@@ -1,0 +1,216 @@
+# =============================================================================
+# Frontend (Bun / Node / Svelte / Vite)
+# =============================================================================
+
+# Dependencies
+frontend/node_modules/
+frontend/.pnp/
+frontend/.pnp.js
+
+# Build output
+frontend/dist/
+frontend/build/
+frontend/.svelte-kit/
+
+# Vite
+frontend/.vite/
+frontend/vite.config.ts.timestamp-*
+
+# Bun
+frontend/bun.lockb
+frontend/.bun/
+
+# Environment
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# Cache
+frontend/.cache/
+
+# =============================================================================
+# Backend (Rust / Cargo)
+# =============================================================================
+
+# Build artifacts
+backend/target/
+
+# Cargo.lock is typically committed for binaries, but gitignore if you prefer
+# backend/Cargo.lock
+
+# =============================================================================
+# Firmware (MicroPython / Python)
+# =============================================================================
+
+# Downloaded dependencies (populated by build.py)
+firmware/lib/
+
+# Built/compressed frontend (populated by build.py)
+firmware/www/
+
+# Python bytecode
+firmware/**/*.pyc
+firmware/**/__pycache__/
+firmware/**/*.pyo
+firmware/**/*.pyd
+
+# Distribution / packaging
+firmware/dist/
+firmware/build/
+firmware/*.egg-info/
+
+# Virtual environments
+firmware/.venv/
+firmware/venv/
+firmware/ENV/
+
+# =============================================================================
+# Python (general - for scripts/)
+# =============================================================================
+
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+.Python
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Distribution
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+sdist/
+wheels/
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# =============================================================================
+# IDEs and Editors
+# =============================================================================
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# JetBrains (PyCharm, RustRover, WebStorm, etc.)
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# Vim
+*.swp
+*.swo
+*~
+.netrwhist
+
+# Emacs
+\#*\#
+.#*
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# =============================================================================
+# Operating Systems
+# =============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# =============================================================================
+# Secrets and Environment
+# =============================================================================
+
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# =============================================================================
+# Logs and Debugging
+# =============================================================================
+
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# =============================================================================
+# Testing and Coverage
+# =============================================================================
+
+coverage/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.pytest_cache/
+*.cover
+*.lcov
+
+# =============================================================================
+# Miscellaneous
+# =============================================================================
+
+# Archives (be careful - you may want some of these)
+# *.zip
+# *.tar.gz
+# *.rar
+# *.7z
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# =============================================================================
+# Claude Code
+# =============================================================================
+
+/.claude/
