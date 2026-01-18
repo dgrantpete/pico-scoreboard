@@ -1,0 +1,165 @@
+{
+  "folders": [
+    {
+      "name": "Frontend (Svelte)",
+      "path": "frontend"
+    },
+    {
+      "name": "Backend (Rust)",
+      "path": "backend"
+    },
+    {
+      "name": "Firmware (MicroPython)",
+      "path": "firmware"
+    },
+    {
+      "name": "Root",
+      "path": "."
+    }
+  ],
+  "settings": {
+    // Frontend (Svelte/TypeScript)
+    "[svelte]": {
+      "editor.defaultFormatter": "svelte.svelte-vscode",
+      "editor.formatOnSave": true
+    },
+    "[typescript]": {
+      "editor.defaultFormatter": "vscode.typescript-language-features",
+      "editor.formatOnSave": true
+    },
+    "[javascript]": {
+      "editor.defaultFormatter": "vscode.typescript-language-features",
+      "editor.formatOnSave": true
+    },
+
+    // Backend (Rust)
+    "[rust]": {
+      "editor.defaultFormatter": "rust-lang.rust-analyzer",
+      "editor.formatOnSave": true
+    },
+    "rust-analyzer.cargo.features": "all",
+    "rust-analyzer.check.command": "clippy",
+
+    // Firmware (Python/MicroPython)
+    "[python]": {
+      "editor.defaultFormatter": "ms-python.python",
+      "editor.formatOnSave": true
+    },
+    "python.analysis.extraPaths": [
+      "${workspaceFolder:Firmware (MicroPython)}/lib"
+    ],
+
+    // General
+    "editor.tabSize": 2,
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "files.exclude": {
+      "**/node_modules": true,
+      "**/target": true,
+      "**/__pycache__": true,
+      "**/*.pyc": true
+    },
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/target": true,
+      "**/dist": true
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      // Svelte/Frontend
+      "svelte.svelte-vscode",
+
+      // Rust/Backend
+      "rust-lang.rust-analyzer",
+
+      // Python/Firmware
+      "ms-python.python",
+      "paulober.pico-w-go",
+
+      // General
+      "bradlc.vscode-tailwindcss"
+    ]
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Frontend: Dev Server",
+        "type": "node",
+        "request": "launch",
+        "cwd": "${workspaceFolder:Frontend (Svelte)}",
+        "runtimeExecutable": "bun",
+        "runtimeArgs": ["run", "dev"],
+        "console": "integratedTerminal"
+      },
+      {
+        "name": "Backend: Run",
+        "type": "lldb",
+        "request": "launch",
+        "program": "${workspaceFolder:Backend (Rust)}/target/debug/backend",
+        "cwd": "${workspaceFolder:Backend (Rust)}",
+        "preLaunchTask": "rust: cargo build"
+      },
+      {
+        "name": "Backend: Run (Release)",
+        "type": "lldb",
+        "request": "launch",
+        "program": "${workspaceFolder:Backend (Rust)}/target/release/backend",
+        "cwd": "${workspaceFolder:Backend (Rust)}",
+        "preLaunchTask": "rust: cargo build --release"
+      }
+    ],
+    "compounds": [
+      {
+        "name": "Full Stack: Frontend + Backend",
+        "configurations": ["Frontend: Dev Server", "Backend: Run"]
+      }
+    ]
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "rust: cargo build",
+        "type": "shell",
+        "command": "cargo",
+        "args": ["build"],
+        "options": {
+          "cwd": "${workspaceFolder:Backend (Rust)}"
+        },
+        "group": "build"
+      },
+      {
+        "label": "rust: cargo build --release",
+        "type": "shell",
+        "command": "cargo",
+        "args": ["build", "--release"],
+        "options": {
+          "cwd": "${workspaceFolder:Backend (Rust)}"
+        },
+        "group": "build"
+      },
+      {
+        "label": "frontend: build",
+        "type": "shell",
+        "command": "bun",
+        "args": ["run", "build"],
+        "options": {
+          "cwd": "${workspaceFolder:Frontend (Svelte)}"
+        },
+        "group": "build"
+      },
+      {
+        "label": "frontend: check",
+        "type": "shell",
+        "command": "bun",
+        "args": ["run", "check"],
+        "options": {
+          "cwd": "${workspaceFolder:Frontend (Svelte)}"
+        },
+        "group": "test"
+      }
+    ]
+  }
+}
