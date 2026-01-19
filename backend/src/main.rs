@@ -1,11 +1,39 @@
 use axum::{routing::get, Router};
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
-use tracing_subscriber;
+
+mod auth;
+mod config;
+mod error;
+mod espn;
+mod game;
+
+use config::AppConfig;
+use espn::EspnClient;
+
+/// Shared application state
+pub struct AppState {
+    pub espn_client: EspnClient,
+    pub config: AppConfig,
+}
 
 #[tokio::main]
 async fn main() {
     // Initialize tracing
     tracing_subscriber::fmt::init();
+
+    // Load configuration
+    let config = AppConfig::load();
+    let bind_address = config.bind_address();
+
+    // Create ESPN client with config
+    let espn_client = EspnClient::new(&config.espn);
+
+    // Create shared application state
+    let app_state = Arc::new(AppState {
+        espn_client,
+        config,
+    });
 
     // Build CORS layer
     let cors = CorsLayer::new()
@@ -17,11 +45,13 @@ async fn main() {
     let app = Router::new()
         .route("/", get(root))
         .route("/health", get(health))
-        .layer(cors);
+        .route("/api/game/{event_id}", get(game::get_game))
+        .layer(cors)
+        .with_state(app_state);
 
     // Run server
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    tracing::info!("Server running on http://localhost:3000");
+    let listener = tokio::net::TcpListener::bind(&bind_address).await.unwrap();
+    tracing::info!("Server running on http://{}", bind_address);
     axum::serve(listener, app).await.unwrap();
 }
 

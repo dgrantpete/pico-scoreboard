@@ -1,0 +1,11 @@
+# Non-secret defaults (safe to commit to git)
+# Secrets like api_key should be set via environment variables (APP_API_KEY)
+
+[server]
+host = "0.0.0.0"
+port = 3000
+
+[espn]
+scoreboard_url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
+user_agent = "pico-scoreboard/1.0"
+timeout_secs = 10
