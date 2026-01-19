@@ -1,0 +1,26 @@
+# Build artifacts - we rebuild inside Docker
+target/
+
+# Git metadata - not needed in container
+.git/
+.gitignore
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment files - secrets should come from fly.io secrets
+.env
+.env.*
+
+# Documentation (not needed to run the app)
+*.md
+
+# Windows-specific
+Thumbs.db
+Desktop.ini
+
+# macOS-specific
+.DS_Store
