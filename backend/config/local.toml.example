@@ -1,0 +1,13 @@
+# Local configuration template
+# Copy this file to local.toml and fill in your values
+# local.toml is gitignored - safe for secrets
+
+# Your API key (required for local development)
+api_key = "your-api-key-here"
+
+# Uncomment to override other settings locally:
+# [server]
+# port = 8080
+
+# [espn]
+# timeout_secs = 30

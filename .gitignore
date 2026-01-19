@@ -35,6 +35,9 @@ frontend/.cache/
 # Build artifacts
 backend/target/
 
+# Local config (secrets) - similar to appsettings.local.json in .NET
+backend/config/local.toml
+
 # Cargo.lock is typically committed for binaries, but gitignore if you prefer
 # backend/Cargo.lock
 
@@ -214,3 +217,4 @@ htmlcov/
 # =============================================================================
 
 /.claude/
+.mcp.json

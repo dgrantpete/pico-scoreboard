@@ -83,9 +83,12 @@ impl Default for EspnConfig {
 impl AppConfig {
     pub fn load() -> Self {
         Config::builder()
-            // 1. Base config file (optional, for non-secret defaults)
+            // 1. Base config file (committed - non-secret defaults)
             .add_source(File::with_name("config/default").required(false))
-            // 2. Environment variables with nested support:
+            // 2. Local config file (gitignored - secrets and local overrides)
+            //    Similar to appsettings.local.json in .NET
+            .add_source(File::with_name("config/local").required(false))
+            // 3. Environment variables (highest priority - for production/CI)
             //    APP_API_KEY → api_key (single underscore stays in field name)
             //    APP_SERVER__PORT → server.port (double underscore = nesting)
             //    APP_ESPN__TIMEOUT_SECS → espn.timeout_secs

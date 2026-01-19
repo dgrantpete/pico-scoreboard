@@ -2,7 +2,7 @@
 # Secrets like api_key should be set via environment variables (APP_API_KEY)
 
 [server]
-host = "0.0.0.0"
+host = "localhost"
 port = 3000
 
 [espn]
