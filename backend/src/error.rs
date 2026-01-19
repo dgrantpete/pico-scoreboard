@@ -4,6 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
+use utoipa::ToSchema;
 
 /// Application error types
 #[derive(Debug)]
@@ -21,10 +22,12 @@ pub enum AppError {
 }
 
 /// Error response body
-#[derive(Serialize)]
-struct ErrorResponse {
-    error: String,
-    message: String,
+#[derive(Serialize, ToSchema)]
+pub struct ErrorResponse {
+    /// Error code (e.g., "game_not_found", "unauthorized")
+    pub error: String,
+    /// Human-readable error message
+    pub message: String,
 }
 
 impl IntoResponse for AppError {

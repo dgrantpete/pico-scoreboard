@@ -1,7 +1,8 @@
 use serde::Serialize;
+use utoipa::ToSchema;
 
 /// The API response - a tagged enum that serializes with "state" discriminator
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(tag = "state", rename_all = "lowercase")]
 pub enum GameResponse {
     Pregame(PregameGame),
@@ -10,7 +11,7 @@ pub enum GameResponse {
 }
 
 /// Team data shared across all game states
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct Team {
     pub abbreviation: String,
     pub color: Color,
@@ -19,7 +20,7 @@ pub struct Team {
 }
 
 /// RGB color as a strongly-typed struct
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -27,7 +28,7 @@ pub struct Color {
 }
 
 /// Pregame-specific data
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PregameGame {
     pub home: Team,
     pub away: Team,
@@ -41,14 +42,14 @@ pub struct PregameGame {
 }
 
 /// Weather information
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct Weather {
     pub temp: i16,
     pub description: String,
 }
 
 /// Live game-specific data
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LiveGame {
     pub home: TeamWithScore,
     pub away: TeamWithScore,
@@ -59,7 +60,7 @@ pub struct LiveGame {
 }
 
 /// Team with score and timeouts (for live/final games)
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TeamWithScore {
     pub abbreviation: String,
     pub color: Color,
@@ -70,7 +71,7 @@ pub struct TeamWithScore {
 }
 
 /// Quarter as a strongly-typed enum
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Quarter {
     First,
@@ -84,7 +85,7 @@ pub enum Quarter {
 }
 
 /// Current play situation (only during active play)
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct Situation {
     pub down: Down,
     pub distance: u8,
@@ -94,7 +95,7 @@ pub struct Situation {
 }
 
 /// Down as a strongly-typed enum
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Down {
     First,
@@ -104,7 +105,7 @@ pub enum Down {
 }
 
 /// Possession indicator
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Possession {
     Home,
@@ -112,7 +113,7 @@ pub enum Possession {
 }
 
 /// Final game-specific data
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FinalGame {
     pub home: TeamWithScore,
     pub away: TeamWithScore,
@@ -121,7 +122,7 @@ pub struct FinalGame {
 }
 
 /// Final status variants
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum FinalStatus {
     Final,
@@ -130,7 +131,7 @@ pub enum FinalStatus {
 }
 
 /// Winner indicator
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Winner {
     Home,
