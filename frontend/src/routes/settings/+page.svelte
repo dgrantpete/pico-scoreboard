@@ -1,23 +1,25 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import * as Card from '$lib/components/ui/card';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Slider } from '$lib/components/ui/slider';
-	import { Switch } from '$lib/components/ui/switch';
-	import { Separator } from '$lib/components/ui/separator';
-	import { Label } from '$lib/components/ui/label';
-	import Save from '@lucide/svelte/icons/save';
-	import Eye from '@lucide/svelte/icons/eye';
-	import EyeOff from '@lucide/svelte/icons/eye-off';
-	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
-	import Wifi from '@lucide/svelte/icons/wifi';
-	import WifiOff from '@lucide/svelte/icons/wifi-off';
-	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
-	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
-	import Radio from '@lucide/svelte/icons/radio';
-	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { onMount } from "svelte";
+	import * as Card from "$lib/components/ui/card";
+	import * as AlertDialog from "$lib/components/ui/alert-dialog";
+	import { Button } from "$lib/components/ui/button";
+	import { Input } from "$lib/components/ui/input";
+	import { Slider } from "$lib/components/ui/slider";
+	import { Switch } from "$lib/components/ui/switch";
+	import { Separator } from "$lib/components/ui/separator";
+	import { Label } from "$lib/components/ui/label";
+	import Save from "@lucide/svelte/icons/save";
+	import Eye from "@lucide/svelte/icons/eye";
+	import EyeOff from "@lucide/svelte/icons/eye-off";
+	import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
+	import Wifi from "@lucide/svelte/icons/wifi";
+	import WifiOff from "@lucide/svelte/icons/wifi-off";
+	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+	import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
+	import Radio from "@lucide/svelte/icons/radio";
+	import { settingsStore } from "$lib/stores/settings.svelte";
+	import { rebootStore } from "$lib/stores/reboot.svelte";
+	import RebootOverlay from "$lib/components/RebootOverlay.svelte";
 
 	// Password visibility toggles
 	let showWifiPassword = $state(false);
@@ -25,7 +27,7 @@
 
 	// Local binding for brightness slider (array format for slider component)
 	let brightnessValue = $derived(
-		settingsStore.config ? [settingsStore.config.display.brightness] : [100]
+		settingsStore.config ? [settingsStore.config.display.brightness] : [100],
 	);
 
 	onMount(() => {
@@ -33,7 +35,7 @@
 	});
 
 	function handleBrightnessChange(value: number[]) {
-		settingsStore.updateDisplay('brightness', value[0]);
+		settingsStore.updateDisplay("brightness", value[0]);
 	}
 </script>
 
@@ -79,16 +81,18 @@
 		</Card.Root>
 	{:else if settingsStore.config}
 		<!-- Device Status -->
-		<Card.Root class={settingsStore.status?.is_fallback ? 'border-amber-500' : ''}>
+		<Card.Root
+			class={settingsStore.status?.is_fallback ? "border-amber-500" : ""}
+		>
 			<Card.Header>
 				<Card.Title class="flex items-center gap-2">
-					{#if settingsStore.status?.mode === 'station' && settingsStore.status?.connected}
+					{#if settingsStore.status?.mode === "station" && settingsStore.status?.connected}
 						<Wifi class="h-5 w-5 text-green-500" />
 						Device Status
-					{:else if settingsStore.status?.mode === 'ap' && settingsStore.status?.is_fallback}
+					{:else if settingsStore.status?.mode === "ap" && settingsStore.status?.is_fallback}
 						<TriangleAlert class="h-5 w-5 text-amber-500" />
 						Connection Failed
-					{:else if settingsStore.status?.mode === 'ap'}
+					{:else if settingsStore.status?.mode === "ap"}
 						<Radio class="h-5 w-5 text-blue-500" />
 						Device Status
 					{:else}
@@ -97,11 +101,11 @@
 					{/if}
 				</Card.Title>
 				<Card.Description>
-					{#if settingsStore.status?.mode === 'station' && settingsStore.status?.connected}
+					{#if settingsStore.status?.mode === "station" && settingsStore.status?.connected}
 						Connected to WiFi
-					{:else if settingsStore.status?.mode === 'ap' && settingsStore.status?.is_fallback}
+					{:else if settingsStore.status?.mode === "ap" && settingsStore.status?.is_fallback}
 						Could not connect to "{settingsStore.status.configured_ssid}"
-					{:else if settingsStore.status?.mode === 'ap'}
+					{:else if settingsStore.status?.mode === "ap"}
 						Access Point Mode
 					{:else}
 						Current network connection status
@@ -114,9 +118,9 @@
 						<div>
 							<span class="text-muted-foreground">Mode:</span>
 							<span class="ml-2 font-medium">
-								{#if settingsStore.status.mode === 'ap' && settingsStore.status.is_fallback}
+								{#if settingsStore.status.mode === "ap" && settingsStore.status.is_fallback}
 									AP (Fallback)
-								{:else if settingsStore.status.mode === 'ap'}
+								{:else if settingsStore.status.mode === "ap"}
 									AP
 								{:else}
 									{settingsStore.status.mode}
@@ -125,25 +129,33 @@
 						</div>
 						<div>
 							<span class="text-muted-foreground">Connected:</span>
-							<span class="ml-2 font-medium">{settingsStore.status.connected ? 'Yes' : 'No'}</span>
+							<span class="ml-2 font-medium"
+								>{settingsStore.status.connected ? "Yes" : "No"}</span
+							>
 						</div>
-						{#if settingsStore.status.mode === 'station' && settingsStore.status.ip}
+						{#if settingsStore.status.mode === "station" && settingsStore.status.ip}
 							<div>
 								<span class="text-muted-foreground">IP Address:</span>
 								<span class="ml-2 font-medium">{settingsStore.status.ip}</span>
 							</div>
 							<div>
 								<span class="text-muted-foreground">Hostname:</span>
-								<span class="ml-2 font-medium">{settingsStore.status.hostname}</span>
+								<span class="ml-2 font-medium"
+									>{settingsStore.status.hostname}</span
+								>
 							</div>
-						{:else if settingsStore.status.mode === 'ap'}
+						{:else if settingsStore.status.mode === "ap"}
 							<div>
 								<span class="text-muted-foreground">AP Network:</span>
-								<span class="ml-2 font-medium">{settingsStore.status.ap_ssid}</span>
+								<span class="ml-2 font-medium"
+									>{settingsStore.status.ap_ssid}</span
+								>
 							</div>
 							<div>
 								<span class="text-muted-foreground">AP IP:</span>
-								<span class="ml-2 font-medium">{settingsStore.status.ap_ip}</span>
+								<span class="ml-2 font-medium"
+									>{settingsStore.status.ap_ip}</span
+								>
 							</div>
 						{/if}
 					</div>
@@ -170,13 +182,14 @@
 					</div>
 					<Switch
 						checked={settingsStore.config.network.ap_mode}
-						onCheckedChange={(checked) => settingsStore.updateNetwork('ap_mode', checked)}
+						onCheckedChange={(checked) =>
+							settingsStore.updateNetwork("ap_mode", checked)}
 					/>
 				</div>
 
-				<Separator />
-
 				{#if !settingsStore.config.network.ap_mode}
+					<Separator />
+
 					<!-- Station Mode Settings -->
 					<div class="space-y-2">
 						<Label for="wifi-ssid">WiFi Network (SSID)</Label>
@@ -186,7 +199,10 @@
 							placeholder="Enter network name"
 							value={settingsStore.config.network.ssid}
 							oninput={(e) =>
-								settingsStore.updateNetwork('ssid', (e.target as HTMLInputElement).value)}
+								settingsStore.updateNetwork(
+									"ssid",
+									(e.target as HTMLInputElement).value,
+								)}
 						/>
 					</div>
 					<div class="space-y-2">
@@ -194,11 +210,14 @@
 						<div class="relative">
 							<Input
 								id="wifi-password"
-								type={showWifiPassword ? 'text' : 'password'}
+								type={showWifiPassword ? "text" : "password"}
 								placeholder="Enter password"
 								value={settingsStore.config.network.password}
 								oninput={(e) =>
-									settingsStore.updateNetwork('password', (e.target as HTMLInputElement).value)}
+									settingsStore.updateNetwork(
+										"password",
+										(e.target as HTMLInputElement).value,
+									)}
 								class="pr-10"
 							/>
 							<Button
@@ -227,13 +246,17 @@
 						placeholder="scoreboard"
 						value={settingsStore.config.network.device_name}
 						oninput={(e) =>
-							settingsStore.updateNetwork('device_name', (e.target as HTMLInputElement).value)}
+							settingsStore.updateNetwork(
+								"device_name",
+								(e.target as HTMLInputElement).value,
+							)}
 					/>
 					<p class="text-xs text-muted-foreground">
 						{#if settingsStore.config.network.ap_mode}
 							WiFi network name when in AP mode
 						{:else}
-							Access the device at {settingsStore.config.network.device_name}.local
+							Access the device at {settingsStore.config.network
+								.device_name}.local
 						{/if}
 					</p>
 				</div>
@@ -247,8 +270,8 @@
 						value={settingsStore.config.network.connect_timeout_seconds}
 						oninput={(e) =>
 							settingsStore.updateNetwork(
-								'connect_timeout_seconds',
-								parseInt((e.target as HTMLInputElement).value) || 15
+								"connect_timeout_seconds",
+								parseInt((e.target as HTMLInputElement).value) || 15,
 							)}
 					/>
 					<p class="text-xs text-muted-foreground">
@@ -262,7 +285,9 @@
 		<Card.Root>
 			<Card.Header>
 				<Card.Title>Backend API</Card.Title>
-				<Card.Description>Connection settings for the scores API</Card.Description>
+				<Card.Description
+					>Connection settings for the scores API</Card.Description
+				>
 			</Card.Header>
 			<Card.Content class="space-y-4">
 				<div class="space-y-2">
@@ -272,7 +297,11 @@
 						type="url"
 						placeholder="https://api.example.com"
 						value={settingsStore.config.api.url}
-						oninput={(e) => settingsStore.updateApi('url', (e.target as HTMLInputElement).value)}
+						oninput={(e) =>
+							settingsStore.updateApi(
+								"url",
+								(e.target as HTMLInputElement).value,
+							)}
 					/>
 				</div>
 				<div class="space-y-2">
@@ -280,10 +309,14 @@
 					<div class="relative">
 						<Input
 							id="api-key"
-							type={showApiKey ? 'text' : 'password'}
+							type={showApiKey ? "text" : "password"}
 							placeholder="Enter API key"
 							value={settingsStore.config.api.key}
-							oninput={(e) => settingsStore.updateApi('key', (e.target as HTMLInputElement).value)}
+							oninput={(e) =>
+								settingsStore.updateApi(
+									"key",
+									(e.target as HTMLInputElement).value,
+								)}
 							class="pr-10"
 						/>
 						<Button
@@ -307,7 +340,9 @@
 		<Card.Root>
 			<Card.Header>
 				<Card.Title>Display</Card.Title>
-				<Card.Description>LED matrix brightness and refresh settings</Card.Description>
+				<Card.Description
+					>LED matrix brightness and refresh settings</Card.Description
+				>
 			</Card.Header>
 			<Card.Content class="space-y-6">
 				<div class="space-y-2">
@@ -336,11 +371,13 @@
 						value={settingsStore.config.display.poll_interval_seconds}
 						oninput={(e) =>
 							settingsStore.updateDisplay(
-								'poll_interval_seconds',
-								parseInt((e.target as HTMLInputElement).value) || 30
+								"poll_interval_seconds",
+								parseInt((e.target as HTMLInputElement).value) || 30,
 							)}
 					/>
-					<p class="text-xs text-muted-foreground">How often to fetch game updates from the API</p>
+					<p class="text-xs text-muted-foreground">
+						How often to fetch game updates from the API
+					</p>
 				</div>
 			</Card.Content>
 		</Card.Root>
@@ -361,8 +398,8 @@
 						value={settingsStore.config.server.cache_max_age_seconds}
 						oninput={(e) =>
 							settingsStore.updateServer(
-								'cache_max_age_seconds',
-								parseInt((e.target as HTMLInputElement).value) || 0
+								"cache_max_age_seconds",
+								parseInt((e.target as HTMLInputElement).value) || 0,
 							)}
 					/>
 					<p class="text-xs text-muted-foreground">
@@ -392,10 +429,10 @@
 			<Button
 				variant="outline"
 				onclick={() => settingsStore.reboot()}
-				disabled={settingsStore.isRebooting}
+				disabled={rebootStore.isActive}
 			>
 				<RotateCcw class="mr-2 h-4 w-4" />
-				{settingsStore.isRebooting ? 'Rebooting...' : 'Reboot Device'}
+				Reboot Device
 			</Button>
 
 			<div class="flex gap-2">
@@ -411,7 +448,7 @@
 					disabled={!settingsStore.isDirty || settingsStore.isSaving}
 				>
 					<Save class="mr-2 h-4 w-4" />
-					{settingsStore.isSaving ? 'Saving...' : 'Save Changes'}
+					{settingsStore.isSaving ? "Saving..." : "Save Changes"}
 				</Button>
 			</div>
 		</div>
@@ -424,15 +461,20 @@
 		<AlertDialog.Header>
 			<AlertDialog.Title>Network Settings Changed</AlertDialog.Title>
 			<AlertDialog.Description>
-				Network configuration has been updated. A reboot is required for changes to take effect.
-				Would you like to reboot now?
+				Network configuration has been updated. A reboot is required for changes
+				to take effect. Would you like to reboot now?
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel onclick={() => settingsStore.dismissRebootPrompt()}>
 				Later
 			</AlertDialog.Cancel>
-			<AlertDialog.Action onclick={() => settingsStore.reboot()}>Reboot Now</AlertDialog.Action>
+			<AlertDialog.Action onclick={() => settingsStore.reboot()}
+				>Reboot Now</AlertDialog.Action
+			>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
+
+<!-- Reboot Overlay (handles the actual reboot process) -->
+<RebootOverlay />

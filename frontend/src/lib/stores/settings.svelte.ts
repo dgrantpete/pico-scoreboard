@@ -1,4 +1,5 @@
 import { picoApi, type Config, type ConfigUpdate, type NetworkStatus } from '$lib/api';
+import { rebootStore } from './reboot.svelte';
 
 /**
  * Extract a nested value from config using a dot-notation path
@@ -69,7 +70,6 @@ export function createSettingsStore() {
 	// Loading states
 	let isLoading = $state(false);
 	let isSaving = $state(false);
-	let isRebooting = $state(false);
 
 	// Error state
 	let error = $state<string | null>(null);
@@ -96,9 +96,6 @@ export function createSettingsStore() {
 		},
 		get isSaving() {
 			return isSaving;
-		},
-		get isRebooting() {
-			return isRebooting;
 		},
 		get error() {
 			return error;
@@ -237,21 +234,12 @@ export function createSettingsStore() {
 		},
 
 		/**
-		 * Reboot device
+		 * Reboot device - delegates to reboot store for graceful handling
 		 */
 		async reboot() {
-			isRebooting = true;
-			error = null;
+			if (!config || !status) return;
 			showRebootPrompt = false;
-
-			try {
-				await picoApi.reboot();
-				// Device will restart, connection will be lost
-			} catch (e) {
-				error = e instanceof Error ? e.message : 'Failed to initiate reboot';
-			} finally {
-				isRebooting = false;
-			}
+			await rebootStore.initiateReboot(status, config);
 		},
 
 		/**
