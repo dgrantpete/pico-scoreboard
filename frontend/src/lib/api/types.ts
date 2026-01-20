@@ -64,3 +64,61 @@ export interface NetworkStatus {
 export interface RebootResponse {
 	message: string;
 }
+
+// Game API types
+export interface Color {
+	r: number;
+	g: number;
+	b: number;
+}
+
+export interface Team {
+	abbreviation: string;
+	color: Color;
+	record?: string;
+}
+
+export interface TeamWithScore extends Team {
+	score: number;
+	timeouts: number;
+}
+
+export interface Situation {
+	down: 'first' | 'second' | 'third' | 'fourth';
+	distance: number;
+	yard_line: number;
+	possession: 'home' | 'away';
+	red_zone: boolean;
+}
+
+export interface PregameGame {
+	state: 'pregame';
+	event_id: string;
+	home: Team;
+	away: Team;
+	start_time: string;
+	venue?: string;
+	broadcast?: string;
+	weather?: { temp: number; description: string };
+}
+
+export interface LiveGame {
+	state: 'live';
+	event_id: string;
+	home: TeamWithScore;
+	away: TeamWithScore;
+	quarter: 'first' | 'second' | 'third' | 'fourth' | 'OT' | 'OT2';
+	clock: string;
+	situation?: Situation;
+}
+
+export interface FinalGame {
+	state: 'final';
+	event_id: string;
+	home: TeamWithScore;
+	away: TeamWithScore;
+	status: 'final' | 'final/OT';
+	winner: 'home' | 'away' | 'tie';
+}
+
+export type GameResponse = PregameGame | LiveGame | FinalGame;

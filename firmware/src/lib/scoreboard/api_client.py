@@ -67,7 +67,7 @@ class ScoreboardApiClient:
             OSError: On network errors (WiFi disconnected, DNS failure, etc.)
             ValueError: If response contains unknown game state
         """
-        url = f"{self._config.api_url}/api/game/{event_id}"
+        url = f"{self._config.api_url}/api/games/{event_id}"
         headers = {"X-Api-Key": self._config.api_key}
 
         response = None
@@ -115,3 +115,59 @@ class ScoreboardApiClient:
         except (ApiError, OSError, ValueError) as e:
             print(f"API error: {e}")
             return None
+
+    def get_all_games(self):
+        """
+        Fetch all games from the backend.
+
+        Returns:
+            List of PregameGame, LiveGame, or FinalGame objects
+
+        Raises:
+            ApiError: On 4xx/5xx responses from the API
+            OSError: On network errors (WiFi disconnected, DNS failure, etc.)
+            ValueError: If response contains unknown game state
+        """
+        url = f"{self._config.api_url}/api/games"
+        headers = {"X-Api-Key": self._config.api_key}
+
+        response = None
+        try:
+            response = urequests.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECS)
+
+            if response.status_code != 200:
+                # Try to parse error response
+                try:
+                    data = response.json()
+                    error = data.get("error", "unknown")
+                    message = data.get("message", "Unknown error")
+                except (ValueError, KeyError):
+                    error = "unknown"
+                    message = f"HTTP {response.status_code}"
+
+                raise ApiError(response.status_code, error, message)
+
+            # Parse successful response (array of games)
+            data = response.json()
+            return [parse_game_response(game) for game in data]
+
+        finally:
+            # CRITICAL: Always close the response to free memory
+            if response is not None:
+                response.close()
+
+    def get_all_games_safe(self):
+        """
+        Fetch all games, returning empty list on any error.
+
+        This is a convenience wrapper around get_all_games() that catches all
+        exceptions and returns an empty list instead.
+
+        Returns:
+            List of game objects, or empty list on error
+        """
+        try:
+            return self.get_all_games()
+        except (ApiError, OSError, ValueError) as e:
+            print(f"API error: {e}")
+            return []

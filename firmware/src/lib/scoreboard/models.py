@@ -159,6 +159,7 @@ class PregameGame:
 
     def __init__(
         self,
+        event_id: str,
         home: Team,
         away: Team,
         start_time: str,
@@ -167,6 +168,7 @@ class PregameGame:
         weather: Weather = None
     ):
         self.state = STATE_PREGAME
+        self.event_id = event_id
         self.home = home
         self.away = away
         self.start_time = start_time
@@ -184,6 +186,7 @@ class PregameGame:
             weather = Weather.from_dict(data["weather"])
 
         return PregameGame(
+            event_id=data["event_id"],
             home=Team.from_dict(data["home"]),
             away=Team.from_dict(data["away"]),
             start_time=data["start_time"],
@@ -198,6 +201,7 @@ class LiveGame:
 
     def __init__(
         self,
+        event_id: str,
         home: TeamWithScore,
         away: TeamWithScore,
         quarter: str,
@@ -205,6 +209,7 @@ class LiveGame:
         situation: Situation = None
     ):
         self.state = STATE_LIVE
+        self.event_id = event_id
         self.home = home
         self.away = away
         self.quarter = quarter
@@ -221,6 +226,7 @@ class LiveGame:
             situation = Situation.from_dict(data["situation"])
 
         return LiveGame(
+            event_id=data["event_id"],
             home=TeamWithScore.from_dict(data["home"]),
             away=TeamWithScore.from_dict(data["away"]),
             quarter=data["quarter"],
@@ -234,12 +240,14 @@ class FinalGame:
 
     def __init__(
         self,
+        event_id: str,
         home: TeamWithScore,
         away: TeamWithScore,
         status: str,
         winner: str
     ):
         self.state = STATE_FINAL
+        self.event_id = event_id
         self.home = home
         self.away = away
         self.status = status
@@ -251,6 +259,7 @@ class FinalGame:
     @staticmethod
     def from_dict(data: dict) -> "FinalGame":
         return FinalGame(
+            event_id=data["event_id"],
             home=TeamWithScore.from_dict(data["home"]),
             away=TeamWithScore.from_dict(data["away"]),
             status=data["status"],

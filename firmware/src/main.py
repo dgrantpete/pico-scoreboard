@@ -15,6 +15,7 @@ import machine
 import uasyncio as asyncio
 from lib.microdot import Microdot, Response, send_file
 from lib.scoreboard import Config
+from lib.scoreboard.api_client import ScoreboardApiClient
 from lib.dns import run_dns_server
 from lib.api import create_api
 
@@ -66,8 +67,11 @@ def get_network_status():
         }
 
 
+# Create API client for backend communication
+api_client = ScoreboardApiClient(config)
+
 # Create and mount API under /api prefix
-api = create_api(config, get_network_status)
+api = create_api(config, get_network_status, api_client)
 app.mount(api, url_prefix='/api')
 
 

@@ -1,4 +1,4 @@
-import type { Config, ConfigUpdate, NetworkStatus, RebootResponse } from './types';
+import type { Config, ConfigUpdate, NetworkStatus, RebootResponse, GameResponse } from './types';
 
 class ApiError extends Error {
 	status: number;
@@ -74,5 +74,21 @@ export const picoApi = {
 	async reboot(signal?: AbortSignal): Promise<RebootResponse> {
 		const response = await fetch('/api/reboot', { method: 'POST', signal });
 		return handleResponse<RebootResponse>(response);
+	},
+
+	/**
+	 * GET /api/games - Fetch all games from the backend
+	 */
+	async getGames(signal?: AbortSignal): Promise<GameResponse[]> {
+		const response = await fetch('/api/games', { signal });
+		return handleResponse<GameResponse[]>(response);
+	},
+
+	/**
+	 * GET /api/games/:eventId - Fetch a single game by event ID
+	 */
+	async getGame(eventId: string, signal?: AbortSignal): Promise<GameResponse> {
+		const response = await fetch(`/api/games/${eventId}`, { signal });
+		return handleResponse<GameResponse>(response);
 	}
 };
