@@ -15,6 +15,10 @@ target/
 .env
 .env.*
 
+# Local config - secrets and local overrides (not for production)
+config/local.toml
+config/local.toml.example
+
 # Documentation (not needed to run the app)
 *.md
 
