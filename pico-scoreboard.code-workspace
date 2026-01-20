@@ -45,8 +45,40 @@
       "editor.defaultFormatter": "ms-python.python",
       "editor.formatOnSave": true
     },
+    "python.analysis.typeshedPaths": [
+      "~/.micropico-stubs/included"
+    ],
     "python.analysis.extraPaths": [
-      "${workspaceFolder:Firmware (MicroPython)}/lib"
+      "~/.micropico-stubs/included",
+      "${workspaceFolder:Firmware (MicroPython)}/src/lib"
+    ],
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticSeverityOverrides": {
+      "reportMissingModuleSource": "none"
+    },
+    "python.terminal.activateEnvironment": false,
+
+    // MicroPico extension settings
+    "micropico.syncFolder": "firmware/src",
+    "micropico.openOnStart": true,
+    "micropico.statusbarButtons": [
+      "status",
+      "run",
+      "softreset",
+      "togglepicowfs"
+    ],
+    "micropico.pyIgnore": [
+      "**/.picowgo",
+      "**/.micropico",
+      "**/.vscode",
+      "**/.gitignore",
+      "**/.git",
+      "**/.DS_Store",
+      "**/project.pico-go",
+      "**/env",
+      "**/venv",
+      "**/.venv",
+      "**/.idea"
     ],
 
     // General
