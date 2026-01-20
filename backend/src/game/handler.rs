@@ -11,11 +11,11 @@ use crate::AppState;
 use super::transform;
 use super::types::GameResponse;
 
-/// GET /api/game/{event_id}
+/// GET /api/games/{event_id}
 /// Fetches game data from ESPN and returns a minimal payload for the Pi Pico
 #[utoipa::path(
     get,
-    path = "/api/game/{event_id}",
+    path = "/api/games/{event_id}",
     params(
         ("event_id" = String, Path, description = "ESPN event ID (numeric)")
     ),
@@ -48,4 +48,32 @@ pub async fn get_game(
     let response = transform::transform(&event);
 
     Ok(Json(response))
+}
+
+/// GET /api/games
+/// Fetches all games from ESPN and returns minimal payloads for the Pi Pico
+#[utoipa::path(
+    get,
+    path = "/api/games",
+    responses(
+        (status = 200, description = "All games retrieved successfully", body = Vec<GameResponse>),
+        (status = 401, description = "Missing or invalid API key", body = ErrorResponse),
+        (status = 502, description = "Error fetching from ESPN API", body = ErrorResponse),
+    ),
+    security(
+        ("api_key" = [])
+    ),
+    tag = "games"
+)]
+pub async fn get_all_games(
+    _api_key: ApiKey,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<GameResponse>>, AppError> {
+    // Fetch all games from ESPN
+    let events = state.espn_client.fetch_all_games().await?;
+
+    // Transform each event to our response format
+    let responses: Vec<GameResponse> = events.iter().map(transform::transform).collect();
+
+    Ok(Json(responses))
 }

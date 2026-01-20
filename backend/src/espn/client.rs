@@ -54,6 +54,12 @@ impl EspnClient {
             .find(|event| event.id == event_id)
             .ok_or_else(|| AppError::GameNotFound(event_id.to_string()))
     }
+
+    /// Fetch all games from the current scoreboard
+    pub async fn fetch_all_games(&self) -> Result<Vec<EspnEvent>, AppError> {
+        let scoreboard = self.fetch_scoreboard().await?;
+        Ok(scoreboard.events)
+    }
 }
 
 impl Default for EspnClient {

@@ -30,6 +30,7 @@ pub struct Color {
 /// Pregame-specific data
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PregameGame {
+    pub event_id: String,
     pub home: Team,
     pub away: Team,
     pub start_time: String,
@@ -51,6 +52,7 @@ pub struct Weather {
 /// Live game-specific data
 #[derive(Debug, Serialize, ToSchema)]
 pub struct LiveGame {
+    pub event_id: String,
     pub home: TeamWithScore,
     pub away: TeamWithScore,
     pub quarter: Quarter,
@@ -115,6 +117,7 @@ pub enum Possession {
 /// Final game-specific data
 #[derive(Debug, Serialize, ToSchema)]
 pub struct FinalGame {
+    pub event_id: String,
     pub home: TeamWithScore,
     pub away: TeamWithScore,
     pub status: FinalStatus,

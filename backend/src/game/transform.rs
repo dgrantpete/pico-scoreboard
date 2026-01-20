@@ -9,23 +9,25 @@ use super::types::{
 pub fn transform(event: &EspnEvent) -> GameResponse {
     let competition = &event.competitions[0];
     let state = event.status.status_type.state.as_str();
+    let event_id = &event.id;
 
     match state {
-        "pre" => GameResponse::Pregame(to_pregame(event, competition)),
-        "in" => GameResponse::Live(to_live(event, competition)),
-        "post" => GameResponse::Final(to_final(event, competition)),
-        _ => GameResponse::Pregame(to_pregame(event, competition)), // Default to pregame for unknown states
+        "pre" => GameResponse::Pregame(to_pregame(event, competition, event_id)),
+        "in" => GameResponse::Live(to_live(event, competition, event_id)),
+        "post" => GameResponse::Final(to_final(event, competition, event_id)),
+        _ => GameResponse::Pregame(to_pregame(event, competition, event_id)), // Default to pregame for unknown states
     }
 }
 
 /// Transform to pregame response
-fn to_pregame(event: &EspnEvent, competition: &EspnCompetition) -> PregameGame {
+fn to_pregame(event: &EspnEvent, competition: &EspnCompetition, event_id: &str) -> PregameGame {
     let (home_competitor, away_competitor) = get_competitors(competition);
 
     let venue = competition.venue.as_ref();
     let is_outdoor = venue.map(|v| !v.indoor.unwrap_or(false)).unwrap_or(true);
 
     PregameGame {
+        event_id: event_id.to_string(),
         home: to_team(home_competitor),
         away: to_team(away_competitor),
         start_time: event.status.status_type.short_detail.clone(),
@@ -45,11 +47,12 @@ fn to_pregame(event: &EspnEvent, competition: &EspnCompetition) -> PregameGame {
 }
 
 /// Transform to live game response
-fn to_live(event: &EspnEvent, competition: &EspnCompetition) -> LiveGame {
+fn to_live(event: &EspnEvent, competition: &EspnCompetition, event_id: &str) -> LiveGame {
     let (home_competitor, away_competitor) = get_competitors(competition);
     let situation = competition.situation.as_ref();
 
     LiveGame {
+        event_id: event_id.to_string(),
         home: to_team_with_score(home_competitor, situation.and_then(|s| s.home_timeouts)),
         away: to_team_with_score(away_competitor, situation.and_then(|s| s.away_timeouts)),
         quarter: parse_quarter(event.status.period),
@@ -59,7 +62,7 @@ fn to_live(event: &EspnEvent, competition: &EspnCompetition) -> LiveGame {
 }
 
 /// Transform to final game response
-fn to_final(event: &EspnEvent, competition: &EspnCompetition) -> FinalGame {
+fn to_final(event: &EspnEvent, competition: &EspnCompetition, event_id: &str) -> FinalGame {
     let (home_competitor, away_competitor) = get_competitors(competition);
 
     let home_score = parse_score(&home_competitor.score);
@@ -69,6 +72,7 @@ fn to_final(event: &EspnEvent, competition: &EspnCompetition) -> FinalGame {
     let situation = competition.situation.as_ref();
 
     FinalGame {
+        event_id: event_id.to_string(),
         home: to_team_with_score(home_competitor, situation.and_then(|s| s.home_timeouts)),
         away: to_team_with_score(away_competitor, situation.and_then(|s| s.away_timeouts)),
         status: if event.status.period > 4 {

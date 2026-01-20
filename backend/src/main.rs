@@ -21,7 +21,7 @@ use espn::EspnClient;
         version = "1.0.0",
         contact(name = "Pico Scoreboard"),
     ),
-    paths(game::handler::get_game),
+    paths(game::handler::get_game, game::handler::get_all_games),
     components(schemas(
         game::types::GameResponse,
         game::types::PregameGame,
@@ -98,7 +98,8 @@ async fn main() {
         .merge(SwaggerUi::new("/docs").url("/docs/openapi.json", ApiDoc::openapi()))
         .route("/", get(root))
         .route("/health", get(health))
-        .route("/api/game/{event_id}", get(game::get_game))
+        .route("/api/games", get(game::get_all_games))
+        .route("/api/games/{event_id}", get(game::get_game))
         .layer(cors)
         .with_state(app_state);
 
