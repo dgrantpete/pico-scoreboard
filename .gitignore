@@ -51,6 +51,11 @@ firmware/lib/
 # Built/compressed frontend (populated by build.py)
 firmware/www/
 
+# MicroPico extension files
+firmware/.micropico/
+
+firmware/src/config.json
+
 # Python bytecode
 firmware/**/*.pyc
 firmware/**/__pycache__/
@@ -218,3 +223,6 @@ htmlcov/
 
 /.claude/
 .mcp.json
+
+openapi.json
+nul
