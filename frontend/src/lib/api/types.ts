@@ -58,6 +58,11 @@ export interface NetworkStatus {
 	hostname?: string | null;
 	ap_ip?: string | null;
 	ap_ssid?: string;
+	// Memory telemetry
+	memory_used: number;
+	memory_free: number;
+	flash_used: number;
+	flash_free: number;
 }
 
 // Reboot response

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from "svelte";
+	import { onMount, onDestroy } from "svelte";
 	import * as Card from "$lib/components/ui/card";
 	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import * as Alert from "$lib/components/ui/alert";
@@ -9,6 +9,8 @@
 	import { Separator } from "$lib/components/ui/separator";
 	import { Label } from "$lib/components/ui/label";
 	import { Skeleton } from "$lib/components/ui/skeleton";
+	import { Progress } from "$lib/components/ui/progress";
+	import { cn } from "$lib/utils";
 	import Save from "@lucide/svelte/icons/save";
 	import Eye from "@lucide/svelte/icons/eye";
 	import EyeOff from "@lucide/svelte/icons/eye-off";
@@ -16,10 +18,13 @@
 	import Wifi from "@lucide/svelte/icons/wifi";
 	import WifiOff from "@lucide/svelte/icons/wifi-off";
 	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+	import Cpu from "@lucide/svelte/icons/cpu";
+	import HardDrive from "@lucide/svelte/icons/hard-drive";
 	import { settingsStore } from "$lib/stores/settings.svelte";
 	import { rebootStore } from "$lib/stores/reboot.svelte";
 	import { picoApi } from "$lib/api";
 	import RebootOverlay from "$lib/components/RebootOverlay.svelte";
+	import type { NetworkStatus, Config } from "$lib/api/types";
 
 	// Password visibility toggles
 	let showWifiPassword = $state(false);
@@ -33,8 +38,42 @@
 		settingsStore.config ? settingsStore.config.display.brightness : 100,
 	);
 
+	// Status refresh interval
+	let refreshInterval: ReturnType<typeof setInterval> | null = null;
+
+	// Memory telemetry helpers
+	function formatBytes(bytes: number): string {
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+		return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+	}
+
+	function calcPercent(used: number, free: number): number {
+		const total = used + free;
+		if (total === 0) return 0;
+		return Math.round((used / total) * 100);
+	}
+
+	function getUsageColor(percent: number): string {
+		if (percent >= 90) return "text-red-500";
+		if (percent >= 70) return "text-amber-500";
+		return "text-green-500";
+	}
+
 	onMount(() => {
 		settingsStore.load();
+
+		// Start status refresh interval (15 seconds)
+		refreshInterval = setInterval(() => {
+			settingsStore.refreshStatus();
+		}, 15000);
+	});
+
+	onDestroy(() => {
+		if (refreshInterval) {
+			clearInterval(refreshInterval);
+			refreshInterval = null;
+		}
 	});
 
 	function handleBrightnessChange(value: number) {
@@ -44,7 +83,12 @@
 	async function handleResetNetwork() {
 		showResetDialog = false;
 		await picoApi.resetNetwork();
-		await settingsStore.reboot();
+		// Use explicit 'network_reset' scenario since we know device will enter AP mode
+		await rebootStore.initiateRebootWithScenario(
+			settingsStore.status as NetworkStatus,
+			settingsStore.config as Config,
+			'network_reset'
+		);
 	}
 </script>
 
@@ -169,6 +213,63 @@
 				{/if}
 			</Card.Content>
 		</Card.Root>
+
+		<!-- System Resources -->
+		{#if settingsStore.status}
+			{@const memoryPercent = calcPercent(
+				settingsStore.status.memory_used,
+				settingsStore.status.memory_free
+			)}
+			{@const flashPercent = calcPercent(
+				settingsStore.status.flash_used,
+				settingsStore.status.flash_free
+			)}
+			<Card.Root>
+				<Card.Header>
+					<Card.Title>System Resources</Card.Title>
+					<Card.Description>Memory and storage usage</Card.Description>
+				</Card.Header>
+				<Card.Content class="space-y-6">
+					<!-- Memory Usage -->
+					<div class="space-y-2">
+						<div class="flex items-center justify-between">
+							<div class="flex items-center gap-2">
+								<Cpu class="h-4 w-4 text-muted-foreground" />
+								<span class="text-sm font-medium">Memory</span>
+							</div>
+							<span class={cn("text-sm font-medium", getUsageColor(memoryPercent))}>
+								{memoryPercent}%
+							</span>
+						</div>
+						<Progress value={memoryPercent} max={100} />
+						<div class="flex justify-between text-xs text-muted-foreground">
+							<span>{formatBytes(settingsStore.status.memory_used)} used</span>
+							<span>{formatBytes(settingsStore.status.memory_free)} free</span>
+						</div>
+					</div>
+
+					<Separator />
+
+					<!-- Flash Storage Usage -->
+					<div class="space-y-2">
+						<div class="flex items-center justify-between">
+							<div class="flex items-center gap-2">
+								<HardDrive class="h-4 w-4 text-muted-foreground" />
+								<span class="text-sm font-medium">Flash Storage</span>
+							</div>
+							<span class={cn("text-sm font-medium", getUsageColor(flashPercent))}>
+								{flashPercent}%
+							</span>
+						</div>
+						<Progress value={flashPercent} max={100} />
+						<div class="flex justify-between text-xs text-muted-foreground">
+							<span>{formatBytes(settingsStore.status.flash_used)} used</span>
+							<span>{formatBytes(settingsStore.status.flash_free)} free</span>
+						</div>
+					</div>
+				</Card.Content>
+			</Card.Root>
+		{/if}
 
 		<!-- Network Configuration -->
 		<Card.Root>

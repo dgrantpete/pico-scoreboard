@@ -185,6 +185,217 @@
 					Go Now
 				</Button>
 			</AlertDialog.Footer>
+		{:else if rebootStore.state === 'network_reset'}
+			<!-- Network Reset - Device entering AP mode -->
+			<AlertDialog.Header>
+				<div class="flex justify-center">
+					<div class="rounded-full bg-amber-100 p-3 dark:bg-amber-900">
+						<AlertTriangle class="h-8 w-8 text-amber-600 dark:text-amber-400" />
+					</div>
+				</div>
+				<AlertDialog.Title class="text-center">Network Reset</AlertDialog.Title>
+				<AlertDialog.Description class="text-center">
+					WiFi credentials cleared. Device is restarting in setup mode.
+				</AlertDialog.Description>
+			</AlertDialog.Header>
+
+			<div class="space-y-4 py-4">
+				<div class="space-y-3">
+					<div class="flex items-start gap-3">
+						<span
+							class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium"
+							>1</span
+						>
+						<div class="flex-1">
+							<p class="text-sm">Connect to the scoreboard's WiFi network:</p>
+							<div
+								class="mt-1 flex items-center gap-2 rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm"
+							>
+								<Wifi class="h-4 w-4 text-muted-foreground" />
+								<span class="font-medium">{targetApSsid}</span>
+							</div>
+						</div>
+					</div>
+
+					<div class="flex items-start gap-3">
+						<span
+							class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium"
+							>2</span
+						>
+						<div class="flex-1">
+							<p class="text-sm">Open your browser to:</p>
+							<div
+								class="mt-1 flex items-center justify-between rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm"
+							>
+								<span>{rebootStore.targetApUrl}</span>
+								<Button
+									variant="ghost"
+									size="sm"
+									class="h-6 w-6 p-0"
+									onclick={() => copyToClipboard(rebootStore.targetApUrl)}
+								>
+									{#if copiedUrl === rebootStore.targetApUrl}
+										<Check class="h-4 w-4 text-green-500" />
+									{:else}
+										<Copy class="h-4 w-4" />
+									{/if}
+								</Button>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<AlertDialog.Footer class="sm:justify-center">
+				<Button onclick={() => rebootStore.redirectToAp()} class="w-full sm:w-auto">
+					I'm Connected
+				</Button>
+			</AlertDialog.Footer>
+		{:else if rebootStore.state === 'ssid_changed'}
+			<!-- SSID Changed - User needs to switch networks -->
+			<AlertDialog.Header>
+				<div class="flex justify-center">
+					<div class="rounded-full bg-primary/10 p-3">
+						<Wifi class="h-8 w-8 text-primary" />
+					</div>
+				</div>
+				<AlertDialog.Title class="text-center">Switching Networks</AlertDialog.Title>
+				<AlertDialog.Description class="text-center">
+					Your scoreboard is connecting to "{targetStationSsid}".
+				</AlertDialog.Description>
+			</AlertDialog.Header>
+
+			<div class="space-y-4 py-4">
+				<div class="space-y-3">
+					<div class="flex items-start gap-3">
+						<span
+							class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium"
+							>1</span
+						>
+						<div class="flex-1">
+							<p class="text-sm">Connect your device to:</p>
+							<div
+								class="mt-1 flex items-center gap-2 rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm"
+							>
+								<Wifi class="h-4 w-4 text-muted-foreground" />
+								<span class="font-medium">{targetStationSsid}</span>
+							</div>
+						</div>
+					</div>
+
+					<div class="flex items-start gap-3">
+						<span
+							class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium"
+							>2</span
+						>
+						<div class="flex-1">
+							<p class="text-sm">Then access your scoreboard at:</p>
+							<div
+								class="mt-1 flex items-center justify-between rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm"
+							>
+								<span>http://{targetHostname}</span>
+								<Button
+									variant="ghost"
+									size="sm"
+									class="h-6 w-6 p-0"
+									onclick={() => copyToClipboard(`http://${targetHostname}`)}
+								>
+									{#if copiedUrl === `http://${targetHostname}`}
+										<Check class="h-4 w-4 text-green-500" />
+									{:else}
+										<Copy class="h-4 w-4" />
+									{/if}
+								</Button>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<Alert.Root class="border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950">
+					<AlertTriangle class="h-5 w-5 text-amber-600 dark:text-amber-500" />
+					<Alert.Description class="text-amber-800 dark:text-amber-200">
+						If the connection fails, device will create a
+						<span class="font-medium">"{targetApSsid}"</span> network for setup.
+					</Alert.Description>
+				</Alert.Root>
+			</div>
+
+			<AlertDialog.Footer class="sm:justify-center">
+				<Button onclick={() => rebootStore.redirectToTarget()} class="w-full sm:w-auto">
+					I'm Connected
+				</Button>
+			</AlertDialog.Footer>
+		{:else if rebootStore.state === 'password_changed'}
+			<!-- Password Changed - Might succeed or fail -->
+			<AlertDialog.Header>
+				<div class="flex justify-center">
+					<div class="rounded-full bg-primary/10 p-3">
+						<Wifi class="h-8 w-8 text-primary" />
+					</div>
+				</div>
+				<AlertDialog.Title class="text-center">WiFi Password Changed</AlertDialog.Title>
+				<AlertDialog.Description class="text-center">
+					Your scoreboard is reconnecting with the new password.
+				</AlertDialog.Description>
+			</AlertDialog.Header>
+
+			<div class="space-y-4 py-4">
+				<div class="space-y-4 rounded-md border p-4">
+					<div>
+						<p class="text-sm font-medium">If successful:</p>
+						<p class="mt-1 text-sm text-muted-foreground">
+							Access your scoreboard at:
+						</p>
+						<div
+							class="mt-2 flex items-center justify-between rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm"
+						>
+							<span>http://{targetHostname}</span>
+							<Button
+								variant="ghost"
+								size="sm"
+								class="h-6 w-6 p-0"
+								onclick={() => copyToClipboard(`http://${targetHostname}`)}
+							>
+								{#if copiedUrl === `http://${targetHostname}`}
+									<Check class="h-4 w-4 text-green-500" />
+								{:else}
+									<Copy class="h-4 w-4" />
+								{/if}
+							</Button>
+						</div>
+					</div>
+
+					<div class="border-t pt-4">
+						<p class="text-sm font-medium">If password is incorrect:</p>
+						<p class="mt-1 text-sm text-muted-foreground">
+							Connect to the <span class="font-medium">"{targetApSsid}"</span> network and open:
+						</p>
+						<div
+							class="mt-2 flex items-center justify-between rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm"
+						>
+							<span>{rebootStore.targetApUrl}</span>
+							<Button
+								variant="ghost"
+								size="sm"
+								class="h-6 w-6 p-0"
+								onclick={() => copyToClipboard(rebootStore.targetApUrl)}
+							>
+								{#if copiedUrl === rebootStore.targetApUrl}
+									<Check class="h-4 w-4 text-green-500" />
+								{:else}
+									<Copy class="h-4 w-4" />
+								{/if}
+							</Button>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<AlertDialog.Footer class="sm:justify-center">
+				<Button onclick={() => rebootStore.redirectToTarget()} class="w-full sm:w-auto">
+					I'm Connected
+				</Button>
+			</AlertDialog.Footer>
 		{:else if rebootStore.state === 'redirecting'}
 			<!-- Redirecting to new address -->
 			<div class="flex flex-col items-center py-6 text-center">

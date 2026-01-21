@@ -13,6 +13,8 @@ import network
 import time
 import machine
 import uasyncio as asyncio
+import gc
+import os
 from lib.microdot import Microdot, Response, send_file
 from lib.scoreboard import Config
 from lib.scoreboard.api_client import ScoreboardApiClient
@@ -30,12 +32,38 @@ app.setup_mode = False
 app.setup_reason = None  # 'no_network_configured' | 'connection_failed' | None
 
 
+def get_memory_stats():
+    """Get current memory usage statistics."""
+    gc.collect()  # Run GC first for accurate reading
+    memory_used = gc.mem_alloc()
+    memory_free = gc.mem_free()
+
+    # Flash filesystem usage via statvfs
+    stat = os.statvfs('/')
+    block_size = stat[0]
+    total_blocks = stat[2]
+    free_blocks = stat[3]
+    flash_total = block_size * total_blocks
+    flash_free = block_size * free_blocks
+    flash_used = flash_total - flash_free
+
+    return {
+        'memory_used': memory_used,
+        'memory_free': memory_free,
+        'flash_used': flash_used,
+        'flash_free': flash_free
+    }
+
+
 def get_network_status():
     """Build current network status dict for API."""
     ap = getattr(app, 'ap', None)
     wlan = getattr(app, 'wlan', None)
     setup_mode = getattr(app, 'setup_mode', False)
     setup_reason = getattr(app, 'setup_reason', None)
+
+    # Get memory stats (same for all modes)
+    memory = get_memory_stats()
 
     if ap and ap.active():
         return {
@@ -47,7 +75,11 @@ def get_network_status():
             'ip': None,
             'hostname': None,
             'ap_ip': ap.ifconfig()[0],
-            'ap_ssid': config.device_name
+            'ap_ssid': config.device_name,
+            'memory_used': memory['memory_used'],
+            'memory_free': memory['memory_free'],
+            'flash_used': memory['flash_used'],
+            'flash_free': memory['flash_free']
         }
     elif wlan and wlan.isconnected():
         return {
@@ -59,7 +91,11 @@ def get_network_status():
             'ip': wlan.ifconfig()[0],
             'hostname': f'{config.device_name}.local',
             'ap_ip': None,
-            'ap_ssid': None
+            'ap_ssid': None,
+            'memory_used': memory['memory_used'],
+            'memory_free': memory['memory_free'],
+            'flash_used': memory['flash_used'],
+            'flash_free': memory['flash_free']
         }
     else:
         return {
@@ -71,7 +107,11 @@ def get_network_status():
             'ip': None,
             'hostname': None,
             'ap_ip': None,
-            'ap_ssid': None
+            'ap_ssid': None,
+            'memory_used': memory['memory_used'],
+            'memory_free': memory['memory_free'],
+            'flash_used': memory['flash_used'],
+            'flash_free': memory['flash_free']
         }
 
 

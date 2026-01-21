@@ -7,6 +7,9 @@ export type RebootState =
 	| 'polling'
 	| 'setup_complete'
 	| 'hostname_changed'
+	| 'network_reset'
+	| 'ssid_changed'
+	| 'password_changed'
 	| 'redirecting'
 	| 'connected'
 	| 'timeout'
@@ -15,7 +18,10 @@ export type RebootState =
 export type RebootScenario =
 	| 'same_connection'
 	| 'setup_complete'
-	| 'hostname_changed';
+	| 'hostname_changed'
+	| 'network_reset'
+	| 'ssid_changed'
+	| 'password_changed';
 
 // Polling configuration
 const POLLING_CONFIG = {
@@ -54,6 +60,11 @@ function getTargetUrl(config: Config): string {
 	// Always target station mode URL (no more AP mode as destination)
 	return `http://${config.network.device_name}.local`;
 }
+
+/**
+ * Get the AP mode URL (used when device enters setup mode)
+ */
+const AP_URL = 'http://10.4.1.1';
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -151,6 +162,9 @@ function createRebootStore() {
 	// Computed: target URL based on config
 	const targetUrl = $derived(targetConfig ? getTargetUrl(targetConfig) : null);
 
+	// AP URL for setup/reset scenarios
+	const targetApUrl = AP_URL;
+
 	return {
 		// Getters
 		get state() {
@@ -183,15 +197,32 @@ function createRebootStore() {
 		get targetUrl() {
 			return targetUrl;
 		},
+		get targetApUrl() {
+			return targetApUrl;
+		},
 
 		/**
-		 * Initiate reboot with context for handling reconnection
+		 * Initiate reboot with context for handling reconnection.
+		 * Automatically determines the scenario based on current status and config.
 		 */
 		async initiateReboot(currentStatus: NetworkStatus, currentConfig: Config) {
+			const detectedScenario = determineScenario(currentStatus, currentConfig);
+			await this.initiateRebootWithScenario(currentStatus, currentConfig, detectedScenario);
+		},
+
+		/**
+		 * Initiate reboot with an explicit scenario.
+		 * Use this when you know the scenario ahead of time (e.g., network reset).
+		 */
+		async initiateRebootWithScenario(
+			currentStatus: NetworkStatus,
+			currentConfig: Config,
+			explicitScenario: RebootScenario
+		) {
 			// Capture pre-reboot state
 			preRebootStatus = currentStatus;
 			targetConfig = currentConfig;
-			scenario = determineScenario(currentStatus, currentConfig);
+			scenario = explicitScenario;
 			attemptNumber = 0;
 			errorMessage = null;
 
@@ -201,19 +232,40 @@ function createRebootStore() {
 				await picoApi.reboot();
 
 				// Transition based on scenario
-				if (scenario === 'same_connection') {
-					state = 'polling';
-					this.startPolling();
-				} else if (scenario === 'setup_complete') {
-					// Completing setup - switching from AP to station mode
-					state = 'setup_complete';
-				} else if (scenario === 'hostname_changed') {
-					// Hostname is changing but we're on the same network
-					// Auto-redirect after giving the device time to reboot
-					state = 'hostname_changed';
-					startCountdown(15, () => {
-						this.redirectToTarget();
-					});
+				switch (scenario) {
+					case 'same_connection':
+						state = 'polling';
+						this.startPolling();
+						break;
+
+					case 'setup_complete':
+						// Completing setup - switching from AP to station mode
+						state = 'setup_complete';
+						break;
+
+					case 'hostname_changed':
+						// Hostname is changing but we're on the same network
+						// Auto-redirect after giving the device time to reboot
+						state = 'hostname_changed';
+						startCountdown(15, () => {
+							this.redirectToTarget();
+						});
+						break;
+
+					case 'network_reset':
+						// Network credentials cleared - device will enter AP mode
+						state = 'network_reset';
+						break;
+
+					case 'ssid_changed':
+						// SSID changed - user needs to switch networks
+						state = 'ssid_changed';
+						break;
+
+					case 'password_changed':
+						// Password changed - might succeed or fail
+						state = 'password_changed';
+						break;
 				}
 			} catch (e) {
 				errorMessage = e instanceof Error ? e.message : 'Failed to initiate reboot';
@@ -269,6 +321,15 @@ function createRebootStore() {
 				state = 'redirecting';
 				window.location.href = targetUrl;
 			}
+		},
+
+		/**
+		 * Redirect to the AP URL (for network reset scenarios)
+		 */
+		redirectToAp() {
+			clearCountdown();
+			state = 'redirecting';
+			window.location.href = targetApUrl;
 		},
 
 		/**

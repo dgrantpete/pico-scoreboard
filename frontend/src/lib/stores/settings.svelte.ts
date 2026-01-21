@@ -1,5 +1,5 @@
 import { picoApi, type Config, type ConfigUpdate, type NetworkStatus } from '$lib/api';
-import { rebootStore } from './reboot.svelte';
+import { rebootStore, type RebootScenario } from './reboot.svelte';
 
 /**
  * Extract a nested value from config using a dot-notation path
@@ -61,6 +61,9 @@ export function createSettingsStore() {
 	// Current config (working copy)
 	let config = $state<Config | null>(null);
 
+	// Original config (snapshot from last load/save, used to detect changes)
+	let originalConfig = $state<Config | null>(null);
+
 	// Network status
 	let status = $state<NetworkStatus | null>(null);
 
@@ -82,6 +85,37 @@ export function createSettingsStore() {
 
 	// Computed: the pending changes to send
 	const pendingChanges = $derived(config ? buildUpdateFromTouched(config, touchedFields) : {});
+
+	/**
+	 * Determine the reboot scenario based on what changed between original and current config
+	 */
+	function determineRebootScenario(): RebootScenario {
+		if (!config || !originalConfig) {
+			return 'same_connection';
+		}
+
+		const ssidChanged = config.network.ssid !== originalConfig.network.ssid;
+		const passwordChanged = config.network.password !== originalConfig.network.password;
+		const hostnameChanged = config.network.device_name !== originalConfig.network.device_name;
+
+		// SSID change takes priority - user must switch networks
+		if (ssidChanged) {
+			return 'ssid_changed';
+		}
+
+		// Password-only change - risky, might fail
+		if (passwordChanged) {
+			return 'password_changed';
+		}
+
+		// Hostname-only change - redirect to new address
+		if (hostnameChanged) {
+			return 'hostname_changed';
+		}
+
+		// No network changes
+		return 'same_connection';
+	}
 
 	return {
 		// Getters
@@ -172,6 +206,8 @@ export function createSettingsStore() {
 					picoApi.getStatus()
 				]);
 				config = configData;
+				// Deep clone to preserve original values for comparison
+				originalConfig = JSON.parse(JSON.stringify(configData));
 				status = statusData;
 			} catch (e) {
 				error = e instanceof Error ? e.message : 'Failed to load configuration';
@@ -234,12 +270,15 @@ export function createSettingsStore() {
 		},
 
 		/**
-		 * Reboot device - delegates to reboot store for graceful handling
+		 * Reboot device - delegates to reboot store for graceful handling.
+		 * Automatically determines the scenario based on what config fields changed.
 		 */
 		async reboot() {
 			if (!config || !status) return;
 			showRebootPrompt = false;
-			await rebootStore.initiateReboot(status, config);
+
+			const scenario = determineRebootScenario();
+			await rebootStore.initiateRebootWithScenario(status, config, scenario);
 		},
 
 		/**

@@ -171,3 +171,54 @@ class ScoreboardApiClient:
         except (ApiError, OSError, ValueError) as e:
             print(f"API error: {e}")
             return []
+
+    def get_game_raw(self, event_id: str):
+        """
+        Fetch raw game data bytes without parsing.
+
+        Returns the response body as raw bytes, avoiding JSON
+        serialization/deserialization overhead on the Pico.
+
+        Args:
+            event_id: ESPN event ID (numeric string)
+
+        Returns:
+            Tuple of (status_code, body_bytes)
+
+        Raises:
+            OSError: On network errors (WiFi disconnected, DNS failure, etc.)
+        """
+        url = f"{self._config.api_url}/api/games/{event_id}"
+        headers = {"X-Api-Key": self._config.api_key}
+
+        response = None
+        try:
+            response = urequests.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECS)
+            return (response.status_code, response.content)
+        finally:
+            if response is not None:
+                response.close()
+
+    def get_all_games_raw(self):
+        """
+        Fetch raw games list bytes without parsing.
+
+        Returns the response body as raw bytes, avoiding JSON
+        serialization/deserialization overhead on the Pico.
+
+        Returns:
+            Tuple of (status_code, body_bytes)
+
+        Raises:
+            OSError: On network errors (WiFi disconnected, DNS failure, etc.)
+        """
+        url = f"{self._config.api_url}/api/games"
+        headers = {"X-Api-Key": self._config.api_key}
+
+        response = None
+        try:
+            response = urequests.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECS)
+            return (response.status_code, response.content)
+        finally:
+            if response is not None:
+                response.close()
