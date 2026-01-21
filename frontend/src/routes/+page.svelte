@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -224,7 +225,7 @@
 							></span>
 							<span class="relative inline-flex h-2 w-2 rounded-full bg-red-500"></span>
 						</span>
-						<span class="font-medium text-red-500">LIVE</span>
+						<Badge variant="destructive">LIVE</Badge>
 						<span class="text-muted-foreground">•</span>
 					{/if}
 					<span class="font-medium">{currentGame.quarter}</span>
@@ -289,9 +290,7 @@
 				{#if currentGame.status === 'active' && currentGame.down}
 					<div class="mt-4 flex items-center justify-center gap-2">
 						{#if currentGame.redZone}
-							<span class="rounded bg-red-500 px-2 py-0.5 text-xs font-bold text-white">
-								RED ZONE
-							</span>
+							<Badge variant="destructive">RED ZONE</Badge>
 						{/if}
 						<span class="text-sm font-medium">
 							{formatDownAndDistance(currentGame.down, currentGame.distance)}

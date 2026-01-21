@@ -1,6 +1,8 @@
 <script lang="ts">
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import * as Alert from '$lib/components/ui/alert';
 	import { Button } from '$lib/components/ui/button';
+	import { Progress } from '$lib/components/ui/progress';
 	import { rebootStore } from '$lib/stores/reboot.svelte';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import Wifi from '@lucide/svelte/icons/wifi';
@@ -61,12 +63,7 @@
 					<div class="flex items-center justify-between text-sm text-muted-foreground">
 						<span>Attempt {rebootStore.attemptNumber}</span>
 					</div>
-					<div class="h-2 w-full overflow-hidden rounded-full bg-muted">
-						<div
-							class="h-full bg-primary transition-all duration-500"
-							style="width: {progressPercent}%"
-						></div>
-					</div>
+					<Progress value={progressPercent} class="h-2" />
 				</div>
 			</div>
 		{:else if rebootStore.state === 'setup_complete'}
@@ -129,15 +126,13 @@
 					</div>
 				</div>
 
-				<div class="rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950">
-					<div class="flex gap-2">
-						<AlertTriangle class="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-500" />
-						<p class="text-sm text-amber-800 dark:text-amber-200">
-							If the device can't connect to WiFi, it will create a
-							<span class="font-medium">"{targetApSsid}"</span> network for setup.
-						</p>
-					</div>
-				</div>
+				<Alert.Root class="border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950">
+					<AlertTriangle class="h-5 w-5 text-amber-600 dark:text-amber-500" />
+					<Alert.Description class="text-amber-800 dark:text-amber-200">
+						If the device can't connect to WiFi, it will create a
+						<span class="font-medium">"{targetApSsid}"</span> network for setup.
+					</Alert.Description>
+				</Alert.Root>
 			</div>
 
 			<AlertDialog.Footer class="sm:justify-center">

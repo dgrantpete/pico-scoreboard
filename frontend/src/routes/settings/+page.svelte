@@ -2,11 +2,13 @@
 	import { onMount } from "svelte";
 	import * as Card from "$lib/components/ui/card";
 	import * as AlertDialog from "$lib/components/ui/alert-dialog";
+	import * as Alert from "$lib/components/ui/alert";
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
 	import { Slider } from "$lib/components/ui/slider";
 	import { Separator } from "$lib/components/ui/separator";
 	import { Label } from "$lib/components/ui/label";
+	import { Skeleton } from "$lib/components/ui/skeleton";
 	import Save from "@lucide/svelte/icons/save";
 	import Eye from "@lucide/svelte/icons/eye";
 	import EyeOff from "@lucide/svelte/icons/eye-off";
@@ -26,17 +28,17 @@
 	// Reset network dialog state
 	let showResetDialog = $state(false);
 
-	// Local binding for brightness slider (array format for slider component)
+	// Local binding for brightness slider
 	let brightnessValue = $derived(
-		settingsStore.config ? [settingsStore.config.display.brightness] : [100],
+		settingsStore.config ? settingsStore.config.display.brightness : 100,
 	);
 
 	onMount(() => {
 		settingsStore.load();
 	});
 
-	function handleBrightnessChange(value: number[]) {
-		settingsStore.updateDisplay("brightness", value[0]);
+	function handleBrightnessChange(value: number) {
+		settingsStore.updateDisplay("brightness", value);
 	}
 
 	async function handleResetNetwork() {
@@ -58,14 +60,14 @@
 			{#each { length: 4 } as _}
 				<Card.Root>
 					<Card.Header>
-						<div class="h-6 w-32 animate-pulse rounded bg-muted"></div>
-						<div class="h-4 w-48 animate-pulse rounded bg-muted"></div>
+						<Skeleton class="h-6 w-32" />
+						<Skeleton class="h-4 w-48" />
 					</Card.Header>
 					<Card.Content class="space-y-4">
 						{#each { length: 2 } as _}
 							<div class="space-y-2">
-								<div class="h-4 w-24 animate-pulse rounded bg-muted"></div>
-								<div class="h-9 w-full animate-pulse rounded bg-muted"></div>
+								<Skeleton class="h-4 w-24" />
+								<Skeleton class="h-9 w-full" />
 							</div>
 						{/each}
 					</Card.Content>
@@ -351,6 +353,7 @@
 						>
 					</div>
 					<Slider
+						type="single"
 						value={brightnessValue}
 						onValueChange={handleBrightnessChange}
 						max={100}
@@ -409,17 +412,18 @@
 
 		<!-- Error banner -->
 		{#if settingsStore.error}
-			<div class="rounded-lg border border-destructive bg-destructive/10 p-4">
-				<p class="text-sm text-destructive">{settingsStore.error}</p>
-				<Button
-					variant="ghost"
-					size="sm"
-					class="mt-2"
-					onclick={() => settingsStore.clearError()}
-				>
-					Dismiss
-				</Button>
-			</div>
+			<Alert.Root variant="destructive">
+				<Alert.Description class="flex items-center justify-between">
+					<span>{settingsStore.error}</span>
+					<Button
+						variant="ghost"
+						size="sm"
+						onclick={() => settingsStore.clearError()}
+					>
+						Dismiss
+					</Button>
+				</Alert.Description>
+			</Alert.Root>
 		{/if}
 
 		<!-- Action Buttons -->

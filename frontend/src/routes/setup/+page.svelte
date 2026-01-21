@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import * as Card from "$lib/components/ui/card";
+	import * as Alert from "$lib/components/ui/alert";
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
 	import { Label } from "$lib/components/ui/label";
+	import { Skeleton } from "$lib/components/ui/skeleton";
 	import Eye from "@lucide/svelte/icons/eye";
 	import EyeOff from "@lucide/svelte/icons/eye-off";
 	import Wifi from "@lucide/svelte/icons/wifi";
@@ -87,18 +89,18 @@
 	{#if isLoading}
 		<!-- Loading skeleton -->
 		<div class="space-y-6">
-			<div class="h-8 w-64 animate-pulse rounded bg-muted"></div>
-			<div class="h-4 w-96 animate-pulse rounded bg-muted"></div>
+			<Skeleton class="h-8 w-64" />
+			<Skeleton class="h-4 w-96" />
 			{#each { length: 2 } as _}
 				<Card.Root>
 					<Card.Header>
-						<div class="h-6 w-32 animate-pulse rounded bg-muted"></div>
+						<Skeleton class="h-6 w-32" />
 					</Card.Header>
 					<Card.Content class="space-y-4">
 						{#each { length: 2 } as _}
 							<div class="space-y-2">
-								<div class="h-4 w-24 animate-pulse rounded bg-muted"></div>
-								<div class="h-9 w-full animate-pulse rounded bg-muted"></div>
+								<Skeleton class="h-4 w-24" />
+								<Skeleton class="h-9 w-full" />
 							</div>
 						{/each}
 					</Card.Content>
@@ -250,9 +252,9 @@
 
 		<!-- Error banner -->
 		{#if error}
-			<div class="rounded-lg border border-destructive bg-destructive/10 p-4">
-				<p class="text-sm text-destructive">{error}</p>
-			</div>
+			<Alert.Root variant="destructive">
+				<Alert.Description>{error}</Alert.Description>
+			</Alert.Root>
 		{/if}
 
 		<!-- Submit button -->
