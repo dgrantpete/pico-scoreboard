@@ -77,6 +77,15 @@ export const picoApi = {
 	},
 
 	/**
+	 * POST /api/reset-network - Clear network credentials
+	 * Clears SSID and password to trigger fresh setup mode on next boot.
+	 */
+	async resetNetwork(signal?: AbortSignal): Promise<{ message: string }> {
+		const response = await fetch('/api/reset-network', { method: 'POST', signal });
+		return handleResponse<{ message: string }>(response);
+	},
+
+	/**
 	 * GET /api/games - Fetch all games from the backend
 	 */
 	async getGames(signal?: AbortSignal): Promise<GameResponse[]> {

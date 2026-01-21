@@ -15,7 +15,6 @@ _DEFAULTS = {
     "network": {
         "ssid": "",
         "password": "",
-        "ap_mode": True,
         "device_name": "scoreboard",
         "connect_timeout_seconds": 15
     },
@@ -91,12 +90,15 @@ class Config:
             with open(self._path, 'r') as f:
                 data = json.load(f)
 
-            # Migrate old hostname/ap_ssid to device_name
+            # Migrate old config fields
             if 'network' in data:
                 if 'hostname' in data['network'] and 'device_name' not in data['network']:
                     data['network']['device_name'] = data['network'].pop('hostname')
                 if 'ap_ssid' in data['network']:
                     del data['network']['ap_ssid']
+                # Remove deprecated ap_mode (now determined automatically)
+                if 'ap_mode' in data['network']:
+                    del data['network']['ap_mode']
 
             return _deep_merge(_deep_copy(_DEFAULTS), data)
         except (OSError, ValueError):
@@ -156,11 +158,6 @@ class Config:
     def password(self) -> str:
         """WiFi password for station mode."""
         return self._data["network"]["password"]
-
-    @property
-    def ap_mode(self) -> bool:
-        """Whether to run in Access Point mode (True) or Station mode (False)."""
-        return self._data["network"]["ap_mode"]
 
     @property
     def device_name(self) -> str:

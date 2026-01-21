@@ -5,7 +5,6 @@
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
 	import { Slider } from "$lib/components/ui/slider";
-	import { Switch } from "$lib/components/ui/switch";
 	import { Separator } from "$lib/components/ui/separator";
 	import { Label } from "$lib/components/ui/label";
 	import Save from "@lucide/svelte/icons/save";
@@ -15,15 +14,17 @@
 	import Wifi from "@lucide/svelte/icons/wifi";
 	import WifiOff from "@lucide/svelte/icons/wifi-off";
 	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-	import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
-	import Radio from "@lucide/svelte/icons/radio";
 	import { settingsStore } from "$lib/stores/settings.svelte";
 	import { rebootStore } from "$lib/stores/reboot.svelte";
+	import { picoApi } from "$lib/api";
 	import RebootOverlay from "$lib/components/RebootOverlay.svelte";
 
 	// Password visibility toggles
 	let showWifiPassword = $state(false);
 	let showApiKey = $state(false);
+
+	// Reset network dialog state
+	let showResetDialog = $state(false);
 
 	// Local binding for brightness slider (array format for slider component)
 	let brightnessValue = $derived(
@@ -36,6 +37,12 @@
 
 	function handleBrightnessChange(value: number[]) {
 		settingsStore.updateDisplay("brightness", value[0]);
+	}
+
+	async function handleResetNetwork() {
+		showResetDialog = false;
+		await picoApi.resetNetwork();
+		await settingsStore.reboot();
 	}
 </script>
 
@@ -82,50 +89,46 @@
 	{:else if settingsStore.config}
 		<!-- Device Status -->
 		<Card.Root
-			class={settingsStore.status?.is_fallback ? "border-amber-500" : ""}
+			class={settingsStore.status?.setup_mode ? "border-amber-500" : ""}
 		>
 			<Card.Header>
 				<Card.Title class="flex items-center gap-2">
 					{#if settingsStore.status?.mode === "station" && settingsStore.status?.connected}
 						<Wifi class="h-5 w-5 text-green-500" />
-						Device Status
-					{:else if settingsStore.status?.mode === "ap" && settingsStore.status?.is_fallback}
-						<TriangleAlert class="h-5 w-5 text-amber-500" />
+						Connected to WiFi
+					{:else if settingsStore.status?.setup_mode && settingsStore.status?.setup_reason === "connection_failed"}
+						<WifiOff class="h-5 w-5 text-amber-500" />
 						Connection Failed
-					{:else if settingsStore.status?.mode === "ap"}
-						<Radio class="h-5 w-5 text-blue-500" />
-						Device Status
+					{:else if settingsStore.status?.setup_mode}
+						<WifiOff class="h-5 w-5 text-muted-foreground" />
+						Network Not Configured
 					{:else}
 						<WifiOff class="h-5 w-5 text-muted-foreground" />
-						Device Status
+						Not Connected
 					{/if}
 				</Card.Title>
 				<Card.Description>
-					{#if settingsStore.status?.mode === "station" && settingsStore.status?.connected}
-						Connected to WiFi
-					{:else if settingsStore.status?.mode === "ap" && settingsStore.status?.is_fallback}
+					{#if settingsStore.status?.setup_mode && settingsStore.status?.setup_reason === "connection_failed"}
 						Could not connect to "{settingsStore.status.configured_ssid}"
-					{:else if settingsStore.status?.mode === "ap"}
-						Access Point Mode
+					{:else if settingsStore.status?.setup_mode}
+						WiFi setup is required to fetch scores
+					{:else if settingsStore.status?.connected}
+						{settingsStore.status.ip} &bull; {settingsStore.status.hostname}
 					{:else}
 						Current network connection status
 					{/if}
 				</Card.Description>
 			</Card.Header>
 			<Card.Content>
-				{#if settingsStore.status}
+				{#if settingsStore.status?.setup_mode}
+					<Button href="#/setup">Complete Setup</Button>
+				{:else if settingsStore.status}
 					<div class="grid grid-cols-2 gap-4 text-sm">
 						<div>
 							<span class="text-muted-foreground">Mode:</span>
-							<span class="ml-2 font-medium">
-								{#if settingsStore.status.mode === "ap" && settingsStore.status.is_fallback}
-									AP (Fallback)
-								{:else if settingsStore.status.mode === "ap"}
-									AP
-								{:else}
-									{settingsStore.status.mode}
-								{/if}
-							</span>
+							<span class="ml-2 font-medium capitalize"
+								>{settingsStore.status.mode}</span
+							>
 						</div>
 						<div>
 							<span class="text-muted-foreground">Connected:</span>
@@ -169,72 +172,53 @@
 		<Card.Root>
 			<Card.Header>
 				<Card.Title>Network</Card.Title>
-				<Card.Description>WiFi and Access Point configuration</Card.Description>
+				<Card.Description>WiFi connection settings</Card.Description>
 			</Card.Header>
 			<Card.Content class="space-y-4">
-				<!-- AP Mode Toggle -->
-				<div class="flex items-center justify-between">
-					<div class="space-y-0.5">
-						<Label>Access Point Mode</Label>
-						<p class="text-sm text-muted-foreground">
-							Create a WiFi network instead of joining one
-						</p>
-					</div>
-					<Switch
-						checked={settingsStore.config.network.ap_mode}
-						onCheckedChange={(checked) =>
-							settingsStore.updateNetwork("ap_mode", checked)}
+				<!-- WiFi Settings -->
+				<div class="space-y-2">
+					<Label for="wifi-ssid">WiFi Network (SSID)</Label>
+					<Input
+						id="wifi-ssid"
+						type="text"
+						placeholder="Enter network name"
+						value={settingsStore.config.network.ssid}
+						oninput={(e) =>
+							settingsStore.updateNetwork(
+								"ssid",
+								(e.target as HTMLInputElement).value,
+							)}
 					/>
 				</div>
-
-				{#if !settingsStore.config.network.ap_mode}
-					<Separator />
-
-					<!-- Station Mode Settings -->
-					<div class="space-y-2">
-						<Label for="wifi-ssid">WiFi Network (SSID)</Label>
+				<div class="space-y-2">
+					<Label for="wifi-password">WiFi Password</Label>
+					<div class="relative">
 						<Input
-							id="wifi-ssid"
-							type="text"
-							placeholder="Enter network name"
-							value={settingsStore.config.network.ssid}
+							id="wifi-password"
+							type={showWifiPassword ? "text" : "password"}
+							placeholder="Enter password"
+							value={settingsStore.config.network.password}
 							oninput={(e) =>
 								settingsStore.updateNetwork(
-									"ssid",
+									"password",
 									(e.target as HTMLInputElement).value,
 								)}
+							class="pr-10"
 						/>
+						<Button
+							variant="ghost"
+							size="sm"
+							class="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+							onclick={() => (showWifiPassword = !showWifiPassword)}
+						>
+							{#if showWifiPassword}
+								<EyeOff class="h-4 w-4 text-muted-foreground" />
+							{:else}
+								<Eye class="h-4 w-4 text-muted-foreground" />
+							{/if}
+						</Button>
 					</div>
-					<div class="space-y-2">
-						<Label for="wifi-password">WiFi Password</Label>
-						<div class="relative">
-							<Input
-								id="wifi-password"
-								type={showWifiPassword ? "text" : "password"}
-								placeholder="Enter password"
-								value={settingsStore.config.network.password}
-								oninput={(e) =>
-									settingsStore.updateNetwork(
-										"password",
-										(e.target as HTMLInputElement).value,
-									)}
-								class="pr-10"
-							/>
-							<Button
-								variant="ghost"
-								size="sm"
-								class="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
-								onclick={() => (showWifiPassword = !showWifiPassword)}
-							>
-								{#if showWifiPassword}
-									<EyeOff class="h-4 w-4 text-muted-foreground" />
-								{:else}
-									<Eye class="h-4 w-4 text-muted-foreground" />
-								{/if}
-							</Button>
-						</div>
-					</div>
-				{/if}
+				</div>
 
 				<Separator />
 
@@ -252,12 +236,7 @@
 							)}
 					/>
 					<p class="text-xs text-muted-foreground">
-						{#if settingsStore.config.network.ap_mode}
-							WiFi network name when in AP mode
-						{:else}
-							Access the device at {settingsStore.config.network
-								.device_name}.local
-						{/if}
+						Access the device at {settingsStore.config.network.device_name}.local
 					</p>
 				</div>
 
@@ -275,8 +254,27 @@
 							)}
 					/>
 					<p class="text-xs text-muted-foreground">
-						Time to wait before falling back to Access Point mode
+						Time to wait before falling back to setup mode
 					</p>
+				</div>
+
+				<Separator />
+
+				<!-- Reset Network -->
+				<div class="flex items-center justify-between">
+					<div class="space-y-0.5">
+						<Label>Reset Network</Label>
+						<p class="text-sm text-muted-foreground">
+							Clear WiFi credentials and return to setup mode
+						</p>
+					</div>
+					<Button
+						variant="destructive"
+						onclick={() => (showResetDialog = true)}
+						disabled={rebootStore.isActive}
+					>
+						Reset Network
+					</Button>
 				</div>
 			</Card.Content>
 		</Card.Root>
@@ -471,6 +469,28 @@
 			</AlertDialog.Cancel>
 			<AlertDialog.Action onclick={() => settingsStore.reboot()}
 				>Reboot Now</AlertDialog.Action
+			>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
+
+<!-- Reset Network Confirmation Dialog -->
+<AlertDialog.Root open={showResetDialog}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Reset Network Settings?</AlertDialog.Title>
+			<AlertDialog.Description>
+				This will clear your WiFi credentials and reboot the device into setup
+				mode. You'll need to reconnect to the scoreboard's WiFi network to
+				reconfigure it.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel onclick={() => (showResetDialog = false)}>
+				Cancel
+			</AlertDialog.Cancel>
+			<AlertDialog.Action onclick={handleResetNetwork}
+				>Reset & Reboot</AlertDialog.Action
 			>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>

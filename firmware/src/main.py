@@ -2,11 +2,11 @@
 Pico Scoreboard Web Server.
 
 Serves the SvelteKit frontend from flash memory and provides
-network connectivity in either AP or Station mode.
+network connectivity.
 
-On first boot (ap_mode=true), creates an open WiFi network
-for initial setup. Once configured, connects to the specified
-WiFi network with automatic fallback to AP mode on failure.
+Automatically enters setup mode (AP) when no WiFi is configured
+or when connection to the configured network fails. Once properly
+configured, connects to the specified WiFi network.
 """
 
 import network
@@ -25,21 +25,25 @@ Response.send_file_buffer_size = 512
 app = Microdot()
 config = Config()
 
-# Track whether we're in fallback AP mode (connection failed vs intentional AP mode)
-app.is_fallback_ap = False
+# Track setup mode state
+app.setup_mode = False
+app.setup_reason = None  # 'no_network_configured' | 'connection_failed' | None
 
 
 def get_network_status():
     """Build current network status dict for API."""
     ap = getattr(app, 'ap', None)
     wlan = getattr(app, 'wlan', None)
+    setup_mode = getattr(app, 'setup_mode', False)
+    setup_reason = getattr(app, 'setup_reason', None)
 
     if ap and ap.active():
         return {
             'mode': 'ap',
             'connected': False,
-            'is_fallback': app.is_fallback_ap,
-            'configured_ssid': config.ssid if app.is_fallback_ap else None,
+            'setup_mode': setup_mode,
+            'setup_reason': setup_reason,
+            'configured_ssid': config.ssid if setup_reason == 'connection_failed' else None,
             'ip': None,
             'hostname': None,
             'ap_ip': ap.ifconfig()[0],
@@ -49,21 +53,25 @@ def get_network_status():
         return {
             'mode': 'station',
             'connected': True,
-            'is_fallback': False,
+            'setup_mode': False,
+            'setup_reason': None,
             'configured_ssid': None,
             'ip': wlan.ifconfig()[0],
             'hostname': f'{config.device_name}.local',
-            'ap_ip': None
+            'ap_ip': None,
+            'ap_ssid': None
         }
     else:
         return {
             'mode': 'unknown',
             'connected': False,
-            'is_fallback': False,
+            'setup_mode': False,
+            'setup_reason': None,
             'configured_ssid': None,
             'ip': None,
             'hostname': None,
-            'ap_ip': None
+            'ap_ip': None,
+            'ap_ssid': None
         }
 
 
@@ -99,10 +107,10 @@ async def index(request):
     ap = getattr(app, 'ap', None)
     host = request.headers.get('Host', '').split(':')[0]
 
-    # If this is a hijacked request (DNS lie), redirect to our IP to trigger portal
+    # If this is a hijacked request (DNS lie), redirect to setup page to trigger portal
     if ap and host not in get_my_hosts(ap):
         redirect_ip = ap.ifconfig()[0]
-        return '', 302, {'Location': f'http://{redirect_ip}/'}
+        return '', 302, {'Location': f'http://{redirect_ip}/#/setup'}
 
     response = send_file('/index.html.gz', content_type='text/html', compressed='gzip')
 
@@ -126,9 +134,9 @@ async def catch_all(request, path):
     if host in get_my_hosts(ap):
         return 'Not found', 404  # Legit request for path that doesn't exist
 
-    # Hijacked request (DNS lie) -> redirect to trigger captive portal
+    # Hijacked request (DNS lie) -> redirect to setup page to trigger captive portal
     redirect_ip = ap.ifconfig()[0] if ap else '192.168.4.1'
-    return '', 302, {'Location': f'http://{redirect_ip}/'}
+    return '', 302, {'Location': f'http://{redirect_ip}/#/setup'}
 
 
 def start_ap_mode():
@@ -195,17 +203,27 @@ def start_station_mode():
 
 async def main():
     """Main entry point."""
-    if config.ap_mode:
+    if not config.ssid:
+        # No network configured - fresh setup mode
+        print("No WiFi configured. Starting setup mode...")
+        app.setup_mode = True
+        app.setup_reason = "no_network_configured"
         ap = start_ap_mode()
-        # Start DNS server for captive portal
         asyncio.create_task(run_dns_server(ap.ifconfig()[0]))
     else:
+        # Try to connect to configured network
         wlan = start_station_mode()
         if wlan is None:
-            print("Falling back to AP mode...")
-            app.is_fallback_ap = True  # Mark as fallback (connection failed)
+            # Connection failed - emergency setup mode
+            print("Connection failed. Starting setup mode...")
+            app.setup_mode = True
+            app.setup_reason = "connection_failed"
             ap = start_ap_mode()
             asyncio.create_task(run_dns_server(ap.ifconfig()[0]))
+        else:
+            # Normal operation
+            app.setup_mode = False
+            app.setup_reason = None
 
     print("Starting web server on port 80...")
     await app.start_server(port=80)

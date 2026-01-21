@@ -5,8 +5,7 @@ export type RebootState =
 	| 'idle'
 	| 'initiating'
 	| 'polling'
-	| 'switching_to_ap'
-	| 'switching_to_station'
+	| 'setup_complete'
 	| 'hostname_changed'
 	| 'redirecting'
 	| 'connected'
@@ -15,8 +14,7 @@ export type RebootState =
 
 export type RebootScenario =
 	| 'same_connection'
-	| 'switching_to_ap'
-	| 'switching_to_station'
+	| 'setup_complete'
 	| 'hostname_changed';
 
 // Polling configuration
@@ -32,24 +30,16 @@ const POLLING_CONFIG = {
  * Determine which reboot scenario we're in based on current status and target config
  */
 function determineScenario(status: NetworkStatus, config: Config): RebootScenario {
-	const currentMode = status.mode;
-	const targetApMode = config.network.ap_mode;
-	const currentApSsid = status.ap_ssid;
-	const targetDeviceName = config.network.device_name;
+	// If we're in setup mode and have a configured SSID, we're completing setup
+	if (status.setup_mode && config.network.ssid) {
+		return 'setup_complete';
+	}
+
 	// Current hostname without .local suffix
 	const currentHostname = status.hostname?.replace(/\.local$/, '');
 
-	// Switching to AP mode?
-	if (targetApMode) {
-		if (currentMode === 'station') return 'switching_to_ap';
-		if (currentMode === 'ap' && currentApSsid !== targetDeviceName) return 'switching_to_ap';
-	}
-
-	// Switching to Station mode?
-	if (!targetApMode && currentMode === 'ap') return 'switching_to_station';
-
-	// Staying in station mode but hostname is changing?
-	if (!targetApMode && currentMode === 'station' && currentHostname !== targetDeviceName) {
+	// Hostname changing in station mode?
+	if (status.mode === 'station' && currentHostname !== config.network.device_name) {
 		return 'hostname_changed';
 	}
 
@@ -61,9 +51,7 @@ function determineScenario(status: NetworkStatus, config: Config): RebootScenari
  * Get the URL to redirect to after reboot based on the target config
  */
 function getTargetUrl(config: Config): string {
-	if (config.network.ap_mode) {
-		return 'http://192.168.4.1';
-	}
+	// Always target station mode URL (no more AP mode as destination)
 	return `http://${config.network.device_name}.local`;
 }
 
@@ -216,10 +204,9 @@ function createRebootStore() {
 				if (scenario === 'same_connection') {
 					state = 'polling';
 					this.startPolling();
-				} else if (scenario === 'switching_to_ap') {
-					state = 'switching_to_ap';
-				} else if (scenario === 'switching_to_station') {
-					state = 'switching_to_station';
+				} else if (scenario === 'setup_complete') {
+					// Completing setup - switching from AP to station mode
+					state = 'setup_complete';
 				} else if (scenario === 'hostname_changed') {
 					// Hostname is changing but we're on the same network
 					// Auto-redirect after giving the device time to reboot

@@ -120,6 +120,13 @@ def create_api(config, get_network_status, api_client=None):
         asyncio.create_task(_delayed_reboot())
         return {'message': 'Rebooting in 1 second...'}
 
+    @api.post('/reset-network')
+    async def reset_network(request):
+        """Clear network credentials to trigger fresh setup on next boot."""
+        config.update('network', 'ssid', '')
+        config.update('network', 'password', '')
+        return {'message': 'Network configuration cleared. Reboot to enter setup mode.'}
+
     # Game endpoints (only if api_client is provided)
     if api_client is not None:
         @api.get('/games')

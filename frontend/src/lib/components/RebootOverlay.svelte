@@ -69,91 +69,17 @@
 					</div>
 				</div>
 			</div>
-		{:else if rebootStore.state === 'switching_to_ap'}
-			<!-- Switching to AP mode -->
+		{:else if rebootStore.state === 'setup_complete'}
+			<!-- Setup Complete - Switching from AP to Station mode -->
 			<AlertDialog.Header>
 				<div class="flex justify-center">
-					<div class="rounded-full bg-primary/10 p-3">
-						<Wifi class="h-8 w-8 text-primary" />
+					<div class="rounded-full bg-green-100 p-3 dark:bg-green-900">
+						<CheckCircle2 class="h-8 w-8 text-green-600 dark:text-green-400" />
 					</div>
 				</div>
-				<AlertDialog.Title class="text-center">Connect to the device's network</AlertDialog.Title>
+				<AlertDialog.Title class="text-center">Setup Complete!</AlertDialog.Title>
 				<AlertDialog.Description class="text-center">
-					The device is rebooting into Access Point mode.
-				</AlertDialog.Description>
-			</AlertDialog.Header>
-
-			<div class="space-y-4 py-4">
-				<div class="space-y-3">
-					<div class="flex items-start gap-3">
-						<span
-							class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium"
-							>1</span
-						>
-						<p class="text-sm">Open your WiFi settings</p>
-					</div>
-
-					<div class="flex items-start gap-3">
-						<span
-							class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium"
-							>2</span
-						>
-						<div class="flex-1">
-							<p class="text-sm">Connect to:</p>
-							<div
-								class="mt-1 flex items-center gap-2 rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm"
-							>
-								<Wifi class="h-4 w-4 text-muted-foreground" />
-								<span class="font-medium">{targetApSsid}</span>
-							</div>
-						</div>
-					</div>
-
-					<div class="flex items-start gap-3">
-						<span
-							class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium"
-							>3</span
-						>
-						<div class="flex-1">
-							<p class="text-sm">Then open:</p>
-							<div
-								class="mt-1 flex items-center justify-between rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm"
-							>
-								<span>http://192.168.4.1</span>
-								<Button
-									variant="ghost"
-									size="sm"
-									class="h-6 w-6 p-0"
-									onclick={() => copyToClipboard('http://192.168.4.1')}
-								>
-									{#if copiedUrl === 'http://192.168.4.1'}
-										<Check class="h-4 w-4 text-green-500" />
-									{:else}
-										<Copy class="h-4 w-4" />
-									{/if}
-								</Button>
-							</div>
-						</div>
-					</div>
-				</div>
-			</div>
-
-			<AlertDialog.Footer class="sm:justify-center">
-				<Button onclick={() => rebootStore.userConfirmedConnection()} class="w-full sm:w-auto">
-					I'm Connected
-				</Button>
-			</AlertDialog.Footer>
-		{:else if rebootStore.state === 'switching_to_station'}
-			<!-- Switching to Station mode -->
-			<AlertDialog.Header>
-				<div class="flex justify-center">
-					<div class="rounded-full bg-primary/10 p-3">
-						<Wifi class="h-8 w-8 text-primary" />
-					</div>
-				</div>
-				<AlertDialog.Title class="text-center">Connect to your WiFi network</AlertDialog.Title>
-				<AlertDialog.Description class="text-center">
-					The device is rebooting and will connect to your WiFi.
+					Your scoreboard is connecting to "{targetStationSsid}".
 				</AlertDialog.Description>
 			</AlertDialog.Header>
 
@@ -165,7 +91,7 @@
 							>1</span
 						>
 						<div class="flex-1">
-							<p class="text-sm">Connect to your network:</p>
+							<p class="text-sm">Connect to your WiFi network:</p>
 							<div
 								class="mt-1 flex items-center gap-2 rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm"
 							>
@@ -181,7 +107,7 @@
 							>2</span
 						>
 						<div class="flex-1">
-							<p class="text-sm">Then open:</p>
+							<p class="text-sm">Then access your scoreboard at:</p>
 							<div
 								class="mt-1 flex items-center justify-between rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm"
 							>
@@ -208,7 +134,7 @@
 						<AlertTriangle class="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-500" />
 						<p class="text-sm text-amber-800 dark:text-amber-200">
 							If the device can't connect to WiFi, it will create a
-							<span class="font-medium">"{targetApSsid}"</span> network instead.
+							<span class="font-medium">"{targetApSsid}"</span> network for setup.
 						</p>
 					</div>
 				</div>

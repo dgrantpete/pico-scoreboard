@@ -2,7 +2,6 @@
 export interface NetworkConfig {
 	ssid: string;
 	password: string;
-	ap_mode: boolean;
 	device_name: string;
 	connect_timeout_seconds: number;
 }
@@ -52,7 +51,8 @@ export interface ConfigUpdate {
 export interface NetworkStatus {
 	mode: 'ap' | 'station' | 'unknown';
 	connected: boolean;
-	is_fallback: boolean;
+	setup_mode: boolean;
+	setup_reason: 'no_network_configured' | 'connection_failed' | null;
 	configured_ssid?: string | null;
 	ip?: string | null;
 	hostname?: string | null;

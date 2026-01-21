@@ -5,9 +5,10 @@
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import WifiOff from '@lucide/svelte/icons/wifi-off';
 	import { getTeamById } from '$lib/data/nfl-teams';
 	import { picoApi } from '$lib/api/pico-api';
-	import type { GameResponse } from '$lib/api/types';
+	import type { GameResponse, NetworkStatus } from '$lib/api/types';
 
 	interface GameData {
 		id: string;
@@ -89,6 +90,7 @@
 	let isLoading = $state(true);
 	let isRefreshing = $state(false);
 	let error = $state<string | null>(null);
+	let status = $state<NetworkStatus | null>(null);
 
 	let currentGame = $derived(games[currentGameIndex]);
 	let homeTeam = $derived(currentGame ? getTeamById(currentGame.homeTeamId) : null);
@@ -110,7 +112,17 @@
 	}
 
 	onMount(async () => {
-		await fetchGames();
+		// Fetch status first to check if we're in setup mode
+		try {
+			status = await picoApi.getStatus();
+		} catch (e) {
+			console.error('Failed to fetch status:', e);
+		}
+
+		// Only fetch games if not in setup mode
+		if (!status?.setup_mode) {
+			await fetchGames();
+		}
 		isLoading = false;
 	});
 
@@ -143,6 +155,32 @@
 				<div class="flex flex-col items-center gap-4">
 					<RefreshCw class="h-8 w-8 animate-spin text-muted-foreground" />
 					<p class="text-muted-foreground">Loading games...</p>
+				</div>
+			</Card.Content>
+		</Card.Root>
+	{:else if status?.setup_mode}
+		<!-- Setup Mode Guidance -->
+		<Card.Root class="w-full max-w-md border-amber-500">
+			<Card.Content class="p-6">
+				<div class="flex flex-col items-center gap-4 text-center">
+					<div class="rounded-full bg-amber-100 p-3 dark:bg-amber-900">
+						<WifiOff class="h-8 w-8 text-amber-600 dark:text-amber-400" />
+					</div>
+					<div>
+						<h3 class="text-lg font-semibold">Network Setup Required</h3>
+						{#if status.setup_reason === 'connection_failed'}
+							<p class="mt-1 text-sm text-muted-foreground">
+								We couldn't connect to your WiFi network. Please check your
+								network settings to view live scores.
+							</p>
+						{:else}
+							<p class="mt-1 text-sm text-muted-foreground">
+								Your scoreboard needs to be connected to WiFi to fetch live
+								game scores.
+							</p>
+						{/if}
+					</div>
+					<Button href="#/setup">Go to Setup</Button>
 				</div>
 			</Card.Content>
 		</Card.Root>
