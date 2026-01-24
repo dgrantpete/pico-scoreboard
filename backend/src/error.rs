@@ -11,6 +11,14 @@ use utoipa::ToSchema;
 pub enum AppError {
     /// Error making request to ESPN API
     EspnRequest(reqwest::Error),
+    /// Error fetching image from ESPN CDN
+    ImageFetch(reqwest::Error),
+    /// Error decoding or encoding image
+    ImageDecode(String),
+    /// Invalid hex color format
+    InvalidColor(String),
+    /// Team logo not found (ESPN returned 404)
+    TeamNotFound(String),
     /// Game not found in scoreboard
     GameNotFound(String),
     /// Invalid event ID format
@@ -37,6 +45,29 @@ impl IntoResponse for AppError {
                 StatusCode::BAD_GATEWAY,
                 "espn_error".to_string(),
                 format!("Failed to fetch data from ESPN: {}", e),
+            ),
+            AppError::ImageFetch(e) => (
+                StatusCode::BAD_GATEWAY,
+                "image_fetch_error".to_string(),
+                format!("Failed to fetch logo from ESPN: {}", e),
+            ),
+            AppError::ImageDecode(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "image_decode_error".to_string(),
+                format!("Failed to process image: {}", msg),
+            ),
+            AppError::InvalidColor(c) => (
+                StatusCode::BAD_REQUEST,
+                "invalid_color".to_string(),
+                format!(
+                    "Invalid hex color '{}'. Expected 6-digit RGB hex (e.g., 'FF0000')",
+                    c
+                ),
+            ),
+            AppError::TeamNotFound(team) => (
+                StatusCode::NOT_FOUND,
+                "team_not_found".to_string(),
+                format!("Team '{}' not found", team),
             ),
             AppError::GameNotFound(id) => (
                 StatusCode::NOT_FOUND,

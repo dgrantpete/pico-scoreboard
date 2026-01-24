@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
+	import TeamLogo from '$lib/components/team-logo.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
@@ -238,12 +239,12 @@
 				<div class="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
 					<!-- Away Team -->
 					<div class="text-center">
-						<div
-							class="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-lg text-lg font-bold text-white"
-							style="background-color: {awayTeam.primaryColor}"
-						>
-							{awayTeam.abbreviation}
-						</div>
+						<TeamLogo
+							teamId={awayTeam.id}
+							teamName={awayTeam.name}
+							abbreviation={awayTeam.abbreviation}
+							primaryColor={awayTeam.primaryColor}
+						/>
 						<div class="text-sm font-medium text-muted-foreground">
 							{awayTeam.city}
 						</div>
@@ -265,12 +266,12 @@
 
 					<!-- Home Team -->
 					<div class="text-center">
-						<div
-							class="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-lg text-lg font-bold text-white"
-							style="background-color: {homeTeam.primaryColor}"
-						>
-							{homeTeam.abbreviation}
-						</div>
+						<TeamLogo
+							teamId={homeTeam.id}
+							teamName={homeTeam.name}
+							abbreviation={homeTeam.abbreviation}
+							primaryColor={homeTeam.primaryColor}
+						/>
 						<div class="text-sm font-medium text-muted-foreground">
 							{homeTeam.city}
 						</div>

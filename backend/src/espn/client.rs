@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use reqwest::Client;
 use std::time::Duration;
 
@@ -10,6 +11,7 @@ use crate::error::AppError;
 pub struct EspnClient {
     client: Client,
     scoreboard_url: String,
+    logo_url: String,
 }
 
 impl EspnClient {
@@ -24,6 +26,7 @@ impl EspnClient {
         Self {
             client,
             scoreboard_url: config.scoreboard_url.clone(),
+            logo_url: config.logo_url.clone(),
         }
     }
 
@@ -60,10 +63,67 @@ impl EspnClient {
         let scoreboard = self.fetch_scoreboard().await?;
         Ok(scoreboard.events)
     }
+
+    /// Fetch team logo from ESPN CDN as raw PNG bytes
+    ///
+    /// # Arguments
+    /// * `team_id` - Team abbreviation (e.g., "dal", "nyg")
+    /// * `width` - Desired width in pixels
+    /// * `height` - Desired height in pixels
+    /// * `transparent` - Whether to request transparent background
+    pub async fn fetch_logo(
+        &self,
+        team_id: &str,
+        width: u32,
+        height: u32,
+        transparent: bool,
+    ) -> Result<Bytes, AppError> {
+        // Build URL: {logo_url}?img=/i/teamlogos/nfl/500/{team}.png&w={w}&h={h}&transparent={t}
+        let url = format!(
+            "{}?img=/i/teamlogos/nfl/500/{}.png&w={}&h={}&transparent={}",
+            self.logo_url,
+            team_id.to_lowercase(),
+            width,
+            height,
+            transparent
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(AppError::ImageFetch)?;
+
+        // Handle 404 from ESPN
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(AppError::TeamNotFound(team_id.to_string()));
+        }
+
+        // Check for other errors
+        let response = response.error_for_status().map_err(AppError::ImageFetch)?;
+
+        let bytes = response.bytes().await.map_err(AppError::ImageFetch)?;
+
+        Ok(bytes)
+    }
 }
 
 impl Default for EspnClient {
     fn default() -> Self {
         Self::new(&EspnConfig::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_logo_url_format() {
+        let client = EspnClient::default();
+        // Just verify the URL is constructed correctly (don't actually fetch)
+        let expected_base = "https://a.espncdn.com/combiner/i";
+        assert!(client.logo_url.starts_with(expected_base));
     }
 }

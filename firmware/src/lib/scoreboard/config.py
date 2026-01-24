@@ -16,7 +16,7 @@ _DEFAULTS = {
         "ssid": "",
         "password": "",
         "device_name": "scoreboard",
-        "connect_timeout_seconds": 15
+        "connect_timeout_seconds": 60
     },
     "api": {
         "url": "",

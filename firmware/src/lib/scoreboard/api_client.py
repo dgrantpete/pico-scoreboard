@@ -222,3 +222,44 @@ class ScoreboardApiClient:
         finally:
             if response is not None:
                 response.close()
+
+    def get_team_logo_raw(self, team_id: str, width: int = None, height: int = None,
+                         background_color: str = None, accept: str = None):
+        """
+        Fetch team logo as raw bytes.
+
+        Args:
+            team_id: Team abbreviation (e.g., "dal", "nyy")
+            width: Optional width in pixels
+            height: Optional height in pixels
+            background_color: Optional hex color (e.g., "FF0000")
+            accept: Optional Accept header value for format selection
+
+        Returns:
+            Tuple of (status_code, body_bytes)
+
+        Raises:
+            OSError: On network errors (WiFi disconnected, DNS failure, etc.)
+        """
+        url = f"{self._config.api_url}/api/teams/{team_id}/logo"
+        params = []
+        if width is not None:
+            params.append(f"width={width}")
+        if height is not None:
+            params.append(f"height={height}")
+        if background_color is not None:
+            params.append(f"background_color={background_color}")
+        if params:
+            url += "?" + "&".join(params)
+
+        headers = {"X-Api-Key": self._config.api_key}
+        if accept:
+            headers["Accept"] = accept
+
+        response = None
+        try:
+            response = urequests.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECS)
+            return (response.status_code, response.content)
+        finally:
+            if response is not None:
+                response.close()

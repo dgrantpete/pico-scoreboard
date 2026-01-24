@@ -32,6 +32,10 @@ pub struct EspnConfig {
     #[serde(default = "default_scoreboard_url")]
     pub scoreboard_url: String,
 
+    /// ESPN CDN combiner URL for team logos
+    #[serde(default = "default_logo_url")]
+    pub logo_url: String,
+
     /// User agent for ESPN requests (default: pico-scoreboard/1.0)
     #[serde(default = "default_user_agent")]
     pub user_agent: String,
@@ -57,6 +61,10 @@ fn default_scoreboard_url() -> String {
     "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard".to_string()
 }
 
+fn default_logo_url() -> String {
+    "https://a.espncdn.com/combiner/i".to_string()
+}
+
 fn default_user_agent() -> String {
     "pico-scoreboard/1.0".to_string()
 }
@@ -74,6 +82,7 @@ impl Default for EspnConfig {
     fn default() -> Self {
         Self {
             scoreboard_url: default_scoreboard_url(),
+            logo_url: default_logo_url(),
             user_agent: default_user_agent(),
             timeout_secs: default_timeout(),
         }

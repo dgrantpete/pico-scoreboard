@@ -72,6 +72,38 @@ def create_api(config, get_network_status, api_client=None):
             except Exception as e:
                 return {'error': 'internal_error', 'message': str(e)}, 500
 
+        @api.get('/teams/<team_id>/logo')
+        async def get_team_logo(request, team_id):
+            """Proxy team logo request to backend."""
+            try:
+                # Extract query params
+                width = request.args.get('width')
+                height = request.args.get('height')
+                background_color = request.args.get('background_color')
+
+                # Forward Accept header (default to PNG)
+                accept = request.headers.get('Accept', 'image/png')
+
+                # Fetch from backend
+                status, body = api_client.get_team_logo_raw(
+                    team_id,
+                    width=int(width) if width else None,
+                    height=int(height) if height else None,
+                    background_color=background_color,
+                    accept=accept
+                )
+
+                # Determine content type from Accept header
+                content_type = 'image/x-portable-pixmap' if 'image/x-portable-pixmap' in accept else 'image/png'
+
+                return Response(body=body, status_code=status,
+                                headers={
+                                    'Content-Type': content_type,
+                                    'Cache-Control': 'public, max-age=86400'
+                                })
+            except Exception as e:
+                return {'error': 'internal_error', 'message': str(e)}, 500
+
     return api
 
 

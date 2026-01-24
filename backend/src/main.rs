@@ -9,6 +9,7 @@ mod config;
 mod error;
 mod espn;
 mod game;
+mod team;
 
 use config::AppConfig;
 use espn::EspnClient;
@@ -21,7 +22,11 @@ use espn::EspnClient;
         version = "1.0.0",
         contact(name = "Pico Scoreboard"),
     ),
-    paths(game::handler::get_game, game::handler::get_all_games),
+    paths(
+        game::handler::get_game,
+        game::handler::get_all_games,
+        team::handler::get_team_logo,
+    ),
     components(schemas(
         game::types::GameResponse,
         game::types::PregameGame,
@@ -41,7 +46,8 @@ use espn::EspnClient;
     )),
     modifiers(&SecurityAddon),
     tags(
-        (name = "games", description = "Game data endpoints")
+        (name = "games", description = "Game data endpoints"),
+        (name = "teams", description = "Team data endpoints")
     )
 )]
 struct ApiDoc;
@@ -100,6 +106,7 @@ async fn main() {
         .route("/health", get(health))
         .route("/api/games", get(game::get_all_games))
         .route("/api/games/{event_id}", get(game::get_game))
+        .route("/api/teams/{team_id}/logo", get(team::get_team_logo))
         .layer(cors)
         .with_state(app_state);
 
