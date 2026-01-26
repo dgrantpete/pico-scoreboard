@@ -26,7 +26,11 @@ primary_region = "iad"
 # For secrets like APP_API_KEY, use: flyctl secrets set APP_API_KEY=your-key
 [env]
   # Rust logging level - "info" shows startup messages and request logs
+  # To debug deserialization: RUST_LOG = "info,espn::deserialize=debug"
   RUST_LOG = "info"
+
+  # Use JSON format for structured logging (easier to search in Fly.io dashboard)
+  LOG_FORMAT = "json"
 
   # Note: Port is already set in config/default.toml (3000)
   # To override nested config fields, use double underscore:

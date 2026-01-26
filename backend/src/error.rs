@@ -27,6 +27,8 @@ pub enum AppError {
     MissingApiKey,
     /// Invalid API key
     Unauthorized,
+    /// ESPN API response deserialization failed
+    EspnDeserialize { path: String, message: String },
 }
 
 /// Error response body
@@ -88,6 +90,11 @@ impl IntoResponse for AppError {
                 StatusCode::UNAUTHORIZED,
                 "unauthorized".to_string(),
                 "Invalid API key".to_string(),
+            ),
+            AppError::EspnDeserialize { path, message } => (
+                StatusCode::BAD_GATEWAY,
+                "espn_deserialize_error".to_string(),
+                format!("Failed to parse ESPN response at '{}': {}", path, message),
             ),
         };
 

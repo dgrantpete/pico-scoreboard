@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use reqwest::Client;
+use serde::de::DeserializeOwned;
 use std::time::Duration;
 
 use super::types::{EspnEvent, EspnScoreboard};
@@ -39,12 +40,55 @@ impl EspnClient {
             .await
             .map_err(AppError::EspnRequest)?;
 
-        let scoreboard = response
-            .json::<EspnScoreboard>()
-            .await
-            .map_err(AppError::EspnRequest)?;
+        // Get raw text first so we can log it on deserialization failure
+        let body = response.text().await.map_err(AppError::EspnRequest)?;
 
-        Ok(scoreboard)
+        self.deserialize_with_logging::<EspnScoreboard>(&body, "scoreboard")
+    }
+
+    /// Deserialize JSON with detailed error logging using serde_path_to_error
+    fn deserialize_with_logging<T: DeserializeOwned>(
+        &self,
+        body: &str,
+        context: &str,
+    ) -> Result<T, AppError> {
+        let jd = &mut serde_json::Deserializer::from_str(body);
+
+        serde_path_to_error::deserialize(jd).map_err(|err| {
+            let path = err.path().to_string();
+            let inner = err.inner().to_string();
+
+            // Always log error path and message at ERROR level
+            tracing::error!(
+                target: "espn::deserialize",
+                error_path = %path,
+                error_message = %inner,
+                context = %context,
+                "ESPN API deserialization failed"
+            );
+
+            // Log raw JSON at DEBUG level (truncated to avoid log bloat)
+            let truncated_body = if body.len() > 10_000 {
+                format!(
+                    "{}... [truncated, {} total bytes]",
+                    &body[..10_000],
+                    body.len()
+                )
+            } else {
+                body.to_string()
+            };
+
+            tracing::debug!(
+                target: "espn::deserialize",
+                raw_json = %truncated_body,
+                "Raw ESPN response that failed to deserialize"
+            );
+
+            AppError::EspnDeserialize {
+                path,
+                message: inner,
+            }
+        })
     }
 
     /// Fetch a single game by event ID from the scoreboard

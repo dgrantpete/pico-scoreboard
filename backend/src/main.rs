@@ -1,6 +1,7 @@
 use axum::{routing::get, Router};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -77,8 +78,29 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() {
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
+    // Initialize tracing with environment filter
+    // Supports RUST_LOG patterns like:
+    //   - "info" (default)
+    //   - "info,espn::deserialize=debug" (show raw JSON on errors)
+    //   - "debug" (verbose everything)
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    // Use JSON format for production (Fly.io), human-readable for local dev
+    let use_json = std::env::var("LOG_FORMAT")
+        .map(|v| v == "json")
+        .unwrap_or(false);
+
+    if use_json {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(fmt::layer().json())
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(fmt::layer())
+            .init();
+    }
 
     // Load configuration
     let config = AppConfig::load();
