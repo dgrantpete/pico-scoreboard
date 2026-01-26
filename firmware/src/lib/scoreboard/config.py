@@ -22,6 +22,9 @@ _DEFAULTS = {
         "url": "",
         "key": ""
     },
+    "game": {
+        "event_id": ""  # ESPN event ID (empty = no game selected)
+    },
     "display": {
         "brightness": 100,
         "poll_interval_seconds": 30
@@ -179,6 +182,12 @@ class Config:
     def api_key(self) -> str:
         """API key for X-Api-Key header."""
         return self._data["api"]["key"]
+
+    # Game properties
+    @property
+    def event_id(self) -> str:
+        """ESPN event ID to display (empty = auto-select)."""
+        return self._data["game"]["event_id"]
 
     # Display properties
     @property
