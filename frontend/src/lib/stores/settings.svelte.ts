@@ -36,6 +36,9 @@ function buildUpdateFromTouched(config: Config, touchedFields: Set<string>): Con
 		} else if (section === 'display') {
 			update.display = update.display || {};
 			(update.display as Record<string, unknown>)[field] = value;
+		} else if (section === 'colors') {
+			update.colors = update.colors || {};
+			(update.colors as Record<string, unknown>)[field] = value;
 		} else if (section === 'server') {
 			update.server = update.server || {};
 			(update.server as Record<string, unknown>)[field] = value;
@@ -178,6 +181,16 @@ export function createSettingsStore() {
 			if (config) {
 				config.display[key] = value;
 				this.markTouched(`display.${key}`);
+			}
+		},
+
+		/**
+		 * Update a colors field and mark it as touched
+		 */
+		updateColors<K extends keyof Config['colors']>(key: K, value: Config['colors'][K]) {
+			if (config) {
+				config.colors[key] = value;
+				this.markTouched(`colors.${key}`);
 			}
 		},
 

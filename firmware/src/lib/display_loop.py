@@ -12,18 +12,30 @@ from lib.fonts import FontWriter, unscii_8, unscii_16, rgb565
 from lib.scoreboard.state import display_state
 from lib.scoreboard.models import STATE_PREGAME, STATE_LIVE, STATE_FINAL
 
-# Colors (RGB565)
-WHITE = rgb565(255, 255, 255)
-RED = rgb565(255, 10, 10)
-BLUE = rgb565(50, 150, 255)
-YELLOW = rgb565(255, 255, 0)
-GREEN = rgb565(0, 255, 0)
-GRAY = rgb565(128, 128, 128)
+# Fixed color
 BLACK = 0
 
 # Display dimensions
 DISPLAY_WIDTH = 64
 DISPLAY_HEIGHT = 64
+
+
+def get_ui_colors(config):
+    """
+    Get UI colors from config, converted to RGB565.
+
+    Returns dict with color names mapped to RGB565 values.
+    """
+    def to_rgb565(color_dict):
+        return rgb565(color_dict["r"], color_dict["g"], color_dict["b"])
+
+    return {
+        'primary': to_rgb565(config.get_color('primary')),
+        'secondary': to_rgb565(config.get_color('secondary')),
+        'accent': to_rgb565(config.get_color('accent')),
+        'clock_normal': to_rgb565(config.get_color('clock_normal')),
+        'clock_warning': to_rgb565(config.get_color('clock_warning')),
+    }
 
 
 def init_display():
@@ -51,33 +63,33 @@ def color_to_rgb565(color):
     return rgb565(color.r, color.g, color.b)
 
 
-def render_idle(display, writer):
+def render_idle(display, writer, colors):
     """Render idle/waiting screen."""
     display.fill(BLACK)
-    writer.center_text("PICO", 16, WHITE, width=DISPLAY_WIDTH, font=unscii_16)
-    writer.center_text("SCOREBOARD", 40, YELLOW, width=DISPLAY_WIDTH)
+    writer.center_text("PICO", 16, colors['primary'], width=DISPLAY_WIDTH, font=unscii_16)
+    writer.center_text("SCOREBOARD", 40, colors['accent'], width=DISPLAY_WIDTH)
 
 
-def render_setup(display, writer):
+def render_setup(display, writer, colors):
     """Render setup mode screen."""
     display.fill(BLACK)
-    writer.center_text("SETUP", 8, YELLOW, width=DISPLAY_WIDTH, font=unscii_16)
-    writer.center_text("Connect to", 32, WHITE, width=DISPLAY_WIDTH)
-    writer.center_text("WiFi AP", 44, WHITE, width=DISPLAY_WIDTH)
+    writer.center_text("SETUP", 8, colors['accent'], width=DISPLAY_WIDTH, font=unscii_16)
+    writer.center_text("Connect to", 32, colors['primary'], width=DISPLAY_WIDTH)
+    writer.center_text("WiFi AP", 44, colors['primary'], width=DISPLAY_WIDTH)
 
 
-def render_error(display, writer, message):
+def render_error(display, writer, message, colors):
     """Render error screen."""
     display.fill(BLACK)
-    writer.center_text("ERROR", 8, RED, width=DISPLAY_WIDTH, font=unscii_16)
+    writer.center_text("ERROR", 8, colors['clock_warning'], width=DISPLAY_WIDTH, font=unscii_16)
     if message:
         # Truncate long messages
         if len(message) > 10:
             message = message[:10]
-        writer.center_text(message, 36, WHITE, width=DISPLAY_WIDTH)
+        writer.center_text(message, 36, colors['primary'], width=DISPLAY_WIDTH)
 
 
-def render_pregame(display, writer, game):
+def render_pregame(display, writer, game, colors):
     """Render pregame screen with team matchup."""
     display.fill(BLACK)
 
@@ -87,23 +99,23 @@ def render_pregame(display, writer, game):
 
     # Team abbreviations at top
     writer.text(game.away.abbreviation, 2, 0, away_color)
-    writer.text("@", 28, 0, WHITE)
+    writer.text("@", 28, 0, colors['primary'])
     writer.text(game.home.abbreviation, 38, 0, home_color)
 
     # Divider
-    display.hline(0, 12, DISPLAY_WIDTH, GRAY)
+    display.hline(0, 12, DISPLAY_WIDTH, colors['secondary'])
 
     # Start time (simplified - show first 5 chars like "12:30")
     time_str = game.start_time[:5] if len(game.start_time) >= 5 else game.start_time
-    writer.center_text(time_str, 20, YELLOW, width=DISPLAY_WIDTH, font=unscii_16)
+    writer.center_text(time_str, 20, colors['accent'], width=DISPLAY_WIDTH, font=unscii_16)
 
     # Venue if available
     if game.venue:
         venue = game.venue[:10] if len(game.venue) > 10 else game.venue
-        writer.center_text(venue, 44, GRAY, width=DISPLAY_WIDTH)
+        writer.center_text(venue, 44, colors['secondary'], width=DISPLAY_WIDTH)
 
 
-def render_live(display, writer, game):
+def render_live(display, writer, game, colors):
     """Render live game with scores."""
     display.fill(BLACK)
 
@@ -124,22 +136,22 @@ def render_live(display, writer, game):
     writer.text(home_score_str, home_x, 12, home_color, font=unscii_16)
 
     # Divider line
-    display.hline(0, 32, DISPLAY_WIDTH, WHITE)
+    display.hline(0, 32, DISPLAY_WIDTH, colors['primary'])
 
     # Clock - color changes as time runs low
     clock = game.clock
     if clock.startswith("0:3") or clock.startswith("0:2") or clock.startswith("0:1") or clock.startswith("0:0"):
-        clock_color = RED
+        clock_color = colors['clock_warning']
     else:
-        clock_color = GREEN
+        clock_color = colors['clock_normal']
     writer.center_text(clock, 36, clock_color, width=DISPLAY_WIDTH, font=unscii_16)
 
     # Quarter
     quarter_display = format_quarter(game.quarter)
-    writer.center_text(quarter_display, 54, WHITE, width=DISPLAY_WIDTH)
+    writer.center_text(quarter_display, 54, colors['primary'], width=DISPLAY_WIDTH)
 
 
-def render_final(display, writer, game):
+def render_final(display, writer, game, colors):
     """Render final score."""
     display.fill(BLACK)
 
@@ -160,13 +172,13 @@ def render_final(display, writer, game):
     writer.text(home_score_str, home_x, 12, home_color, font=unscii_16)
 
     # Divider line
-    display.hline(0, 32, DISPLAY_WIDTH, WHITE)
+    display.hline(0, 32, DISPLAY_WIDTH, colors['primary'])
 
     # Final status
     status_text = "FINAL"
     if game.status == "final/OT":
         status_text = "F/OT"
-    writer.center_text(status_text, 40, WHITE, width=DISPLAY_WIDTH, font=unscii_16)
+    writer.center_text(status_text, 40, colors['primary'], width=DISPLAY_WIDTH, font=unscii_16)
 
 
 def format_quarter(quarter):
@@ -182,38 +194,41 @@ def format_quarter(quarter):
     return quarter_map.get(quarter, quarter.upper()[:3])
 
 
-def render_frame(display, writer, state):
+def render_frame(display, writer, state, colors):
     """Render a frame based on current display state."""
     mode = state.get('mode', 'idle')
 
     if mode == 'idle':
-        render_idle(display, writer)
+        render_idle(display, writer, colors)
     elif mode == 'setup':
-        render_setup(display, writer)
+        render_setup(display, writer, colors)
     elif mode == 'error':
-        render_error(display, writer, state.get('error_message'))
+        render_error(display, writer, state.get('error_message'), colors)
     elif mode == 'game':
         game = state.get('game')
         if game is None:
-            render_idle(display, writer)
+            render_idle(display, writer, colors)
         elif game.state == STATE_PREGAME:
-            render_pregame(display, writer, game)
+            render_pregame(display, writer, game, colors)
         elif game.state == STATE_LIVE:
-            render_live(display, writer, game)
+            render_live(display, writer, game, colors)
         elif game.state == STATE_FINAL:
-            render_final(display, writer, game)
+            render_final(display, writer, game, colors)
         else:
-            render_idle(display, writer)
+            render_idle(display, writer, colors)
     else:
-        render_idle(display, writer)
+        render_idle(display, writer, colors)
 
 
-async def display_loop():
+async def display_loop(config):
     """
     Main display rendering loop.
 
     Runs continuously, reading from display_state and updating the display.
     Uses asyncio.sleep() to yield control between frames.
+
+    Args:
+        config: Config instance for reading UI colors
     """
     print("Initializing display...")
     driver, display, writer = init_display()
@@ -222,7 +237,9 @@ async def display_loop():
     while True:
         try:
             if display_state['dirty']:
-                render_frame(display, writer, display_state)
+                # Get colors fresh each frame so config changes take effect
+                colors = get_ui_colors(config)
+                render_frame(display, writer, display_state, colors)
                 display.show()  # Non-blocking: queues DMA transfer
                 display_state['dirty'] = False
         except Exception as e:

@@ -24,7 +24,7 @@
 	import { rebootStore } from "$lib/stores/reboot.svelte";
 	import { picoApi } from "$lib/api";
 	import RebootOverlay from "$lib/components/RebootOverlay.svelte";
-	import type { NetworkStatus, Config } from "$lib/api/types";
+	import type { NetworkStatus, Config, Color } from "$lib/api/types";
 
 	// Password visibility toggles
 	let showWifiPassword = $state(false);
@@ -58,6 +58,23 @@
 		if (percent >= 90) return "text-red-500";
 		if (percent >= 70) return "text-amber-500";
 		return "text-green-500";
+	}
+
+	// Color conversion helpers
+	function rgbToHex(color: Color): string {
+		const toHex = (n: number) => n.toString(16).padStart(2, "0");
+		return `#${toHex(color.r)}${toHex(color.g)}${toHex(color.b)}`;
+	}
+
+	function hexToRgb(hex: string): Color {
+		const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+		return result
+			? {
+					r: parseInt(result[1], 16),
+					g: parseInt(result[2], 16),
+					b: parseInt(result[3], 16),
+				}
+			: { r: 255, g: 255, b: 255 };
 	}
 
 	onMount(() => {
@@ -480,6 +497,108 @@
 					<p class="text-xs text-muted-foreground">
 						How often to fetch game updates from the API
 					</p>
+				</div>
+			</Card.Content>
+		</Card.Root>
+
+		<!-- Display Colors -->
+		<Card.Root>
+			<Card.Header>
+				<Card.Title>Display Colors</Card.Title>
+				<Card.Description>Customize UI colors on the LED matrix</Card.Description>
+			</Card.Header>
+			<Card.Content class="space-y-4">
+				<div class="flex items-center justify-between">
+					<div class="space-y-0.5">
+						<Label>Primary</Label>
+						<p class="text-sm text-muted-foreground">Dividers, status text, quarter display</p>
+					</div>
+					<input
+						type="color"
+						value={rgbToHex(settingsStore.config.colors.primary)}
+						oninput={(e) =>
+							settingsStore.updateColors(
+								"primary",
+								hexToRgb((e.target as HTMLInputElement).value),
+							)}
+						class="h-9 w-14 cursor-pointer rounded border"
+					/>
+				</div>
+
+				<Separator />
+
+				<div class="flex items-center justify-between">
+					<div class="space-y-0.5">
+						<Label>Secondary</Label>
+						<p class="text-sm text-muted-foreground">Venue text, subtle elements</p>
+					</div>
+					<input
+						type="color"
+						value={rgbToHex(settingsStore.config.colors.secondary)}
+						oninput={(e) =>
+							settingsStore.updateColors(
+								"secondary",
+								hexToRgb((e.target as HTMLInputElement).value),
+							)}
+						class="h-9 w-14 cursor-pointer rounded border"
+					/>
+				</div>
+
+				<Separator />
+
+				<div class="flex items-center justify-between">
+					<div class="space-y-0.5">
+						<Label>Accent</Label>
+						<p class="text-sm text-muted-foreground">Highlights, start time</p>
+					</div>
+					<input
+						type="color"
+						value={rgbToHex(settingsStore.config.colors.accent)}
+						oninput={(e) =>
+							settingsStore.updateColors(
+								"accent",
+								hexToRgb((e.target as HTMLInputElement).value),
+							)}
+						class="h-9 w-14 cursor-pointer rounded border"
+					/>
+				</div>
+
+				<Separator />
+
+				<div class="flex items-center justify-between">
+					<div class="space-y-0.5">
+						<Label>Clock (Normal)</Label>
+						<p class="text-sm text-muted-foreground">Game clock when time remaining</p>
+					</div>
+					<input
+						type="color"
+						value={rgbToHex(settingsStore.config.colors.clock_normal)}
+						oninput={(e) =>
+							settingsStore.updateColors(
+								"clock_normal",
+								hexToRgb((e.target as HTMLInputElement).value),
+							)}
+						class="h-9 w-14 cursor-pointer rounded border"
+					/>
+				</div>
+
+				<Separator />
+
+				<div class="flex items-center justify-between">
+					<div class="space-y-0.5">
+						<Label>Clock (Warning)</Label>
+						<p class="text-sm text-muted-foreground">Low time warning, errors</p>
+					</div>
+					<input
+						type="color"
+						value={rgbToHex(settingsStore.config.colors.clock_warning)}
+						oninput={(e) =>
+							settingsStore.updateColors(
+								"clock_warning",
+								hexToRgb((e.target as HTMLInputElement).value),
+							)}
+						class="h-9 w-14 cursor-pointer rounded border"
+					/>
 				</div>
 			</Card.Content>
 		</Card.Root>

@@ -15,6 +15,7 @@ import machine
 import uasyncio as asyncio
 import gc
 import os
+import rp2
 from lib.microdot import Microdot, Response, send_file
 from lib.scoreboard import Config
 from lib.scoreboard.api_client import ScoreboardApiClient
@@ -222,22 +223,28 @@ def get_wlan_status_string(status):
 
 def reset_wlan(wlan):
     """Full reset of WLAN interface to clear stale state."""
-    print("[DEBUG] Performing full WLAN reset...")
     try:
         wlan.disconnect()
     except:
         pass
-    wlan.active(False)
-    time.sleep(1)  # Longer delay for chip to fully reset
+
+    # deinit() completely wipes chip state (better than just active(False))
+    try:
+        wlan.deinit()
+    except:
+        pass
+
+    time.sleep(1)  # Allow chip to fully power down
+
+    # Re-initialize
     wlan.active(True)
     time.sleep(1)
 
-    # Disable power management - known to cause connection flakiness
+    # Use documented power management disable value
     try:
-        wlan.config(pm=0)  # 0 = no power saving
-        print("[DEBUG] Power management disabled")
-    except Exception as e:
-        print(f"[DEBUG] Could not disable power management: {e}")
+        wlan.config(pm=0xa11140)
+    except:
+        pass
 
     time.sleep(0.5)
 
@@ -256,91 +263,101 @@ def start_station_mode():
         print("Error: WiFi SSID not configured")
         return None
 
+    # Set country code for proper channel/power configuration
+    rp2.country('US')
+
     network.hostname(config.device_name)
     wlan = network.WLAN(network.STA_IF)
 
     max_retries = 3
+    per_attempt_timeout = 20  # Base timeout (extended for LINK_NOIP)
+    noip_extension = 15  # Extra time if we reach LINK_NOIP state
 
     for attempt in range(1, max_retries + 1):
-        print(f"[DEBUG] === Connection attempt {attempt}/{max_retries} ===")
+        print(f"=== WiFi Connection Attempt {attempt}/{max_retries} ===")
 
         # Full reset before each attempt
         reset_wlan(wlan)
 
-        # Log MAC address for debugging
-        mac = wlan.config('mac')
-        mac_str = ':'.join(f'{b:02x}' for b in mac)
-        print(f"[DEBUG] WLAN MAC address: {mac_str}")
-        print(f"[DEBUG] Device hostname: {config.device_name}")
-
         # Scan for available networks
-        print("[DEBUG] Scanning for available networks...")
+        print("Scanning...")
+        target_found = False
         try:
             networks = wlan.scan()
-            print(f"[DEBUG] Found {len(networks)} networks:")
+            print(f"Found {len(networks)} networks:")
             for net in networks:
                 ssid = net[0].decode('utf-8', 'replace')
-                bssid = ':'.join(f'{b:02x}' for b in net[1])
                 channel = net[2]
                 rssi = net[3]
-                security = net[4]
-                # Channel 1-14 = 2.4GHz, 36+ = 5GHz
-                band = "2.4GHz" if channel <= 14 else "5GHz"
-                match = " <-- TARGET" if ssid == config.ssid else ""
-                print(f"[DEBUG]   '{ssid}' ch:{channel} ({band}) rssi:{rssi}dBm sec:{security} bssid:{bssid}{match}")
+                is_target = ssid == config.ssid
+                if is_target:
+                    target_found = True
+                marker = "  <-- TARGET" if is_target else ""
+                print(f"  '{ssid}' ch:{channel} rssi:{rssi}dBm{marker}")
         except Exception as e:
-            print(f"[DEBUG] Scan failed: {e}")
+            print(f"Scan failed: {e}")
 
-        print(f"[DEBUG] Attempting to connect to SSID: '{config.ssid}'")
-        print(f"[DEBUG] Password length: {len(config.password)} chars")
+        print(f"Connecting to '{config.ssid}'...")
 
         wlan.connect(config.ssid, config.password)
 
         start = time.time()
-        per_attempt_timeout = 15  # Shorter timeout per attempt since we retry
         last_status = None
-        badauth_detected = False
+        status_history = []
+        reached_noip = False
+        retry_connect_count = 0
 
         while not wlan.isconnected():
             elapsed = time.time() - start
             status = wlan.status()
 
-            # Log status changes
+            # Track status changes for summary output
             if status != last_status:
-                print(f"[DEBUG] [{elapsed:.1f}s] Status changed: {get_wlan_status_string(status)}")
+                status_history.append(get_wlan_status_string(status))
                 last_status = status
 
-            # Detect BADAUTH early and break to retry
+                # Track if we've reached LINK_NOIP (connected, waiting for DHCP)
+                if status == 2:  # LINK_NOIP
+                    reached_noip = True
+
+            # Handle BADAUTH - break to try next attempt
             if status == -3:  # LINK_BADAUTH
-                print(f"[DEBUG] BADAUTH detected - will reset and retry")
-                badauth_detected = True
-                time.sleep(1)  # Brief pause before retry
+                print("Authentication failed - wrong password?")
+                time.sleep(1)
                 break
 
-            # Log periodic updates
-            if int(elapsed) % 5 == 0 and elapsed > 0:
-                ifconfig = wlan.ifconfig()
-                print(f"[DEBUG] [{elapsed:.1f}s] Still connecting... status={get_wlan_status_string(status)} ip={ifconfig[0]}")
+            # Handle early LINK_FAIL - retry connect within same attempt
+            if status == -1 and elapsed < 5 and retry_connect_count < 2:
+                retry_connect_count += 1
+                wlan.connect(config.ssid, config.password)
+                time.sleep(1)
+                continue
 
-            if elapsed > per_attempt_timeout:
-                print(f"[DEBUG] Attempt {attempt} timeout after {per_attempt_timeout}s")
+            # Calculate effective timeout (extended if we're in NOIP state)
+            effective_timeout = per_attempt_timeout
+            if reached_noip:
+                effective_timeout = per_attempt_timeout + noip_extension
+
+            if elapsed > effective_timeout:
                 break
 
             time.sleep(0.5)
 
+        # Check for successful connection with valid IP
         if wlan.isconnected():
-            print()
-            final_status = wlan.status()
-            print(f"[DEBUG] Connection successful! Final status: {get_wlan_status_string(final_status)}")
-            print(f"Connected! IP: {wlan.ifconfig()[0]}")
-            print(f"Hostname: {config.device_name}.local")
-            app.wlan = wlan
-            return wlan
+            ip = wlan.ifconfig()[0]
+            if ip and ip != '0.0.0.0':
+                status_str = ' -> '.join(status_history) if status_history else 'DIRECT'
+                print(f"Status: {status_str}")
+                print(f"Connected! IP: {ip}")
+                print(f"Hostname: {config.device_name}.local")
+                app.wlan = wlan
+                return wlan
+            else:
+                print("Connected but no valid IP, retrying...")
 
     # All retries exhausted
-    print(f"[DEBUG] All {max_retries} connection attempts failed")
-    print(f"[DEBUG] Final status: {get_wlan_status_string(wlan.status())}")
-    print(f"[DEBUG] ifconfig: {wlan.ifconfig()}")
+    print(f"All {max_retries} connection attempts failed")
     wlan.active(False)
     return None
 
@@ -348,7 +365,7 @@ def start_station_mode():
 async def main():
     """Main entry point."""
     # Start display loop (runs in all modes)
-    asyncio.create_task(display_loop())
+    asyncio.create_task(display_loop(config))
 
     if not config.ssid:
         # No network configured - fresh setup mode

@@ -22,12 +22,16 @@ _DEFAULTS = {
         "url": "",
         "key": ""
     },
-    "game": {
-        "event_id": ""  # ESPN event ID (empty = no game selected)
-    },
     "display": {
         "brightness": 100,
         "poll_interval_seconds": 30
+    },
+    "colors": {
+        "primary": {"r": 255, "g": 255, "b": 255},      # White - dividers, status text
+        "secondary": {"r": 128, "g": 128, "b": 128},    # Gray - venue, subtle elements
+        "accent": {"r": 255, "g": 255, "b": 0},         # Yellow - highlights, time
+        "clock_normal": {"r": 0, "g": 255, "b": 0},     # Green - clock with time remaining
+        "clock_warning": {"r": 255, "g": 10, "b": 10}   # Red - low time, errors
     },
     "server": {
         "cache_max_age_seconds": 0
@@ -74,7 +78,7 @@ class Config:
     Example usage:
         cfg = Config()
         print(cfg.api_url)
-        cfg.update("game", "event_id", "401547417")
+        cfg.update("display", "brightness", 80)
     """
 
     def __init__(self, path: str = CONFIG_PATH):
@@ -103,6 +107,10 @@ class Config:
                 if 'ap_mode' in data['network']:
                     del data['network']['ap_mode']
 
+            # Remove deprecated game section (cycling is now automatic)
+            if 'game' in data:
+                del data['game']
+
             return _deep_merge(_deep_copy(_DEFAULTS), data)
         except (OSError, ValueError):
             # File doesn't exist or is invalid JSON - use defaults
@@ -122,8 +130,8 @@ class Config:
         Update a configuration value and save to file.
 
         Args:
-            section: Top-level section (e.g., "network", "api", "game", "display")
-            key: Key within section (e.g., "ssid", "url", "event_id")
+            section: Top-level section (e.g., "network", "api", "display")
+            key: Key within section (e.g., "ssid", "url", "brightness")
             value: New value to set
         """
         if section in self._data:
@@ -183,12 +191,6 @@ class Config:
         """API key for X-Api-Key header."""
         return self._data["api"]["key"]
 
-    # Game properties
-    @property
-    def event_id(self) -> str:
-        """ESPN event ID to display (empty = auto-select)."""
-        return self._data["game"]["event_id"]
-
     # Display properties
     @property
     def brightness(self) -> int:
@@ -205,3 +207,16 @@ class Config:
     def cache_max_age_seconds(self) -> int:
         """Cache-Control max-age for static content (0 = no caching)."""
         return self._data["server"]["cache_max_age_seconds"]
+
+    # Color properties
+    def get_color(self, name: str) -> dict:
+        """
+        Get RGB color dict by name.
+
+        Args:
+            name: Color name (primary, secondary, accent, clock_normal, clock_warning)
+
+        Returns:
+            Dict with r, g, b keys (0-255 values)
+        """
+        return self._data["colors"].get(name, _DEFAULTS["colors"].get(name))

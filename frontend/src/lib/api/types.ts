@@ -31,11 +31,23 @@ export interface ServerConfig {
 
 export type ServerConfigUpdate = Partial<ServerConfig>;
 
+// Colors configuration (RGB 0-255)
+export interface ColorsConfig {
+	primary: Color;
+	secondary: Color;
+	accent: Color;
+	clock_normal: Color;
+	clock_warning: Color;
+}
+
+export type ColorsConfigUpdate = Partial<ColorsConfig>;
+
 // Full configuration
 export interface Config {
 	network: NetworkConfig;
 	api: ApiConfig;
 	display: DisplayConfig;
+	colors: ColorsConfig;
 	server: ServerConfig;
 }
 
@@ -44,6 +56,7 @@ export interface ConfigUpdate {
 	network?: NetworkConfigUpdate;
 	api?: ApiConfigUpdate;
 	display?: DisplayConfigUpdate;
+	colors?: ColorsConfigUpdate;
 	server?: ServerConfigUpdate;
 }
 
