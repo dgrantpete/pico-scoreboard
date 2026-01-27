@@ -206,6 +206,7 @@ class LiveGame:
         away: TeamWithScore,
         quarter: str,
         clock: str,
+        clock_running: bool = False,
         situation: Situation = None
     ):
         self.state = STATE_LIVE
@@ -214,6 +215,7 @@ class LiveGame:
         self.away = away
         self.quarter = quarter
         self.clock = clock
+        self.clock_running = clock_running
         self.situation = situation
 
     def __repr__(self):
@@ -231,6 +233,7 @@ class LiveGame:
             away=TeamWithScore.from_dict(data["away"]),
             quarter=data["quarter"],
             clock=data["clock"],
+            clock_running=data.get("clock_running", False),
             situation=situation
         )
 

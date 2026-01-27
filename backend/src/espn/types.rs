@@ -8,6 +8,7 @@ pub struct EspnScoreboard {
 
 /// Single game/event from ESPN
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EspnEvent {
     pub id: String,
     #[allow(dead_code)]
@@ -15,15 +16,15 @@ pub struct EspnEvent {
     pub status: EspnStatus,
     pub competitions: Vec<EspnCompetition>,
     pub weather: Option<EspnWeather>,
-    #[serde(rename = "geoBroadcasts", default)]
+    #[serde(default)]
     pub geo_broadcasts: Vec<EspnBroadcast>,
 }
 
 /// Game status information
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EspnStatus {
     pub period: u8,
-    #[serde(rename = "displayClock")]
     pub display_clock: String,
     #[serde(rename = "type")]
     pub status_type: EspnStatusType,
@@ -31,9 +32,10 @@ pub struct EspnStatus {
 
 /// Status type with state and display info
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EspnStatusType {
+    pub id: String,
     pub state: String,
-    #[serde(rename = "shortDetail")]
     pub short_detail: String,
 }
 
@@ -47,10 +49,10 @@ pub struct EspnCompetition {
 
 /// Team competitor in a game
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EspnCompetitor {
     pub team: EspnTeam,
     pub score: Option<String>,
-    #[serde(rename = "homeAway")]
     pub home_away: String,
     #[serde(default)]
     pub records: Vec<EspnRecord>,
@@ -72,34 +74,47 @@ pub struct EspnRecord {
 
 /// Live game situation (only present during active play)
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EspnSituation {
-    pub down: Option<u8>,
-    #[serde(rename = "distance")]
-    pub distance: Option<u8>,
-    #[serde(rename = "yardLine")]
-    pub yard_line: Option<u8>,
+    pub down: Option<i8>,
+    pub distance: Option<i8>,
+    pub yard_line: Option<i8>,
     pub possession: Option<String>,
-    #[serde(rename = "isRedZone")]
     pub is_red_zone: Option<bool>,
-    #[serde(rename = "homeTimeouts")]
     pub home_timeouts: Option<u8>,
-    #[serde(rename = "awayTimeouts")]
     pub away_timeouts: Option<u8>,
+    pub last_play: Option<EspnLastPlay>,
+}
+
+/// Last play information
+#[derive(Debug, Deserialize)]
+pub struct EspnLastPlay {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub play_type: EspnPlayType,
+    pub text: Option<String>,
+}
+
+/// Play type information
+#[derive(Debug, Deserialize)]
+pub struct EspnPlayType {
+    pub id: String,
+    pub text: Option<String>,
 }
 
 /// Venue information
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EspnVenue {
-    #[serde(rename = "fullName")]
     pub full_name: String,
     pub indoor: Option<bool>,
 }
 
 /// Weather information
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EspnWeather {
     pub temperature: Option<i16>,
-    #[serde(rename = "displayValue")]
     pub display_value: Option<String>,
 }
 
@@ -111,7 +126,7 @@ pub struct EspnBroadcast {
 
 /// Media/network information
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EspnMedia {
-    #[serde(rename = "shortName")]
     pub short_name: String,
 }

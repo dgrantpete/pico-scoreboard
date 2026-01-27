@@ -131,11 +131,10 @@ def draw_text(fb: framebuf.FrameBuffer, string: str, x: int, y: int,
     return cursor_x
 
 
-def rgb565(r: int, g: int, b: int) -> int:
-    """Convert RGB888 to RGB565 color value."""
-    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
-
+# Import rgb565 from shared color module for backwards compatibility
+from lib.color import rgb565
 
 # Import font modules for convenience
 from . import unscii_8
 from . import unscii_16
+from . import spleen_5x8

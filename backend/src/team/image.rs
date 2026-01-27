@@ -91,6 +91,59 @@ pub fn decode_png(bytes: &[u8]) -> Result<DynamicImage, AppError> {
         .map_err(|e| AppError::ImageDecode(e.to_string()))
 }
 
+/// Convert image to raw RGB888 bytes (3 bytes per pixel, no header)
+///
+/// Pixels are stored in row-major order: R0,G0,B0,R1,G1,B1,...
+/// Alpha channel is discarded.
+pub fn encode_rgb888_raw(img: &RgbaImage) -> Vec<u8> {
+    let (width, height) = img.dimensions();
+    let pixel_count = (width * height) as usize;
+
+    let mut output = Vec::with_capacity(pixel_count * 3);
+
+    for pixel in img.pixels() {
+        let Rgba([r, g, b, _]) = *pixel;
+        output.push(r);
+        output.push(g);
+        output.push(b);
+    }
+
+    output
+}
+
+/// Convert image to raw RGB565 bytes (2 bytes per pixel, little-endian)
+///
+/// RGB565 format: RRRRR GGGGGG BBBBB (5 bits red, 6 bits green, 5 bits blue)
+/// - Red:   bits 15-11 (top 5 bits of 8-bit red)
+/// - Green: bits 10-5  (top 6 bits of 8-bit green)
+/// - Blue:  bits 4-0   (top 5 bits of 8-bit blue)
+///
+/// Byte order: Little-endian (low byte first) for embedded compatibility.
+/// Pixels are stored in row-major order.
+pub fn encode_rgb565_raw(img: &RgbaImage) -> Vec<u8> {
+    let (width, height) = img.dimensions();
+    let pixel_count = (width * height) as usize;
+
+    let mut output = Vec::with_capacity(pixel_count * 2);
+
+    for pixel in img.pixels() {
+        let Rgba([r, g, b, _]) = *pixel;
+
+        // Convert RGB888 to RGB565
+        let r5 = (r >> 3) as u16;
+        let g6 = (g >> 2) as u16;
+        let b5 = (b >> 3) as u16;
+
+        let rgb565: u16 = (r5 << 11) | (g6 << 5) | b5;
+
+        // Little-endian: low byte first
+        output.push((rgb565 & 0xFF) as u8);
+        output.push((rgb565 >> 8) as u8);
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +232,91 @@ mod tests {
         assert!(pixel[1] >= 126 && pixel[1] <= 128);
         assert!(pixel[2] >= 126 && pixel[2] <= 128);
         assert_eq!(pixel[3], 255);
+    }
+
+    #[test]
+    fn test_rgb888_raw_size() {
+        let img = RgbaImage::new(10, 20);
+        let raw = encode_rgb888_raw(&img);
+        // 10 * 20 * 3 = 600 bytes
+        assert_eq!(raw.len(), 600);
+    }
+
+    #[test]
+    fn test_rgb888_raw_pixel_values() {
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([0xAB, 0xCD, 0xEF, 0xFF]));
+        let raw = encode_rgb888_raw(&img);
+        assert_eq!(raw, vec![0xAB, 0xCD, 0xEF]);
+    }
+
+    #[test]
+    fn test_rgb888_raw_strips_alpha() {
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([0x12, 0x34, 0x56, 0x78])); // alpha ignored
+        let raw = encode_rgb888_raw(&img);
+        assert_eq!(raw, vec![0x12, 0x34, 0x56]);
+    }
+
+    #[test]
+    fn test_rgb565_raw_size() {
+        let img = RgbaImage::new(10, 20);
+        let raw = encode_rgb565_raw(&img);
+        // 10 * 20 * 2 = 400 bytes
+        assert_eq!(raw.len(), 400);
+    }
+
+    #[test]
+    fn test_rgb565_pure_red() {
+        let mut img = RgbaImage::new(1, 1);
+        // Pure red: R=255 (0xFF), G=0, B=0
+        // RGB565: 11111 000000 00000 = 0xF800
+        // Little-endian: 0x00, 0xF8
+        img.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
+        let raw = encode_rgb565_raw(&img);
+        assert_eq!(raw, vec![0x00, 0xF8]);
+    }
+
+    #[test]
+    fn test_rgb565_pure_green() {
+        let mut img = RgbaImage::new(1, 1);
+        // Pure green: R=0, G=255, B=0
+        // RGB565: 00000 111111 00000 = 0x07E0
+        // Little-endian: 0xE0, 0x07
+        img.put_pixel(0, 0, Rgba([0, 255, 0, 255]));
+        let raw = encode_rgb565_raw(&img);
+        assert_eq!(raw, vec![0xE0, 0x07]);
+    }
+
+    #[test]
+    fn test_rgb565_pure_blue() {
+        let mut img = RgbaImage::new(1, 1);
+        // Pure blue: R=0, G=0, B=255
+        // RGB565: 00000 000000 11111 = 0x001F
+        // Little-endian: 0x1F, 0x00
+        img.put_pixel(0, 0, Rgba([0, 0, 255, 255]));
+        let raw = encode_rgb565_raw(&img);
+        assert_eq!(raw, vec![0x1F, 0x00]);
+    }
+
+    #[test]
+    fn test_rgb565_white() {
+        let mut img = RgbaImage::new(1, 1);
+        // White: R=255, G=255, B=255
+        // RGB565: 11111 111111 11111 = 0xFFFF
+        // Little-endian: 0xFF, 0xFF
+        img.put_pixel(0, 0, Rgba([255, 255, 255, 255]));
+        let raw = encode_rgb565_raw(&img);
+        assert_eq!(raw, vec![0xFF, 0xFF]);
+    }
+
+    #[test]
+    fn test_rgb565_black() {
+        let mut img = RgbaImage::new(1, 1);
+        // Black: R=0, G=0, B=0
+        // RGB565: 00000 000000 00000 = 0x0000
+        img.put_pixel(0, 0, Rgba([0, 0, 0, 255]));
+        let raw = encode_rgb565_raw(&img);
+        assert_eq!(raw, vec![0x00, 0x00]);
     }
 }

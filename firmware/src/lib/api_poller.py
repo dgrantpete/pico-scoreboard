@@ -21,14 +21,13 @@ async def api_polling_loop(config, api_client):
         config: Config instance with poll_interval_seconds
         api_client: ScoreboardApiClient instance
     """
-    poll_interval_s = config.poll_interval_seconds
     consecutive_failures = 0
     MAX_FAILURES_BEFORE_ERROR = 5
 
     # Initial delay to let system stabilize
     await asyncio.sleep(2)
 
-    print(f"API poller started (interval: {poll_interval_s}s, cycling all games)")
+    print(f"API poller started (interval: {config.poll_interval_seconds}s, cycling all games)")
 
     while True:
         try:
@@ -55,4 +54,4 @@ async def api_polling_loop(config, api_client):
             if consecutive_failures >= MAX_FAILURES_BEFORE_ERROR:
                 set_mode('error', 'API Error')
 
-        await asyncio.sleep(poll_interval_s)
+        await asyncio.sleep(config.poll_interval_seconds)

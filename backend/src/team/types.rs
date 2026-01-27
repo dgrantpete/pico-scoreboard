@@ -26,6 +26,8 @@ fn default_size() -> u32 {
 pub enum OutputFormat {
     Png,
     Ppm,
+    Rgb888,
+    Rgb565,
 }
 
 impl OutputFormat {
@@ -33,6 +35,8 @@ impl OutputFormat {
         match self {
             OutputFormat::Png => "image/png",
             OutputFormat::Ppm => "image/x-portable-pixmap",
+            OutputFormat::Rgb888 => "image/x-rgb888",
+            OutputFormat::Rgb565 => "image/x-rgb565",
         }
     }
 }

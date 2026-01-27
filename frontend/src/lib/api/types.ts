@@ -12,6 +12,7 @@ export type NetworkConfigUpdate = Partial<NetworkConfig>;
 export interface ApiConfig {
 	url: string;
 	key: string;
+	mock: boolean;
 }
 
 export type ApiConfigUpdate = Partial<ApiConfig>;

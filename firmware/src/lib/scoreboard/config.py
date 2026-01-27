@@ -20,7 +20,8 @@ _DEFAULTS = {
     },
     "api": {
         "url": "",
-        "key": ""
+        "key": "",
+        "mock": False
     },
     "display": {
         "brightness": 100,
@@ -34,7 +35,7 @@ _DEFAULTS = {
         "clock_warning": {"r": 255, "g": 10, "b": 10}   # Red - low time, errors
     },
     "server": {
-        "cache_max_age_seconds": 0
+        "cache_max_age_seconds": 600
     }
 }
 
@@ -96,20 +97,6 @@ class Config:
         try:
             with open(self._path, 'r') as f:
                 data = json.load(f)
-
-            # Migrate old config fields
-            if 'network' in data:
-                if 'hostname' in data['network'] and 'device_name' not in data['network']:
-                    data['network']['device_name'] = data['network'].pop('hostname')
-                if 'ap_ssid' in data['network']:
-                    del data['network']['ap_ssid']
-                # Remove deprecated ap_mode (now determined automatically)
-                if 'ap_mode' in data['network']:
-                    del data['network']['ap_mode']
-
-            # Remove deprecated game section (cycling is now automatic)
-            if 'game' in data:
-                del data['game']
 
             return _deep_merge(_deep_copy(_DEFAULTS), data)
         except (OSError, ValueError):
@@ -190,6 +177,11 @@ class Config:
     def api_key(self) -> str:
         """API key for X-Api-Key header."""
         return self._data["api"]["key"]
+
+    @property
+    def api_mock(self) -> bool:
+        """Whether to use mock endpoints (/api/mock/games) instead of real ones."""
+        return self._data["api"].get("mock", False)
 
     # Display properties
     @property

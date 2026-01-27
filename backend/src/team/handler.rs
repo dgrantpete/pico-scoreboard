@@ -9,13 +9,22 @@ use crate::AppState;
 use crate::auth::ApiKey;
 use crate::error::AppError;
 
-use super::image::{blend_with_background, decode_png, encode_png, encode_ppm_p6, parse_hex_color};
+use super::image::{
+    blend_with_background, decode_png, encode_png, encode_ppm_p6, encode_rgb565_raw,
+    encode_rgb888_raw, parse_hex_color,
+};
 use super::types::{LogoQuery, OutputFormat};
 
 /// Determine output format from Accept header
 fn parse_accept_header(headers: &HeaderMap) -> OutputFormat {
     if let Some(accept) = headers.get(header::ACCEPT) {
         if let Ok(accept_str) = accept.to_str() {
+            if accept_str.contains("image/x-rgb565") {
+                return OutputFormat::Rgb565;
+            }
+            if accept_str.contains("image/x-rgb888") {
+                return OutputFormat::Rgb888;
+            }
             if accept_str.contains("image/x-portable-pixmap") {
                 return OutputFormat::Ppm;
             }
@@ -32,6 +41,8 @@ fn parse_accept_header(headers: &HeaderMap) -> OutputFormat {
 /// Content negotiation via Accept header:
 /// - `image/png` or `*/*` (default): Returns PNG
 /// - `image/x-portable-pixmap`: Returns PPM P6 binary
+/// - `image/x-rgb888`: Returns raw RGB888 bytes (3 bytes per pixel, no header)
+/// - `image/x-rgb565`: Returns raw RGB565 bytes (2 bytes per pixel, little-endian)
 #[utoipa::path(
     get,
     path = "/api/teams/{team_id}/logo",
@@ -42,7 +53,9 @@ fn parse_accept_header(headers: &HeaderMap) -> OutputFormat {
     responses(
         (status = 200, description = "Logo image", content(
             ("image/png"),
-            ("image/x-portable-pixmap")
+            ("image/x-portable-pixmap"),
+            ("image/x-rgb888"),
+            ("image/x-rgb565")
         )),
         (status = 400, description = "Invalid parameters"),
         (status = 401, description = "Missing or invalid API key"),
@@ -74,9 +87,10 @@ pub async fn get_team_logo(
     // Determine whether to request transparent image from ESPN
     // - PNG without background: transparent=true, passthrough
     // - PNG with background: transparent=true, blend
-    // - PPM without background: transparent=false, convert
-    // - PPM with background: transparent=true, blend, convert
-    let request_transparent = output_format == OutputFormat::Png || has_background;
+    // - Raw formats without background: transparent=false, convert
+    // - Raw formats with background: transparent=true, blend, convert
+    let supports_transparency = output_format == OutputFormat::Png;
+    let request_transparent = supports_transparency || has_background;
 
     // Fetch logo from ESPN
     let logo_bytes = state
@@ -113,6 +127,14 @@ pub async fn get_team_logo(
         OutputFormat::Ppm => {
             let bytes = encode_ppm_p6(&processed);
             (bytes, OutputFormat::Ppm.content_type())
+        }
+        OutputFormat::Rgb888 => {
+            let bytes = encode_rgb888_raw(&processed);
+            (bytes, OutputFormat::Rgb888.content_type())
+        }
+        OutputFormat::Rgb565 => {
+            let bytes = encode_rgb565_raw(&processed);
+            (bytes, OutputFormat::Rgb565.content_type())
         }
     };
 

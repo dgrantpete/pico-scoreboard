@@ -10,6 +10,7 @@ mod config;
 mod error;
 mod espn;
 mod game;
+mod mock;
 mod team;
 
 use config::AppConfig;
@@ -27,6 +28,8 @@ use espn::EspnClient;
         game::handler::get_game,
         game::handler::get_all_games,
         team::handler::get_team_logo,
+        mock::handler::get_mock_games,
+        mock::handler::get_mock_game,
     ),
     components(schemas(
         game::types::GameResponse,
@@ -43,12 +46,15 @@ use espn::EspnClient;
         game::types::Possession,
         game::types::FinalStatus,
         game::types::Winner,
+        game::types::LastPlay,
+        game::types::PlayType,
         error::ErrorResponse,
     )),
     modifiers(&SecurityAddon),
     tags(
         (name = "games", description = "Game data endpoints"),
-        (name = "teams", description = "Team data endpoints")
+        (name = "teams", description = "Team data endpoints"),
+        (name = "mock", description = "Mock data endpoints for testing")
     )
 )]
 struct ApiDoc;
@@ -129,6 +135,8 @@ async fn main() {
         .route("/api/games", get(game::get_all_games))
         .route("/api/games/{event_id}", get(game::get_game))
         .route("/api/teams/{team_id}/logo", get(team::get_team_logo))
+        .route("/api/mock/games", get(mock::get_mock_games))
+        .route("/api/mock/games/{event_id}", get(mock::get_mock_game))
         .layer(cors)
         .with_state(app_state);
 

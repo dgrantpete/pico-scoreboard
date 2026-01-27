@@ -1,12 +1,14 @@
 """
 HTTP client for the Pico Scoreboard backend API.
 
-Uses urequests (MicroPython's built-in HTTP library) to fetch game data.
+Uses a persistent HTTP connection to avoid socket exhaustion and
+ENOMEM errors that occur with urequests' per-request connections.
 """
 
-import urequests
+import ujson
 from .config import Config
 from .models import parse_game_response
+from lib.http_client import PersistentHttp, parse_url
 
 # Request timeout in seconds
 REQUEST_TIMEOUT_SECS = 10
@@ -51,6 +53,22 @@ class ScoreboardApiClient:
             config: Config instance with API URL and key
         """
         self._config = config
+        self._http = None
+        self._base_path = ""
+
+    def _ensure_http(self):
+        """Lazily initialize the HTTP client when first needed."""
+        if self._http is None:
+            use_ssl, host, port, base_path = parse_url(self._config.api_url)
+            self._http = PersistentHttp(host, port, use_ssl, REQUEST_TIMEOUT_SECS)
+            self._base_path = base_path.rstrip("/")
+            print(f"API client: initialized for {host}:{port} (ssl={use_ssl})")
+
+    def _games_path(self) -> str:
+        """Return the games API path, using mock path if mock mode is enabled."""
+        if self._config.api_mock:
+            return "/api/mock/games"
+        return "/api/games"
 
     def get_game(self, event_id: str):
         """
@@ -67,34 +85,27 @@ class ScoreboardApiClient:
             OSError: On network errors (WiFi disconnected, DNS failure, etc.)
             ValueError: If response contains unknown game state
         """
-        url = f"{self._config.api_url}/api/games/{event_id}"
+        self._ensure_http()
+        path = f"{self._base_path}{self._games_path()}/{event_id}"
         headers = {"X-Api-Key": self._config.api_key}
 
-        response = None
-        try:
-            response = urequests.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECS)
+        status_code, body = self._http.get(path, headers)
 
-            if response.status_code != 200:
-                # Try to parse error response
-                try:
-                    data = response.json()
-                    error = data.get("error", "unknown")
-                    message = data.get("message", "Unknown error")
-                except (ValueError, KeyError):
-                    error = "unknown"
-                    message = f"HTTP {response.status_code}"
+        if status_code != 200:
+            # Try to parse error response
+            try:
+                data = ujson.loads(body)
+                error = data.get("error", "unknown")
+                message = data.get("message", "Unknown error")
+            except (ValueError, KeyError):
+                error = "unknown"
+                message = f"HTTP {status_code}"
 
-                raise ApiError(response.status_code, error, message)
+            raise ApiError(status_code, error, message)
 
-            # Parse successful response
-            data = response.json()
-            return parse_game_response(data)
-
-        finally:
-            # CRITICAL: Always close the response to free memory
-            # MicroPython has limited RAM, so leaked connections are problematic
-            if response is not None:
-                response.close()
+        # Parse successful response
+        data = ujson.loads(body)
+        return parse_game_response(data)
 
     def get_game_safe(self, event_id: str):
         """
@@ -128,33 +139,27 @@ class ScoreboardApiClient:
             OSError: On network errors (WiFi disconnected, DNS failure, etc.)
             ValueError: If response contains unknown game state
         """
-        url = f"{self._config.api_url}/api/games"
+        self._ensure_http()
+        path = f"{self._base_path}{self._games_path()}"
         headers = {"X-Api-Key": self._config.api_key}
 
-        response = None
-        try:
-            response = urequests.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECS)
+        status_code, body = self._http.get(path, headers)
 
-            if response.status_code != 200:
-                # Try to parse error response
-                try:
-                    data = response.json()
-                    error = data.get("error", "unknown")
-                    message = data.get("message", "Unknown error")
-                except (ValueError, KeyError):
-                    error = "unknown"
-                    message = f"HTTP {response.status_code}"
+        if status_code != 200:
+            # Try to parse error response
+            try:
+                data = ujson.loads(body)
+                error = data.get("error", "unknown")
+                message = data.get("message", "Unknown error")
+            except (ValueError, KeyError):
+                error = "unknown"
+                message = f"HTTP {status_code}"
 
-                raise ApiError(response.status_code, error, message)
+            raise ApiError(status_code, error, message)
 
-            # Parse successful response (array of games)
-            data = response.json()
-            return [parse_game_response(game) for game in data]
-
-        finally:
-            # CRITICAL: Always close the response to free memory
-            if response is not None:
-                response.close()
+        # Parse successful response (array of games)
+        data = ujson.loads(body)
+        return [parse_game_response(game) for game in data]
 
     def get_all_games_safe(self):
         """
@@ -188,16 +193,10 @@ class ScoreboardApiClient:
         Raises:
             OSError: On network errors (WiFi disconnected, DNS failure, etc.)
         """
-        url = f"{self._config.api_url}/api/games/{event_id}"
+        self._ensure_http()
+        path = f"{self._base_path}{self._games_path()}/{event_id}"
         headers = {"X-Api-Key": self._config.api_key}
-
-        response = None
-        try:
-            response = urequests.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECS)
-            return (response.status_code, response.content)
-        finally:
-            if response is not None:
-                response.close()
+        return self._http.get(path, headers)
 
     def get_all_games_raw(self):
         """
@@ -212,16 +211,10 @@ class ScoreboardApiClient:
         Raises:
             OSError: On network errors (WiFi disconnected, DNS failure, etc.)
         """
-        url = f"{self._config.api_url}/api/games"
+        self._ensure_http()
+        path = f"{self._base_path}{self._games_path()}"
         headers = {"X-Api-Key": self._config.api_key}
-
-        response = None
-        try:
-            response = urequests.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECS)
-            return (response.status_code, response.content)
-        finally:
-            if response is not None:
-                response.close()
+        return self._http.get(path, headers)
 
     def get_team_logo_raw(self, team_id: str, width: int = None, height: int = None,
                          background_color: str = None, accept: str = None):
@@ -241,7 +234,8 @@ class ScoreboardApiClient:
         Raises:
             OSError: On network errors (WiFi disconnected, DNS failure, etc.)
         """
-        url = f"{self._config.api_url}/api/teams/{team_id}/logo"
+        self._ensure_http()
+        path = f"{self._base_path}/api/teams/{team_id}/logo"
         params = []
         if width is not None:
             params.append(f"width={width}")
@@ -250,16 +244,10 @@ class ScoreboardApiClient:
         if background_color is not None:
             params.append(f"background_color={background_color}")
         if params:
-            url += "?" + "&".join(params)
+            path += "?" + "&".join(params)
 
         headers = {"X-Api-Key": self._config.api_key}
         if accept:
             headers["Accept"] = accept
 
-        response = None
-        try:
-            response = urequests.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECS)
-            return (response.status_code, response.content)
-        finally:
-            if response is not None:
-                response.close()
+        return self._http.get(path, headers)

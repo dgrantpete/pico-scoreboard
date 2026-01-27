@@ -7,6 +7,7 @@
 	import { Input } from "$lib/components/ui/input";
 	import { Slider } from "$lib/components/ui/slider";
 	import { Separator } from "$lib/components/ui/separator";
+	import { Switch } from "$lib/components/ui/switch";
 	import { Label } from "$lib/components/ui/label";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { Progress } from "$lib/components/ui/progress";
@@ -450,6 +451,21 @@
 							{/if}
 						</Button>
 					</div>
+				</div>
+
+				<Separator />
+
+				<div class="flex items-center justify-between">
+					<div class="space-y-0.5">
+						<Label>Mock Mode</Label>
+						<p class="text-sm text-muted-foreground">
+							Use procedurally generated test data instead of live ESPN data
+						</p>
+					</div>
+					<Switch
+						checked={settingsStore.config.api.mock}
+						onCheckedChange={(checked) => settingsStore.updateApi("mock", checked)}
+					/>
 				</div>
 			</Card.Content>
 		</Card.Root>

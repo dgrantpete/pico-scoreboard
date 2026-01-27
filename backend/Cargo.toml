@@ -18,3 +18,4 @@ utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 bytes = "1.10"
+rand = "0.8"

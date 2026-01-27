@@ -16,13 +16,14 @@ import uasyncio as asyncio
 import gc
 import os
 import rp2
+import hashlib
 from lib.microdot import Microdot, Response, send_file
 from lib.scoreboard import Config
 from lib.scoreboard.api_client import ScoreboardApiClient
-from lib.scoreboard.state import set_mode
+from lib.scoreboard.state import set_mode, set_startup_step, clear_startup_state
 from lib.dns import run_dns_server
 from lib.api import create_api
-from lib.display_loop import display_loop
+from lib.display_loop import display_loop, init_display, render_startup, get_ui_colors
 from lib.api_poller import api_polling_loop
 
 # Reduce buffer size for memory-constrained environment
@@ -30,6 +31,51 @@ Response.send_file_buffer_size = 512
 
 app = Microdot()
 config = Config()
+
+
+# Compute ETag for index.html.gz once at startup
+def _compute_index_etag():
+    try:
+        h = hashlib.sha1()
+        with open('/index.html.gz', 'rb') as f:
+            while True:
+                chunk = f.read(512)
+                if not chunk:
+                    break
+                h.update(chunk)
+        # Convert first 8 bytes to hex string (16 chars)
+        return ''.join('{:02x}'.format(b) for b in h.digest()[:8])
+    except OSError:
+        return None
+
+
+INDEX_ETAG = _compute_index_etag()
+
+# Display components (initialized before asyncio for startup display)
+_display = None
+_writer = None
+
+def update_startup_display(step, operation, detail=''):
+    """
+    Update startup progress on the display.
+
+    Called during synchronous startup before async loop takes over.
+
+    Args:
+        step: Current step number (1-5)
+        operation: Short operation name
+        detail: Optional detail text
+    """
+    global _display, _writer
+    if _display is None or _writer is None:
+        return
+
+    from lib.scoreboard.state import display_state
+    set_startup_step(step, 5, operation, detail)
+    colors = get_ui_colors(config)
+    render_startup(_display, _writer, display_state, colors)
+    _display.show()
+
 
 # Track setup mode state
 app.setup_mode = False
@@ -156,9 +202,15 @@ async def index(request):
         redirect_ip = ap.ifconfig()[0]
         return '', 302, {'Location': f'http://{redirect_ip}/#/setup'}
 
+    # Check for conditional request (304 Not Modified)
+    if INDEX_ETAG and request.headers.get('If-None-Match') == INDEX_ETAG:
+        return '', 304, {'ETag': INDEX_ETAG}
+
     response = send_file('/index.html.gz', content_type='text/html', compressed='gzip')
 
-    # Add cache control if configured
+    # Add caching headers
+    if INDEX_ETAG:
+        response.headers['ETag'] = INDEX_ETAG
     if config.cache_max_age_seconds > 0:
         response.headers['Cache-Control'] = f'max-age={config.cache_max_age_seconds}'
 
@@ -281,10 +333,12 @@ def start_station_mode():
 
         # Scan for available networks
         print("Scanning...")
+        update_startup_display(2, "WiFi scan", "Scanning...")
         target_found = False
         try:
             networks = wlan.scan()
             print(f"Found {len(networks)} networks:")
+            update_startup_display(2, "WiFi scan", f"Found {len(networks)}")
             for net in networks:
                 ssid = net[0].decode('utf-8', 'replace')
                 channel = net[2]
@@ -296,8 +350,12 @@ def start_station_mode():
                 print(f"  '{ssid}' ch:{channel} rssi:{rssi}dBm{marker}")
         except Exception as e:
             print(f"Scan failed: {e}")
+            update_startup_display(2, "WiFi scan", "Scan failed")
 
         print(f"Connecting to '{config.ssid}'...")
+        # Truncate SSID to 8 chars for display
+        ssid_display = config.ssid[:8] if len(config.ssid) > 8 else config.ssid
+        update_startup_display(3, "Connecting", f"{ssid_display} {attempt}/{max_retries}")
 
         wlan.connect(config.ssid, config.password)
 
@@ -351,6 +409,7 @@ def start_station_mode():
                 print(f"Status: {status_str}")
                 print(f"Connected! IP: {ip}")
                 print(f"Hostname: {config.device_name}.local")
+                update_startup_display(4, "Connected", ip)
                 app.wlan = wlan
                 return wlan
             else:
@@ -358,14 +417,17 @@ def start_station_mode():
 
     # All retries exhausted
     print(f"All {max_retries} connection attempts failed")
+    update_startup_display(4, "WiFi", "FAILED")
     wlan.active(False)
     return None
 
 
 async def main():
     """Main entry point."""
-    # Start display loop (runs in all modes)
-    asyncio.create_task(display_loop(config))
+    global _display, _writer
+
+    # Start display loop with pre-initialized display (runs in all modes)
+    asyncio.create_task(display_loop(config, api_client, _display, _writer))
 
     if not config.ssid:
         # No network configured - fresh setup mode
@@ -390,11 +452,26 @@ async def main():
             # Normal operation - start API polling
             app.setup_mode = False
             app.setup_reason = None
+            update_startup_display(5, "Starting", "API poller")
             asyncio.create_task(api_polling_loop(config, api_client))
 
+    update_startup_display(5, "Starting", "Web server")
     print("Starting web server on port 80...")
+
+    # Clear startup state and transition to idle (display loop will take over)
+    clear_startup_state()
+    set_mode('idle')
+
     await app.start_server(port=80)
 
 
 if __name__ == '__main__':
+    # Initialize display before asyncio for startup progress
+    print("Initializing display...")
+    _driver, _display, _writer = init_display()
+    print("Display initialized")
+
+    # Show first startup step
+    update_startup_display(1, "Display", "Initialized")
+
     asyncio.run(main())

@@ -1,96 +1,30 @@
-# =============================================================================
-# Fly.io Application Configuration
-# =============================================================================
-# This file tells fly.io how to build, deploy, and run your application.
-# Documentation: https://fly.io/docs/reference/configuration/
-
-# Your application name on fly.io (globally unique)
 app = "pico-scoreboard-api-dgrantpete"
-
-# The primary region for deployment.
-# "iad" = Ashburn, Virginia (US East) - close to ESPN's servers for low latency.
-# Other options: sjc (San Jose), lax (Los Angeles), lhr (London), etc.
 primary_region = "iad"
 
-# =============================================================================
-# Build Configuration
-# =============================================================================
 [build]
-  # Use the Dockerfile in the same directory as this fly.toml
-  dockerfile = "Dockerfile"
+dockerfile = "Dockerfile"
 
-# =============================================================================
-# Environment Variables (Non-Secrets)
-# =============================================================================
-# These are visible in logs and the dashboard.
-# For secrets like APP_API_KEY, use: flyctl secrets set APP_API_KEY=your-key
 [env]
-  # Rust logging level - "info" shows startup messages and request logs
-  # To debug deserialization: RUST_LOG = "info,espn::deserialize=debug"
-  RUST_LOG = "info"
+RUST_LOG = "info"
+LOG_FORMAT = "json"
 
-  # Use JSON format for structured logging (easier to search in Fly.io dashboard)
-  LOG_FORMAT = "json"
+[http_service]
+internal_port = 3000
+force_https = true
+auto_stop_machines = "stop"
+auto_start_machines = true
+min_machines_running = 1
 
-  # Note: Port is already set in config/default.toml (3000)
-  # To override nested config fields, use double underscore:
-  # APP_SERVER__PORT = "3000"  (server.port)
-  # APP_ESPN__TIMEOUT_SECS = "15"  (espn.timeout_secs)
+[http_service.http_options]
+idle_timeout = 120
 
-# =============================================================================
-# HTTP Service Configuration
-# =============================================================================
-[[services]]
-  # Internal port your application listens on (must match your Rust code)
-  internal_port = 3000
+[[http_service.checks]]
+grace_period = "10s"
+interval = "15s"
+method = "GET"
+timeout = "5s"
+path = "/health"
 
-  # Protocol for the service
-  protocol = "tcp"
-
-  # Auto-stop machines when idle (saves money!)
-  # Your app will stop after ~5 minutes of no traffic
-  auto_stop_machines = "stop"
-
-  # Auto-start when requests come in (slight cold-start delay)
-  auto_start_machines = true
-
-  # Minimum machines to keep running (0 = scale to zero when idle)
-  min_machines_running = 0
-
-  # --------------------------------------------------------------------------
-  # Port Handlers - How fly.io routes traffic to your app
-  # --------------------------------------------------------------------------
-  [[services.ports]]
-    # HTTP traffic on port 80 gets redirected to HTTPS
-    port = 80
-    handlers = ["http"]
-    force_https = true
-
-  [[services.ports]]
-    # HTTPS traffic on port 443 (fly.io handles TLS/SSL for you!)
-    port = 443
-    handlers = ["tls", "http"]
-
-  # --------------------------------------------------------------------------
-  # Health Checks
-  # --------------------------------------------------------------------------
-  # fly.io pings this endpoint to check if your app is healthy.
-  # If it fails, fly.io restarts the machine or routes traffic elsewhere.
-  [[services.http_checks]]
-    interval = "15s"       # Check every 15 seconds
-    timeout = "5s"         # Wait up to 5 seconds for response
-    grace_period = "10s"   # Give app 10 seconds to start before checking
-    method = "GET"
-    path = "/health"       # Your health endpoint from main.rs
-    protocol = "http"      # Internal traffic is HTTP (fly.io terminates TLS)
-
-# =============================================================================
-# Machine Configuration (VM Resources)
-# =============================================================================
 [[vm]]
-  # Machine size - shared-cpu-1x is the smallest/cheapest option
-  # Rust binaries are very efficient; this is plenty for a low-traffic API
-  size = "shared-cpu-1x"
-
-  # Memory in MB (256 is the minimum)
-  memory = 256
+size = "shared-cpu-1x"
+memory = 256

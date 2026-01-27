@@ -1,8 +1,8 @@
-use crate::espn::types::{EspnCompetition, EspnCompetitor, EspnEvent, EspnSituation};
+use crate::espn::types::{EspnCompetition, EspnCompetitor, EspnEvent, EspnLastPlay, EspnSituation};
 
 use super::types::{
-    Color, Down, FinalGame, FinalStatus, GameResponse, LiveGame, Possession, PregameGame, Quarter,
-    Situation, Team, TeamWithScore, Weather, Winner,
+    Color, Down, FinalGame, FinalStatus, GameResponse, LastPlay, LiveGame, PlayType, Possession,
+    PregameGame, Quarter, Situation, Team, TeamWithScore, Weather, Winner,
 };
 
 /// Transform an ESPN event into our API response format
@@ -30,7 +30,7 @@ fn to_pregame(event: &EspnEvent, competition: &EspnCompetition, event_id: &str) 
         event_id: event_id.to_string(),
         home: to_team(home_competitor),
         away: to_team(away_competitor),
-        start_time: event.status.status_type.short_detail.clone(),
+        start_time: event.date.clone(),  // ISO datetime for firmware to parse
         venue: venue.map(|v| v.full_name.clone()),
         broadcast: get_broadcast(event),
         weather: if is_outdoor {
@@ -50,6 +50,10 @@ fn to_pregame(event: &EspnEvent, competition: &EspnCompetition, event_id: &str) 
 fn to_live(event: &EspnEvent, competition: &EspnCompetition, event_id: &str) -> LiveGame {
     let (home_competitor, away_competitor) = get_competitors(competition);
     let situation = competition.situation.as_ref();
+    let last_play = situation.and_then(|s| s.last_play.as_ref()).map(to_last_play);
+
+    // Compute clock_running based on game status and last play
+    let clock_running = compute_clock_running(event, last_play.as_ref());
 
     LiveGame {
         event_id: event_id.to_string(),
@@ -57,7 +61,9 @@ fn to_live(event: &EspnEvent, competition: &EspnCompetition, event_id: &str) -> 
         away: to_team_with_score(away_competitor, situation.and_then(|s| s.away_timeouts)),
         quarter: parse_quarter(event.status.period),
         clock: event.status.display_clock.clone(),
+        clock_running,
         situation: situation.and_then(|s| to_situation(s, home_competitor, away_competitor)),
+        last_play,
     }
 }
 
@@ -127,10 +133,10 @@ fn to_situation(
     home: &EspnCompetitor,
     away: &EspnCompetitor,
 ) -> Option<Situation> {
-    // All fields must be present for a valid situation
-    let down = situation.down?;
-    let distance = situation.distance?;
-    let yard_line = situation.yard_line?;
+    // Convert i8 to u8, treating negative values (ESPN's sentinel for "not applicable") as None
+    let down = situation.down.filter(|&v| v >= 0).map(|v| v as u8)?;
+    let distance = situation.distance.filter(|&v| v >= 0).map(|v| v as u8)?;
+    let yard_line = situation.yard_line.filter(|&v| v >= 0).map(|v| v as u8)?;
     let possession_id = situation.possession.as_ref()?;
 
     Some(Situation {
@@ -214,4 +220,58 @@ fn parse_score(score: &Option<String>) -> u8 {
         .as_ref()
         .and_then(|s| s.parse().ok())
         .unwrap_or(0)
+}
+
+/// Transform ESPN last play to our LastPlay type
+fn to_last_play(last_play: &EspnLastPlay) -> LastPlay {
+    LastPlay {
+        play_type: PlayType::from_espn_id_with_context(
+            &last_play.play_type.id,
+            last_play.text.as_deref(),
+        ),
+        text: last_play.text.clone(),
+    }
+}
+
+/// Compute whether the game clock is running based on NFL rules.
+///
+/// Uses a two-layer approach:
+/// 1. Check game status (halftime, end of period, etc. = clock stopped)
+/// 2. Check last play type and details (incomplete pass, timeout, out of bounds, etc.)
+fn compute_clock_running(event: &EspnEvent, last_play: Option<&LastPlay>) -> bool {
+    // Status IDs that indicate clock is definitely stopped
+    // 1 = scheduled, 3 = final, 22 = end of period, 23 = halftime
+    let status_id = &event.status.status_type.id;
+    if status_id != "2" {
+        // Not STATUS_IN_PROGRESS - clock is stopped
+        return false;
+    }
+
+    // Check last play type
+    if let Some(play) = last_play {
+        // If play type always stops the clock, return false
+        if play.play_type.stops_clock() {
+            return false;
+        }
+
+        // For plays where clock depends on details (rush, reception, sack),
+        // check if the play went out of bounds
+        if play.play_type.clock_depends_on_details() {
+            if let Some(text) = &play.text {
+                let text_lower = text.to_lowercase();
+                if text_lower.contains("out of bounds")
+                    || text_lower.contains("pushed out")
+                    || text_lower.contains("ran out")
+                    || text_lower.contains("stepped out")
+                {
+                    return false;
+                }
+            }
+            // In bounds - clock runs
+            return true;
+        }
+    }
+
+    // Default: assume clock is running during in-progress status
+    true
 }

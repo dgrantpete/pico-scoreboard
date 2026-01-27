@@ -23,6 +23,8 @@ pub enum AppError {
     GameNotFound(String),
     /// Invalid event ID format
     InvalidEventId(String),
+    /// Invalid mock scenario
+    InvalidScenario(String),
     /// Missing API key header
     MissingApiKey,
     /// Invalid API key
@@ -80,6 +82,14 @@ impl IntoResponse for AppError {
                 StatusCode::BAD_REQUEST,
                 "invalid_event_id".to_string(),
                 format!("Event ID '{}' is invalid. Must be numeric.", id),
+            ),
+            AppError::InvalidScenario(s) => (
+                StatusCode::BAD_REQUEST,
+                "invalid_scenario".to_string(),
+                format!(
+                    "Invalid scenario '{}'. Valid options: pregame, live, final, mixed, redzone, overtime",
+                    s
+                ),
             ),
             AppError::MissingApiKey => (
                 StatusCode::UNAUTHORIZED,
