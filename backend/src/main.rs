@@ -28,8 +28,10 @@ use espn::EspnClient;
         game::handler::get_game,
         game::handler::get_all_games,
         team::handler::get_team_logo,
-        mock::handler::get_mock_games,
+        mock::handler::list_mock_games,
         mock::handler::get_mock_game,
+        mock::handler::create_mock_game,
+        mock::handler::delete_mock_game,
     ),
     components(schemas(
         game::types::GameResponse,
@@ -48,6 +50,10 @@ use espn::EspnClient;
         game::types::Winner,
         game::types::LastPlay,
         game::types::PlayType,
+        mock::simulation::CreateGameRequest,
+        mock::simulation::CreatePregameOptions,
+        mock::simulation::CreateLiveOptions,
+        mock::simulation::CreateFinalOptions,
         error::ErrorResponse,
     )),
     modifiers(&SecurityAddon),
@@ -80,6 +86,7 @@ impl utoipa::Modify for SecurityAddon {
 pub struct AppState {
     pub espn_client: EspnClient,
     pub config: AppConfig,
+    pub game_repository: mock::GameRepository,
 }
 
 #[tokio::main]
@@ -115,10 +122,14 @@ async fn main() {
     // Create ESPN client with config
     let espn_client = EspnClient::new(&config.espn);
 
+    // Create game repository for mock simulations
+    let game_repository = mock::GameRepository::new();
+
     // Create shared application state
     let app_state = Arc::new(AppState {
         espn_client,
         config,
+        game_repository,
     });
 
     // Build CORS layer
@@ -135,8 +146,14 @@ async fn main() {
         .route("/api/games", get(game::get_all_games))
         .route("/api/games/{event_id}", get(game::get_game))
         .route("/api/teams/{team_id}/logo", get(team::get_team_logo))
-        .route("/api/mock/games", get(mock::get_mock_games))
-        .route("/api/mock/games/{event_id}", get(mock::get_mock_game))
+        .route(
+            "/api/mock/games",
+            get(mock::list_mock_games).post(mock::create_mock_game),
+        )
+        .route(
+            "/api/mock/games/{id}",
+            get(mock::get_mock_game).delete(mock::delete_mock_game),
+        )
         .layer(cors)
         .with_state(app_state);
 

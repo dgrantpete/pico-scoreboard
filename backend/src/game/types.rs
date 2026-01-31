@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 /// The API response - a tagged enum that serializes with "state" discriminator
@@ -20,7 +20,7 @@ pub struct Team {
 }
 
 /// RGB color as a strongly-typed struct
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -78,7 +78,7 @@ pub struct TeamWithScore {
 }
 
 /// Quarter as a strongly-typed enum
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Quarter {
     First,
@@ -102,7 +102,7 @@ pub struct Situation {
 }
 
 /// Down as a strongly-typed enum
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Down {
     First,
@@ -112,7 +112,7 @@ pub enum Down {
 }
 
 /// Possession indicator
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Possession {
     Home,

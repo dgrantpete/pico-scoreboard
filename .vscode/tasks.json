@@ -1,0 +1,53 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "python",
+      "args": ["tools/build.py"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "detail": "Build frontend and copy files to pico/"
+    },
+    {
+      "label": "build: flash",
+      "type": "shell",
+      "command": "python",
+      "args": ["tools/build.py", "flash"],
+      "group": "build",
+      "problemMatcher": [],
+      "detail": "Build and flash to Pico"
+    },
+    {
+      "label": "build: run",
+      "type": "shell",
+      "command": "python",
+      "args": ["tools/build.py", "run"],
+      "group": "build",
+      "problemMatcher": [],
+      "detail": "Build, flash, and open REPL"
+    },
+    {
+      "label": "build: flash (no build)",
+      "type": "shell",
+      "command": "python",
+      "args": ["tools/build.py", "flash", "--no-build"],
+      "group": "build",
+      "problemMatcher": [],
+      "detail": "Flash existing build to Pico"
+    },
+    {
+      "label": "build: run (no build)",
+      "type": "shell",
+      "command": "python",
+      "args": ["tools/build.py", "run", "--no-build"],
+      "group": "build",
+      "problemMatcher": [],
+      "detail": "Flash existing build and open REPL"
+    }
+  ]
+}

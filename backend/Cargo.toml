@@ -19,3 +19,4 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 bytes = "1.10"
 rand = "0.8"
+chrono = { version = "0.4", features = ["serde"] }

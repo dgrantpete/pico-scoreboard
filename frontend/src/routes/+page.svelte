@@ -8,7 +8,6 @@
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import WifiOff from '@lucide/svelte/icons/wifi-off';
-	import { getTeamById } from '$lib/data/nfl-teams';
 	import { picoApi } from '$lib/api/pico-api';
 	import type { GameResponse, NetworkStatus } from '$lib/api/types';
 
@@ -37,6 +36,25 @@
 		OT2: '2OT'
 	};
 
+	function rgbToCss(color: { r: number; g: number; b: number }): string {
+		// Handle black (0,0,0) with a fallback gray for visibility
+		if (color.r === 0 && color.g === 0 && color.b === 0) {
+			return '#666666';
+		}
+		return `rgb(${color.r}, ${color.g}, ${color.b})`;
+	}
+
+	function formatGameTime(isoString: string): string {
+		const date = new Date(isoString);
+		return date.toLocaleString(undefined, {
+			weekday: 'short',
+			month: 'short',
+			day: 'numeric',
+			hour: 'numeric',
+			minute: '2-digit'
+		});
+	}
+
 	function transformGame(game: GameResponse): GameData {
 		if (game.state === 'pregame') {
 			return {
@@ -45,7 +63,7 @@
 				awayTeamId: game.away.abbreviation.toLowerCase(),
 				homeScore: 0,
 				awayScore: 0,
-				quarter: game.start_time,
+				quarter: formatGameTime(game.start_time),
 				timeRemaining: '',
 				possession: null,
 				down: null,
@@ -88,6 +106,7 @@
 	}
 
 	let games = $state<GameData[]>([]);
+	let rawGames = $state<GameResponse[]>([]);
 	let currentGameIndex = $state(0);
 	let isLoading = $state(true);
 	let isRefreshing = $state(false);
@@ -95,12 +114,14 @@
 	let status = $state<NetworkStatus | null>(null);
 
 	let currentGame = $derived(games[currentGameIndex]);
-	let homeTeam = $derived(currentGame ? getTeamById(currentGame.homeTeamId) : null);
-	let awayTeam = $derived(currentGame ? getTeamById(currentGame.awayTeamId) : null);
+	let currentRawGame = $derived(rawGames[currentGameIndex]);
+	let homeTeam = $derived(currentRawGame?.home ?? null);
+	let awayTeam = $derived(currentRawGame?.away ?? null);
 
 	async function fetchGames() {
 		try {
 			const response = await picoApi.getGames();
+			rawGames = response;
 			games = response.map(transformGame);
 			error = null;
 			// Reset index if it's out of bounds
@@ -240,15 +261,12 @@
 					<!-- Away Team -->
 					<div class="text-center">
 						<TeamLogo
-							teamId={awayTeam.id}
-							teamName={awayTeam.name}
+							teamId={awayTeam.abbreviation.toLowerCase()}
+							teamName={awayTeam.abbreviation}
 							abbreviation={awayTeam.abbreviation}
-							primaryColor={awayTeam.primaryColor}
+							primaryColor={rgbToCss(awayTeam.color)}
 						/>
-						<div class="text-sm font-medium text-muted-foreground">
-							{awayTeam.city}
-						</div>
-						<div class="text-sm font-bold">{awayTeam.name}</div>
+						<div class="text-lg font-bold">{awayTeam.abbreviation}</div>
 						<div class="mt-2 text-4xl font-bold tabular-nums">
 							{currentGame.awayScore}
 						</div>
@@ -267,15 +285,12 @@
 					<!-- Home Team -->
 					<div class="text-center">
 						<TeamLogo
-							teamId={homeTeam.id}
-							teamName={homeTeam.name}
+							teamId={homeTeam.abbreviation.toLowerCase()}
+							teamName={homeTeam.abbreviation}
 							abbreviation={homeTeam.abbreviation}
-							primaryColor={homeTeam.primaryColor}
+							primaryColor={rgbToCss(homeTeam.color)}
 						/>
-						<div class="text-sm font-medium text-muted-foreground">
-							{homeTeam.city}
-						</div>
-						<div class="text-sm font-bold">{homeTeam.name}</div>
+						<div class="text-lg font-bold">{homeTeam.abbreviation}</div>
 						<div class="mt-2 text-4xl font-bold tabular-nums">
 							{currentGame.homeScore}
 						</div>

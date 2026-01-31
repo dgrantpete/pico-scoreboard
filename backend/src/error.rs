@@ -25,6 +25,8 @@ pub enum AppError {
     InvalidEventId(String),
     /// Invalid mock scenario
     InvalidScenario(String),
+    /// Mock game not found in repository
+    MockGameNotFound(String),
     /// Missing API key header
     MissingApiKey,
     /// Invalid API key
@@ -90,6 +92,11 @@ impl IntoResponse for AppError {
                     "Invalid scenario '{}'. Valid options: pregame, live, final, mixed, redzone, overtime",
                     s
                 ),
+            ),
+            AppError::MockGameNotFound(id) => (
+                StatusCode::NOT_FOUND,
+                "mock_game_not_found".to_string(),
+                format!("Mock game with ID '{}' not found", id),
             ),
             AppError::MissingApiKey => (
                 StatusCode::UNAUTHORIZED,

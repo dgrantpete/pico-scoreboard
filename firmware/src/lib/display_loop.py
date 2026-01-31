@@ -13,9 +13,13 @@ from lib.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565
 from lib.scoreboard.state import display_state, parse_clock, format_clock
 from lib.scoreboard.models import STATE_PREGAME, STATE_LIVE, STATE_FINAL
 from lib.hub75.image import rgb888_to_rgb565_into_buffer
+from lib.animations import ScrollingText
 
 # Fixed color
 BLACK = 0
+
+# Day name abbreviations (Monday=0 to Sunday=6)
+DAY_NAMES = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
 
 # Display dimensions
 DISPLAY_WIDTH = 128
@@ -35,6 +39,9 @@ _logo_lru = []    # LRU order: oldest first
 _free_slots = set(range(_LOGO_POOL_SIZE))  # Track available buffer slots
 
 print(f"Pre-allocated {_LOGO_POOL_SIZE} logo buffers ({_LOGO_POOL_SIZE * _LOGO_BUFFER_SIZE // 1024} KB)")
+
+# Scrolling text instances (keyed by identifier)
+_scrollers = {}
 
 
 def get_logo_framebuffer(api_client, team_abbreviation):
@@ -117,6 +124,28 @@ def get_ui_colors(config):
     }
 
 
+def get_or_create_scroller(key: str, text: str, text_width: int, display_width: int) -> ScrollingText:
+    """
+    Get existing scroller or create new one if text changed.
+
+    Args:
+        key: Unique identifier for this scroller instance
+        text: The text to scroll
+        text_width: Pre-measured width of text in pixels
+        display_width: Width of display area in pixels
+
+    Returns:
+        ScrollingText instance (existing or newly created)
+    """
+    existing = _scrollers.get(key)
+    if existing and existing.text == text:
+        return existing
+
+    scroller = ScrollingText(text, text_width, display_width)
+    _scrollers[key] = scroller
+    return scroller
+
+
 def init_display():
     """
     Initialize and return HUB75 display hardware.
@@ -127,10 +156,10 @@ def init_display():
     driver = Hub75Driver(
         address_bit_count=5,
         shift_register_depth=128,
-        base_address_pin=Pin(9, Pin.OUT),
-        output_enable_pin=Pin(8, Pin.OUT),
-        base_clock_pin=Pin(6, Pin.OUT),
-        base_data_pin=Pin(0, Pin.OUT)
+        base_address_pin=Pin(8, Pin.OUT),
+        output_enable_pin=Pin(7, Pin.OUT),
+        base_clock_pin=Pin(5, Pin.OUT),
+        base_data_pin=Pin(16, Pin.OUT)
     )
     display = Hub75Display(driver)
     writer = FontWriter(display.frame_buffer, default_font=unscii_8)
@@ -142,13 +171,13 @@ def color_to_rgb565(color):
     return rgb565(color.r, color.g, color.b)
 
 
-def safe_team_color(color):
+def safe_team_color(color, fallback_color):
     """
     Convert team color to RGB565, ensuring visibility on black background.
-    If color is too dark, use dark grey instead.
+    If color is too dark, use the fallback color instead.
     """
     if color.r < 30 and color.g < 30 and color.b < 30:
-        return rgb565(60, 60, 60)  # Dark grey
+        return fallback_color
     return rgb565(color.r, color.g, color.b)
 
 
@@ -186,10 +215,10 @@ def wrap_text(text, max_chars):
 
 def parse_iso_datetime(iso_str):
     """
-    Parse ISO datetime string and return (date_str, time_str) tuple.
+    Parse ISO datetime string and return (day_abbr, date_str, time_str) tuple.
 
     Input: "2024-01-15T19:30:00Z" or "2024-01-15T19:30Z"
-    Output: ("01/15", "7:30 PM")
+    Output: ("WED", "01/15", "7:30 PM")
 
     Falls back gracefully if format is not ISO (e.g., old "7:30 PM ET" format).
     Note: MicroPython lacks strptime, so we use string slicing.
@@ -202,17 +231,26 @@ def parse_iso_datetime(iso_str):
             if time_str.endswith(tz):
                 time_str = time_str[:-len(tz)]
                 break
-        return ("", time_str)
+        return ("", "", time_str)
 
     try:
         # Split date and time parts
         date_part = iso_str[0:10]   # "2024-01-15"
         time_part = iso_str[11:16]  # "19:30"
 
+        # Extract year, month, day as integers
+        year = int(date_part[0:4])
+        month = int(date_part[5:7])
+        day = int(date_part[8:10])
+
         # Format date as MM/DD
-        month = date_part[5:7]
-        day = date_part[8:10]
-        date_str = f"{month}/{day}"
+        date_str = f"{month:02d}/{day:02d}"
+
+        # Calculate day of week using time module
+        time_tuple = (year, month, day, 0, 0, 0, 0, 0)
+        timestamp = time.mktime(time_tuple)
+        weekday = time.localtime(timestamp)[6]  # 0=Monday, 6=Sunday
+        day_abbr = DAY_NAMES[weekday]
 
         # Format time as 12-hour with AM/PM
         hour = int(time_part[0:2])
@@ -224,10 +262,10 @@ def parse_iso_datetime(iso_str):
             hour -= 12
         time_str = f"{hour}:{minute} {am_pm}"
 
-        return date_str, time_str
+        return (day_abbr, date_str, time_str)
     except (ValueError, IndexError):
         # Parsing failed - return original string with no date
-        return ("", iso_str)
+        return ("", "", iso_str)
 
 
 def draw_progress_bar(display, x, y, width, height, progress, colors):
@@ -315,8 +353,8 @@ def render_pregame(display, writer, game, colors, api_client):
     display.fill(BLACK)
 
     # Team colors (with dark color protection)
-    home_color = safe_team_color(game.home.color)
-    away_color = safe_team_color(game.away.color)
+    home_color = safe_team_color(game.home.color, colors['secondary'])
+    away_color = safe_team_color(game.away.color, colors['secondary'])
 
     # Team logos (24x24 each) with 1px padding
     if api_client:
@@ -331,24 +369,30 @@ def render_pregame(display, writer, game, colors, api_client):
     # "@" in center
     writer.center_text("@", 4, colors['primary'], width=DISPLAY_WIDTH, font=unscii_16)
 
-    # Parse ISO datetime for date and time
-    date_str, time_str = parse_iso_datetime(game.start_time)
+    # Parse ISO datetime for day, date and time
+    day_abbr, date_str, time_str = parse_iso_datetime(game.start_time)
 
     # Team abbreviations aligned to logos, date centered (all at Y=26)
     writer.text(game.away.abbreviation, 1, 26, away_color)  # Left-aligned
     home_abbr_x = 103 + 24 - len(game.home.abbreviation) * 8
     writer.text(game.home.abbreviation, home_abbr_x, 26, home_color)  # Right-aligned
-    writer.center_text(date_str, 22, colors['secondary'], width=DISPLAY_WIDTH)
+    date_display = f"{day_abbr} {date_str}" if day_abbr else date_str
+    writer.center_text(date_display, 22, colors['secondary'], width=DISPLAY_WIDTH)
 
     # Time
     writer.center_text(time_str, 32, colors['accent'], width=DISPLAY_WIDTH)
 
-    # Venue with word wrapping (up to 2 lines)
+    # Venue (single line, scrolls if too long)
     if game.venue:
-        venue_lines = wrap_text(game.venue, 16)
-        writer.center_text(venue_lines[0], 46, colors['secondary'], width=DISPLAY_WIDTH)
-        if len(venue_lines) > 1:
-            writer.center_text(venue_lines[1], 54, colors['secondary'], width=DISPLAY_WIDTH)
+        venue_width = writer.measure(game.venue, unscii_8)
+        if venue_width <= DISPLAY_WIDTH:
+            # Fits - center it
+            writer.center_text(game.venue, 46, colors['secondary'], width=DISPLAY_WIDTH)
+        else:
+            # Too long - use scroller
+            scroller = get_or_create_scroller('venue', game.venue, venue_width, DISPLAY_WIDTH)
+            offset = scroller.get_offset()
+            writer.text(game.venue, -offset, 46, colors['secondary'], font=unscii_8)
 
 
 def render_live(display, writer, game, colors, api_client):
@@ -356,8 +400,8 @@ def render_live(display, writer, game, colors, api_client):
     display.fill(BLACK)
 
     # Team colors (with dark color protection)
-    home_color = safe_team_color(game.home.color)
-    away_color = safe_team_color(game.away.color)
+    home_color = safe_team_color(game.home.color, colors['secondary'])
+    away_color = safe_team_color(game.away.color, colors['secondary'])
 
     # Team logos (24x24 each) with 1px padding
     if api_client:
@@ -408,8 +452,8 @@ def render_final(display, writer, game, colors, api_client):
     display.fill(BLACK)
 
     # Team colors (with dark color protection)
-    home_color = safe_team_color(game.home.color)
-    away_color = safe_team_color(game.away.color)
+    home_color = safe_team_color(game.home.color, colors['secondary'])
+    away_color = safe_team_color(game.away.color, colors['secondary'])
 
     # Team logos (24x24 each) with 1px padding
     if api_client:
@@ -561,6 +605,15 @@ async def display_loop(config, api_client, display=None, writer=None):
                 game.clock_running):
                 clock_running = True
 
+            # Check if scrolling animation is active (pregame with long venue)
+            scrolling_active = False
+            if (display_state['mode'] == 'game' and
+                game is not None and
+                game.state == STATE_PREGAME and
+                'venue' in _scrollers and
+                _scrollers['venue'].needs_scrolling):
+                scrolling_active = True
+
             # Tick the clock if running
             if clock_running and display_state['clock_seconds'] is not None:
                 now_ms = time.ticks_ms()
@@ -574,8 +627,8 @@ async def display_loop(config, api_client, display=None, writer=None):
                     display_state['clock_dirty'] = True
 
             # Handle rendering
-            if display_state['dirty']:
-                # Full redraw (score change, quarter change, API update, etc.)
+            if display_state['dirty'] or scrolling_active:
+                # Full redraw (score change, quarter change, API update, scrolling, etc.)
                 colors = get_ui_colors(config)
                 render_frame(display, writer, display_state, colors, api_client)
                 display.show()
@@ -593,8 +646,10 @@ async def display_loop(config, api_client, display=None, writer=None):
             print(f"Display loop error: {e}")
             # Don't crash - keep trying
 
-        # Dynamic sleep: 200ms when clock running, 1 second otherwise
-        if clock_running:
-            await asyncio.sleep(0.2)
+        # Dynamic sleep based on animation state
+        if scrolling_active:
+            await asyncio.sleep(0.05)  # 50ms = 20 FPS for smooth scrolling
+        elif clock_running:
+            await asyncio.sleep(0.2)   # 200ms for clock updates
         else:
-            await asyncio.sleep(1)
+            await asyncio.sleep(1)     # 1 second when idle
