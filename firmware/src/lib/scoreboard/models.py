@@ -106,7 +106,7 @@ class TeamWithScore:
 
 
 class Weather:
-    """Weather information for pregame."""
+    """Weather information for outdoor games (pregame and live)."""
 
     def __init__(self, temp: int, description: str):
         self.temp = temp
@@ -151,6 +151,24 @@ class Situation:
             yard_line=data["yard_line"],
             possession=data["possession"],
             red_zone=data["red_zone"]
+        )
+
+
+class LastPlay:
+    """Last play information for live games."""
+
+    def __init__(self, play_type: str, text: str = None):
+        self.play_type = play_type
+        self.text = text
+
+    def __repr__(self):
+        return f"LastPlay({self.play_type})"
+
+    @staticmethod
+    def from_dict(data: dict) -> "LastPlay":
+        return LastPlay(
+            play_type=data.get("play_type", "unknown"),
+            text=data.get("text")
         )
 
 
@@ -207,7 +225,9 @@ class LiveGame:
         quarter: str,
         clock: str,
         clock_running: bool = False,
-        situation: Situation = None
+        situation: Situation = None,
+        last_play: LastPlay = None,
+        weather: Weather = None
     ):
         self.state = STATE_LIVE
         self.event_id = event_id
@@ -217,6 +237,8 @@ class LiveGame:
         self.clock = clock
         self.clock_running = clock_running
         self.situation = situation
+        self.last_play = last_play
+        self.weather = weather
 
     def __repr__(self):
         return f"LiveGame({self.away.abbreviation} {self.away.score} @ {self.home.abbreviation} {self.home.score})"
@@ -227,6 +249,14 @@ class LiveGame:
         if data.get("situation"):
             situation = Situation.from_dict(data["situation"])
 
+        last_play = None
+        if data.get("last_play"):
+            last_play = LastPlay.from_dict(data["last_play"])
+
+        weather = None
+        if data.get("weather"):
+            weather = Weather.from_dict(data["weather"])
+
         return LiveGame(
             event_id=data["event_id"],
             home=TeamWithScore.from_dict(data["home"]),
@@ -234,7 +264,9 @@ class LiveGame:
             quarter=data["quarter"],
             clock=data["clock"],
             clock_running=data.get("clock_running", False),
-            situation=situation
+            situation=situation,
+            last_play=last_play,
+            weather=weather
         )
 
 

@@ -64,6 +64,8 @@ pub struct LiveGame {
     pub situation: Option<Situation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_play: Option<LastPlay>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weather: Option<Weather>,
 }
 
 /// Team with score and timeouts (for live/final games)

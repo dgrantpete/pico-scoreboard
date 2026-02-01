@@ -49,6 +49,29 @@
 		return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 	}
 
+	// Logarithmic slider helpers for data frequency (2 kHz to 50 MHz)
+	const FREQ_MIN = 2; // kHz
+	const FREQ_MAX = 50000; // kHz
+
+	function freqToSlider(freqKhz: number): number {
+		// Convert frequency to 0-100 slider position (logarithmic)
+		return (100 * Math.log(freqKhz / FREQ_MIN)) / Math.log(FREQ_MAX / FREQ_MIN);
+	}
+
+	function sliderToFreq(sliderValue: number): number {
+		// Convert 0-100 slider position to frequency (logarithmic)
+		return Math.round(
+			FREQ_MIN * Math.pow(FREQ_MAX / FREQ_MIN, sliderValue / 100),
+		);
+	}
+
+	function formatFrequency(freqKhz: number): string {
+		if (freqKhz >= 1000) {
+			return `${(freqKhz / 1000).toFixed(freqKhz % 1000 === 0 ? 0 : 1)} MHz`;
+		}
+		return `${freqKhz} kHz`;
+	}
+
 	function calcPercent(used: number, free: number): number {
 		const total = used + free;
 		if (total === 0) return 0;
@@ -512,6 +535,54 @@
 					/>
 					<p class="text-xs text-muted-foreground">
 						How often to fetch game updates from the API
+					</p>
+				</div>
+
+				<Separator />
+
+				<!-- Data Frequency (logarithmic scale) -->
+				<div class="space-y-2">
+					<div class="flex items-center justify-between">
+						<Label>Data Frequency</Label>
+						<span class="text-sm text-muted-foreground">
+							{formatFrequency(settingsStore.config.display.data_frequency_khz)}
+						</span>
+					</div>
+					<Slider
+						type="single"
+						value={freqToSlider(settingsStore.config.display.data_frequency_khz)}
+						onValueChange={(value) =>
+							settingsStore.updateDisplay("data_frequency_khz", sliderToFreq(value))}
+						min={0}
+						max={100}
+						step={0.1}
+					/>
+					<p class="text-xs text-muted-foreground">
+						LED matrix data clock speed. Very low values allow observing bitplane scanning.
+					</p>
+				</div>
+
+				<Separator />
+
+				<!-- Address Frequency Divider -->
+				<div class="space-y-2">
+					<div class="flex items-center justify-between">
+						<Label>Address Divider</Label>
+						<span class="text-sm text-muted-foreground">
+							{settingsStore.config.display.address_frequency_divider}x
+						</span>
+					</div>
+					<Slider
+						type="single"
+						value={settingsStore.config.display.address_frequency_divider}
+						onValueChange={(value) =>
+							settingsStore.updateDisplay("address_frequency_divider", value)}
+						min={4}
+						max={64}
+						step={1}
+					/>
+					<p class="text-xs text-muted-foreground">
+						Higher values increase brightness but may cause ghosting.
 					</p>
 				</div>
 			</Card.Content>

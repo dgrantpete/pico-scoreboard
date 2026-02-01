@@ -151,6 +151,7 @@ fn clone_game_state(state: &GameState) -> GameState {
             simulated_game_seconds: l.simulated_game_seconds,
             time_scale: l.time_scale,
             kickoff_pending: l.kickoff_pending,
+            weather: l.weather.clone(),
         }),
         GameState::Final(f) => GameState::Final(FinalState {
             home_team: f.home_team.clone(),
@@ -254,6 +255,7 @@ fn create_live_state(opts: CreateLiveOptions) -> LiveState {
         simulated_game_seconds: 0,
         time_scale,
         kickoff_pending: opts.yard_line.is_none() && opts.possession.is_none(),
+        weather: None, // Weather not supported for directly-created live games
     }
 }
 

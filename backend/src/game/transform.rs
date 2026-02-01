@@ -55,6 +55,20 @@ fn to_live(event: &EspnEvent, competition: &EspnCompetition, event_id: &str) -> 
     // Compute clock_running based on game status and last play
     let clock_running = compute_clock_running(event, last_play.as_ref());
 
+    // Weather is available for outdoor venues during live games
+    let venue = competition.venue.as_ref();
+    let is_outdoor = venue.map(|v| !v.indoor.unwrap_or(false)).unwrap_or(true);
+    let weather = if is_outdoor {
+        event.weather.as_ref().and_then(|w| {
+            Some(Weather {
+                temp: w.temperature?,
+                description: w.display_value.clone()?,
+            })
+        })
+    } else {
+        None
+    };
+
     LiveGame {
         event_id: event_id.to_string(),
         home: to_team_with_score(home_competitor, situation.and_then(|s| s.home_timeouts)),
@@ -64,6 +78,7 @@ fn to_live(event: &EspnEvent, competition: &EspnCompetition, event_id: &str) -> 
         clock_running,
         situation: situation.and_then(|s| to_situation(s, home_competitor, away_competitor)),
         last_play,
+        weather,
     }
 }
 

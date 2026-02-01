@@ -3,6 +3,7 @@
 import machine
 import uasyncio as asyncio
 from lib.microdot import Microdot, Response
+from lib.scoreboard.state import update_ui_colors, update_display_frequency
 
 
 def create_api(config, get_network_status, api_client=None):
@@ -29,6 +30,13 @@ def create_api(config, get_network_status, api_client=None):
             if section in config.raw and isinstance(values, dict):
                 for key, value in values.items():
                     config.update(section, key, value)
+        # Re-compute UI colors if colors section was updated
+        if 'colors' in data:
+            update_ui_colors(config)
+        # Update display frequency if frequency settings changed
+        if 'display' in data:
+            if 'data_frequency_khz' in data['display'] or 'address_frequency_divider' in data['display']:
+                update_display_frequency(config)
         return config.raw
 
     @api.get('/status')

@@ -126,6 +126,11 @@ fn generate_live(index: usize, rng: &mut impl Rng, force_redzone: bool) -> GameR
         clock_running: rng.gen_bool(0.6), // 60% chance clock is running
         situation: Some(generate_situation(rng, force_redzone)),
         last_play: None, // Mock doesn't generate play-by-play
+        weather: if rng.gen_bool(0.7) {
+            Some(generate_weather(rng))
+        } else {
+            None
+        },
     })
 }
 
@@ -213,6 +218,11 @@ fn generate_overtime(index: usize, rng: &mut impl Rng) -> GameResponse {
             clock_running: rng.gen_bool(0.6),
             situation: Some(generate_situation(rng, false)),
             last_play: None,
+            weather: if rng.gen_bool(0.7) {
+                Some(generate_weather(rng))
+            } else {
+                None
+            },
         })
     } else {
         // Final with overtime

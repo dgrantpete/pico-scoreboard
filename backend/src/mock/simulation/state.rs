@@ -102,6 +102,7 @@ impl PregameState {
             self.away_team,
             self.seed,
             self.time_scale,
+            self.weather,
         )
     }
 }
@@ -136,10 +137,18 @@ pub struct LiveState {
     pub time_scale: f64,
     /// Whether we're in a kickoff situation
     pub kickoff_pending: bool,
+    /// Weather info (persists from pregame)
+    pub weather: Option<WeatherInfo>,
 }
 
 impl LiveState {
-    pub fn new(home_team: TeamInfo, away_team: TeamInfo, seed: u64, time_scale: f64) -> Self {
+    pub fn new(
+        home_team: TeamInfo,
+        away_team: TeamInfo,
+        seed: u64,
+        time_scale: f64,
+        weather: Option<WeatherInfo>,
+    ) -> Self {
         use rand::SeedableRng;
 
         let mut rng = StdRng::seed_from_u64(seed);
@@ -172,6 +181,7 @@ impl LiveState {
             simulated_game_seconds: 0,
             time_scale,
             kickoff_pending: true, // Start with opening kickoff
+            weather,
         }
     }
 
@@ -211,6 +221,10 @@ impl LiveState {
             last_play: self.last_play.as_ref().map(|p| LastPlay {
                 play_type: p.play_type,
                 text: Some(p.description.clone()),
+            }),
+            weather: self.weather.as_ref().map(|w| Weather {
+                temp: w.temp,
+                description: w.description.clone(),
             }),
         }
     }

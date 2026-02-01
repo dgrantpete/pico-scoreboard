@@ -25,7 +25,9 @@ _DEFAULTS = {
     },
     "display": {
         "brightness": 100,
-        "poll_interval_seconds": 30
+        "poll_interval_seconds": 30,
+        "data_frequency_khz": 25000,
+        "address_frequency_divider": 16
     },
     "colors": {
         "primary": {"r": 255, "g": 255, "b": 255},      # White - dividers, status text
@@ -193,6 +195,26 @@ class Config:
     def poll_interval_seconds(self) -> int:
         """How often to poll the API in seconds."""
         return self._data["display"]["poll_interval_seconds"]
+
+    @property
+    def data_frequency_khz(self) -> int:
+        """Data clock frequency in kHz (2-50000)."""
+        return self._data["display"]["data_frequency_khz"]
+
+    @property
+    def address_frequency_divider(self) -> int:
+        """Address frequency divider (4-64)."""
+        return self._data["display"]["address_frequency_divider"]
+
+    @property
+    def data_frequency_hz(self) -> int:
+        """Data clock frequency in Hz (for driver)."""
+        return self._data["display"]["data_frequency_khz"] * 1_000
+
+    @property
+    def address_frequency_hz(self) -> int:
+        """Derived address frequency in Hz (for driver)."""
+        return self.data_frequency_hz // self._data["display"]["address_frequency_divider"]
 
     # Server properties
     @property

@@ -17,13 +17,15 @@ import gc
 import os
 import rp2
 import hashlib
+import _thread
 from lib.microdot import Microdot, Response, send_file
 from lib.scoreboard import Config
 from lib.scoreboard.api_client import ScoreboardApiClient
-from lib.scoreboard.state import set_mode, set_startup_step, clear_startup_state
+from lib.scoreboard.state import set_mode, set_startup_step, finish_startup, set_display_driver
 from lib.dns import run_dns_server
 from lib.api import create_api
-from lib.display_loop import display_loop, init_display, render_startup, get_ui_colors
+from lib.display_loop import init_display, render_startup, get_ui_colors
+from lib.display_thread import run_display_thread
 from lib.api_poller import api_polling_loop
 
 # Reduce buffer size for memory-constrained environment
@@ -70,10 +72,10 @@ def update_startup_display(step, operation, detail=''):
     if _display is None or _writer is None:
         return
 
-    from lib.scoreboard.state import display_state
+    from lib.scoreboard.state import get_display_state
     set_startup_step(step, 5, operation, detail)
     colors = get_ui_colors(config)
-    render_startup(_display, _writer, display_state, colors)
+    render_startup(_display, _writer, get_display_state(), colors)
     _display.show()
 
 
@@ -381,6 +383,7 @@ def start_station_mode():
             # Handle BADAUTH - break to try next attempt
             if status == -3:  # LINK_BADAUTH
                 print("Authentication failed - wrong password?")
+                app.setup_reason = "bad_auth"
                 time.sleep(1)
                 break
 
@@ -422,20 +425,77 @@ def start_station_mode():
     return None
 
 
+# Display thread health tracking
+_display_thread_healthy = False
+
+
+def start_display_thread(display, writer, cfg):
+    """
+    Spawn display loop on Core 1.
+
+    The display thread runs independently of the networking thread,
+    ensuring smooth display updates even during network blocking operations.
+
+    Args:
+        display: Hub75Display instance (pre-initialized)
+        writer: FontWriter instance (pre-initialized)
+        cfg: Config instance for UI colors
+    """
+    global _display_thread_healthy
+
+    def wrapper():
+        global _display_thread_healthy
+        try:
+            _display_thread_healthy = True
+            print("Display thread started on Core 1")
+            run_display_thread(display, writer, cfg)
+        except Exception as e:
+            print(f"Display thread crashed: {e}")
+            _display_thread_healthy = False
+
+    _thread.start_new_thread(wrapper, ())
+
+
+async def watchdog_task():
+    """
+    Monitor display thread health and reset device if it crashes.
+
+    Checks the display thread health every 30 seconds. If the thread
+    is unhealthy, triggers a device reset to recover.
+    """
+    global _display_thread_healthy
+    await asyncio.sleep(10)  # Initial delay to let things stabilize
+
+    while True:
+        await asyncio.sleep(30)
+        if not _display_thread_healthy:
+            print("Display thread unhealthy, resetting device...")
+            await asyncio.sleep(1)
+            machine.reset()
+
+
 async def main():
     """Main entry point."""
     global _display, _writer
 
-    # Start display loop with pre-initialized display (runs in all modes)
-    asyncio.create_task(display_loop(config, api_client, _display, _writer))
+    # Start display thread on Core 1 (runs in all modes)
+    start_display_thread(_display, _writer, config)
+
+    # Start watchdog to monitor display thread health
+    asyncio.create_task(watchdog_task())
 
     if not config.ssid:
         # No network configured - fresh setup mode
         print("No WiFi configured. Starting setup mode...")
         app.setup_mode = True
         app.setup_reason = "no_network_configured"
-        set_mode('setup')
         ap = start_ap_mode()
+        # Explicit transition: startup → setup
+        finish_startup('setup',
+            reason="no_config",
+            ap_ssid=config.device_name,
+            ap_ip=ap.ifconfig()[0]
+        )
         asyncio.create_task(run_dns_server(ap.ifconfig()[0]))
     else:
         # Try to connect to configured network
@@ -444,32 +504,49 @@ async def main():
             # Connection failed - emergency setup mode
             print("Connection failed. Starting setup mode...")
             app.setup_mode = True
-            app.setup_reason = "connection_failed"
-            set_mode('error', 'WiFi Failed')
+            # app.setup_reason may already be set to "bad_auth" from the connection loop
+            if app.setup_reason is None:
+                app.setup_reason = "connection_failed"
             ap = start_ap_mode()
+            # Explicit transition: startup → setup
+            finish_startup('setup',
+                reason=app.setup_reason if app.setup_reason == "bad_auth" else "connection_failed",
+                ap_ssid=config.device_name,
+                ap_ip=ap.ifconfig()[0],
+                wifi_ssid=config.ssid
+            )
             asyncio.create_task(run_dns_server(ap.ifconfig()[0]))
         else:
             # Normal operation - start API polling
             app.setup_mode = False
             app.setup_reason = None
-            update_startup_display(5, "Starting", "API poller")
+            update_startup_display(5, "Starting", "Services")
+            # Explicit transition: startup → idle
+            finish_startup('idle')
             asyncio.create_task(api_polling_loop(config, api_client))
 
-    update_startup_display(5, "Starting", "Web server")
     print("Starting web server on port 80...")
-
-    # Clear startup state and transition to idle (display loop will take over)
-    clear_startup_state()
-    set_mode('idle')
-
     await app.start_server(port=80)
 
 
 if __name__ == '__main__':
     # Initialize display before asyncio for startup progress
     print("Initializing display...")
-    _driver, _display, _writer = init_display()
+    _driver, _display, _writer = init_display(config)
+    set_display_driver(_driver)
     print("Display initialized")
+
+    # Initialize glyph caches on Core 0 (before display thread starts)
+    # This pre-caches digits for zero-allocation rendering
+    from lib.fonts import unscii_16
+    _writer.init_clock(unscii_16)   # Clock digits + colon
+    _writer.init_digits(unscii_16)  # Score digits
+    print("Glyph caches initialized")
+
+    # Pre-compute UI colors on Core 0 (before display thread starts)
+    from lib.scoreboard.state import update_ui_colors
+    update_ui_colors(config)
+    print("UI colors initialized")
 
     # Show first startup step
     update_startup_display(1, "Display", "Initialized")
