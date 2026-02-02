@@ -1,11 +1,9 @@
 """
 Animation primitives for the Pico Scoreboard display.
 
-Provides time-based animations that derive visual state from elapsed time
-rather than maintaining explicit state machines.
+Provides pure functions for time-based animations that derive visual state
+from elapsed time rather than maintaining explicit state machines.
 """
-
-import time
 
 
 def calculate_scroll_offset(
@@ -52,61 +50,3 @@ def calculate_scroll_offset(
         return max_scroll
 
 
-class ScrollingText:
-    """
-    Lightweight wrapper tracking timing for scrolling text.
-
-    Stores minimal state (start time, text, dimensions) and computes
-    the current scroll offset from elapsed time on each call.
-    """
-
-    def __init__(
-        self,
-        text: str,
-        text_width: int,
-        display_width: int,
-        pause_ms: int = 2000,
-        pixels_per_second: int = 30
-    ):
-        """
-        Initialize a scrolling text instance.
-
-        Args:
-            text: The text being scrolled (stored for identity comparison)
-            text_width: Pre-measured width of text in pixels
-            display_width: Width of display area in pixels
-            pause_ms: Duration to pause at start and end
-            pixels_per_second: Scroll speed
-        """
-        self.text = text
-        self.text_width = text_width
-        self.display_width = display_width
-        self.pause_ms = pause_ms
-        self.pixels_per_second = pixels_per_second
-        self.start_time = time.ticks_ms()
-
-    @property
-    def needs_scrolling(self) -> bool:
-        """True if text is wider than display area."""
-        return self.text_width > self.display_width
-
-    def get_offset(self) -> int:
-        """
-        Get current scroll offset based on elapsed time.
-
-        Returns 0 if text fits in display or during pause phases.
-        """
-        if not self.needs_scrolling:
-            return 0
-        elapsed = time.ticks_diff(time.ticks_ms(), self.start_time)
-        return calculate_scroll_offset(
-            self.text_width,
-            self.display_width,
-            elapsed,
-            self.pause_ms,
-            self.pixels_per_second
-        )
-
-    def reset(self):
-        """Restart animation from beginning."""
-        self.start_time = time.ticks_ms()

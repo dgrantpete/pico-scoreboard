@@ -10,6 +10,11 @@ Usage:
 """
 import framebuf
 
+# Alignment constants (integers to avoid allocations)
+ALIGN_LEFT = 0
+ALIGN_CENTER = 1
+ALIGN_RIGHT = 2
+
 
 class FontWriter:
     """
@@ -74,9 +79,8 @@ class FontWriter:
         glyph_data, char_height, char_width = font.get_ch(':')
         self._clock_glyphs[10] = (glyph_data, char_width, char_height)
 
-    def clock(self, seconds: int, x: int, y: int, color: int,
-              bgcolor: int = 0, centered: bool = False,
-              width: int = None) -> int:
+    def clock(self, seconds: int, x: int, y: int, width: int, align: int,
+              color: int, bgcolor: int = 0) -> int:
         """
         Render clock from seconds with ZERO allocations.
 
@@ -86,11 +90,12 @@ class FontWriter:
 
         Args:
             seconds: Total seconds (e.g., 225 for "3:45")
-            x, y: Position
+            x: Left edge of bounding box (pixels)
+            y: Y position (pixels)
+            width: Width of bounding box (pixels)
+            align: ALIGN_LEFT, ALIGN_CENTER, or ALIGN_RIGHT
             color: Foreground color (RGB565)
             bgcolor: Background color (RGB565), default black
-            centered: Center horizontally on display
-            width: Display width (required if centered=True)
 
         Returns:
             X position after last digit
@@ -113,18 +118,22 @@ class FontWriter:
         COLON = 10
         spec = self._glyph_spec
 
-        # Calculate total width for centering
-        if centered:
-            total_width = 0
-            if minutes >= 10:
-                total_width += glyphs[minutes // 10][1]
-            total_width += glyphs[minutes % 10][1]
-            total_width += glyphs[COLON][1]
-            total_width += glyphs[secs // 10][1]
-            total_width += glyphs[secs % 10][1]
-            x = (width - total_width) // 2
+        # Calculate total width for alignment
+        total_width = 0
+        if minutes >= 10:
+            total_width += glyphs[minutes // 10][1]
+        total_width += glyphs[minutes % 10][1]
+        total_width += glyphs[COLON][1]
+        total_width += glyphs[secs // 10][1]
+        total_width += glyphs[secs % 10][1]
 
-        cursor_x = x
+        # Calculate starting position based on alignment
+        if align == ALIGN_CENTER:
+            cursor_x = x + (width - total_width) // 2
+        elif align == ALIGN_RIGHT:
+            cursor_x = x + width - total_width
+        else:  # ALIGN_LEFT
+            cursor_x = x
 
         # Render: [M]M:SS - inline blit to avoid function allocation
         if minutes >= 10:
@@ -171,9 +180,8 @@ class FontWriter:
             glyphs[digit] = (glyph_data, char_width, char_height)
         self._digit_glyphs[id(font)] = glyphs
 
-    def integer(self, value: int, x: int, y: int, color: int,
-                bgcolor: int = 0, font=None, right_align: bool = False,
-                right_x: int = None) -> int:
+    def integer(self, value: int, x: int, y: int, width: int, align: int,
+                color: int, bgcolor: int = 0, font=None) -> int:
         """
         Render an integer with ZERO allocations.
 
@@ -181,13 +189,14 @@ class FontWriter:
         this method. Calling without initialization will raise an error.
 
         Args:
-            value: Integer to render (0-99999, handles any positive int up to 5 digits)
-            x, y: Position (left edge, or ignored if right_align=True)
+            value: Integer to render (0-99999)
+            x: Left edge of bounding box (pixels)
+            y: Y position (pixels)
+            width: Width of bounding box (pixels)
+            align: ALIGN_LEFT, ALIGN_CENTER, or ALIGN_RIGHT
             color: Foreground color (RGB565)
             bgcolor: Background color (RGB565), default black
             font: Font to use (must have been passed to init_digits())
-            right_align: If True, align right edge to right_x
-            right_x: Right edge x position (required if right_align=True)
 
         Returns:
             X position after last digit
@@ -221,13 +230,17 @@ class FontWriter:
                 temp //= 10
                 num_digits += 1
 
-        # Calculate total width for right alignment
-        if right_align:
-            total_width = 0
-            for i in range(num_digits):
-                total_width += glyphs[digits[i]][1]
-            cursor_x = right_x - total_width
-        else:
+        # Calculate total width for alignment
+        total_width = 0
+        for i in range(num_digits):
+            total_width += glyphs[digits[i]][1]
+
+        # Calculate starting position based on alignment
+        if align == ALIGN_CENTER:
+            cursor_x = x + (width - total_width) // 2
+        elif align == ALIGN_RIGHT:
+            cursor_x = x + width - total_width
+        else:  # ALIGN_LEFT
             cursor_x = x
 
         # Render digits (in reverse order since we extracted backwards)
@@ -286,17 +299,39 @@ class FontWriter:
 
         return cursor_x
 
-    def center_text(self, string: str, y: int, color: int,
-                    bgcolor: int = 0, font=None, width: int = None) -> None:
-        """Draw text centered horizontally."""
+    def aligned_text(self, string: str, x: int, y: int, width: int, align: int,
+                     color: int, bgcolor: int = 0, font=None) -> int:
+        """
+        Draw text aligned within a bounding box.
+
+        Args:
+            string: Text to render
+            x: Left edge of bounding box (pixels)
+            y: Y position (pixels)
+            width: Width of bounding box (pixels)
+            align: ALIGN_LEFT, ALIGN_CENTER, or ALIGN_RIGHT
+            color: Foreground color (RGB565)
+            bgcolor: Background color (RGB565), default black
+            font: Font module, or None to use default
+
+        Returns:
+            X position after last character
+        """
         if font is None:
             font = self._default_font
-        if width is None:
-            raise ValueError("width required for center_text")
+        if font is None:
+            raise ValueError("No font specified and no default set")
 
         text_width = self.measure(string, font)
-        x = (width - text_width) // 2
-        self.text(string, x, y, color, bgcolor, font)
+
+        if align == ALIGN_CENTER:
+            start_x = x + (width - text_width) // 2
+        elif align == ALIGN_RIGHT:
+            start_x = x + width - text_width
+        else:  # ALIGN_LEFT or default
+            start_x = x
+
+        return self.text(string, start_x, y, color, bgcolor, font)
 
     def measure(self, string: str, font=None) -> int:
         """Measure text width in pixels."""

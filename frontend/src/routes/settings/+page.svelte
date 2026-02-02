@@ -39,6 +39,14 @@
 		settingsStore.config ? settingsStore.config.display.brightness : 100,
 	);
 
+	// Local state for frequency slider (prevents lag during dragging)
+	let freqSliderValue = $state<number | null>(null);
+	let freqDisplayKhz = $derived(
+		freqSliderValue !== null
+			? sliderToFreq(freqSliderValue)
+			: (settingsStore.config?.display.data_frequency_khz ?? 20000)
+	);
+
 	// Status refresh interval
 	let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -391,11 +399,15 @@
 						type="number"
 						min="1"
 						value={settingsStore.config.network.connect_timeout_seconds}
-						oninput={(e) =>
-							settingsStore.updateNetwork(
-								"connect_timeout_seconds",
-								parseInt((e.target as HTMLInputElement).value) || 15,
-							)}
+					onchange={(e) => {
+						const input = e.target as HTMLInputElement;
+						const value = parseInt(input.value);
+						if (!isNaN(value) && value >= 1) {
+							settingsStore.updateNetwork("connect_timeout_seconds", value);
+						} else {
+							input.value = String(settingsStore.config?.network.connect_timeout_seconds ?? "");
+						}
+					}}
 					/>
 					<p class="text-xs text-muted-foreground">
 						Time to wait before falling back to setup mode
@@ -527,11 +539,15 @@
 						type="number"
 						min="1"
 						value={settingsStore.config.display.poll_interval_seconds}
-						oninput={(e) =>
-							settingsStore.updateDisplay(
-								"poll_interval_seconds",
-								parseInt((e.target as HTMLInputElement).value) || 30,
-							)}
+					onchange={(e) => {
+						const input = e.target as HTMLInputElement;
+						const value = parseInt(input.value);
+						if (!isNaN(value) && value >= 1) {
+							settingsStore.updateDisplay("poll_interval_seconds", value);
+						} else {
+							input.value = String(settingsStore.config?.display.poll_interval_seconds ?? "");
+						}
+					}}
 					/>
 					<p class="text-xs text-muted-foreground">
 						How often to fetch game updates from the API
@@ -545,14 +561,19 @@
 					<div class="flex items-center justify-between">
 						<Label>Data Frequency</Label>
 						<span class="text-sm text-muted-foreground">
-							{formatFrequency(settingsStore.config.display.data_frequency_khz)}
+							{formatFrequency(freqDisplayKhz)}
 						</span>
 					</div>
 					<Slider
 						type="single"
-						value={freqToSlider(settingsStore.config.display.data_frequency_khz)}
-						onValueChange={(value) =>
-							settingsStore.updateDisplay("data_frequency_khz", sliderToFreq(value))}
+						value={freqSliderValue ?? freqToSlider(settingsStore.config.display.data_frequency_khz)}
+						onValueChange={(value) => {
+							freqSliderValue = value;
+						}}
+						onValueCommit={(value) => {
+							settingsStore.updateDisplay("data_frequency_khz", sliderToFreq(value));
+							freqSliderValue = null;
+						}}
 						min={0}
 						max={100}
 						step={0.1}
@@ -704,11 +725,15 @@
 						type="number"
 						min="0"
 						value={settingsStore.config.server.cache_max_age_seconds}
-						oninput={(e) =>
-							settingsStore.updateServer(
-								"cache_max_age_seconds",
-								parseInt((e.target as HTMLInputElement).value) || 0,
-							)}
+					onchange={(e) => {
+						const input = e.target as HTMLInputElement;
+						const value = parseInt(input.value);
+						if (!isNaN(value) && value >= 0) {
+							settingsStore.updateServer("cache_max_age_seconds", value);
+						} else {
+							input.value = String(settingsStore.config?.server.cache_max_age_seconds ?? "");
+						}
+					}}
 					/>
 					<p class="text-xs text-muted-foreground">
 						HTTP cache duration for static content (0 = no caching)

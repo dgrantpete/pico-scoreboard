@@ -26,7 +26,7 @@ _DEFAULTS = {
     "display": {
         "brightness": 100,
         "poll_interval_seconds": 30,
-        "data_frequency_khz": 25000,
+        "data_frequency_khz": 20000,
         "address_frequency_divider": 16
     },
     "colors": {

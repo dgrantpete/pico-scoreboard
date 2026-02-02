@@ -44,6 +44,10 @@ class DoubleBufferedState:
             'clock_dirty': False,
             'clock_seconds': None,
             'clock_last_tick_ms': 0,
+            'animation_start_ms': 0,  # Reset scrolling animations on each API poll
+            # Score flash animation timestamps (set by Core 0 when score changes)
+            'home_scored_ms': 0,
+            'away_scored_ms': 0,
             'startup': {
                 'step': 1,
                 'total_steps': 5,
@@ -55,6 +59,11 @@ class DoubleBufferedState:
                 'ap_ssid': '',       # AP network name to connect to
                 'ap_ip': '',         # IP address to open in browser
                 'wifi_ssid': '',     # Failed SSID (for error context)
+                # Dynamic QR code (generated on Core 0)
+                'qr_fb': None,       # FrameBuffer (MONO_HLSB format)
+                'qr_width': 0,       # QR code width in pixels
+                'qr_height': 0,      # QR code height in pixels
+                'qr_palette': None,  # RGB565 palette for display blitting
             },
             'error': {
                 'title': '',         # Short title (e.g., "API ERROR")
@@ -251,6 +260,7 @@ def set_setup_mode(reason, ap_ssid='', ap_ip='', wifi_ssid=''):
     Set setup mode with detailed context for display.
 
     Thread-safe: writes to back buffer and commits.
+    Generates WiFi QR code for all setup reasons (user always needs to join AP).
 
     Args:
         reason: 'no_config' | 'connection_failed' | 'bad_auth'
@@ -264,6 +274,24 @@ def set_setup_mode(reason, ap_ssid='', ap_ip='', wifi_ssid=''):
     state['setup']['ap_ssid'] = ap_ssid
     state['setup']['ap_ip'] = ap_ip
     state['setup']['wifi_ssid'] = wifi_ssid
+
+    # Generate WiFi QR code for any setup mode
+    # User always needs to (re)join the AP network to access config page
+    if ap_ssid:
+        try:
+            from lib.scoreboard.qr_generator import generate_wifi_qr
+            qr_fb, qr_w, qr_h, qr_palette = generate_wifi_qr(ap_ssid)
+            state['setup']['qr_fb'] = qr_fb
+            state['setup']['qr_width'] = qr_w
+            state['setup']['qr_height'] = qr_h
+            state['setup']['qr_palette'] = qr_palette
+        except Exception as e:
+            print(f"QR generation failed: {e}")
+            state['setup']['qr_fb'] = None
+            state['setup']['qr_width'] = 0
+            state['setup']['qr_height'] = 0
+            state['setup']['qr_palette'] = None
+
     state['dirty'] = True
     commit_state()
 

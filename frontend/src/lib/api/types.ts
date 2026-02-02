@@ -21,7 +21,7 @@ export type ApiConfigUpdate = Partial<ApiConfig>;
 export interface DisplayConfig {
 	brightness: number; // 0-100
 	poll_interval_seconds: number; // min: 1
-	data_frequency_khz: number; // min: 2, max: 50000, default: 25000
+	data_frequency_khz: number; // min: 2, max: 50000, default: 20000
 	address_frequency_divider: number; // min: 4, max: 64, default: 16
 }
 

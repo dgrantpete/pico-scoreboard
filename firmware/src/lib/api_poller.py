@@ -63,6 +63,22 @@ async def api_polling_loop(config, api_client):
 
                 # Write complete state to back buffer
                 state = get_write_state()
+
+                # Detect score changes for flash animation
+                prev_game = state.get('game')
+                if prev_game and hasattr(game, 'home') and hasattr(prev_game, 'home'):
+                    # Only compare if same matchup (same teams)
+                    same_matchup = (
+                        hasattr(game.home, 'abbreviation') and
+                        hasattr(prev_game.home, 'abbreviation') and
+                        game.home.abbreviation == prev_game.home.abbreviation
+                    )
+                    if same_matchup:
+                        if game.home.score > prev_game.home.score:
+                            state['home_scored_ms'] = time.ticks_ms()
+                        if game.away.score > prev_game.away.score:
+                            state['away_scored_ms'] = time.ticks_ms()
+
                 state['mode'] = 'game'
                 state['game'] = game
                 state['games'] = games
@@ -71,6 +87,7 @@ async def api_polling_loop(config, api_client):
                 state['away_logo'] = away_logo
                 state['error_message'] = None
                 state['last_update_ms'] = time.ticks_ms()
+                state['animation_start_ms'] = time.ticks_ms()  # Reset scroll animations
                 state['dirty'] = True
 
                 # Sync clock for live games

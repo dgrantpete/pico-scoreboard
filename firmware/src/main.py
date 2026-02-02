@@ -355,9 +355,9 @@ def start_station_mode():
             update_startup_display(2, "WiFi scan", "Scan failed")
 
         print(f"Connecting to '{config.ssid}'...")
-        # Truncate SSID to 8 chars for display
-        ssid_display = config.ssid[:8] if len(config.ssid) > 8 else config.ssid
-        update_startup_display(3, "Connecting", f"{ssid_display} {attempt}/{max_retries}")
+        # Show SSID in detail line (up to 20 chars), attempt counter in operation
+        ssid_display = config.ssid[:20] if len(config.ssid) > 20 else config.ssid
+        update_startup_display(3, f"Connecting ({attempt}/{max_retries})", ssid_display)
 
         wlan.connect(config.ssid, config.password)
 

@@ -9,7 +9,7 @@ from micropython import const
 import _thread
 import re
 
-DEFAULT_DATA_FREQUENCY = 25_000_000
+DEFAULT_DATA_FREQUENCY = 20_000_000
 
 # Increasing this value non-linearly increases the duty cycle but decreases the refresh rate
 # This default value is a good balance between brightness and refresh rate
