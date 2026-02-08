@@ -27,7 +27,9 @@ _DEFAULTS = {
         "brightness": 100,
         "poll_interval_seconds": 30,
         "data_frequency_khz": 20000,
-        "address_frequency_divider": 16
+        "target_refresh_rate": 120,
+        "gamma": 2.2,
+        "blanking_time_ns": 0
     },
     "colors": {
         "primary": {"r": 255, "g": 255, "b": 255},      # White - dividers, status text
@@ -202,19 +204,24 @@ class Config:
         return self._data["display"]["data_frequency_khz"]
 
     @property
-    def address_frequency_divider(self) -> int:
-        """Address frequency divider (4-64)."""
-        return self._data["display"]["address_frequency_divider"]
-
-    @property
     def data_frequency_hz(self) -> int:
         """Data clock frequency in Hz (for driver)."""
         return self._data["display"]["data_frequency_khz"] * 1_000
 
     @property
-    def address_frequency_hz(self) -> int:
-        """Derived address frequency in Hz (for driver)."""
-        return self.data_frequency_hz // self._data["display"]["address_frequency_divider"]
+    def target_refresh_rate(self) -> float:
+        """Target display refresh rate in Hz (30-240)."""
+        return float(self._data["display"]["target_refresh_rate"])
+
+    @property
+    def gamma(self) -> float:
+        """Gamma correction exponent (1.0-3.0)."""
+        return float(self._data["display"]["gamma"])
+
+    @property
+    def blanking_time_ns(self) -> int:
+        """Blanking time in nanoseconds (0-3000)."""
+        return self._data["display"]["blanking_time_ns"]
 
     # Server properties
     @property

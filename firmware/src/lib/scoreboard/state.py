@@ -82,6 +82,7 @@ class DoubleBufferedState:
             'display': {
                 'quarter': '',         # "Q1", "Q2", "OT", etc.
                 'situation': '',       # "3rd & 7" or ''
+                'possession': '',      # "home", "away", or '' (for possession arrow)
                 'pregame_date': '',    # "SUN 01/15"
                 'pregame_time': '',    # "7:30 PM"
                 'last_play_text': '',  # Last play description for live games
@@ -387,23 +388,92 @@ def set_display_driver(driver):
 
 def update_display_frequency(config):
     """
-    Update display frequency at runtime.
+    Update display data frequency at runtime.
 
-    Called when display.data_frequency_khz or display.address_frequency_divider
-    changes via API. Safe to call from Core 0 - the driver's set_frequency()
-    directly updates PIO clock divider registers.
+    Called when display.data_frequency_khz changes via API.
+    Safe to call from Core 0 - directly updates PIO clock divider registers.
 
     Args:
         config: Config instance with frequency settings
     """
-    global _display_driver
     if _display_driver is None:
         return
 
     data_freq = config.data_frequency_hz
-    addr_freq = config.address_frequency_hz
-    _display_driver.set_frequency(data_frequency=data_freq, address_frequency=addr_freq)
-    print(f"Display frequency updated: data={data_freq // 1000}kHz, addr={addr_freq // 1000}kHz")
+    _display_driver.set_frequency(data_freq)
+    print(f"Display frequency updated: data={data_freq // 1000}kHz")
+
+
+def _recompute_refresh_rate(config):
+    """
+    Recompute base_cycles after changing brightness or blanking time.
+
+    The driver's set_target_refresh_rate() runs a binary search that accounts
+    for the current brightness and blanking_time when computing base_cycles.
+    Without this, changing brightness or blanking_time alone would alter the
+    timing buffer without adjusting base_cycles, causing unexpected dimming.
+    """
+    rate = _display_driver.set_target_refresh_rate(config.target_refresh_rate)
+    print(f"Display refresh rate recomputed: {rate:.1f} Hz")
+
+
+def update_display_brightness(config):
+    """
+    Update display brightness at runtime.
+
+    Args:
+        config: Config instance with brightness setting (0-100)
+    """
+    if _display_driver is None:
+        return
+
+    brightness = config.brightness / 100.0
+    _display_driver.set_brightness(brightness)
+    _recompute_refresh_rate(config)
+    print(f"Display brightness updated: {config.brightness}%")
+
+
+def update_display_refresh_rate(config):
+    """
+    Update display target refresh rate at runtime.
+
+    Args:
+        config: Config instance with target_refresh_rate setting (Hz)
+    """
+    if _display_driver is None:
+        return
+
+    rate = _display_driver.set_target_refresh_rate(config.target_refresh_rate)
+    print(f"Display refresh rate updated: {rate:.1f} Hz")
+
+
+def update_display_gamma(config):
+    """
+    Update display gamma correction at runtime.
+
+    Args:
+        config: Config instance with gamma setting (1.0-3.0)
+    """
+    if _display_driver is None:
+        return
+
+    _display_driver.set_gamma(config.gamma)
+    print(f"Display gamma updated: {config.gamma}")
+
+
+def update_display_blanking_time(config):
+    """
+    Update display blanking (dead) time at runtime.
+
+    Args:
+        config: Config instance with blanking_time_us setting (microseconds)
+    """
+    if _display_driver is None:
+        return
+
+    _display_driver.set_blanking_time(config.blanking_time_ns)
+    _recompute_refresh_rate(config)
+    print(f"Display blanking time updated: {config.blanking_time_ns}ns")
 
 
 def format_quarter(quarter):

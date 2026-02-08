@@ -3,7 +3,10 @@
 import machine
 import uasyncio as asyncio
 from lib.microdot import Microdot, Response
-from lib.scoreboard.state import update_ui_colors, update_display_frequency
+from lib.scoreboard.state import (
+    update_ui_colors, update_display_frequency, update_display_brightness,
+    update_display_refresh_rate, update_display_gamma, update_display_blanking_time
+)
 
 
 def create_api(config, get_network_status, api_client=None):
@@ -33,10 +36,18 @@ def create_api(config, get_network_status, api_client=None):
         # Re-compute UI colors if colors section was updated
         if 'colors' in data:
             update_ui_colors(config)
-        # Update display frequency if frequency settings changed
+        # Update display driver settings as needed
         if 'display' in data:
-            if 'data_frequency_khz' in data['display'] or 'address_frequency_divider' in data['display']:
+            if 'data_frequency_khz' in data['display']:
                 update_display_frequency(config)
+            if 'brightness' in data['display']:
+                update_display_brightness(config)
+            if 'target_refresh_rate' in data['display']:
+                update_display_refresh_rate(config)
+            if 'gamma' in data['display']:
+                update_display_gamma(config)
+            if 'blanking_time_ns' in data['display']:
+                update_display_blanking_time(config)
         return config.raw
 
     @api.get('/status')

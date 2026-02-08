@@ -22,7 +22,9 @@ export interface DisplayConfig {
 	brightness: number; // 0-100
 	poll_interval_seconds: number; // min: 1
 	data_frequency_khz: number; // min: 2, max: 50000, default: 20000
-	address_frequency_divider: number; // min: 4, max: 64, default: 16
+	target_refresh_rate: number; // 30-240 Hz
+	gamma: number; // 1.0-3.0
+	blanking_time_ns: number; // 0-3000 nanoseconds
 }
 
 export type DisplayConfigUpdate = Partial<DisplayConfig>;

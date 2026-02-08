@@ -598,25 +598,73 @@
 
 				<Separator />
 
-				<!-- Address Frequency Divider -->
+				<!-- Target Refresh Rate -->
 				<div class="space-y-2">
 					<div class="flex items-center justify-between">
-						<Label>Address Divider</Label>
+						<Label>Refresh Rate</Label>
 						<span class="text-sm text-muted-foreground">
-							{settingsStore.config.display.address_frequency_divider}x
+							{settingsStore.config.display.target_refresh_rate} Hz
 						</span>
 					</div>
 					<Slider
 						type="single"
-						value={settingsStore.config.display.address_frequency_divider}
+						value={settingsStore.config.display.target_refresh_rate}
 						onValueChange={(value) =>
-							settingsStore.updateDisplay("address_frequency_divider", value)}
-						min={4}
-						max={64}
+							settingsStore.updateDisplay("target_refresh_rate", value)}
+						min={30}
+						max={240}
 						step={1}
 					/>
 					<p class="text-xs text-muted-foreground">
-						Higher values increase brightness but may cause ghosting.
+						Target display refresh rate. Lower values save power but may cause flicker.
+					</p>
+				</div>
+
+				<Separator />
+
+				<!-- Gamma -->
+				<div class="space-y-2">
+					<div class="flex items-center justify-between">
+						<Label>Gamma</Label>
+						<span class="text-sm text-muted-foreground">
+							{settingsStore.config.display.gamma.toFixed(1)}
+						</span>
+					</div>
+					<Slider
+						type="single"
+						value={settingsStore.config.display.gamma}
+						onValueChange={(value) =>
+							settingsStore.updateDisplay("gamma", Math.round(value * 10) / 10)}
+						min={1.0}
+						max={3.0}
+						step={0.1}
+					/>
+					<p class="text-xs text-muted-foreground">
+						Gamma correction exponent. 2.2 is standard for sRGB content.
+					</p>
+				</div>
+
+				<Separator />
+
+				<!-- Dead Time (Blanking Time) -->
+				<div class="space-y-2">
+					<div class="flex items-center justify-between">
+						<Label>Dead Time</Label>
+						<span class="text-sm text-muted-foreground">
+							{settingsStore.config.display.blanking_time_ns} ns
+						</span>
+					</div>
+					<Slider
+						type="single"
+						value={settingsStore.config.display.blanking_time_ns}
+						onValueChange={(value) =>
+							settingsStore.updateDisplay("blanking_time_ns", value)}
+						min={0}
+						max={3000}
+						step={10}
+					/>
+					<p class="text-xs text-muted-foreground">
+						Output-enable blanking time. Reduces ghosting but dims the display.
 					</p>
 				</div>
 			</Card.Content>
