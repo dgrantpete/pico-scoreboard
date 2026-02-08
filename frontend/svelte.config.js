@@ -14,6 +14,9 @@ const config = {
 		},
 		output: {
 			bundleStrategy: 'inline'  // Inline all JS/CSS into HTML
+		},
+		version: {
+			name: 'v1'  // Fixed version for deterministic builds
 		}
 	}
 };
