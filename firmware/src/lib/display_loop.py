@@ -68,6 +68,10 @@ LAST_PLAY_Y = 49
 FLASH_DURATION_MS = 3000   # How long to flash after scoring (3 seconds)
 FLASH_INTERVAL_MS = 200    # Toggle rate (5 Hz = 200ms per state)
 
+# Clock flash animation constants
+CLOCK_FLASH_INTERVAL_MS = 800   # Sub-10s clock toggle rate (1/4 score flash speed)
+CLOCK_ZERO_FLASH_DURATION_MS = 5000  # How long to flash after clock hits zero
+
 
 def should_flash(scored_ms: int, now_ms: int) -> bool:
     """
@@ -649,7 +653,8 @@ def render_live(display, writer, game, state, colors, home_logo, away_logo, now_
     # Compute display clock from immutable state (no mutation!)
     clock_seconds = state.get('clock_seconds') or 0
     clock_last_tick_ms = state.get('clock_last_tick_ms', 0)
-    if hasattr(game, 'clock_running') and game.clock_running and clock_last_tick_ms:
+    clock_is_counting = hasattr(game, 'clock_running') and game.clock_running and clock_last_tick_ms
+    if clock_is_counting:
         # Subtract elapsed time since last API sync
         elapsed_ms = time.ticks_diff(now_ms, clock_last_tick_ms)
         display_seconds = max(0, clock_seconds - elapsed_ms // 1000)
@@ -657,8 +662,26 @@ def render_live(display, writer, game, state, colors, home_logo, away_logo, now_
         # Clock is stopped - show exact API value
         display_seconds = clock_seconds
 
-    # Clock color changes as time runs low
-    if display_seconds < 40:
+    # Clock color: normal >= 60s, warning < 60s, flashing < 10s, fast flash at zero
+    if display_seconds == 0 and clock_is_counting and clock_seconds > 0:
+        # Clock counted down to zero — fast flash for 5 seconds
+        # Compute when the clock crossed zero (stateless, from existing timestamps)
+        zero_ms = clock_last_tick_ms + clock_seconds * 1000
+        since_zero = time.ticks_diff(now_ms, zero_ms)
+        if 0 <= since_zero < CLOCK_ZERO_FLASH_DURATION_MS:
+            if (now_ms // FLASH_INTERVAL_MS) % 2 == 1:
+                clock_color = colors['accent']
+            else:
+                clock_color = colors['clock_warning']
+        else:
+            clock_color = colors['clock_warning']
+    elif display_seconds < 10:
+        # Sub-10s (includes 0 when not counting down): slow flash (800ms)
+        if (now_ms // CLOCK_FLASH_INTERVAL_MS) % 2 == 1:
+            clock_color = colors['accent']
+        else:
+            clock_color = colors['clock_warning']
+    elif display_seconds < 60:
         clock_color = colors['clock_warning']
     else:
         clock_color = colors['clock_normal']
@@ -763,7 +786,7 @@ def redraw_clock_only(display, writer, seconds, colors):
     display.fill_rect(CLOCK_X, CLOCK_Y, CLOCK_WIDTH, clock_height, BLACK)
 
     # Determine clock color based on time remaining (integer comparison)
-    if seconds < 40:  # Under 40 seconds
+    if seconds < 60:  # Under 1 minute
         clock_color = colors['clock_warning']
     else:
         clock_color = colors['clock_normal']

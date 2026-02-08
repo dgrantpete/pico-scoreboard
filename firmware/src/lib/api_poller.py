@@ -92,7 +92,17 @@ async def api_polling_loop(config, api_client):
 
                 # Sync clock for live games
                 if hasattr(game, 'clock') and game.clock:
-                    state['clock_seconds'] = parse_clock(game.clock)
+                    new_clock_seconds = parse_clock(game.clock)
+                    prev_clock_seconds = state.get('clock_seconds')
+
+                    # Stale clock: API says running but value unchanged since last poll.
+                    # Override to stopped so display shows exact value, not local countdown.
+                    if (game.clock_running
+                            and prev_clock_seconds is not None
+                            and new_clock_seconds == prev_clock_seconds):
+                        game.clock_running = False
+
+                    state['clock_seconds'] = new_clock_seconds
                     state['clock_last_tick_ms'] = time.ticks_ms()
 
                 # Pre-format display strings for Core 1 (no allocations on display thread)
