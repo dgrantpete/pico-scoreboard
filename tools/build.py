@@ -6,10 +6,14 @@ Builds the SvelteKit frontend and prepares firmware files for deployment
 to a Raspberry Pi Pico running MicroPython.
 
 Usage:
-    python tools/build.py              # Build to pico/
+    python tools/build.py              # Build to pico/ (release mode)
+    python tools/build.py -c dev       # Build without .mpy compilation
     python tools/build.py flash        # Build and flash to device
     python tools/build.py run          # Build, flash, and open REPL
     python tools/build.py flash --no-build   # Flash without rebuilding
+
+Prerequisites:
+    pip install mpy-cross    # For .mpy compilation
 """
 
 import shutil
@@ -25,6 +29,23 @@ root_directory = Path(__file__).parent.parent
 firmware_source = root_directory / 'firmware' / 'src'
 frontend_directory = root_directory / 'frontend'
 frontend_build = frontend_directory / 'build'
+
+# Files to always copy without compilation (glob patterns)
+COPY_ONLY_FILES = [
+    '*/main.py',      # Entry point - keep as .py for debugging
+    '*/config.json',  # Configuration file
+    '*.gz',           # Binary assets (index.html.gz)
+    '*.mpy',          # Already compiled (hub75, miqro deps)
+]
+
+# Files/directories to skip entirely (glob patterns)
+SKIP_FILES = [
+    '*/__pycache__/*',  # Python cache files
+    '*.pyc',            # Compiled Python cache
+]
+
+# Files to skip in release builds (glob patterns)
+DEV_ONLY_FILES = []  # None currently, but available for future use
 
 
 def build_frontend() -> bool:
@@ -42,20 +63,78 @@ def build_frontend() -> bool:
     return True
 
 
-def copy_firmware_files(output_dir: Path):
-    """Copy firmware source files to output directory."""
-    print(f"Copying firmware files to {output_dir.relative_to(root_directory)}/")
+def process_firmware_files(output_dir: Path, configuration: str, arch: str):
+    """
+    Process firmware files - compile .py to .mpy or copy.
 
-    for item in firmware_source.iterdir():
-        src_path = firmware_source / item.name
-        dst_path = output_dir / item.name
+    In release mode, .py files are compiled to .mpy using mpy-cross.
+    In dev mode, all files are copied without compilation.
 
-        if src_path.is_dir():
-            shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
-            print(f"  Copied {item.name}/")
-        else:
-            shutil.copy2(src_path, dst_path)
-            print(f"  Copied {item.name}")
+    Args:
+        output_dir: Destination directory for processed files
+        configuration: 'dev' or 'release'
+        arch: Target architecture ('armv6m', 'armv7emsp', or 'all')
+    """
+    print(f"Processing firmware files ({configuration} mode)...")
+
+    compiled_count = 0
+    copied_count = 0
+
+    for file in firmware_source.rglob('*'):
+        if file.is_dir():
+            continue
+
+        relative_path = file.relative_to(firmware_source)
+        output_path = output_dir / relative_path
+
+        # Skip files that should never be included
+        if any(file.full_match(p) for p in SKIP_FILES):
+            continue
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Skip dev-only files in release
+        if configuration == 'release' and any(file.full_match(p) for p in DEV_ONLY_FILES):
+            print(f"  Skipping {relative_path} (dev-only)")
+            continue
+
+        # Copy non-.py files and copy-only patterns
+        if file.suffix != '.py' or any(file.full_match(p) for p in COPY_ONLY_FILES):
+            shutil.copy2(file, output_path)
+            copied_count += 1
+            print(f"  Copied {relative_path}")
+            continue
+
+        # In dev mode, copy .py files without compilation
+        if configuration == 'dev':
+            shutil.copy2(file, output_path)
+            copied_count += 1
+            print(f"  Copied {relative_path} (dev mode)")
+            continue
+
+        # Try to compile .py to .mpy
+        try:
+            mpy_path = output_path.with_suffix('.mpy')
+            cmd = ['mpy-cross', '-o', str(mpy_path), str(file)]
+            if arch != 'all':
+                cmd.append(f'-march={arch}')
+
+            result = subprocess.run(cmd, capture_output=True, check=True, text=True)
+            compiled_count += 1
+            print(f"  Compiled {relative_path} -> {relative_path.with_suffix('.mpy')}")
+
+        except subprocess.CalledProcessError as e:
+            # If compilation fails due to arch requirements, fall back to copying
+            if 'invalid arch' in (e.stderr or ''):
+                shutil.copy2(file, output_path)
+                copied_count += 1
+                print(f"  Copied {relative_path} (multi-arch required)")
+            else:
+                print(f"  Error compiling {relative_path}:")
+                print(f"    {e.stderr or e.stdout}")
+                raise
+
+    print(f"  Compiled: {compiled_count}, Copied: {copied_count}")
 
 
 def copy_frontend_build(output_dir: Path) -> bool:
@@ -99,7 +178,7 @@ def flash_device(source_dir: Path, port: str = None, repl: bool = False):
         print("Flash complete!")
 
 
-def do_build(output_dir: Path) -> bool:
+def do_build(output_dir: Path, configuration: str, arch: str) -> bool:
     """Execute the build pipeline."""
     # Build frontend
     if not build_frontend():
@@ -110,14 +189,36 @@ def do_build(output_dir: Path) -> bool:
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy firmware files
-    copy_firmware_files(output_dir)
+    # Process firmware files (compile or copy)
+    process_firmware_files(output_dir, configuration, arch)
 
     # Copy frontend build output (overwrites source index.html.gz)
     copy_frontend_build(output_dir)
 
     print(f"\nBuild complete: {output_dir.relative_to(root_directory)}/")
     return True
+
+
+def add_common_args(parser):
+    """Add common arguments to a parser."""
+    parser.add_argument(
+        '-o', '--output',
+        type=Path,
+        default='pico',
+        help='Output directory (default: pico)'
+    )
+    parser.add_argument(
+        '-c', '--configuration',
+        choices=['dev', 'release'],
+        default='release',
+        help='Build configuration: dev copies .py files, release compiles to .mpy (default: release)'
+    )
+    parser.add_argument(
+        '-a', '--arch',
+        choices=['armv7emsp', 'armv6m', 'all'],
+        default='all',
+        help='Target architecture for mpy-cross: RP2040=armv6m, RP2350=armv7emsp (default: all)'
+    )
 
 
 def main():
@@ -138,12 +239,7 @@ def main():
         '--port',
         help='Serial port for flashing (auto-detect if not specified)'
     )
-    flash_parser.add_argument(
-        '-o', '--output',
-        type=Path,
-        default='pico',
-        help='Output directory (default: pico)'
-    )
+    add_common_args(flash_parser)
 
     # run subcommand
     run_parser = subparsers.add_parser('run', help='Build, flash, and open REPL')
@@ -156,20 +252,10 @@ def main():
         '--port',
         help='Serial port for flashing (auto-detect if not specified)'
     )
-    run_parser.add_argument(
-        '-o', '--output',
-        type=Path,
-        default='pico',
-        help='Output directory (default: pico)'
-    )
+    add_common_args(run_parser)
 
     # Global arguments (for default build command)
-    parser.add_argument(
-        '-o', '--output',
-        type=Path,
-        default='pico',
-        help='Output directory (default: pico)'
-    )
+    add_common_args(parser)
 
     args = parser.parse_args()
 
@@ -178,14 +264,14 @@ def main():
 
     # Default command (no subcommand) = build only
     if args.command is None:
-        if not do_build(output_dir):
+        if not do_build(output_dir, args.configuration, args.arch):
             return 1
         return 0
 
     # flash command
     elif args.command == 'flash':
         if not args.no_build:
-            if not do_build(output_dir):
+            if not do_build(output_dir, args.configuration, args.arch):
                 return 1
         elif not output_dir.exists():
             print(f"Error: {output_dir} does not exist. Run build first or remove --no-build.")
@@ -197,7 +283,7 @@ def main():
     # run command
     elif args.command == 'run':
         if not args.no_build:
-            if not do_build(output_dir):
+            if not do_build(output_dir, args.configuration, args.arch):
                 return 1
         elif not output_dir.exists():
             print(f"Error: {output_dir} does not exist. Run build first or remove --no-build.")
