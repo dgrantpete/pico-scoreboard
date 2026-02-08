@@ -11,8 +11,8 @@ from machine import Pin
 from hub75 import Hub75Driver, Hub75Display
 from lib.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT
 from lib.scoreboard.models import STATE_PREGAME, STATE_LIVE, STATE_FINAL
-from lib.hub75.image import rgb888_to_rgb565_into_buffer
 from lib.animations import calculate_scroll_offset
+from lib.color import rgb888_to_rgb565_into_buffer
 
 # Fixed color
 BLACK = 0
