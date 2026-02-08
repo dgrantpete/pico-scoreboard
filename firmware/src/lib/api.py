@@ -65,7 +65,8 @@ def create_api(config, get_network_status, api_client=None):
             """Fetch all games from backend and forward raw response."""
             try:
                 status, body = api_client.get_all_games_raw()
-                return Response(body=body, status_code=status,
+                # Copy body - api_client returns memoryview to shared buffer
+                return Response(body=bytes(body), status_code=status,
                                 headers={'Content-Type': 'application/json'})
             except Exception as e:
                 return {'error': 'internal_error', 'message': str(e)}, 500
@@ -75,7 +76,8 @@ def create_api(config, get_network_status, api_client=None):
             """Fetch single game from backend and forward raw response."""
             try:
                 status, body = api_client.get_game_raw(event_id)
-                return Response(body=body, status_code=status,
+                # Copy body - api_client returns memoryview to shared buffer
+                return Response(body=bytes(body), status_code=status,
                                 headers={'Content-Type': 'application/json'})
             except Exception as e:
                 return {'error': 'internal_error', 'message': str(e)}, 500
@@ -100,6 +102,10 @@ def create_api(config, get_network_status, api_client=None):
                     background_color=background_color,
                     accept=accept
                 )
+
+                # Copy body - the api_client returns a memoryview to a shared buffer
+                # that can be overwritten by concurrent requests
+                body = bytes(body)
 
                 # Determine content type from Accept header
                 content_type = 'image/x-portable-pixmap' if 'image/x-portable-pixmap' in accept else 'image/png'
