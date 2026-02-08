@@ -100,6 +100,7 @@ async def api_polling_loop(config, api_client):
                 if game.state == STATE_LIVE or game.state == STATE_FINAL:
                     display['quarter'] = format_quarter(game.quarter) if hasattr(game, 'quarter') else ''
                     display['situation'] = format_situation(game.situation) if hasattr(game, 'situation') and game.situation else ''
+                    display['possession'] = game.situation.possession if hasattr(game, 'situation') and game.situation else ''
                     display['pregame_date'] = ''
                     display['pregame_time'] = ''
                     # Last play text for live games
@@ -110,6 +111,7 @@ async def api_polling_loop(config, api_client):
                 elif game.state == STATE_PREGAME:
                     display['quarter'] = ''
                     display['situation'] = ''
+                    display['possession'] = ''
                     display['last_play_text'] = ''
                     if hasattr(game, 'start_time') and game.start_time:
                         date_display, time_display = parse_pregame_datetime(game.start_time)

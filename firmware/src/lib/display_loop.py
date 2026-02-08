@@ -7,12 +7,12 @@ on Core 1.
 """
 
 import time
+import framebuf
 from machine import Pin
 from hub75 import Hub75Driver, Hub75Display
 from lib.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT
 from lib.scoreboard.models import STATE_PREGAME, STATE_LIVE, STATE_FINAL
 from lib.animations import calculate_scroll_offset
-from lib.color import rgb888_to_rgb565_into_buffer
 
 # Fixed color
 BLACK = 0
@@ -27,8 +27,18 @@ LOGO_PADDING = 1
 AWAY_LOGO_X = LOGO_PADDING                              # 1
 HOME_LOGO_X = DISPLAY_WIDTH - LOGO_SIZE - LOGO_PADDING  # 103
 
-# Score positioning (centered under logos)
-SCORE_Y = 26  # Just below logo (which ends at Y=24)
+# Timeout bars (between logos and scores)
+TIMEOUT_Y = 25         # 1px below logo bottom (Y=24)
+TIMEOUT_BAR_W = 6      # Width of each bar
+TIMEOUT_BAR_H = 1      # Height of each bar
+TIMEOUT_GAP = 1        # Gap between bars
+TIMEOUT_COUNT = 3      # Number of timeout bars
+# Total width: 6+1+6+1+6 = 20px, centered under 24px logo
+TIMEOUT_TOTAL_W = TIMEOUT_COUNT * TIMEOUT_BAR_W + (TIMEOUT_COUNT - 1) * TIMEOUT_GAP  # 20
+TIMEOUT_OFFSET_X = (LOGO_SIZE - TIMEOUT_TOTAL_W) // 2  # 2px inset from logo edge
+
+# Score positioning (below timeout bars)
+SCORE_Y = 27  # Below timeout bars (which end at Y=25)
 
 # Center area (between logos)
 CENTER_X = AWAY_LOGO_X + LOGO_SIZE                      # 25
@@ -50,8 +60,8 @@ QUARTER_Y = CLOCK_Y + 4  # Vertically centered on clock
 SITUATION_Y = 22
 
 # Last play summary (bottom of display, centered in free space below scores)
-# Scores end at Y=42 (SCORE_Y + 16), display height is 64, free space is 22px
-# Using spleen_5x8 (8px tall): Y = 42 + (22 - 8) / 2 = 49
+# Scores end at Y=43 (SCORE_Y + 16), display height is 64, free space is 21px
+# Using spleen_5x8 (8px tall): Y = 43 + (21 - 8) / 2 ≈ 49
 LAST_PLAY_Y = 49
 
 # Score flash animation constants
@@ -80,6 +90,52 @@ def should_flash(scored_ms: int, now_ms: int) -> bool:
     # Alternate every FLASH_INTERVAL_MS
     # Returns True for odd intervals (shows accent color)
     return (elapsed // FLASH_INTERVAL_MS) % 2 == 1
+
+
+def dim_team_color(color):
+    """Dim a Color object to 50% brightness and return RGB565."""
+    return rgb565(color.r >> 1, color.g >> 1, color.b >> 1)
+
+
+def draw_timeout_bars(display, logo_x, timeouts_remaining, team_color, used_color):
+    """
+    Draw 3 timeout indicator bars under a team's logo.
+
+    Args:
+        display: Hub75Display instance
+        logo_x: X position of the team's logo (AWAY_LOGO_X or HOME_LOGO_X)
+        timeouts_remaining: Number of remaining timeouts (0-3)
+        team_color: RGB565 color for remaining timeouts
+        used_color: RGB565 color for used timeouts
+    """
+    base_x = logo_x + TIMEOUT_OFFSET_X
+    for i in range(TIMEOUT_COUNT):
+        x = base_x + i * (TIMEOUT_BAR_W + TIMEOUT_GAP)
+        color = team_color if i < timeouts_remaining else used_color
+        display.fill_rect(x, TIMEOUT_Y, TIMEOUT_BAR_W, TIMEOUT_BAR_H, color)
+
+
+def draw_possession_arrow(display, x, y, pointing_right, color):
+    """
+    Draw a small 3x5 filled triangle as a possession indicator.
+
+    Args:
+        display: Hub75Display instance
+        x: X position (left edge of bounding box)
+        y: Y position (top edge of bounding box)
+        pointing_right: True for ► (home), False for ◄ (away)
+        color: RGB565 color
+    """
+    if pointing_right:
+        # ►: col 0 = full height, col 1 = middle 3, col 2 = center
+        display.fill_rect(x, y, 1, 5, color)
+        display.fill_rect(x + 1, y + 1, 1, 3, color)
+        display.pixel(x + 2, y + 2, color)
+    else:
+        # ◄: col 2 = full height, col 1 = middle 3, col 0 = center
+        display.fill_rect(x + 2, y, 1, 5, color)
+        display.fill_rect(x + 1, y + 1, 1, 3, color)
+        display.pixel(x, y + 2, color)
 
 
 # Pre-allocated logo buffer pool
@@ -139,7 +195,7 @@ def get_logo_framebuffer(api_client, team_abbreviation):
             team_id=key,
             width=_LOGO_WIDTH,
             height=_LOGO_HEIGHT,
-            accept="image/x-rgb888"
+            accept="image/x-rgb565"
         )
 
         if status != 200:
@@ -147,8 +203,10 @@ def get_logo_framebuffer(api_client, team_abbreviation):
             _free_slots.add(slot_index)  # Return slot to free pool
             return None
 
-        # Convert RGB888 to RGB565 with gamma correction into pre-allocated buffer
-        fb = rgb888_to_rgb565_into_buffer(body, _logo_buffers[slot_index], _LOGO_WIDTH, _LOGO_HEIGHT)
+        # Copy RGB565 data directly into pre-allocated buffer
+        buf = _logo_buffers[slot_index]
+        buf[:len(body)] = body
+        fb = framebuf.FrameBuffer(buf, _LOGO_WIDTH, _LOGO_HEIGHT, framebuf.RGB565)
 
         _logo_cache[key] = (slot_index, fb)
         _logo_lru.append(key)
@@ -184,20 +242,25 @@ def init_display(config=None):
     Initialize and return HUB75 display hardware.
 
     Args:
-        config: Optional Config instance for frequency settings.
+        config: Optional Config instance for display settings.
                 Uses driver defaults if not provided.
 
     Returns:
         Tuple of (driver, display, writer)
     """
-    # Determine frequencies from config or use driver defaults
     if config is not None:
         data_freq = config.data_frequency_hz
-        addr_freq = config.address_frequency_hz
+        brightness = config.brightness / 100.0
+        gamma = config.gamma
+        blanking_time = config.blanking_time_ns
+        target_refresh_rate = config.target_refresh_rate
     else:
-        from hub75 import DEFAULT_DATA_FREQUENCY, DEFAULT_ADDRESS_FREQUENCY_DIVIDER
+        from hub75.driver import DEFAULT_DATA_FREQUENCY
         data_freq = DEFAULT_DATA_FREQUENCY
-        addr_freq = data_freq // DEFAULT_ADDRESS_FREQUENCY_DIVIDER
+        brightness = 1.0
+        gamma = 2.2
+        blanking_time = 0
+        target_refresh_rate = 120.0
 
     driver = Hub75Driver(
         address_bit_count=5,
@@ -207,10 +270,13 @@ def init_display(config=None):
         base_clock_pin=Pin(5, Pin.OUT),
         base_data_pin=Pin(16, Pin.OUT),
         data_frequency=data_freq,
-        address_frequency=addr_freq
+        brightness=brightness,
+        gamma=gamma,
+        blanking_time=blanking_time,
+        target_refresh_rate=target_refresh_rate
     )
     display = Hub75Display(driver)
-    writer = FontWriter(display.frame_buffer, default_font=unscii_8)
+    writer = FontWriter(display, default_font=unscii_8)
     return driver, display, writer
 
 
@@ -509,9 +575,9 @@ def render_pregame(display, writer, game, state, colors, home_logo, away_logo, n
     date_display = display_data['pregame_date']
     time_str = display_data['pregame_time']
 
-    # Date and time centered
-    writer.aligned_text(date_display, 0, 22, DISPLAY_WIDTH, ALIGN_CENTER, colors['secondary'])
-    writer.aligned_text(time_str, 0, SITUATION_Y, DISPLAY_WIDTH, ALIGN_CENTER, colors['accent'])
+    # Date and time centered (vertically separated)
+    writer.aligned_text(date_display, 0, 26, DISPLAY_WIDTH, ALIGN_CENTER, colors['secondary'])
+    writer.aligned_text(time_str, 0, 36, DISPLAY_WIDTH, ALIGN_CENTER, colors['accent'])
 
     # Venue (single line, scrolls if too long)
     if game.venue:
@@ -563,6 +629,10 @@ def render_live(display, writer, game, state, colors, home_logo, away_logo, now_
     else:
         home_score_color = home_color
 
+    # Timeout bars under logos (used timeouts dimmed to 50%)
+    draw_timeout_bars(display, AWAY_LOGO_X, game.away.timeouts, away_color, dim_team_color(game.away.color))
+    draw_timeout_bars(display, HOME_LOGO_X, game.home.timeouts, home_color, dim_team_color(game.home.color))
+
     # Scores centered under logos - ZERO ALLOCATIONS
     writer.integer(game.away.score, AWAY_LOGO_X, SCORE_Y, LOGO_SIZE, ALIGN_CENTER, away_score_color, font=unscii_16)
     writer.integer(game.home.score, HOME_LOGO_X, SCORE_Y, LOGO_SIZE, ALIGN_CENTER, home_score_color, font=unscii_16)
@@ -594,9 +664,20 @@ def render_live(display, writer, game, state, colors, home_logo, away_logo, now_
         clock_color = colors['clock_normal']
     writer.clock(display_seconds, CLOCK_X, CLOCK_Y, CLOCK_WIDTH, ALIGN_CENTER, clock_color)
 
-    # Down & distance below quarter/clock line
+    # Down & distance below quarter/clock line, with possession arrow
     if situation_str:
         writer.aligned_text(situation_str, 0, SITUATION_Y, DISPLAY_WIDTH, ALIGN_CENTER, colors['primary'])
+
+        # Possession triangle arrow next to situation text
+        possession = display_data.get('possession', '')
+        if possession:
+            text_width = writer.measure(situation_str)
+            text_x = (DISPLAY_WIDTH - text_width) // 2
+            arrow_y = SITUATION_Y + 1  # Vertically centered (5px arrow in 8px text)
+            if possession == 'away':
+                draw_possession_arrow(display, text_x - 5, arrow_y, False, away_color)
+            elif possession == 'home':
+                draw_possession_arrow(display, text_x + text_width + 2, arrow_y, True, home_color)
 
     # Last play summary at bottom of display
     last_play_text = display_data.get('last_play_text', '')
@@ -646,6 +727,10 @@ def render_final(display, writer, game, state, colors, home_logo, away_logo, now
         home_score_color = colors['accent']
     else:
         home_score_color = home_color
+
+    # Timeout bars under logos (used timeouts dimmed to 50%)
+    draw_timeout_bars(display, AWAY_LOGO_X, game.away.timeouts, away_color, dim_team_color(game.away.color))
+    draw_timeout_bars(display, HOME_LOGO_X, game.home.timeouts, home_color, dim_team_color(game.home.color))
 
     # Scores centered under logos - ZERO ALLOCATIONS
     writer.integer(game.away.score, AWAY_LOGO_X, SCORE_Y, LOGO_SIZE, ALIGN_CENTER, away_score_color, font=unscii_16)
