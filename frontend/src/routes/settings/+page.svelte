@@ -23,8 +23,10 @@
 	import HardDrive from "@lucide/svelte/icons/hard-drive";
 	import { settingsStore } from "$lib/stores/settings.svelte";
 	import { rebootStore } from "$lib/stores/reboot.svelte";
+	import { memoryTelemetryStore } from "$lib/stores/memory-telemetry.svelte";
 	import { picoApi } from "$lib/api";
 	import RebootOverlay from "$lib/components/RebootOverlay.svelte";
+	import MemoryChart from "$lib/components/MemoryChart.svelte";
 	import type { NetworkStatus, Config, Color } from "$lib/api/types";
 
 	// Password visibility toggles
@@ -110,9 +112,15 @@
 	}
 
 	onMount(() => {
-		settingsStore.load();
+		settingsStore.load().then(() => {
+			// Seed memory telemetry with initial status and start polling
+			if (settingsStore.status) {
+				memoryTelemetryStore.seedFromStatus(settingsStore.status);
+			}
+			memoryTelemetryStore.startPolling();
+		});
 
-		// Start status refresh interval (15 seconds)
+		// Start status refresh interval (15 seconds) for other status data
 		refreshInterval = setInterval(() => {
 			settingsStore.refreshStatus();
 		}, 15000);
@@ -123,6 +131,7 @@
 			clearInterval(refreshInterval);
 			refreshInterval = null;
 		}
+		memoryTelemetryStore.stopPolling();
 	});
 
 	function handleBrightnessChange(value: number) {
@@ -265,10 +274,6 @@
 
 		<!-- System Resources -->
 		{#if settingsStore.status}
-			{@const memoryPercent = calcPercent(
-				settingsStore.status.memory_used,
-				settingsStore.status.memory_free
-			)}
 			{@const flashPercent = calcPercent(
 				settingsStore.status.flash_used,
 				settingsStore.status.flash_free
@@ -276,25 +281,33 @@
 			<Card.Root>
 				<Card.Header>
 					<Card.Title>System Resources</Card.Title>
-					<Card.Description>Memory and storage usage</Card.Description>
+					<Card.Description>Memory and storage usage over time</Card.Description>
 				</Card.Header>
 				<Card.Content class="space-y-6">
-					<!-- Memory Usage -->
+					<!-- Memory Usage Chart -->
 					<div class="space-y-2">
 						<div class="flex items-center justify-between">
 							<div class="flex items-center gap-2">
 								<Cpu class="h-4 w-4 text-muted-foreground" />
 								<span class="text-sm font-medium">Memory</span>
 							</div>
-							<span class={cn("text-sm font-medium", getUsageColor(memoryPercent))}>
-								{memoryPercent}%
-							</span>
+							{#if memoryTelemetryStore.latestStatus}
+								{@const memPercent = calcPercent(
+									memoryTelemetryStore.latestStatus.memory_used,
+									memoryTelemetryStore.latestStatus.memory_free
+								)}
+								<span class={cn("text-sm font-medium", getUsageColor(memPercent))}>
+									{memPercent}%
+								</span>
+							{/if}
 						</div>
-						<Progress value={memoryPercent} max={100} />
-						<div class="flex justify-between text-xs text-muted-foreground">
-							<span>{formatBytes(settingsStore.status.memory_used)} used</span>
-							<span>{formatBytes(settingsStore.status.memory_free)} free</span>
-						</div>
+						<MemoryChart />
+						{#if memoryTelemetryStore.latestStatus}
+							<div class="flex justify-between text-xs text-muted-foreground">
+								<span>{formatBytes(memoryTelemetryStore.latestStatus.memory_used)} used</span>
+								<span>{formatBytes(memoryTelemetryStore.latestStatus.memory_free)} free</span>
+							</div>
+						{/if}
 					</div>
 
 					<Separator />
