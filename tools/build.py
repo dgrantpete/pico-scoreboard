@@ -19,8 +19,6 @@ Prerequisites:
 import shutil
 import subprocess
 import argparse
-import sys
-import os
 import time
 from pathlib import Path
 
@@ -32,10 +30,10 @@ frontend_build = frontend_directory / 'build'
 
 # Files to always copy without compilation (glob patterns)
 COPY_ONLY_FILES = [
-    '*/main.py',      # Entry point - keep as .py for debugging
-    '*/config.json',  # Configuration file
-    '*.gz',           # Binary assets (index.html.gz)
-    '*.mpy',          # Already compiled (hub75, miqro deps)
+    '**/main.py',      # Entry point - keep as .py for debugging
+    '**/config.json',  # Configuration file
+    '**/index.html.gz',           # Binary assets (index.html.gz)
+    '**/*.mpy',          # Already compiled (hub75, miqro deps)
 ]
 
 # Files/directories to skip entirely (glob patterns)

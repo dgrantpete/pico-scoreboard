@@ -9,6 +9,10 @@ or when connection to the configured network fails. Once properly
 configured, connects to the specified WiFi network.
 """
 
+import sys
+
+sys.path.append('lib')
+
 import network
 import time
 import machine
