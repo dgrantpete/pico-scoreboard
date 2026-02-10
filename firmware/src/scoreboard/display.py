@@ -1,18 +1,16 @@
 """
-Display rendering functions for the Pico Scoreboard.
+Display rendering and thread management for the Pico Scoreboard.
 
-Provides render functions for different display modes (startup, idle, game, error)
-and the logo caching system. The actual display loop runs in display_thread.py
-on Core 1.
+Provides render functions for different display modes (startup, idle, game, error),
+the logo caching system, animation primitives, and the Core 1 display thread.
 """
 
 import time
 import framebuf
 from machine import Pin
 from hub75 import Hub75Driver, Hub75Display
-from lib.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT
-from lib.scoreboard.models import STATE_PREGAME, STATE_LIVE, STATE_FINAL
-from lib.animations import calculate_scroll_offset
+from scoreboard.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT
+from scoreboard.models import STATE_PREGAME, STATE_LIVE, STATE_FINAL
 
 # Fixed color
 BLACK = 0
@@ -72,6 +70,58 @@ FLASH_INTERVAL_MS = 200    # Toggle rate (5 Hz = 200ms per state)
 CLOCK_FLASH_INTERVAL_MS = 800   # Sub-10s clock toggle rate (1/4 score flash speed)
 CLOCK_ZERO_FLASH_DURATION_MS = 5000  # How long to flash after clock hits zero
 
+
+# =============================================================================
+# Animation primitives
+# =============================================================================
+
+def calculate_scroll_offset(
+    text_width: int,
+    display_width: int,
+    elapsed_ms: int,
+    pause_ms: int = 2000,
+    pixels_per_second: int = 30
+) -> int:
+    """
+    Pure function: Given dimensions and elapsed time, return pixel offset.
+
+    The animation cycle is:
+        [pause_start] -> [scrolling] -> [pause_end] -> repeat
+
+    Args:
+        text_width: Width of text in pixels
+        display_width: Width of display area in pixels
+        elapsed_ms: Milliseconds since animation started
+        pause_ms: Duration to pause at start and end (default 2 seconds)
+        pixels_per_second: Scroll speed (default 30 px/s)
+
+    Returns:
+        Pixel offset (0 to max_scroll). Returns 0 if text fits in display.
+    """
+    max_scroll = text_width - display_width
+    if max_scroll <= 0:
+        return 0
+
+    scroll_duration_ms = (max_scroll * 1000) // pixels_per_second
+    total_cycle_ms = pause_ms + scroll_duration_ms + pause_ms
+
+    position = elapsed_ms % total_cycle_ms
+
+    if position < pause_ms:
+        # Phase 1: Paused at start
+        return 0
+    elif position < pause_ms + scroll_duration_ms:
+        # Phase 2: Scrolling
+        scroll_position = position - pause_ms
+        return (scroll_position * pixels_per_second) // 1000
+    else:
+        # Phase 3: Paused at end
+        return max_scroll
+
+
+# =============================================================================
+# Rendering helpers
+# =============================================================================
 
 def should_flash(scored_ms: int, now_ms: int) -> bool:
     """
@@ -374,6 +424,10 @@ def draw_progress_bar(display, x, y, width, height, progress, colors):
     if fill_width > 0:
         display.fill_rect(x + 1, y + 1, fill_width, height - 2, colors['accent'])
 
+
+# =============================================================================
+# Render functions for each display mode
+# =============================================================================
 
 def render_startup(display, writer, state, colors):
     """Render startup/boot progress screen."""
@@ -844,3 +898,49 @@ def render_frame(display, writer, state, colors, now_ms):
         render_idle(display, writer, colors)
 
 
+# =============================================================================
+# Display thread (runs on Core 1)
+# =============================================================================
+
+def run_display_thread(display, writer, config):
+    """
+    Main entry point for Core 1 display thread.
+
+    Runs a constant 20 FPS loop reading state from the front buffer
+    and rendering to the display. The fixed frame rate ensures smooth
+    animations (scrolling text, score flashing, clock updates).
+
+    IMPORTANT: This function runs on Core 1 with ZERO memory allocations.
+    All display hardware (PIO, DMA) is accessed exclusively from this thread.
+    UI colors are pre-computed on Core 0 and read from state['ui_colors'].
+
+    Args:
+        display: Hub75Display instance (pre-initialized on Core 0)
+        writer: FontWriter instance (pre-initialized on Core 0)
+        config: Config instance (unused - colors pre-computed in state)
+    """
+    from scoreboard.state import get_display_state
+
+    _ = config  # Unused - colors are pre-computed in state['ui_colors']
+    print("Display thread starting on Core 1 (20 FPS)...")
+
+    while True:
+        try:
+            # Capture current time once per frame (used for all timing-dependent rendering)
+            now_ms = time.ticks_ms()
+
+            # Read from front buffer (lock-free!)
+            state = get_display_state()
+
+            # Render frame using pre-computed colors (no allocation!)
+            # now_ms is passed through for pure timing computations (clock, flash, scroll)
+            colors = state['ui_colors']
+            render_frame(display, writer, state, colors, now_ms)
+            display.show()
+
+        except Exception as e:
+            print(f"Display thread error: {e}")
+            # Don't crash - keep trying
+
+        # Constant 20 FPS for all animations
+        time.sleep_ms(50)

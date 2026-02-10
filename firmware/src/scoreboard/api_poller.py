@@ -11,12 +11,12 @@ ensuring the display thread (Core 1) never blocks on network I/O.
 
 import time
 import uasyncio as asyncio
-from lib.scoreboard.state import (
+from scoreboard.state import (
     get_write_state, commit_state, parse_clock, set_error,
     format_quarter, format_situation, parse_pregame_datetime
 )
-from lib.scoreboard.models import STATE_PREGAME, STATE_LIVE, STATE_FINAL
-from lib.display_loop import get_logo_framebuffer
+from scoreboard.models import STATE_PREGAME, STATE_LIVE, STATE_FINAL
+from scoreboard.display import get_logo_framebuffer
 
 
 async def api_polling_loop(config, api_client):

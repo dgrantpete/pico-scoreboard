@@ -9,10 +9,6 @@ or when connection to the configured network fails. Once properly
 configured, connects to the specified WiFi network.
 """
 
-import sys
-
-sys.path.append('lib')
-
 import network
 import time
 import machine
@@ -22,15 +18,14 @@ import os
 import rp2
 import hashlib
 import _thread
-from lib.microdot import Microdot, Response, send_file
-from lib.scoreboard import Config
-from lib.scoreboard.api_client import ScoreboardApiClient
-from lib.scoreboard.state import set_mode, set_startup_step, finish_startup, set_display_driver
-from lib.dns import run_dns_server
-from lib.api import create_api
-from lib.display_loop import init_display, render_startup, get_ui_colors
-from lib.display_thread import run_display_thread
-from lib.api_poller import api_polling_loop
+from microdot import Microdot, Response, send_file
+from scoreboard import Config
+from scoreboard.api_client import ScoreboardApiClient
+from scoreboard.state import set_mode, set_startup_step, finish_startup, set_display_driver
+from scoreboard.dns import run_dns_server
+from scoreboard.api_routes import create_api
+from scoreboard.display import init_display, render_startup, get_ui_colors, run_display_thread
+from scoreboard.api_poller import api_polling_loop
 
 # Reduce buffer size for memory-constrained environment
 Response.send_file_buffer_size = 512
@@ -76,7 +71,7 @@ def update_startup_display(step, operation, detail=''):
     if _display is None or _writer is None:
         return
 
-    from lib.scoreboard.state import get_display_state
+    from scoreboard.state import get_display_state
     set_startup_step(step, 5, operation, detail)
     colors = get_ui_colors(config)
     render_startup(_display, _writer, get_display_state(), colors)
@@ -542,13 +537,13 @@ if __name__ == '__main__':
 
     # Initialize glyph caches on Core 0 (before display thread starts)
     # This pre-caches digits for zero-allocation rendering
-    from lib.fonts import unscii_16
+    from scoreboard.fonts import unscii_16
     _writer.init_clock(unscii_16)   # Clock digits + colon
     _writer.init_digits(unscii_16)  # Score digits
     print("Glyph caches initialized")
 
     # Pre-compute UI colors on Core 0 (before display thread starts)
-    from lib.scoreboard.state import update_ui_colors
+    from scoreboard.state import update_ui_colors
     update_ui_colors(config)
     print("UI colors initialized")
 

@@ -256,6 +256,44 @@ def finish_startup(target_mode, **mode_kwargs):
         set_mode(target_mode)
 
 
+# =============================================================================
+# WiFi QR code generation (for setup screen)
+# =============================================================================
+
+# Pre-allocated palette buffer (4 bytes for 2 RGB565 colors)
+# This is allocated once at import time
+import framebuf
+
+_qr_palette_buf = bytearray(4)
+_qr_palette = framebuf.FrameBuffer(_qr_palette_buf, 2, 1, framebuf.RGB565)
+_qr_palette.pixel(0, 0, 0xFFFF)  # Index 0: white (QR background/light modules)
+_qr_palette.pixel(1, 0, 0x0000)  # Index 1: black (QR dark modules)
+
+
+def _generate_wifi_qr(ssid, password=''):
+    """
+    Generate a QR code encoding WiFi credentials.
+
+    Uses lazy import of miqro to avoid loading it at startup when not needed.
+
+    Args:
+        ssid: Network name (the AP SSID)
+        password: Network password (empty string for open network)
+
+    Returns:
+        Tuple of (framebuffer, width, height, palette)
+    """
+    from miqro import QRCode
+
+    if password:
+        wifi_str = f"WIFI:T:WPA;S:{ssid};P:{password};;"
+    else:
+        wifi_str = f"WIFI:T:nopass;S:{ssid};;"
+
+    qr = QRCode(wifi_str)
+    return (qr.data, qr.width, qr.height, _qr_palette)
+
+
 def set_setup_mode(reason, ap_ssid='', ap_ip='', wifi_ssid=''):
     """
     Set setup mode with detailed context for display.
@@ -280,8 +318,7 @@ def set_setup_mode(reason, ap_ssid='', ap_ip='', wifi_ssid=''):
     # User always needs to (re)join the AP network to access config page
     if ap_ssid:
         try:
-            from lib.scoreboard.qr_generator import generate_wifi_qr
-            qr_fb, qr_w, qr_h, qr_palette = generate_wifi_qr(ap_ssid)
+            qr_fb, qr_w, qr_h, qr_palette = _generate_wifi_qr(ap_ssid)
             state['setup']['qr_fb'] = qr_fb
             state['setup']['qr_width'] = qr_w
             state['setup']['qr_height'] = qr_h
@@ -349,7 +386,7 @@ def update_ui_colors(config):
     Args:
         config: Config instance with get_color() method
     """
-    from lib.color import rgb565
+    from scoreboard.fonts import rgb565
 
     def to_rgb565(color_dict):
         return rgb565(color_dict["r"], color_dict["g"], color_dict["b"])

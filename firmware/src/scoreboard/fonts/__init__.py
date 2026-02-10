@@ -2,18 +2,25 @@
 Simple font rendering for Hub75 displays.
 
 Usage:
-    from lib.fonts import FontWriter, unscii_8, unscii_16
+    from scoreboard.fonts import FontWriter, unscii_8, unscii_16
 
     writer = FontWriter(display.frame_buffer, default_font=unscii_8)
     writer.text("SCORE", 0, 0, color=0xFFFF)
     writer.text("24", 50, 0, color=0xF800, font=unscii_16)
 """
 import framebuf
+import micropython
 
 # Alignment constants (integers to avoid allocations)
 ALIGN_LEFT = 0
 ALIGN_CENTER = 1
 ALIGN_RIGHT = 2
+
+
+@micropython.viper
+def rgb565(r: int, g: int, b: int) -> int:
+    """Convert RGB888 to RGB565 color value."""
+    return int(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3))
 
 
 class FontWriter:
@@ -371,9 +378,6 @@ def draw_text(fb: framebuf.FrameBuffer, string: str, x: int, y: int,
 
     return cursor_x
 
-
-# Import rgb565 from shared color module for backwards compatibility
-from lib.color import rgb565
 
 # Import font modules for convenience
 from . import unscii_8
