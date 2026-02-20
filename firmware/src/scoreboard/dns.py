@@ -9,7 +9,7 @@ import socket
 import uasyncio as asyncio
 
 
-async def run_dns_server(ip_address='192.168.4.1'):
+async def run_dns_server(ip_address: str = '192.168.4.1') -> None:
     """
     Simple DNS server that responds to all queries with the given IP.
     Runs as an async task alongside the web server.
@@ -18,10 +18,10 @@ async def run_dns_server(ip_address='192.168.4.1'):
         ip_address: The IP to return for all DNS queries (default: 192.168.4.1)
     """
     # Convert IP string to bytes
-    ip_bytes = bytes(map(int, ip_address.split('.')))
+    ip_bytes: bytes = bytes(map(int, ip_address.split('.')))
 
     # Create UDP socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setblocking(False)
     sock.bind(('0.0.0.0', 53))
 
@@ -41,7 +41,7 @@ async def run_dns_server(ip_address='192.168.4.1'):
             await asyncio.sleep_ms(50)
 
 
-def _build_dns_response(query, ip_bytes):
+def _build_dns_response(query: bytes, ip_bytes: bytes) -> bytes:
     """
     Build a DNS response that returns the given IP for any A record query.
 
@@ -53,26 +53,26 @@ def _build_dns_response(query, ip_bytes):
         The raw DNS response packet
     """
     # Transaction ID (first 2 bytes of query)
-    transaction_id = query[:2]
+    transaction_id: bytes = query[:2]
 
     # Flags: standard response, no error
-    flags = b'\x81\x80'
+    flags: bytes = b'\x81\x80'
 
     # Questions: 1, Answers: 1, Authority: 0, Additional: 0
-    counts = b'\x00\x01\x00\x01\x00\x00\x00\x00'
+    counts: bytes = b'\x00\x01\x00\x01\x00\x00\x00\x00'
 
     # Find the question section (starts at byte 12)
     # Copy it for the response
-    question_end = 12
+    question_end: int = 12
     while query[question_end] != 0:
         question_end += query[question_end] + 1
     question_end += 5  # null byte + qtype (2) + qclass (2)
 
-    question = query[12:question_end]
+    question: bytes = query[12:question_end]
 
     # Answer section
     # Name pointer to question (0xC00C = pointer to offset 12)
-    answer = b'\xc0\x0c'
+    answer: bytes = b'\xc0\x0c'
     # Type A (1), Class IN (1)
     answer += b'\x00\x01\x00\x01'
     # TTL (60 seconds)

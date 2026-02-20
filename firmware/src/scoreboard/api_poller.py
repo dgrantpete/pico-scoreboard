@@ -10,16 +10,19 @@ ensuring the display thread (Core 1) never blocks on network I/O.
 """
 
 import time
+import framebuf
 import uasyncio as asyncio
+from scoreboard.config import Config
+from scoreboard.api_client import ScoreboardApiClient
 from scoreboard.state import (
     get_write_state, commit_state, parse_clock, set_error,
     format_quarter, format_situation, parse_pregame_datetime
 )
-from scoreboard.models import STATE_PREGAME, STATE_LIVE, STATE_FINAL
+from scoreboard.models import PregameGame, LiveGame, FinalGame
 from scoreboard.display import get_logo_framebuffer
 
 
-async def api_polling_loop(config, api_client):
+async def api_polling_loop(config: Config, api_client: ScoreboardApiClient) -> None:
     """
     Background task that polls the API and cycles through all games.
 
@@ -31,11 +34,11 @@ async def api_polling_loop(config, api_client):
         config: Config instance with poll_interval_seconds
         api_client: ScoreboardApiClient instance
     """
-    consecutive_failures = 0
-    MAX_FAILURES_BEFORE_ERROR = 5
+    consecutive_failures: int = 0
+    MAX_FAILURES_BEFORE_ERROR: int = 5
 
     # Track game cycling state locally (not in double buffer)
-    game_index = -1  # Will be incremented to 0 on first poll
+    game_index: int = -1  # Will be incremented to 0 on first poll
 
     # Initial delay to let system stabilize
     await asyncio.sleep(2)
@@ -54,8 +57,8 @@ async def api_polling_loop(config, api_client):
                 game = games[game_index]
 
                 # Fetch logos for this game (blocking network calls, but we're on Core 0)
-                home_logo = None
-                away_logo = None
+                home_logo: framebuf.FrameBuffer | None = None
+                away_logo: framebuf.FrameBuffer | None = None
                 if hasattr(game, 'home') and hasattr(game.home, 'abbreviation'):
                     home_logo = get_logo_framebuffer(api_client, game.home.abbreviation)
                 if hasattr(game, 'away') and hasattr(game.away, 'abbreviation'):
@@ -65,35 +68,34 @@ async def api_polling_loop(config, api_client):
                 state = get_write_state()
 
                 # Detect score changes for flash animation
-                prev_game = state.get('game')
-                if prev_game and hasattr(game, 'home') and hasattr(prev_game, 'home'):
+                prev_game = state.game
+                if (isinstance(game, (LiveGame, FinalGame))
+                        and isinstance(prev_game, (LiveGame, FinalGame))):
                     # Only compare if same matchup (same teams)
                     same_matchup = (
-                        hasattr(game.home, 'abbreviation') and
-                        hasattr(prev_game.home, 'abbreviation') and
                         game.home.abbreviation == prev_game.home.abbreviation
                     )
                     if same_matchup:
                         if game.home.score > prev_game.home.score:
-                            state['home_scored_ms'] = time.ticks_ms()
+                            state.home_scored_ms = time.ticks_ms()
                         if game.away.score > prev_game.away.score:
-                            state['away_scored_ms'] = time.ticks_ms()
+                            state.away_scored_ms = time.ticks_ms()
 
-                state['mode'] = 'game'
-                state['game'] = game
-                state['games'] = games
-                state['game_index'] = game_index
-                state['home_logo'] = home_logo
-                state['away_logo'] = away_logo
-                state['error_message'] = None
-                state['last_update_ms'] = time.ticks_ms()
-                state['animation_start_ms'] = time.ticks_ms()  # Reset scroll animations
-                state['dirty'] = True
+                state.mode = 'game'
+                state.game = game
+                state.games = games
+                state.game_index = game_index
+                state.home_logo = home_logo
+                state.away_logo = away_logo
+                state.error_message = None
+                state.last_update_ms = time.ticks_ms()
+                state.animation_start_ms = time.ticks_ms()  # Reset scroll animations
+                state.dirty = True
 
                 # Sync clock for live games
-                if hasattr(game, 'clock') and game.clock:
+                if isinstance(game, LiveGame) and game.clock:
                     new_clock_seconds = parse_clock(game.clock)
-                    prev_clock_seconds = state.get('clock_seconds')
+                    prev_clock_seconds = state.clock_seconds
 
                     # Stale clock: API says running but value unchanged since last poll.
                     # Override to stopped so display shows exact value, not local countdown.
@@ -102,34 +104,40 @@ async def api_polling_loop(config, api_client):
                             and new_clock_seconds == prev_clock_seconds):
                         game.clock_running = False
 
-                    state['clock_seconds'] = new_clock_seconds
-                    state['clock_last_tick_ms'] = time.ticks_ms()
+                    state.clock_seconds = new_clock_seconds
+                    state.clock_last_tick_ms = time.ticks_ms()
 
                 # Pre-format display strings for Core 1 (no allocations on display thread)
-                display = state['display']
-                if game.state == STATE_LIVE or game.state == STATE_FINAL:
-                    display['quarter'] = format_quarter(game.quarter) if hasattr(game, 'quarter') else ''
-                    display['situation'] = format_situation(game.situation) if hasattr(game, 'situation') and game.situation else ''
-                    display['possession'] = game.situation.possession if hasattr(game, 'situation') and game.situation else ''
-                    display['pregame_date'] = ''
-                    display['pregame_time'] = ''
-                    # Last play text for live games
-                    if game.state == STATE_LIVE and hasattr(game, 'last_play') and game.last_play and game.last_play.text:
-                        display['last_play_text'] = game.last_play.text
+                display = state.display
+                if isinstance(game, LiveGame):
+                    display.quarter = format_quarter(game.quarter)
+                    display.situation = format_situation(game.situation) if game.situation else ''
+                    display.possession = game.situation.possession if game.situation else ''
+                    display.pregame_date = ''
+                    display.pregame_time = ''
+                    if game.last_play and game.last_play.text:
+                        display.last_play_text = game.last_play.text
                     else:
-                        display['last_play_text'] = ''
-                elif game.state == STATE_PREGAME:
-                    display['quarter'] = ''
-                    display['situation'] = ''
-                    display['possession'] = ''
-                    display['last_play_text'] = ''
-                    if hasattr(game, 'start_time') and game.start_time:
+                        display.last_play_text = ''
+                elif isinstance(game, FinalGame):
+                    display.quarter = ''
+                    display.situation = ''
+                    display.possession = ''
+                    display.pregame_date = ''
+                    display.pregame_time = ''
+                    display.last_play_text = ''
+                elif isinstance(game, PregameGame):
+                    display.quarter = ''
+                    display.situation = ''
+                    display.possession = ''
+                    display.last_play_text = ''
+                    if game.start_time:
                         date_display, time_display = parse_pregame_datetime(game.start_time)
-                        display['pregame_date'] = date_display
-                        display['pregame_time'] = time_display
+                        display.pregame_date = date_display
+                        display.pregame_time = time_display
                     else:
-                        display['pregame_date'] = ''
-                        display['pregame_time'] = ''
+                        display.pregame_date = ''
+                        display.pregame_time = ''
 
                 # Atomic swap - display thread now sees this state
                 commit_state()
@@ -137,14 +145,13 @@ async def api_polling_loop(config, api_client):
                 print(f"Game {game_index + 1}/{len(games)}: {game}")
             else:
                 # No games is a normal state, not an error
-                # Reset failure counter since API responded successfully
                 consecutive_failures = 0
 
                 state = get_write_state()
-                state['mode'] = 'no_games'
-                state['game'] = None
-                state['games'] = []
-                state['dirty'] = True
+                state.mode = 'no_games'
+                state.game = None
+                state.games = []
+                state.dirty = True
                 commit_state()
 
                 print("No games scheduled")

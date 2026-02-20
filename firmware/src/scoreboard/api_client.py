@@ -5,7 +5,7 @@ HTTP client for the Pico Scoreboard backend API.
 import gc
 import ujson
 from .config import Config
-from .models import parse_game_response
+from .models import parse_game_response, PregameGame, LiveGame, FinalGame
 
 try:
     import urequests as requests
@@ -18,7 +18,7 @@ _response_buf = bytearray(_MAX_RESPONSE_SIZE)
 _response_mv = memoryview(_response_buf)
 
 
-def _read_response_body(response):
+def _read_response_body(response: object) -> memoryview:
     """
     Read response body into pre-allocated buffer (zero-copy).
 
@@ -57,10 +57,10 @@ class ApiError(Exception):
         message: Human-readable error message
     """
 
-    def __init__(self, status_code: int, error: str, message: str):
-        self.status_code = status_code
-        self.error = error
-        self.message = message
+    def __init__(self, status_code: int, error: str, message: str) -> None:
+        self.status_code: int = status_code
+        self.error: str = error
+        self.message: str = message
         super().__init__(f"{status_code}: {error} - {message}")
 
 
@@ -78,14 +78,14 @@ class ScoreboardApiClient:
         print(game.state, game.home.abbreviation)
     """
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config) -> None:
         """
         Initialize the API client.
 
         Args:
             config: Config instance with API URL and key
         """
-        self._config = config
+        self._config: Config = config
 
     def _games_path(self) -> str:
         """Return the games API path, using mock path if mock mode is enabled."""
@@ -93,7 +93,7 @@ class ScoreboardApiClient:
             return "/api/mock/games"
         return "/api/games"
 
-    def get_game(self, event_id: str):
+    def get_game(self, event_id: str) -> PregameGame | LiveGame | FinalGame:
         """
         Fetch game data for the given event_id.
 
@@ -135,7 +135,7 @@ class ScoreboardApiClient:
         finally:
             response.close()
 
-    def get_game_safe(self, event_id: str):
+    def get_game_safe(self, event_id: str) -> PregameGame | LiveGame | FinalGame | None:
         """
         Fetch game data, returning None on any error.
 
@@ -155,7 +155,7 @@ class ScoreboardApiClient:
             print(f"API error: {e}")
             return None
 
-    def get_all_games(self):
+    def get_all_games(self) -> list[PregameGame | LiveGame | FinalGame]:
         """
         Fetch all games from the backend.
 
@@ -194,7 +194,7 @@ class ScoreboardApiClient:
         finally:
             response.close()
 
-    def get_all_games_safe(self):
+    def get_all_games_safe(self) -> list[PregameGame | LiveGame | FinalGame]:
         """
         Fetch all games, returning empty list on any error.
 
@@ -210,7 +210,7 @@ class ScoreboardApiClient:
             print(f"API error: {e}")
             return []
 
-    def get_game_raw(self, event_id: str):
+    def get_game_raw(self, event_id: str) -> tuple[int, memoryview]:
         """
         Fetch raw game data bytes without parsing.
 
@@ -236,7 +236,7 @@ class ScoreboardApiClient:
         finally:
             response.close()
 
-    def get_all_games_raw(self):
+    def get_all_games_raw(self) -> tuple[int, memoryview]:
         """
         Fetch raw games list bytes without parsing.
 
@@ -259,8 +259,8 @@ class ScoreboardApiClient:
         finally:
             response.close()
 
-    def get_team_logo_raw(self, team_id: str, width: int = None, height: int = None,
-                         background_color: str = None, accept: str = None):
+    def get_team_logo_raw(self, team_id: str, width: int | None = None, height: int | None = None,
+                         background_color: str | None = None, accept: str | None = None) -> tuple[int, memoryview]:
         """
         Fetch team logo as raw bytes.
 

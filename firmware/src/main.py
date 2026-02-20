@@ -18,29 +18,31 @@ import os
 import rp2
 import hashlib
 import _thread
-from microdot import Microdot, Response, send_file
+from microdot import Microdot, Request, Response, send_file
 from scoreboard import Config
 from scoreboard.api_client import ScoreboardApiClient
 from scoreboard.state import set_mode, set_startup_step, finish_startup, set_display_driver
 from scoreboard.dns import run_dns_server
 from scoreboard.api_routes import create_api
-from scoreboard.display import init_display, render_startup, get_ui_colors, run_display_thread
+from scoreboard.display import init_display, render_startup, run_display_thread
+from scoreboard.fonts import FontWriter
 from scoreboard.api_poller import api_polling_loop
+from hub75 import Hub75Display
 
 # Reduce buffer size for memory-constrained environment
 Response.send_file_buffer_size = 512
 
-app = Microdot()
-config = Config()
+app: Microdot = Microdot()
+config: Config = Config()
 
 
 # Compute ETag for index.html.gz once at startup
-def _compute_index_etag():
+def _compute_index_etag() -> str | None:
     try:
         h = hashlib.sha1()
         with open('/index.html.gz', 'rb') as f:
             while True:
-                chunk = f.read(512)
+                chunk: bytes = f.read(512)
                 if not chunk:
                     break
                 h.update(chunk)
@@ -50,22 +52,20 @@ def _compute_index_etag():
         return None
 
 
-INDEX_ETAG = _compute_index_etag()
+INDEX_ETAG: str | None = _compute_index_etag()
 
 # Display components (initialized before asyncio for startup display)
-_display = None
-_writer = None
+_display: Hub75Display | None = None
+_writer: FontWriter | None = None
+_display_thread_started: bool = False
 
-def update_startup_display(step, operation, detail=''):
+def update_startup_display(step: int, operation: str, detail: str = '') -> None:
     """
     Update startup progress on the display.
 
-    Called during synchronous startup before async loop takes over.
-
-    Args:
-        step: Current step number (1-5)
-        operation: Short operation name
-        detail: Optional detail text
+    Before the display thread starts, renders directly to the display.
+    After the display thread starts, only updates state — the display
+    thread handles rendering to avoid dual-core framebuffer races.
     """
     global _display, _writer
     if _display is None or _writer is None:
@@ -73,8 +73,13 @@ def update_startup_display(step, operation, detail=''):
 
     from scoreboard.state import get_display_state
     set_startup_step(step, 5, operation, detail)
-    colors = get_ui_colors(config)
-    render_startup(_display, _writer, get_display_state(), colors)
+
+    if _display_thread_started:
+        return  # Display thread handles rendering now
+
+    # Direct rendering (only before display thread starts)
+    state = get_display_state()
+    render_startup(_display, _writer, state, state.ui_colors)
     _display.show()
 
 
@@ -83,7 +88,7 @@ app.setup_mode = False
 app.setup_reason = None  # 'no_network_configured' | 'connection_failed' | None
 
 
-def get_memory_stats():
+def get_memory_stats() -> dict:
     """Get current memory usage statistics."""
     gc.collect()  # Run GC first for accurate reading
     memory_used = gc.mem_alloc()
@@ -106,7 +111,7 @@ def get_memory_stats():
     }
 
 
-def get_network_status():
+def get_network_status() -> dict:
     """Build current network status dict for API."""
     ap = getattr(app, 'ap', None)
     wlan = getattr(app, 'wlan', None)
@@ -167,19 +172,19 @@ def get_network_status():
 
 
 # Create API client for backend communication
-api_client = ScoreboardApiClient(config)
+api_client: ScoreboardApiClient = ScoreboardApiClient(config)
 
 # Create and mount API under /api prefix
-api = create_api(config, get_network_status, api_client)
+api: Microdot = create_api(config, get_network_status, api_client)
 app.mount(api, url_prefix='/api')
 
 
-def get_my_hosts(ap):
+def get_my_hosts(ap: network.WLAN | None) -> set:
     """
     Get the set of hostnames that belong to us.
     Built dynamically from config and the provided AP interface.
     """
-    hosts = set()
+    hosts: set = set()
 
     # Add configured device name (e.g., "scoreboard.local")
     hosts.add(f"{config.device_name}.local")
@@ -193,7 +198,7 @@ def get_my_hosts(ap):
 
 
 @app.get('/')
-async def index(request):
+async def index(request: Request) -> Response | tuple:
     """Serve the SPA, or redirect hijacked requests to trigger captive portal."""
     ap = getattr(app, 'ap', None)
     host = request.headers.get('Host', '').split(':')[0]
@@ -219,7 +224,7 @@ async def index(request):
 
 
 @app.route('/<path:path>')
-async def catch_all(request, path):
+async def catch_all(request: Request, path: str) -> tuple:
     """
     Handle unknown paths using Host header to distinguish:
     - Legitimate requests (Host is our IP/hostname) -> 404
@@ -236,7 +241,7 @@ async def catch_all(request, path):
     return '', 302, {'Location': f'http://{redirect_ip}/#/setup'}
 
 
-def start_ap_mode():
+def start_ap_mode() -> network.WLAN:
     """
     Start Access Point mode for initial setup.
 
@@ -247,7 +252,7 @@ def start_ap_mode():
     Returns:
         The AP WLAN interface
     """
-    ap = network.WLAN(network.AP_IF)
+    ap: network.WLAN = network.WLAN(network.AP_IF)
     ap.config(essid=config.device_name, security=0)  # security=0 means open network
     ap.active(True)
 
@@ -260,9 +265,9 @@ def start_ap_mode():
     return ap
 
 
-def get_wlan_status_string(status):
+def get_wlan_status_string(status: int) -> str:
     """Convert WLAN status code to human-readable string."""
-    status_map = {
+    status_map: dict = {
         0: "LINK_DOWN",
         1: "LINK_JOIN",
         2: "LINK_NOIP",
@@ -274,7 +279,7 @@ def get_wlan_status_string(status):
     return status_map.get(status, f"UNKNOWN({status})")
 
 
-def reset_wlan(wlan):
+def reset_wlan(wlan: network.WLAN) -> None:
     """Full reset of WLAN interface to clear stale state."""
     try:
         wlan.disconnect()
@@ -302,7 +307,7 @@ def reset_wlan(wlan):
     time.sleep(0.5)
 
 
-def start_station_mode():
+def start_station_mode() -> network.WLAN | None:
     """
     Connect to configured WiFi network.
 
@@ -425,10 +430,10 @@ def start_station_mode():
 
 
 # Display thread health tracking
-_display_thread_healthy = False
+_display_thread_healthy: bool = False
 
 
-def start_display_thread(display, writer, cfg):
+def start_display_thread(display: Hub75Display, writer: FontWriter, cfg: Config) -> None:
     """
     Spawn display loop on Core 1.
 
@@ -440,7 +445,8 @@ def start_display_thread(display, writer, cfg):
         writer: FontWriter instance (pre-initialized)
         cfg: Config instance for UI colors
     """
-    global _display_thread_healthy
+    global _display_thread_healthy, _display_thread_started
+    _display_thread_started = True
 
     def wrapper():
         global _display_thread_healthy
@@ -455,7 +461,7 @@ def start_display_thread(display, writer, cfg):
     _thread.start_new_thread(wrapper, ())
 
 
-async def watchdog_task():
+async def watchdog_task() -> None:
     """
     Monitor display thread health and reset device if it crashes.
 
@@ -473,11 +479,13 @@ async def watchdog_task():
             machine.reset()
 
 
-async def main():
+async def main() -> None:
     """Main entry point."""
     global _display, _writer
 
     # Start display thread on Core 1 (runs in all modes)
+    # _display and _writer are guaranteed non-None here (set in __main__ before asyncio.run)
+    assert _display is not None and _writer is not None
     start_display_thread(_display, _writer, config)
 
     # Start watchdog to monitor display thread health

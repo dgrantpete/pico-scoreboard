@@ -8,9 +8,12 @@ the logo caching system, animation primitives, and the Core 1 display thread.
 import time
 import framebuf
 from machine import Pin
-from hub75 import Hub75Driver, Hub75Display
+from hub75 import Hub75Driver, Hub75Display, row_addressing, gamma as gamma_mod
 from scoreboard.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT
-from scoreboard.models import STATE_PREGAME, STATE_LIVE, STATE_FINAL
+from scoreboard.models import Color, PregameGame, LiveGame, FinalGame, STATE_PREGAME, STATE_LIVE, STATE_FINAL
+from scoreboard.state import StateBuffer, UiColors
+from scoreboard.config import Config
+from scoreboard.api_client import ScoreboardApiClient
 
 # Fixed color
 BLACK = 0
@@ -87,16 +90,6 @@ def calculate_scroll_offset(
 
     The animation cycle is:
         [pause_start] -> [scrolling] -> [pause_end] -> repeat
-
-    Args:
-        text_width: Width of text in pixels
-        display_width: Width of display area in pixels
-        elapsed_ms: Milliseconds since animation started
-        pause_ms: Duration to pause at start and end (default 2 seconds)
-        pixels_per_second: Scroll speed (default 30 px/s)
-
-    Returns:
-        Pixel offset (0 to max_scroll). Returns 0 if text fits in display.
     """
     max_scroll = text_width - display_width
     if max_scroll <= 0:
@@ -129,10 +122,6 @@ def should_flash(scored_ms: int, now_ms: int) -> bool:
 
     Returns True if we're in a flash window AND on an "alternate" cycle.
     Uses time.ticks_diff for proper wraparound handling.
-
-    Args:
-        scored_ms: Timestamp when score changed (0 if no recent score)
-        now_ms: Current timestamp (passed from render loop)
     """
     if scored_ms == 0:
         return False
@@ -142,26 +131,16 @@ def should_flash(scored_ms: int, now_ms: int) -> bool:
         return False
 
     # Alternate every FLASH_INTERVAL_MS
-    # Returns True for odd intervals (shows accent color)
     return (elapsed // FLASH_INTERVAL_MS) % 2 == 1
 
 
-def dim_team_color(color):
+def dim_team_color(color: Color) -> int:
     """Dim a Color object to 50% brightness and return RGB565."""
     return rgb565(color.r >> 1, color.g >> 1, color.b >> 1)
 
 
-def draw_timeout_bars(display, logo_x, timeouts_remaining, team_color, used_color):
-    """
-    Draw 3 timeout indicator bars under a team's logo.
-
-    Args:
-        display: Hub75Display instance
-        logo_x: X position of the team's logo (AWAY_LOGO_X or HOME_LOGO_X)
-        timeouts_remaining: Number of remaining timeouts (0-3)
-        team_color: RGB565 color for remaining timeouts
-        used_color: RGB565 color for used timeouts
-    """
+def draw_timeout_bars(display: Hub75Display, logo_x: int, timeouts_remaining: int, team_color: int, used_color: int) -> None:
+    """Draw 3 timeout indicator bars under a team's logo."""
     base_x = logo_x + TIMEOUT_OFFSET_X
     for i in range(TIMEOUT_COUNT):
         x = base_x + i * (TIMEOUT_BAR_W + TIMEOUT_GAP)
@@ -169,81 +148,57 @@ def draw_timeout_bars(display, logo_x, timeouts_remaining, team_color, used_colo
         display.fill_rect(x, TIMEOUT_Y, TIMEOUT_BAR_W, TIMEOUT_BAR_H, color)
 
 
-def draw_possession_arrow(display, x, y, pointing_right, color):
-    """
-    Draw a small 3x5 filled triangle as a possession indicator.
-
-    Args:
-        display: Hub75Display instance
-        x: X position (left edge of bounding box)
-        y: Y position (top edge of bounding box)
-        pointing_right: True for ► (home), False for ◄ (away)
-        color: RGB565 color
-    """
+def draw_possession_arrow(display: Hub75Display, x: int, y: int, pointing_right: bool, color: int) -> None:
+    """Draw a small 3x5 filled triangle as a possession indicator."""
     if pointing_right:
-        # ►: col 0 = full height, col 1 = middle 3, col 2 = center
         display.fill_rect(x, y, 1, 5, color)
         display.fill_rect(x + 1, y + 1, 1, 3, color)
         display.pixel(x + 2, y + 2, color)
     else:
-        # ◄: col 2 = full height, col 1 = middle 3, col 0 = center
         display.fill_rect(x + 2, y, 1, 5, color)
         display.fill_rect(x + 1, y + 1, 1, 3, color)
         display.pixel(x, y + 2, color)
 
 
 # Pre-allocated logo buffer pool
-# Allocating upfront prevents memory fragmentation during runtime
 _LOGO_POOL_SIZE = 8  # Max logos cached
 _LOGO_WIDTH = 24
 _LOGO_HEIGHT = 24
 _LOGO_BUFFER_SIZE = _LOGO_WIDTH * _LOGO_HEIGHT * 2  # 1152 bytes per logo
 
-# Pre-allocate all buffers at module load time (before fragmentation occurs)
 _logo_buffers = [bytearray(_LOGO_BUFFER_SIZE) for _ in range(_LOGO_POOL_SIZE)]
 _logo_cache = {}  # team_abbr -> (slot_index, FrameBuffer)
 _logo_lru = []    # LRU order: oldest first
-_free_slots = set(range(_LOGO_POOL_SIZE))  # Track available buffer slots
+_free_slots = set(range(_LOGO_POOL_SIZE))
 
 print(f"Pre-allocated {_LOGO_POOL_SIZE} logo buffers ({_LOGO_POOL_SIZE * _LOGO_BUFFER_SIZE // 1024} KB)")
 
 
 
-def get_logo_framebuffer(api_client, team_abbreviation):
+def get_logo_framebuffer(api_client: ScoreboardApiClient, team_abbreviation: str) -> framebuf.FrameBuffer | None:
     """
     Get logo framebuffer from cache or fetch from API.
 
     Uses a pre-allocated buffer pool with LRU eviction to prevent
     memory fragmentation from repeated allocations.
-
-    Args:
-        api_client: ScoreboardApiClient instance
-        team_abbreviation: Team abbreviation (e.g., "DAL")
-
-    Returns:
-        framebuf.FrameBuffer or None on error
     """
     key = team_abbreviation.lower()
 
     # Return cached if available
     if key in _logo_cache:
-        # Move to end of LRU (most recently used)
         _logo_lru.remove(key)
         _logo_lru.append(key)
-        return _logo_cache[key][1]  # Return FrameBuffer
+        return _logo_cache[key][1]
 
     # Need to fetch - get a buffer slot
     if _free_slots:
-        # Use a free slot
         slot_index = _free_slots.pop()
     else:
-        # Evict oldest entry to reuse its slot
         evict_key = _logo_lru.pop(0)
         slot_index = _logo_cache[evict_key][0]
         del _logo_cache[evict_key]
         print(f"Evicted logo {evict_key} from slot {slot_index}")
 
-    # Fetch from API
     try:
         status, body = api_client.get_team_logo_raw(
             team_id=key,
@@ -254,10 +209,9 @@ def get_logo_framebuffer(api_client, team_abbreviation):
 
         if status != 200:
             print(f"Logo fetch failed for {key}: HTTP {status}")
-            _free_slots.add(slot_index)  # Return slot to free pool
+            _free_slots.add(slot_index)
             return None
 
-        # Copy RGB565 data directly into pre-allocated buffer
         buf = _logo_buffers[slot_index]
         buf[:len(body)] = body
         fb = framebuf.FrameBuffer(buf, _LOGO_WIDTH, _LOGO_HEIGHT, framebuf.RGB565)
@@ -269,17 +223,17 @@ def get_logo_framebuffer(api_client, team_abbreviation):
 
     except Exception as e:
         print(f"Logo fetch error for {key}: {e}")
-        _free_slots.add(slot_index)  # Return slot to free pool
+        _free_slots.add(slot_index)
         return None
 
 
-def get_ui_colors(config):
+def get_ui_colors(config: Config) -> dict:
     """
     Get UI colors from config, converted to RGB565.
 
     Returns dict with color names mapped to RGB565 values.
     """
-    def to_rgb565(color_dict):
+    def to_rgb565(color_dict: dict) -> int:
         return rgb565(color_dict["r"], color_dict["g"], color_dict["b"])
 
     return {
@@ -291,13 +245,9 @@ def get_ui_colors(config):
     }
 
 
-def init_display(config=None):
+def init_display(config: Config | None = None) -> tuple[Hub75Driver, Hub75Display, FontWriter]:
     """
     Initialize and return HUB75 display hardware.
-
-    Args:
-        config: Optional Config instance for display settings.
-                Uses driver defaults if not provided.
 
     Returns:
         Tuple of (driver, display, writer)
@@ -312,14 +262,16 @@ def init_display(config=None):
         from hub75.driver import DEFAULT_DATA_FREQUENCY
         data_freq = DEFAULT_DATA_FREQUENCY
         brightness = 1.0
-        gamma = 2.2
+        gamma = gamma_mod.SRGB()
         blanking_time = 0
         target_refresh_rate = 120.0
 
     driver = Hub75Driver(
-        address_bit_count=5,
+        row_addressing=row_addressing.Direct(
+            base_pin=Pin(8, Pin.OUT),
+            bit_count=5
+        ),
         shift_register_depth=128,
-        base_address_pin=Pin(8, Pin.OUT),
         output_enable_pin=Pin(7, Pin.OUT),
         base_clock_pin=Pin(5, Pin.OUT),
         base_data_pin=Pin(16, Pin.OUT),
@@ -334,12 +286,12 @@ def init_display(config=None):
     return driver, display, writer
 
 
-def color_to_rgb565(color):
+def color_to_rgb565(color: Color) -> int:
     """Convert a Color object to RGB565."""
     return rgb565(color.r, color.g, color.b)
 
 
-def safe_team_color(color, fallback_color):
+def safe_team_color(color: Color, fallback_color: int) -> int:
     """
     Convert team color to RGB565, ensuring visibility on black background.
     If color is too dark, use the fallback color instead.
@@ -349,21 +301,11 @@ def safe_team_color(color, fallback_color):
     return rgb565(color.r, color.g, color.b)
 
 
-def render_scrolling_or_centered(writer, text, y, width, color, font, animation_start_ms, now_ms):
+def render_scrolling_or_centered(writer: FontWriter, text: str, y: int, width: int, color: int, font: object, animation_start_ms: int, now_ms: int) -> None:
     """
     Pure function: Render text centered if it fits, or scroll if too wide.
 
     Computes scroll offset from timestamps without any internal state.
-
-    Args:
-        writer: FontWriter instance
-        text: Text to render
-        y: Y position
-        width: Available width in pixels
-        color: Text color (RGB565)
-        font: Font to use
-        animation_start_ms: Timestamp when animation started
-        now_ms: Current timestamp
     """
     text_width = writer.measure(text, font)
     if text_width <= width:
@@ -374,13 +316,8 @@ def render_scrolling_or_centered(writer, text, y, width, color, font, animation_
         writer.text(text, -offset, y, color, font=font)
 
 
-def wrap_text(text, max_chars):
-    """
-    Wrap text to fit within max_chars per line.
-
-    Tries to break at word boundaries when possible.
-    Returns list of lines.
-    """
+def wrap_text(text: str, max_chars: int) -> list:
+    """Wrap text to fit within max_chars per line. Returns list of lines."""
     if len(text) <= max_chars:
         return [text]
 
@@ -392,142 +329,112 @@ def wrap_text(text, max_chars):
             lines.append(remaining)
             break
 
-        # Find last space within limit
         break_point = remaining[:max_chars].rfind(' ')
         if break_point <= 0:
-            # No space found, hard break at limit
             break_point = max_chars - 1
             lines.append(remaining[:break_point] + '-')
             remaining = remaining[break_point:]
         else:
             lines.append(remaining[:break_point])
-            remaining = remaining[break_point + 1:]  # Skip the space
+            remaining = remaining[break_point + 1:]
 
     return lines
 
 
-def draw_progress_bar(display, x, y, width, height, progress, colors):
-    """
-    Draw a horizontal progress bar.
-
-    Args:
-        display: Hub75Display instance
-        x, y: Top-left position
-        width, height: Dimensions
-        progress: 0-100 percentage
-        colors: Color dict with 'secondary' (border) and 'accent' (fill)
-    """
+def draw_progress_bar(display: Hub75Display, x: int, y: int, width: int, height: int, progress: int, colors: UiColors) -> None:
+    """Draw a horizontal progress bar."""
     # Border
-    display.rect(x, y, width, height, colors['secondary'])
+    display.rect(x, y, width, height, colors.secondary)
     # Fill (leave 1px border)
     fill_width = int((width - 2) * progress / 100)
     if fill_width > 0:
-        display.fill_rect(x + 1, y + 1, fill_width, height - 2, colors['accent'])
+        display.fill_rect(x + 1, y + 1, fill_width, height - 2, colors.accent)
 
 
 # =============================================================================
 # Render functions for each display mode
 # =============================================================================
 
-def render_startup(display, writer, state, colors):
+def render_startup(display: Hub75Display, writer: FontWriter, state: StateBuffer, colors: UiColors) -> None:
     """Render startup/boot progress screen."""
     display.fill(BLACK)
 
-    startup = state.get('startup', {})
-    step = startup.get('step', 1)
-    total = startup.get('total_steps', 5)
-    operation = startup.get('operation', 'Starting...')
-    detail = startup.get('detail', '')
+    startup = state.startup
+    step = startup.step
+    total = startup.total_steps
+    operation = startup.operation
+    detail = startup.detail
 
     # Title "BOOTING" at top
-    writer.aligned_text("BOOTING", 0, 4, DISPLAY_WIDTH, ALIGN_CENTER, colors['accent'], font=unscii_16)
+    writer.aligned_text("BOOTING", 0, 4, DISPLAY_WIDTH, ALIGN_CENTER, colors.accent, font=unscii_16)
 
     # Progress bar (80px wide, centered) at Y=24
     bar_width = 80
     bar_x = (DISPLAY_WIDTH - bar_width) // 2
-    progress = int((step - 1) / total * 100) + (100 // total) // 2  # Center of current step
+    progress = int((step - 1) / total * 100) + (100 // total) // 2
     draw_progress_bar(display, bar_x, 24, bar_width, 8, progress, colors)
 
     # Step indicator to the right of progress bar
     step_text = f"{step}/{total}"
-    writer.text(step_text, bar_x + bar_width + 4, 24, colors['secondary'], font=spleen_5x8)
+    writer.text(step_text, bar_x + bar_width + 4, 24, colors.secondary, font=spleen_5x8)
 
     # Operation text (truncate to 25 chars)
     if len(operation) > 25:
         operation = operation[:24] + '.'
-    writer.aligned_text(operation, 0, 42, DISPLAY_WIDTH, ALIGN_CENTER, colors['primary'], font=spleen_5x8)
+    writer.aligned_text(operation, 0, 42, DISPLAY_WIDTH, ALIGN_CENTER, colors.primary, font=spleen_5x8)
 
     # Detail text (truncate to 25 chars)
     if detail:
         if len(detail) > 25:
             detail = detail[:24] + '.'
-        writer.aligned_text(detail, 0, 54, DISPLAY_WIDTH, ALIGN_CENTER, colors['secondary'], font=spleen_5x8)
+        writer.aligned_text(detail, 0, 54, DISPLAY_WIDTH, ALIGN_CENTER, colors.secondary, font=spleen_5x8)
 
 
-def render_idle(display, writer, colors):
+def render_idle(display: Hub75Display, writer: FontWriter, colors: UiColors) -> None:
     """Render idle/waiting screen."""
     display.fill(BLACK)
-    writer.aligned_text("PICO", 0, 16, DISPLAY_WIDTH, ALIGN_CENTER, colors['primary'], font=unscii_16)
-    writer.aligned_text("SCOREBOARD", 0, 40, DISPLAY_WIDTH, ALIGN_CENTER, colors['accent'])
+    writer.aligned_text("PICO", 0, 16, DISPLAY_WIDTH, ALIGN_CENTER, colors.primary, font=unscii_16)
+    writer.aligned_text("SCOREBOARD", 0, 40, DISPLAY_WIDTH, ALIGN_CENTER, colors.accent)
 
 
-def render_no_games(display, writer, colors):
+def render_no_games(display: Hub75Display, writer: FontWriter, colors: UiColors) -> None:
     """Render no games scheduled screen."""
     display.fill(BLACK)
-    writer.aligned_text("NO GAMES", 0, 20, DISPLAY_WIDTH, ALIGN_CENTER, colors['primary'], font=unscii_16)
-    writer.aligned_text("scheduled", 0, 40, DISPLAY_WIDTH, ALIGN_CENTER, colors['secondary'], font=spleen_5x8)
+    writer.aligned_text("NO GAMES", 0, 20, DISPLAY_WIDTH, ALIGN_CENTER, colors.primary, font=unscii_16)
+    writer.aligned_text("scheduled", 0, 40, DISPLAY_WIDTH, ALIGN_CENTER, colors.secondary, font=spleen_5x8)
 
 
-def render_setup(display, writer, state, colors, now_ms):
-    """
-    Render setup mode screen with WiFi QR code and contextual information.
-
-    All setup screens show a WiFi QR code so users can (re)join the AP network.
-    QR is a convenience - text instructions are always provided as the primary path.
-    Shows different messaging based on the reason for entering setup mode:
-    - no_config: First-time setup instructions
-    - connection_failed: WiFi connection failure with SSID
-    - bad_auth: Wrong password error with SSID
-
-    Args:
-        display: Hub75Display instance
-        writer: FontWriter instance
-        state: Display state dict
-        colors: UI colors dict
-        now_ms: Current timestamp for animations
-    """
+def render_setup(display: Hub75Display, writer: FontWriter, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
+    """Render setup mode screen with WiFi QR code and contextual information."""
     display.fill(BLACK)
 
-    setup = state.get('setup', {})
-    reason = setup.get('reason', 'no_config')
-    ap_ssid = setup.get('ap_ssid', 'scoreboard')
-    ap_ip = setup.get('ap_ip', '192.168.4.1')
-    wifi_ssid = setup.get('wifi_ssid', '')
-    animation_start_ms = state.get('animation_start_ms', 0)
+    setup = state.setup
+    reason = setup.reason or 'no_config'
+    ap_ssid = setup.ap_ssid or 'scoreboard'
+    ap_ip = setup.ap_ip or '192.168.4.1'
+    wifi_ssid = setup.wifi_ssid or ''
+    animation_start_ms = state.animation_start_ms
 
     # Get QR code from state (generated on Core 0)
-    qr_fb = setup.get('qr_fb')
-    qr_width = setup.get('qr_width', 0)
-    qr_height = setup.get('qr_height', 0)
-    qr_palette = setup.get('qr_palette')
+    qr_fb = setup.qr_fb
+    qr_width = setup.qr_width
+    qr_height = setup.qr_height
+    qr_palette = setup.qr_palette
 
     # Render QR on right side if available
     text_area_width = DISPLAY_WIDTH
     if qr_fb is not None and qr_palette is not None and qr_width > 0:
-        qr_x = DISPLAY_WIDTH - qr_width - 2  # 2px padding from right
-        qr_y = 2  # 2px from top
+        qr_x = DISPLAY_WIDTH - qr_width - 2
+        qr_y = 2
         display.blit(qr_fb, qr_x, qr_y, -1, qr_palette)
-        text_area_width = qr_x - 4  # Leave gap before QR
+        text_area_width = qr_x - 4
 
     # Calculate where QR code ends vertically
     qr_bottom = qr_y + qr_height if qr_height > 0 else 0
 
-    # Helper for scrolling text - pure function using timestamps
-    def render_scrolling_text(text, y, color, width=None):
-        # Use full display width for lines below QR code, otherwise text_area_width
+    def render_scrolling_text(text: str, y: int, color: int, width: int | None = None) -> None:
         if width is None:
             width = DISPLAY_WIDTH if y >= qr_bottom else text_area_width
-        # Use actual measured width instead of approximating
         pixel_width = writer.measure(text, spleen_5x8)
         if pixel_width > width and width > 0:
             elapsed = time.ticks_diff(now_ms, animation_start_ms)
@@ -537,157 +444,109 @@ def render_setup(display, writer, state, colors, now_ms):
             writer.text(text, 2, y, color, font=spleen_5x8)
 
     if reason == 'bad_auth':
-        # Wrong password - show error, explain how to fix
-        writer.text("WRONG PASS", 2, 0, colors['clock_warning'], font=unscii_16)
-        # y=18 is next to QR, y=28+ is below QR
-        render_scrolling_text(f'for "{wifi_ssid}"', 18, colors['primary'])
-        render_scrolling_text(f'Scan/join "{ap_ssid}"', 28, colors['secondary'])
-        writer.text(f"Then go to {ap_ip}", 2, 44, colors['secondary'], font=spleen_5x8)
-        writer.text("to fix password", 2, 54, colors['accent'], font=spleen_5x8)
+        writer.text("WRONG PASS", 2, 0, colors.clock_warning, font=unscii_16)
+        render_scrolling_text(f'for "{wifi_ssid}"', 18, colors.primary)
+        render_scrolling_text(f'Scan/join "{ap_ssid}"', 28, colors.secondary)
+        writer.text(f"Then go to {ap_ip}", 2, 44, colors.secondary, font=spleen_5x8)
+        writer.text("to fix password", 2, 54, colors.accent, font=spleen_5x8)
 
     elif reason == 'connection_failed':
-        # Connection failed - show error, explain how to reconfigure
-        writer.text("WIFI FAIL", 2, 0, colors['clock_warning'], font=unscii_16)
-        # y=18 is next to QR, y=28+ is below QR
-        render_scrolling_text(f'"{wifi_ssid}"', 18, colors['primary'])
-        render_scrolling_text(f'Scan/join "{ap_ssid}"', 28, colors['secondary'])
-        writer.text(f"Then go to {ap_ip}", 2, 44, colors['secondary'], font=spleen_5x8)
-        writer.text("to reconfigure", 2, 54, colors['accent'], font=spleen_5x8)
+        writer.text("WIFI FAIL", 2, 0, colors.clock_warning, font=unscii_16)
+        render_scrolling_text(f'"{wifi_ssid}"', 18, colors.primary)
+        render_scrolling_text(f'Scan/join "{ap_ssid}"', 28, colors.secondary)
+        writer.text(f"Then go to {ap_ip}", 2, 44, colors.secondary, font=spleen_5x8)
+        writer.text("to reconfigure", 2, 54, colors.accent, font=spleen_5x8)
 
     else:
-        # no_config - first-time setup with clear step-by-step instructions
-        writer.text("SETUP", 2, 0, colors['accent'], font=unscii_16)
-        writer.text("Scan QR or join", 2, 18, colors['primary'], font=spleen_5x8)
-        # y=28 is below QR, use full width
-        render_scrolling_text(f'"{ap_ssid}" WiFi', 28, colors['secondary'])
-        writer.text("Then go to", 2, 44, colors['secondary'], font=spleen_5x8)
-        writer.text(ap_ip, 2, 54, colors['accent'], font=spleen_5x8)
+        writer.text("SETUP", 2, 0, colors.accent, font=unscii_16)
+        writer.text("Scan QR or join", 2, 18, colors.primary, font=spleen_5x8)
+        render_scrolling_text(f'"{ap_ssid}" WiFi', 28, colors.secondary)
+        writer.text("Then go to", 2, 44, colors.secondary, font=spleen_5x8)
+        writer.text(ap_ip, 2, 54, colors.accent, font=spleen_5x8)
 
 
-def render_error(display, writer, state, colors):
-    """
-    Render error screen with multi-line details.
-
-    Uses state['error']['title'] for the header and
-    state['error']['lines'] for up to 4 detail lines.
-    Falls back to state['error_message'] for legacy compatibility.
-    """
+def render_error(display: Hub75Display, writer: FontWriter, state: StateBuffer, colors: UiColors) -> None:
+    """Render error screen with multi-line details."""
     display.fill(BLACK)
 
-    error = state.get('error', {})
-    title = error.get('title', '')
-    lines = error.get('lines', [])
+    error = state.error
+    title = error.title
+    lines = error.lines
 
     # Fall back to legacy error_message if new format not used
     if not title and not lines:
-        legacy_message = state.get('error_message', '')
+        legacy_message = state.error_message or ''
         title = 'ERROR'
         if legacy_message:
             lines = [legacy_message[:25]]
 
     # Title in warning color at top
-    writer.aligned_text(title or 'ERROR', 0, 0, DISPLAY_WIDTH, ALIGN_CENTER, colors['clock_warning'], font=unscii_16)
+    writer.aligned_text(title or 'ERROR', 0, 0, DISPLAY_WIDTH, ALIGN_CENTER, colors.clock_warning, font=unscii_16)
 
     # Detail lines (up to 4, using spleen_5x8)
     y_start = 24
     line_height = 10
     for i, line in enumerate(lines[:4]):
-        # Truncate line to fit (25 chars for spleen_5x8)
         display_line = line[:25] if len(line) > 25 else line
-        writer.aligned_text(display_line, 0, y_start + (i * line_height), DISPLAY_WIDTH, ALIGN_CENTER, colors['primary'], font=spleen_5x8)
+        writer.aligned_text(display_line, 0, y_start + (i * line_height), DISPLAY_WIDTH, ALIGN_CENTER, colors.primary, font=spleen_5x8)
 
 
-def render_pregame(display, writer, game, state, colors, home_logo, away_logo, now_ms):
-    """
-    Render pregame screen with team matchup on 128x64 display.
-
-    Uses pre-formatted date/time from state['display'] to avoid allocations.
-
-    Args:
-        display: Hub75Display instance
-        writer: FontWriter instance
-        game: PregameGame object
-        state: Display state dict (contains pre-formatted display strings)
-        colors: UI colors dict
-        home_logo: Home team logo FrameBuffer (from state)
-        away_logo: Away team logo FrameBuffer (from state)
-        now_ms: Current timestamp for animations
-    """
+def render_pregame(display: Hub75Display, writer: FontWriter, game: PregameGame, state: StateBuffer, colors: UiColors, home_logo: framebuf.FrameBuffer | None, away_logo: framebuf.FrameBuffer | None, now_ms: int) -> None:
+    """Render pregame screen with team matchup on 128x64 display."""
     display.fill(BLACK)
 
-    # Team colors (with dark color protection)
-    home_color = safe_team_color(game.home.color, colors['secondary'])
-    away_color = safe_team_color(game.away.color, colors['secondary'])
+    home_color = safe_team_color(game.home.color, colors.secondary)
+    away_color = safe_team_color(game.away.color, colors.secondary)
 
-    # Team logos (24x24 each) with 1px padding
     if away_logo:
         display.blit(away_logo, AWAY_LOGO_X, 0)
     if home_logo:
         display.blit(home_logo, HOME_LOGO_X, 0)
 
     # "@" in center between logos
-    writer.aligned_text("@", 0, QUARTER_Y, DISPLAY_WIDTH, ALIGN_CENTER, colors['primary'], font=unscii_16)
+    writer.aligned_text("@", 0, QUARTER_Y, DISPLAY_WIDTH, ALIGN_CENTER, colors.primary, font=unscii_16)
 
     # Use pre-formatted date/time from state (no allocation)
-    display_data = state['display']
-    date_display = display_data['pregame_date']
-    time_str = display_data['pregame_time']
+    display_data = state.display
+    date_display = display_data.pregame_date
+    time_str = display_data.pregame_time
 
-    # Date and time centered (vertically separated)
-    writer.aligned_text(date_display, 0, 26, DISPLAY_WIDTH, ALIGN_CENTER, colors['secondary'])
-    writer.aligned_text(time_str, 0, 36, DISPLAY_WIDTH, ALIGN_CENTER, colors['accent'])
+    writer.aligned_text(date_display, 0, 26, DISPLAY_WIDTH, ALIGN_CENTER, colors.secondary)
+    writer.aligned_text(time_str, 0, 36, DISPLAY_WIDTH, ALIGN_CENTER, colors.accent)
 
     # Venue (single line, scrolls if too long)
     if game.venue:
-        animation_start_ms = state.get('animation_start_ms', 0)
+        animation_start_ms = state.animation_start_ms
         render_scrolling_or_centered(
             writer, game.venue, 46, DISPLAY_WIDTH,
-            colors['secondary'], unscii_8, animation_start_ms, now_ms
+            colors.secondary, unscii_8, animation_start_ms, now_ms
         )
 
 
-def render_live(display, writer, game, state, colors, home_logo, away_logo, now_ms):
-    """
-    Render live game with logos and scores on 128x64 display.
-
-    Pure function: computes clock display from state timestamps, no mutations.
-    Uses zero-allocation integer rendering for scores and pre-formatted
-    strings from state['display'] for quarter/situation.
-
-    Args:
-        display: Hub75Display instance
-        writer: FontWriter instance
-        game: LiveGame object
-        state: Display state dict (contains pre-formatted display strings)
-        colors: UI colors dict
-        home_logo: Home team logo FrameBuffer (from state)
-        away_logo: Away team logo FrameBuffer (from state)
-        now_ms: Current timestamp for animations and clock computation
-    """
+def render_live(display: Hub75Display, writer: FontWriter, game: LiveGame, state: StateBuffer, colors: UiColors, home_logo: framebuf.FrameBuffer | None, away_logo: framebuf.FrameBuffer | None, now_ms: int) -> None:
+    """Render live game with logos and scores on 128x64 display."""
     display.fill(BLACK)
 
-    # Team colors (with dark color protection)
-    home_color = safe_team_color(game.home.color, colors['secondary'])
-    away_color = safe_team_color(game.away.color, colors['secondary'])
+    home_color = safe_team_color(game.home.color, colors.secondary)
+    away_color = safe_team_color(game.away.color, colors.secondary)
 
-    # Team logos (24x24 each) with 1px padding
     if away_logo:
         display.blit(away_logo, AWAY_LOGO_X, 0)
     if home_logo:
         display.blit(home_logo, HOME_LOGO_X, 0)
 
     # Determine score colors with flash effect
-    if should_flash(state.get('away_scored_ms', 0), now_ms):
-        away_score_color = colors['accent']
+    if should_flash(state.away_scored_ms, now_ms):
+        away_score_color = colors.accent
     else:
         away_score_color = away_color
 
-    if should_flash(state.get('home_scored_ms', 0), now_ms):
-        home_score_color = colors['accent']
+    if should_flash(state.home_scored_ms, now_ms):
+        home_score_color = colors.accent
     else:
         home_score_color = home_color
 
-    # Timeout bars under logos (used timeouts dimmed to 50%)
+    # Timeout bars under logos
     draw_timeout_bars(display, AWAY_LOGO_X, game.away.timeouts, away_color, dim_team_color(game.away.color))
     draw_timeout_bars(display, HOME_LOGO_X, game.home.timeouts, home_color, dim_team_color(game.home.color))
 
@@ -696,116 +555,93 @@ def render_live(display, writer, game, state, colors, home_logo, away_logo, now_
     writer.integer(game.home.score, HOME_LOGO_X, SCORE_Y, LOGO_SIZE, ALIGN_CENTER, home_score_color, font=unscii_16)
 
     # Quarter and situation from pre-formatted state (no allocation)
-    display_data = state['display']
-    quarter_display = display_data['quarter']
-    situation_str = display_data['situation']
+    display_data = state.display
+    quarter_display = display_data.quarter
+    situation_str = display_data.situation
 
-    # Quarter (left 1/3) and Clock (right 2/3) on same line, both centered in their areas
-    # Quarter is vertically centered on the taller clock font
-    writer.aligned_text(quarter_display, QUARTER_X, QUARTER_Y, QUARTER_WIDTH, ALIGN_CENTER, colors['primary'])
+    # Quarter (left 1/3) and Clock (right 2/3) on same line
+    writer.aligned_text(quarter_display, QUARTER_X, QUARTER_Y, QUARTER_WIDTH, ALIGN_CENTER, colors.primary)
 
     # Compute display clock from immutable state (no mutation!)
-    clock_seconds = state.get('clock_seconds') or 0
-    clock_last_tick_ms = state.get('clock_last_tick_ms', 0)
+    clock_seconds = state.clock_seconds or 0
+    clock_last_tick_ms = state.clock_last_tick_ms
     clock_is_counting = hasattr(game, 'clock_running') and game.clock_running and clock_last_tick_ms
     if clock_is_counting:
-        # Subtract elapsed time since last API sync
         elapsed_ms = time.ticks_diff(now_ms, clock_last_tick_ms)
         display_seconds = max(0, clock_seconds - elapsed_ms // 1000)
     else:
-        # Clock is stopped - show exact API value
         display_seconds = clock_seconds
 
     # Clock color: normal >= 60s, warning < 60s, flashing < 10s, fast flash at zero
     if display_seconds == 0 and clock_is_counting and clock_seconds > 0:
-        # Clock counted down to zero — fast flash for 5 seconds
-        # Compute when the clock crossed zero (stateless, from existing timestamps)
         zero_ms = clock_last_tick_ms + clock_seconds * 1000
         since_zero = time.ticks_diff(now_ms, zero_ms)
         if 0 <= since_zero < CLOCK_ZERO_FLASH_DURATION_MS:
             if (now_ms // FLASH_INTERVAL_MS) % 2 == 1:
-                clock_color = colors['accent']
+                clock_color = colors.accent
             else:
-                clock_color = colors['clock_warning']
+                clock_color = colors.clock_warning
         else:
-            clock_color = colors['clock_warning']
+            clock_color = colors.clock_warning
     elif display_seconds < 10:
-        # Sub-10s (includes 0 when not counting down): slow flash (800ms)
         if (now_ms // CLOCK_FLASH_INTERVAL_MS) % 2 == 1:
-            clock_color = colors['accent']
+            clock_color = colors.accent
         else:
-            clock_color = colors['clock_warning']
+            clock_color = colors.clock_warning
     elif display_seconds < 60:
-        clock_color = colors['clock_warning']
+        clock_color = colors.clock_warning
     else:
-        clock_color = colors['clock_normal']
+        clock_color = colors.clock_normal
     writer.clock(display_seconds, CLOCK_X, CLOCK_Y, CLOCK_WIDTH, ALIGN_CENTER, clock_color)
 
     # Down & distance below quarter/clock line, with possession arrow
     if situation_str:
-        writer.aligned_text(situation_str, 0, SITUATION_Y, DISPLAY_WIDTH, ALIGN_CENTER, colors['primary'])
+        writer.aligned_text(situation_str, 0, SITUATION_Y, DISPLAY_WIDTH, ALIGN_CENTER, colors.primary)
 
-        # Possession triangle arrow next to situation text
-        possession = display_data.get('possession', '')
+        possession = display_data.possession
         if possession:
             text_width = writer.measure(situation_str)
             text_x = (DISPLAY_WIDTH - text_width) // 2
-            arrow_y = SITUATION_Y + 1  # Vertically centered (5px arrow in 8px text)
+            arrow_y = SITUATION_Y + 1
             if possession == 'away':
                 draw_possession_arrow(display, text_x - 5, arrow_y, False, away_color)
             elif possession == 'home':
                 draw_possession_arrow(display, text_x + text_width + 2, arrow_y, True, home_color)
 
     # Last play summary at bottom of display
-    last_play_text = display_data.get('last_play_text', '')
+    last_play_text = display_data.last_play_text
     if last_play_text:
-        animation_start_ms = state.get('animation_start_ms', 0)
+        animation_start_ms = state.animation_start_ms
         render_scrolling_or_centered(
             writer, last_play_text, LAST_PLAY_Y, DISPLAY_WIDTH,
-            colors['secondary'], unscii_8, animation_start_ms, now_ms
+            colors.secondary, unscii_8, animation_start_ms, now_ms
         )
 
 
-def render_final(display, writer, game, state, colors, home_logo, away_logo, now_ms):
-    """
-    Render final score with logos on 128x64 display.
-
-    Uses zero-allocation integer rendering for scores.
-
-    Args:
-        display: Hub75Display instance
-        writer: FontWriter instance
-        game: FinalGame object
-        state: Display state dict
-        colors: UI colors dict
-        home_logo: Home team logo FrameBuffer (from state)
-        away_logo: Away team logo FrameBuffer (from state)
-        now_ms: Current timestamp for flash animation
-    """
+def render_final(display: Hub75Display, writer: FontWriter, game: FinalGame, state: StateBuffer, colors: UiColors, home_logo: framebuf.FrameBuffer | None, away_logo: framebuf.FrameBuffer | None, now_ms: int) -> None:
+    """Render final score with logos on 128x64 display."""
     display.fill(BLACK)
 
-    # Team colors (with dark color protection)
-    home_color = safe_team_color(game.home.color, colors['secondary'])
-    away_color = safe_team_color(game.away.color, colors['secondary'])
+    home_color = safe_team_color(game.home.color, colors.secondary)
+    away_color = safe_team_color(game.away.color, colors.secondary)
 
-    # Team logos (24x24 each) with 1px padding
     if away_logo:
         display.blit(away_logo, AWAY_LOGO_X, 0)
     if home_logo:
         display.blit(home_logo, HOME_LOGO_X, 0)
 
     # Determine score colors with flash effect (continues from live game)
-    if should_flash(state.get('away_scored_ms', 0), now_ms):
-        away_score_color = colors['accent']
+    if should_flash(state.away_scored_ms, now_ms):
+        away_score_color = colors.accent
     else:
         away_score_color = away_color
 
-    if should_flash(state.get('home_scored_ms', 0), now_ms):
-        home_score_color = colors['accent']
+    if should_flash(state.home_scored_ms, now_ms):
+        home_score_color = colors.accent
     else:
         home_score_color = home_color
 
-    # Timeout bars under logos (used timeouts dimmed to 50%)
+    # Timeout bars under logos
     draw_timeout_bars(display, AWAY_LOGO_X, game.away.timeouts, away_color, dim_team_color(game.away.color))
     draw_timeout_bars(display, HOME_LOGO_X, game.home.timeouts, home_color, dim_team_color(game.home.color))
 
@@ -817,57 +653,34 @@ def render_final(display, writer, game, state, colors, home_logo, away_logo, now
     status_text = "FINAL"
     if game.status == "final/OT":
         status_text = "F/OT"
-    writer.aligned_text(status_text, 0, CLOCK_Y, DISPLAY_WIDTH, ALIGN_CENTER, colors['primary'], font=unscii_16)
+    writer.aligned_text(status_text, 0, CLOCK_Y, DISPLAY_WIDTH, ALIGN_CENTER, colors.primary, font=unscii_16)
 
 
-def redraw_clock_only(display, writer, seconds, colors):
-    """
-    Redraw only the clock region (partial update) with zero allocations.
-
-    Clears the clock strip and redraws the clock using the zero-allocation
-    writer.clock() method. Does not touch other parts of the display.
-
-    Args:
-        display: Hub75Display instance
-        writer: FontWriter instance (must have init_clock() called first)
-        seconds: Clock time in total seconds (e.g., 225 for "3:45")
-        colors: Color dict with clock_normal and clock_warning
-    """
-    # Clock is centered in its area (right 2/3 of center) at CLOCK_Y, using unscii_16 (16px tall)
+def redraw_clock_only(display: Hub75Display, writer: FontWriter, seconds: int, colors: UiColors) -> None:
+    """Redraw only the clock region (partial update) with zero allocations."""
     clock_height = 16
 
-    # Clear the clock area (preserves quarter on left)
     display.fill_rect(CLOCK_X, CLOCK_Y, CLOCK_WIDTH, clock_height, BLACK)
 
-    # Determine clock color based on time remaining (integer comparison)
-    if seconds < 60:  # Under 1 minute
-        clock_color = colors['clock_warning']
+    if seconds < 60:
+        clock_color = colors.clock_warning
     else:
-        clock_color = colors['clock_normal']
+        clock_color = colors.clock_normal
 
-    # Use zero-allocation clock method (font already set via init_clock)
     writer.clock(seconds, CLOCK_X, CLOCK_Y, CLOCK_WIDTH, ALIGN_CENTER, clock_color)
 
 
-def render_frame(display, writer, state, colors, now_ms):
+def render_frame(display: Hub75Display, writer: FontWriter, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
     """
     Render a frame based on current display state.
 
     Pure function: all timing-dependent computations use the passed now_ms
     timestamp rather than querying time internally.
-
-    Args:
-        display: Hub75Display instance
-        writer: FontWriter instance
-        state: Display state dict (contains mode, game, logos, etc.)
-        colors: UI colors dict
-        now_ms: Current timestamp for all timing-dependent rendering
     """
-    mode = state.get('mode', 'idle')
+    mode = state.mode
 
-    # Get logos from state (fetched by networking thread)
-    home_logo = state.get('home_logo')
-    away_logo = state.get('away_logo')
+    home_logo = state.home_logo
+    away_logo = state.away_logo
 
     if mode == 'startup':
         render_startup(display, writer, state, colors)
@@ -880,16 +693,16 @@ def render_frame(display, writer, state, colors, now_ms):
     elif mode == 'error':
         render_error(display, writer, state, colors)
     elif mode == 'game':
-        game = state.get('game')
+        game = state.game
         if game is None:
             render_idle(display, writer, colors)
-        elif game.state == STATE_PREGAME:
+        elif isinstance(game, PregameGame):
             render_pregame(display, writer, game, state, colors,
                           home_logo, away_logo, now_ms)
-        elif game.state == STATE_LIVE:
+        elif isinstance(game, LiveGame):
             render_live(display, writer, game, state, colors,
                        home_logo, away_logo, now_ms)
-        elif game.state == STATE_FINAL:
+        elif isinstance(game, FinalGame):
             render_final(display, writer, game, state, colors,
                         home_logo, away_logo, now_ms)
         else:
@@ -902,7 +715,7 @@ def render_frame(display, writer, state, colors, now_ms):
 # Display thread (runs on Core 1)
 # =============================================================================
 
-def run_display_thread(display, writer, config):
+def run_display_thread(display: Hub75Display, writer: FontWriter, config: Config) -> None:
     """
     Main entry point for Core 1 display thread.
 
@@ -912,35 +725,27 @@ def run_display_thread(display, writer, config):
 
     IMPORTANT: This function runs on Core 1 with ZERO memory allocations.
     All display hardware (PIO, DMA) is accessed exclusively from this thread.
-    UI colors are pre-computed on Core 0 and read from state['ui_colors'].
-
-    Args:
-        display: Hub75Display instance (pre-initialized on Core 0)
-        writer: FontWriter instance (pre-initialized on Core 0)
-        config: Config instance (unused - colors pre-computed in state)
+    UI colors are pre-computed on Core 0 and read from state.ui_colors.
     """
     from scoreboard.state import get_display_state
 
-    _ = config  # Unused - colors are pre-computed in state['ui_colors']
+    _ = config  # Unused - colors are pre-computed in state.ui_colors
     print("Display thread starting on Core 1 (20 FPS)...")
 
     while True:
         try:
-            # Capture current time once per frame (used for all timing-dependent rendering)
             now_ms = time.ticks_ms()
 
-            # Read from front buffer (lock-free!)
+            # Read from front buffer (lock-protected capture)
             state = get_display_state()
 
             # Render frame using pre-computed colors (no allocation!)
-            # now_ms is passed through for pure timing computations (clock, flash, scroll)
-            colors = state['ui_colors']
+            colors = state.ui_colors
             render_frame(display, writer, state, colors, now_ms)
             display.show()
 
         except Exception as e:
             print(f"Display thread error: {e}")
-            # Don't crash - keep trying
 
         # Constant 20 FPS for all animations
         time.sleep_ms(50)

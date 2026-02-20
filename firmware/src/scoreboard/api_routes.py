@@ -2,14 +2,21 @@
 
 import machine
 import uasyncio as asyncio
-from microdot import Microdot, Response
+from microdot import Microdot, Request, Response
+from scoreboard.config import Config
+from scoreboard.api_client import ScoreboardApiClient
+
+try:
+    from typing import Callable
+except ImportError:
+    pass
 from scoreboard.state import (
     update_ui_colors, update_display_frequency, update_display_brightness,
     update_display_refresh_rate, update_display_gamma, update_display_blanking_time
 )
 
 
-def create_api(config, get_network_status, api_client=None):
+def create_api(config: Config, get_network_status: "Callable[[], dict]", api_client: ScoreboardApiClient | None = None) -> Microdot:
     """
     Create API sub-application.
 
@@ -18,17 +25,19 @@ def create_api(config, get_network_status, api_client=None):
         get_network_status: Callable that returns current network state dict
         api_client: Optional ScoreboardApiClient for game data endpoints
     """
-    api = Microdot()
+    api: Microdot = Microdot()
 
     @api.get('/config')
-    async def get_config(request):
+    async def get_config(request: Request) -> dict:
         """Return the full configuration object."""
         return config.raw
 
     @api.put('/config')
-    async def update_config(request):
+    async def update_config(request: Request) -> dict:
         """Merge provided fields into existing config."""
         data = request.json
+        if data is None:
+            return config.raw
         for section, values in data.items():
             if section in config.raw and isinstance(values, dict):
                 for key, value in values.items():
@@ -51,18 +60,18 @@ def create_api(config, get_network_status, api_client=None):
         return config.raw
 
     @api.get('/status')
-    async def get_status(request):
+    async def get_status(request: Request) -> dict:
         """Return current device network status."""
         return get_network_status()
 
     @api.post('/reboot')
-    async def reboot(request):
+    async def reboot(request: Request) -> dict:
         """Trigger a device restart after a brief delay."""
         asyncio.create_task(_delayed_reboot())
         return {'message': 'Rebooting in 1 second...'}
 
     @api.post('/reset-network')
-    async def reset_network(request):
+    async def reset_network(request: Request) -> dict:
         """Clear network credentials to trigger fresh setup on next boot."""
         config.update('network', 'ssid', '')
         config.update('network', 'password', '')
@@ -72,7 +81,7 @@ def create_api(config, get_network_status, api_client=None):
     # These forward raw bytes from the Rust API without JSON parsing
     if api_client is not None:
         @api.get('/games')
-        async def get_all_games(request):
+        async def get_all_games(request: Request) -> Response | tuple:
             """Fetch all games from backend and forward raw response."""
             try:
                 status, body = api_client.get_all_games_raw()
@@ -83,7 +92,7 @@ def create_api(config, get_network_status, api_client=None):
                 return {'error': 'internal_error', 'message': str(e)}, 500
 
         @api.get('/games/<event_id>')
-        async def get_game(request, event_id):
+        async def get_game(request: Request, event_id: str) -> Response | tuple:
             """Fetch single game from backend and forward raw response."""
             try:
                 status, body = api_client.get_game_raw(event_id)
@@ -94,7 +103,7 @@ def create_api(config, get_network_status, api_client=None):
                 return {'error': 'internal_error', 'message': str(e)}, 500
 
         @api.get('/teams/<team_id>/logo')
-        async def get_team_logo(request, team_id):
+        async def get_team_logo(request: Request, team_id: str) -> Response | tuple:
             """Proxy team logo request to backend."""
             try:
                 # Extract query params
@@ -132,7 +141,7 @@ def create_api(config, get_network_status, api_client=None):
     return api
 
 
-async def _delayed_reboot():
+async def _delayed_reboot() -> None:
     """Wait briefly then reset the device."""
     await asyncio.sleep(1)
     machine.reset()

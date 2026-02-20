@@ -2,134 +2,230 @@
 Global display state for the Pico Scoreboard.
 
 Shared between networking thread (Core 0) and display thread (Core 1).
-Uses double buffering for lock-free thread-safe state sharing:
+Uses double buffering with lock-protected swap for thread-safe state sharing:
 - Networking thread writes to back buffer
 - Display thread reads from front buffer
-- Atomic pointer swap when update is complete
+- Lock-protected swap + carry-forward when update is complete
 """
 
 import time
+import _thread
+import framebuf
 
+from hub75 import Hub75Driver, gamma as gamma_mod
+from scoreboard.config import Config
+from scoreboard.models import PregameGame, LiveGame, FinalGame, Situation
+
+
+# =============================================================================
+# Typed state classes
+# =============================================================================
+
+class StartupState:
+    """Boot progress state."""
+
+    def __init__(self) -> None:
+        self.step: int = 1
+        self.total_steps: int = 5
+        self.operation: str = ''
+        self.detail: str = ''
+
+
+class SetupState:
+    """WiFi setup / AP mode state."""
+
+    def __init__(self) -> None:
+        self.reason: str | None = None       # 'no_config' | 'connection_failed' | 'bad_auth'
+        self.ap_ssid: str = ''               # AP network name to connect to
+        self.ap_ip: str = ''                 # IP address to open in browser
+        self.wifi_ssid: str = ''             # Failed SSID (for error context)
+        self.qr_fb: framebuf.FrameBuffer | None = None        # FrameBuffer (MONO_HLSB format)
+        self.qr_width: int = 0              # QR code width in pixels
+        self.qr_height: int = 0             # QR code height in pixels
+        self.qr_palette: framebuf.FrameBuffer | None = None   # RGB565 palette for display blitting
+
+
+class ErrorState:
+    """Error display state."""
+
+    def __init__(self) -> None:
+        self.title: str = ''          # Short title (e.g., "API ERROR")
+        self.lines: list[str] = []    # Up to 4 detail lines
+
+
+class UiColors:
+    """Pre-computed UI colors (RGB565), set by Core 0."""
+
+    def __init__(self) -> None:
+        self.primary: int = 0xFFFF
+        self.secondary: int = 0xFFFF
+        self.accent: int = 0xFFFF
+        self.clock_normal: int = 0xFFFF
+        self.clock_warning: int = 0xFFFF
+
+
+class DisplayStrings:
+    """Pre-formatted display strings, set by Core 0 when game updates."""
+
+    def __init__(self) -> None:
+        self.quarter: str = ''         # "Q1", "Q2", "OT", etc.
+        self.situation: str = ''       # "3rd & 7" or ''
+        self.possession: str = ''      # "home", "away", or '' (for possession arrow)
+        self.pregame_date: str = ''    # "SUN 01/15"
+        self.pregame_time: str = ''    # "7:30 PM"
+        self.last_play_text: str = ''  # Last play description for live games
+
+
+class StateBuffer:
+    """Complete display state snapshot. Pre-allocated, mutated in place."""
+
+    def __init__(self) -> None:
+        self.mode: str = 'idle'
+        self.game: PregameGame | LiveGame | FinalGame | None = None
+        self.games: list[PregameGame | LiveGame | FinalGame] = []
+        self.game_index: int = 0
+        self.home_logo: framebuf.FrameBuffer | None = None
+        self.away_logo: framebuf.FrameBuffer | None = None
+        self.error_message: str | None = None
+        self.last_update_ms: int = 0
+        self.dirty: bool = True
+        self.clock_dirty: bool = False
+        self.clock_seconds: int | None = None
+        self.clock_last_tick_ms: int = 0
+        self.animation_start_ms: int = 0   # Reset scrolling animations on each API poll
+        self.home_scored_ms: int = 0       # Score flash timestamp (set by Core 0)
+        self.away_scored_ms: int = 0       # Score flash timestamp (set by Core 0)
+        self.startup: StartupState = StartupState()
+        self.setup: SetupState = SetupState()
+        self.error: ErrorState = ErrorState()
+        self.ui_colors: UiColors = UiColors()
+        self.display: DisplayStrings = DisplayStrings()
+
+
+# =============================================================================
+# Double buffering
+# =============================================================================
 
 class DoubleBufferedState:
     """
-    Lock-free double buffering for thread-safe state sharing.
+    Double buffering for thread-safe state sharing between Core 0 and Core 1.
 
     The networking thread writes complete state updates to the back buffer,
-    then calls swap() to atomically make them visible to the display thread.
-    The display thread reads from the front buffer without any locking.
+    then calls swap() to make them visible to the display thread.
+    A lock protects swap+sync and get_front to ensure the display thread
+    always captures a consistent buffer reference.
     """
 
-    def __init__(self):
-        # Pre-allocate both buffers with identical structure
-        self._buffers = [
-            self._create_state_buffer(),
-            self._create_state_buffer(),
-        ]
-        self._front_index = 0  # Display reads from this
-        # back index = 1 - front_index
+    def __init__(self) -> None:
+        self._buffers: list[StateBuffer] = [StateBuffer(), StateBuffer()]
+        self._front_index: int = 0  # Display reads from this
+        self._lock = _thread.allocate_lock()
 
-    def _create_state_buffer(self):
-        """Create a complete state buffer with all fields."""
-        return {
-            'mode': 'idle',
-            'game': None,
-            'games': [],
-            'game_index': 0,
-            'home_logo': None,   # FrameBuffer or None
-            'away_logo': None,   # FrameBuffer or None
-            'error_message': None,
-            'last_update_ms': 0,
-            'dirty': True,
-            'clock_dirty': False,
-            'clock_seconds': None,
-            'clock_last_tick_ms': 0,
-            'animation_start_ms': 0,  # Reset scrolling animations on each API poll
-            # Score flash animation timestamps (set by Core 0 when score changes)
-            'home_scored_ms': 0,
-            'away_scored_ms': 0,
-            'startup': {
-                'step': 1,
-                'total_steps': 5,
-                'operation': '',
-                'detail': '',
-            },
-            'setup': {
-                'reason': None,      # 'no_config' | 'connection_failed' | 'bad_auth'
-                'ap_ssid': '',       # AP network name to connect to
-                'ap_ip': '',         # IP address to open in browser
-                'wifi_ssid': '',     # Failed SSID (for error context)
-                # Dynamic QR code (generated on Core 0)
-                'qr_fb': None,       # FrameBuffer (MONO_HLSB format)
-                'qr_width': 0,       # QR code width in pixels
-                'qr_height': 0,      # QR code height in pixels
-                'qr_palette': None,  # RGB565 palette for display blitting
-            },
-            'error': {
-                'title': '',         # Short title (e.g., "API ERROR")
-                'lines': [],         # Up to 4 detail lines
-            },
-            # Pre-computed UI colors (RGB565) - set by Core 0 via update_ui_colors()
-            'ui_colors': {
-                'primary': 0xFFFF,
-                'secondary': 0xFFFF,
-                'accent': 0xFFFF,
-                'clock_normal': 0xFFFF,
-                'clock_warning': 0xFFFF,
-            },
-            # Pre-formatted display strings - set by Core 0 when game updates
-            # Scores stay as integers on game object, rendered via writer.integer()
-            'display': {
-                'quarter': '',         # "Q1", "Q2", "OT", etc.
-                'situation': '',       # "3rd & 7" or ''
-                'possession': '',      # "home", "away", or '' (for possession arrow)
-                'pregame_date': '',    # "SUN 01/15"
-                'pregame_time': '',    # "7:30 PM"
-                'last_play_text': '',  # Last play description for live games
-            },
-        }
-
-    def get_front(self) -> dict:
+    def get_front(self) -> StateBuffer:
         """Get the front buffer for reading (display thread)."""
-        return self._buffers[self._front_index]
+        with self._lock:
+            return self._buffers[self._front_index]
 
-    def get_back(self) -> dict:
+    def get_back(self) -> StateBuffer:
         """Get the back buffer for writing (networking thread)."""
         return self._buffers[1 - self._front_index]
 
-    def swap(self):
+    def swap(self) -> None:
         """
-        Swap front and back buffers.
+        Swap front and back buffers, then carry forward state.
 
         Called by networking thread after completing a state update.
-        This is atomic in Python (single integer assignment).
+        The lock ensures the display thread never captures a buffer
+        reference during the swap+sync window.
         """
-        self._front_index = 1 - self._front_index
+        with self._lock:
+            self._front_index = 1 - self._front_index
+            self._sync_after_swap()
+
+    def _sync_after_swap(self) -> None:
+        """
+        Copy state from new front to new back buffer after swap.
+
+        Ensures the writer always starts from the most recent committed
+        state, preventing the back buffer from containing stale data
+        from 2 cycles ago. No memory allocation — copies references
+        for objects, values for scalars, field-by-field for sub-objects.
+        """
+        front = self._buffers[self._front_index]
+        back = self._buffers[1 - self._front_index]
+
+        # Scalar and reference fields
+        back.mode = front.mode
+        back.game = front.game
+        back.games = front.games
+        back.game_index = front.game_index
+        back.home_logo = front.home_logo
+        back.away_logo = front.away_logo
+        back.error_message = front.error_message
+        back.last_update_ms = front.last_update_ms
+        back.dirty = front.dirty
+        back.clock_dirty = front.clock_dirty
+        back.clock_seconds = front.clock_seconds
+        back.clock_last_tick_ms = front.clock_last_tick_ms
+        back.animation_start_ms = front.animation_start_ms
+        back.home_scored_ms = front.home_scored_ms
+        back.away_scored_ms = front.away_scored_ms
+
+        # Sub-objects: field-by-field to preserve pre-allocated instances
+        back.startup.step = front.startup.step
+        back.startup.total_steps = front.startup.total_steps
+        back.startup.operation = front.startup.operation
+        back.startup.detail = front.startup.detail
+
+        back.setup.reason = front.setup.reason
+        back.setup.ap_ssid = front.setup.ap_ssid
+        back.setup.ap_ip = front.setup.ap_ip
+        back.setup.wifi_ssid = front.setup.wifi_ssid
+        back.setup.qr_fb = front.setup.qr_fb
+        back.setup.qr_width = front.setup.qr_width
+        back.setup.qr_height = front.setup.qr_height
+        back.setup.qr_palette = front.setup.qr_palette
+
+        back.error.title = front.error.title
+        back.error.lines = front.error.lines
+
+        back.ui_colors.primary = front.ui_colors.primary
+        back.ui_colors.secondary = front.ui_colors.secondary
+        back.ui_colors.accent = front.ui_colors.accent
+        back.ui_colors.clock_normal = front.ui_colors.clock_normal
+        back.ui_colors.clock_warning = front.ui_colors.clock_warning
+
+        back.display.quarter = front.display.quarter
+        back.display.situation = front.display.situation
+        back.display.possession = front.display.possession
+        back.display.pregame_date = front.display.pregame_date
+        back.display.pregame_time = front.display.pregame_time
+        back.display.last_play_text = front.display.last_play_text
 
 
-# Singleton instance for double buffering
-_double_buffer = DoubleBufferedState()
+# Singleton instance
+_double_buffer: DoubleBufferedState = DoubleBufferedState()
 
 # Phase flag: True during synchronous startup, False after display thread takes over
-_startup_phase = True
+_startup_phase: bool = True
 
 
-def get_display_state():
-    """Get front buffer for display thread to read (lock-free)."""
+def get_display_state() -> StateBuffer:
+    """Get front buffer for display thread to read."""
     return _double_buffer.get_front()
 
 
-def get_write_state():
+def get_write_state() -> StateBuffer:
     """Get back buffer for networking thread to write."""
     return _double_buffer.get_back()
 
 
-def commit_state():
-    """Swap buffers - makes back buffer visible to display thread."""
+def commit_state() -> None:
+    """Swap buffers — makes back buffer visible to display thread."""
     _double_buffer.swap()
 
 
-def parse_clock(clock_str):
+def parse_clock(clock_str: str) -> int:
     """
     Parse clock string to total seconds.
 
@@ -142,14 +238,13 @@ def parse_clock(clock_str):
     if ':' in clock_str:
         parts = clock_str.split(':')
         return int(parts[0]) * 60 + int(parts[1])
-    # Edge case: just seconds (shouldn't happen but handle gracefully)
     try:
         return int(clock_str)
     except ValueError:
         return 0
 
 
-def format_clock(seconds):
+def format_clock(seconds: int) -> str:
     """
     Format seconds back to clock string.
 
@@ -166,69 +261,56 @@ def format_clock(seconds):
     return f"{minutes}:{secs:02d}"
 
 
-def set_mode(mode, error_message=None):
+def set_mode(mode: str, error_message: str | None = None) -> None:
     """
     Set display mode (called during setup/error states).
 
     Thread-safe: writes to back buffer and commits.
-
-    Args:
-        mode: One of 'idle', 'game', 'setup', 'error'
-        error_message: Optional error text (only used when mode='error')
     """
     state = get_write_state()
-    state['mode'] = mode
-    state['error_message'] = error_message
-    state['dirty'] = True
+    state.mode = mode
+    state.error_message = error_message
+    state.dirty = True
     commit_state()
 
 
-def mark_dirty():
+def mark_dirty() -> None:
     """Mark display state as needing a redraw (thread-safe)."""
     state = get_write_state()
-    state['dirty'] = True
+    state.dirty = True
     commit_state()
 
 
-def set_startup_step(step, total, operation, detail=''):
+def set_startup_step(step: int, total: int, operation: str, detail: str = '') -> None:
     """
     Update startup progress display.
 
     No-op after finish_startup() is called. During startup phase,
     writes to BOTH buffers since there's no race condition yet.
-
-    Args:
-        step: Current step number (1-based)
-        total: Total number of steps
-        operation: Short operation name (e.g., "WiFi scan")
-        detail: Optional detail text (e.g., "Found 8 networks")
     """
     if not _startup_phase:
-        return  # Ignore calls after startup phase ends
+        return
 
-    # Write to BOTH buffers during startup (no race condition yet)
     for buf in _double_buffer._buffers:
-        buf['mode'] = 'startup'
-        buf['startup']['step'] = step
-        buf['startup']['total_steps'] = total
-        buf['startup']['operation'] = operation
-        buf['startup']['detail'] = detail
-        buf['dirty'] = True
+        buf.mode = 'startup'
+        buf.startup.step = step
+        buf.startup.total_steps = total
+        buf.startup.operation = operation
+        buf.startup.detail = detail
+        buf.dirty = True
 
 
-def clear_startup_state():
+def clear_startup_state() -> None:
     """Clear startup state after boot completes to free memory."""
-    # Clear in both buffers to ensure consistency
     for buf in _double_buffer._buffers:
-        buf['startup'] = {
-            'step': 1,
-            'total_steps': 5,
-            'operation': '',
-            'detail': '',
-        }
+        startup = buf.startup
+        startup.step = 1
+        startup.total_steps = 5
+        startup.operation = ''
+        startup.detail = ''
 
 
-def finish_startup(target_mode, **mode_kwargs):
+def finish_startup(target_mode: str, **mode_kwargs) -> None:
     """
     Explicitly end startup phase and transition to runtime.
 
@@ -238,16 +320,12 @@ def finish_startup(target_mode, **mode_kwargs):
     Args:
         target_mode: 'idle', 'setup', or 'error'
         **mode_kwargs: Arguments passed to the target mode setter
-            - For 'setup': reason, ap_ssid, ap_ip, wifi_ssid
-            - For 'error': title, lines
     """
     global _startup_phase
     _startup_phase = False
 
-    # Clear startup state in both buffers
     clear_startup_state()
 
-    # Set the target mode (these use back buffer + swap)
     if target_mode == 'setup':
         set_setup_mode(**mode_kwargs)
     elif target_mode == 'error':
@@ -260,28 +338,17 @@ def finish_startup(target_mode, **mode_kwargs):
 # WiFi QR code generation (for setup screen)
 # =============================================================================
 
-# Pre-allocated palette buffer (4 bytes for 2 RGB565 colors)
-# This is allocated once at import time
-import framebuf
-
-_qr_palette_buf = bytearray(4)
-_qr_palette = framebuf.FrameBuffer(_qr_palette_buf, 2, 1, framebuf.RGB565)
+_qr_palette_buf: bytearray = bytearray(4)
+_qr_palette: framebuf.FrameBuffer = framebuf.FrameBuffer(_qr_palette_buf, 2, 1, framebuf.RGB565)
 _qr_palette.pixel(0, 0, 0xFFFF)  # Index 0: white (QR background/light modules)
 _qr_palette.pixel(1, 0, 0x0000)  # Index 1: black (QR dark modules)
 
 
-def _generate_wifi_qr(ssid, password=''):
+def _generate_wifi_qr(ssid: str, password: str = '') -> tuple[framebuf.FrameBuffer, int, int, framebuf.FrameBuffer]:
     """
     Generate a QR code encoding WiFi credentials.
 
     Uses lazy import of miqro to avoid loading it at startup when not needed.
-
-    Args:
-        ssid: Network name (the AP SSID)
-        password: Network password (empty string for open network)
-
-    Returns:
-        Tuple of (framebuffer, width, height, palette)
     """
     from miqro import QRCode
 
@@ -294,61 +361,50 @@ def _generate_wifi_qr(ssid, password=''):
     return (qr.data, qr.width, qr.height, _qr_palette)
 
 
-def set_setup_mode(reason, ap_ssid='', ap_ip='', wifi_ssid=''):
+def set_setup_mode(reason: str, ap_ssid: str = '', ap_ip: str = '', wifi_ssid: str = '') -> None:
     """
     Set setup mode with detailed context for display.
 
     Thread-safe: writes to back buffer and commits.
     Generates WiFi QR code for all setup reasons (user always needs to join AP).
-
-    Args:
-        reason: 'no_config' | 'connection_failed' | 'bad_auth'
-        ap_ssid: Access point SSID (device name)
-        ap_ip: Access point IP address
-        wifi_ssid: Configured WiFi SSID (for failed connections)
     """
     state = get_write_state()
-    state['mode'] = 'setup'
-    state['setup']['reason'] = reason
-    state['setup']['ap_ssid'] = ap_ssid
-    state['setup']['ap_ip'] = ap_ip
-    state['setup']['wifi_ssid'] = wifi_ssid
+    state.mode = 'setup'
+    setup = state.setup
+    setup.reason = reason
+    setup.ap_ssid = ap_ssid
+    setup.ap_ip = ap_ip
+    setup.wifi_ssid = wifi_ssid
 
-    # Generate WiFi QR code for any setup mode
-    # User always needs to (re)join the AP network to access config page
     if ap_ssid:
         try:
             qr_fb, qr_w, qr_h, qr_palette = _generate_wifi_qr(ap_ssid)
-            state['setup']['qr_fb'] = qr_fb
-            state['setup']['qr_width'] = qr_w
-            state['setup']['qr_height'] = qr_h
-            state['setup']['qr_palette'] = qr_palette
+            setup.qr_fb = qr_fb
+            setup.qr_width = qr_w
+            setup.qr_height = qr_h
+            setup.qr_palette = qr_palette
         except Exception as e:
             print(f"QR generation failed: {e}")
-            state['setup']['qr_fb'] = None
-            state['setup']['qr_width'] = 0
-            state['setup']['qr_height'] = 0
-            state['setup']['qr_palette'] = None
+            setup.qr_fb = None
+            setup.qr_width = 0
+            setup.qr_height = 0
+            setup.qr_palette = None
 
-    state['dirty'] = True
+    state.dirty = True
     commit_state()
 
 
-def set_error(title, lines=None):
+def set_error(title: str, lines: list[str] | None = None) -> None:
     """
     Set error mode with title and multi-line details.
 
     Thread-safe: writes to back buffer and commits.
-
-    Args:
-        title: Short error title (max ~12 chars for unscii_16)
-        lines: List of detail strings (up to 4 lines)
     """
     state = get_write_state()
-    state['mode'] = 'error'
-    state['error']['title'] = title[:12] if title else 'ERROR'
-    state['error']['lines'] = lines[:4] if lines else []
-    state['dirty'] = True
+    state.mode = 'error'
+    state.error.title = title[:12] if title else 'ERROR'
+    state.error.lines = lines[:4] if lines else []
+    state.dirty = True
     commit_state()
 
 
@@ -356,7 +412,6 @@ def set_error(title, lines=None):
 # Pre-computed display values (set by Core 0, read by Core 1)
 # =============================================================================
 
-# Module-level lookup dicts - allocated once at import, not per call
 _QUARTER_MAP = {
     "first": "Q1",
     "second": "Q2",
@@ -373,66 +428,45 @@ _DOWN_MAP = {
     "fourth": "4th",
 }
 
-# Day name abbreviations for pregame date parsing
 _DAY_NAMES = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
 
 
-def update_ui_colors(config):
+def update_ui_colors(config: Config) -> None:
     """
     Pre-compute UI colors on Core 0. Call at startup and when config changes.
 
     Updates both buffers to ensure consistency regardless of which is active.
-
-    Args:
-        config: Config instance with get_color() method
     """
     from scoreboard.fonts import rgb565
 
-    def to_rgb565(color_dict):
+    def to_rgb565(color_dict: dict) -> int:
         return rgb565(color_dict["r"], color_dict["g"], color_dict["b"])
 
-    # Update both buffers to ensure consistency
     for buf in _double_buffer._buffers:
-        colors = buf['ui_colors']
-        colors['primary'] = to_rgb565(config.get_color('primary'))
-        colors['secondary'] = to_rgb565(config.get_color('secondary'))
-        colors['accent'] = to_rgb565(config.get_color('accent'))
-        colors['clock_normal'] = to_rgb565(config.get_color('clock_normal'))
-        colors['clock_warning'] = to_rgb565(config.get_color('clock_warning'))
-        buf['dirty'] = True
+        colors = buf.ui_colors
+        colors.primary = to_rgb565(config.get_color('primary'))
+        colors.secondary = to_rgb565(config.get_color('secondary'))
+        colors.accent = to_rgb565(config.get_color('accent'))
+        colors.clock_normal = to_rgb565(config.get_color('clock_normal'))
+        colors.clock_warning = to_rgb565(config.get_color('clock_warning'))
+        buf.dirty = True
 
 
 # =============================================================================
 # Display driver frequency control
 # =============================================================================
 
-# Module-level driver reference (set by main.py after init)
-_display_driver = None
+_display_driver: Hub75Driver | None = None
 
 
-def set_display_driver(driver):
-    """
-    Set the display driver reference for runtime frequency updates.
-
-    Called once from main.py after display initialization.
-
-    Args:
-        driver: Hub75Driver instance
-    """
+def set_display_driver(driver: Hub75Driver) -> None:
+    """Set the display driver reference for runtime frequency updates."""
     global _display_driver
     _display_driver = driver
 
 
-def update_display_frequency(config):
-    """
-    Update display data frequency at runtime.
-
-    Called when display.data_frequency_khz changes via API.
-    Safe to call from Core 0 - directly updates PIO clock divider registers.
-
-    Args:
-        config: Config instance with frequency settings
-    """
+def update_display_frequency(config: Config) -> None:
+    """Update display data frequency at runtime."""
     if _display_driver is None:
         return
 
@@ -441,26 +475,16 @@ def update_display_frequency(config):
     print(f"Display frequency updated: data={data_freq // 1000}kHz")
 
 
-def _recompute_refresh_rate(config):
-    """
-    Recompute base_cycles after changing brightness or blanking time.
-
-    The driver's set_target_refresh_rate() runs a binary search that accounts
-    for the current brightness and blanking_time when computing base_cycles.
-    Without this, changing brightness or blanking_time alone would alter the
-    timing buffer without adjusting base_cycles, causing unexpected dimming.
-    """
+def _recompute_refresh_rate(config: Config) -> None:
+    """Recompute base_cycles after changing brightness or blanking time."""
+    if _display_driver is None:
+        return
     rate = _display_driver.set_target_refresh_rate(config.target_refresh_rate)
     print(f"Display refresh rate recomputed: {rate:.1f} Hz")
 
 
-def update_display_brightness(config):
-    """
-    Update display brightness at runtime.
-
-    Args:
-        config: Config instance with brightness setting (0-100)
-    """
+def update_display_brightness(config: Config) -> None:
+    """Update display brightness at runtime."""
     if _display_driver is None:
         return
 
@@ -470,13 +494,8 @@ def update_display_brightness(config):
     print(f"Display brightness updated: {config.brightness}%")
 
 
-def update_display_refresh_rate(config):
-    """
-    Update display target refresh rate at runtime.
-
-    Args:
-        config: Config instance with target_refresh_rate setting (Hz)
-    """
+def update_display_refresh_rate(config: Config) -> None:
+    """Update display target refresh rate at runtime."""
     if _display_driver is None:
         return
 
@@ -484,27 +503,23 @@ def update_display_refresh_rate(config):
     print(f"Display refresh rate updated: {rate:.1f} Hz")
 
 
-def update_display_gamma(config):
-    """
-    Update display gamma correction at runtime.
-
-    Args:
-        config: Config instance with gamma setting (1.0-3.0)
-    """
+def update_display_gamma(config: Config) -> None:
+    """Update display gamma correction at runtime."""
     if _display_driver is None:
         return
 
-    _display_driver.set_gamma(config.gamma)
-    print(f"Display gamma updated: {config.gamma}")
+    gamma_value = config.gamma
+    _display_driver.set_gamma(gamma_value)
+    if gamma_value is None:
+        print("Display gamma updated: none (linear)")
+    elif isinstance(gamma_value, gamma_mod.Power):
+        print(f"Display gamma updated: power ({gamma_value.value})")
+    else:
+        print("Display gamma updated: sRGB")
 
 
-def update_display_blanking_time(config):
-    """
-    Update display blanking (dead) time at runtime.
-
-    Args:
-        config: Config instance with blanking_time_us setting (microseconds)
-    """
+def update_display_blanking_time(config: Config) -> None:
+    """Update display blanking (dead) time at runtime."""
     if _display_driver is None:
         return
 
@@ -513,50 +528,29 @@ def update_display_blanking_time(config):
     print(f"Display blanking time updated: {config.blanking_time_ns}ns")
 
 
-def format_quarter(quarter):
-    """
-    Format quarter for display. Uses module-level dict (no allocation).
-
-    Args:
-        quarter: Quarter string from API (e.g., "first", "second", "OT")
-
-    Returns:
-        Formatted string (e.g., "Q1", "Q2", "OT")
-    """
+def format_quarter(quarter: str) -> str:
+    """Format quarter for display. Uses module-level dict (no allocation)."""
     if not quarter:
         return ""
     return _QUARTER_MAP.get(quarter, quarter[:3].upper())
 
 
-def format_situation(situation):
-    """
-    Format down and distance for display.
-
-    Args:
-        situation: Situation object with .down and .distance attributes
-
-    Returns:
-        Formatted string (e.g., "3rd & 7") or empty string if None
-    """
+def format_situation(situation: Situation | None) -> str:
+    """Format down and distance for display."""
     if situation is None:
         return ''
     down_str = _DOWN_MAP.get(situation.down, situation.down)
     return f"{down_str} & {situation.distance}"
 
 
-def parse_pregame_datetime(iso_str):
+def parse_pregame_datetime(iso_str: str) -> tuple[str, str]:
     """
     Parse ISO datetime string for pregame display.
-
-    Args:
-        iso_str: ISO datetime string (e.g., "2024-01-15T19:30:00Z")
 
     Returns:
         Tuple of (date_display, time_display) strings
     """
-    # Check if it looks like ISO format (contains 'T')
     if 'T' not in iso_str:
-        # Old format - just return the time portion
         time_str = iso_str
         for tz in [" ET", " PT", " CT", " MT", " EST", " PST", " CST", " MST"]:
             if time_str.endswith(tz):
@@ -565,25 +559,20 @@ def parse_pregame_datetime(iso_str):
         return ("", time_str)
 
     try:
-        # Split date and time parts
-        date_part = iso_str[0:10]   # "2024-01-15"
-        time_part = iso_str[11:16]  # "19:30"
+        date_part = iso_str[0:10]
+        time_part = iso_str[11:16]
 
-        # Extract year, month, day as integers
         year = int(date_part[0:4])
         month = int(date_part[5:7])
         day = int(date_part[8:10])
 
-        # Calculate day of week using time module
         time_tuple = (year, month, day, 0, 0, 0, 0, 0)
         timestamp = time.mktime(time_tuple)
-        weekday = time.localtime(timestamp)[6]  # 0=Monday, 6=Sunday
+        weekday = time.localtime(timestamp)[6]
         day_abbr = _DAY_NAMES[weekday]
 
-        # Format date as "SUN 01/15"
         date_display = f"{day_abbr} {month:02d}/{day:02d}"
 
-        # Format time as 12-hour with AM/PM
         hour = int(time_part[0:2])
         minute = time_part[3:5]
         am_pm = "AM" if hour < 12 else "PM"
@@ -595,5 +584,4 @@ def parse_pregame_datetime(iso_str):
 
         return (date_display, time_display)
     except (ValueError, IndexError):
-        # Parsing failed - return original string
         return ("", iso_str)

@@ -12,9 +12,9 @@ import framebuf
 import micropython
 
 # Alignment constants (integers to avoid allocations)
-ALIGN_LEFT = 0
-ALIGN_CENTER = 1
-ALIGN_RIGHT = 2
+ALIGN_LEFT: int = 0
+ALIGN_CENTER: int = 1
+ALIGN_RIGHT: int = 2
 
 
 @micropython.viper
@@ -40,34 +40,34 @@ class FontWriter:
             framebuffer: The RGB565 framebuffer to draw on
             default_font: Font module to use when none specified
         """
-        self._fb = framebuffer
+        self._fb: framebuf.FrameBuffer = framebuffer
         self._default_font = default_font
 
         # Reusable palette buffer (2 RGB565 entries = 4 bytes)
         # Index 0 = background color, Index 1 = foreground color
-        self._palette_buf = bytearray(4)
-        self._palette = framebuf.FrameBuffer(
+        self._palette_buf: bytearray = bytearray(4)
+        self._palette: framebuf.FrameBuffer = framebuf.FrameBuffer(
             self._palette_buf, 2, 1, framebuf.RGB565
         )
 
         # Pre-allocated glyph spec for zero-allocation blit
         # Format: [buffer, width, height, format]
         # Updated in-place during rendering - no per-character allocation
-        self._glyph_spec = [None, 0, 0, framebuf.MONO_HLSB]
+        self._glyph_spec: list = [None, 0, 0, framebuf.MONO_HLSB]
 
         # Pre-cached clock digit glyphs (initialized via init_clock)
         # List indexed by digit (0-9) plus colon at index 10
-        self._clock_glyphs = None
+        self._clock_glyphs: list | None = None
 
         # Pre-cached digit glyphs per font (initialized via init_digits)
         # Maps font id -> list of (glyph_data, width, height) for 0-9
-        self._digit_glyphs = {}
+        self._digit_glyphs: dict = {}
 
         # Pre-allocated scratch space for integer() digit extraction
         # Avoids allocation during rendering - max 5 digits for scores
-        self._int_digits = [0, 0, 0, 0, 0]
+        self._int_digits: list = [0, 0, 0, 0, 0]
 
-    def init_clock(self, font):
+    def init_clock(self, font) -> None:
         """
         Initialize clock glyph cache. MUST be called on Core 0 during setup.
 
@@ -110,6 +110,7 @@ class FontWriter:
         # NO LAZY INIT - clock must be pre-initialized on Core 0
         # This will crash if not initialized, which is intentional
         glyphs = self._clock_glyphs
+        assert glyphs is not None
 
         # Calculate minutes and seconds (pure integer math)
         if seconds < 0:
@@ -171,7 +172,7 @@ class FontWriter:
 
         return cursor_x
 
-    def init_digits(self, font):
+    def init_digits(self, font) -> None:
         """
         Pre-cache digit glyphs for a font. Call on Core 0 during setup.
 

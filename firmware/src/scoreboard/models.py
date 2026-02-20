@@ -37,12 +37,12 @@ STATUS_FINAL_OT = "final/OT"
 class Color:
     """RGB color (0-255 per channel)."""
 
-    def __init__(self, r: int, g: int, b: int):
-        self.r = r
-        self.g = g
-        self.b = b
+    def __init__(self, r: int, g: int, b: int) -> None:
+        self.r: int = r
+        self.g: int = g
+        self.b: int = b
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Color(r={self.r}, g={self.g}, b={self.b})"
 
     @staticmethod
@@ -57,12 +57,12 @@ class Color:
 class Team:
     """Team data for pregame (no score)."""
 
-    def __init__(self, abbreviation: str, color: Color, record: str = None):
-        self.abbreviation = abbreviation
-        self.color = color
-        self.record = record
+    def __init__(self, abbreviation: str, color: Color, record: str | None = None) -> None:
+        self.abbreviation: str = abbreviation
+        self.color: Color = color
+        self.record: str | None = record
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Team({self.abbreviation})"
 
     @staticmethod
@@ -83,15 +83,15 @@ class TeamWithScore:
         color: Color,
         score: int,
         timeouts: int,
-        record: str = None
-    ):
-        self.abbreviation = abbreviation
-        self.color = color
-        self.score = score
-        self.timeouts = timeouts
-        self.record = record
+        record: str | None = None
+    ) -> None:
+        self.abbreviation: str = abbreviation
+        self.color: Color = color
+        self.score: int = score
+        self.timeouts: int = timeouts
+        self.record: str | None = record
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"TeamWithScore({self.abbreviation}: {self.score})"
 
     @staticmethod
@@ -108,11 +108,11 @@ class TeamWithScore:
 class Weather:
     """Weather information for outdoor games (pregame and live)."""
 
-    def __init__(self, temp: int, description: str):
-        self.temp = temp
-        self.description = description
+    def __init__(self, temp: int, description: str) -> None:
+        self.temp: int = temp
+        self.description: str = description
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Weather({self.temp}F, {self.description})"
 
     @staticmethod
@@ -133,14 +133,14 @@ class Situation:
         yard_line: int,
         possession: str,
         red_zone: bool
-    ):
-        self.down = down
-        self.distance = distance
-        self.yard_line = yard_line
-        self.possession = possession
-        self.red_zone = red_zone
+    ) -> None:
+        self.down: str = down
+        self.distance: int = distance
+        self.yard_line: int = yard_line
+        self.possession: str = possession
+        self.red_zone: bool = red_zone
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Situation({self.down}&{self.distance} at {self.yard_line})"
 
     @staticmethod
@@ -157,11 +157,11 @@ class Situation:
 class LastPlay:
     """Last play information for live games."""
 
-    def __init__(self, play_type: str, text: str = None):
-        self.play_type = play_type
-        self.text = text
+    def __init__(self, play_type: str, text: str | None = None) -> None:
+        self.play_type: str = play_type
+        self.text: str | None = text
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"LastPlay({self.play_type})"
 
     @staticmethod
@@ -181,20 +181,20 @@ class PregameGame:
         home: Team,
         away: Team,
         start_time: str,
-        venue: str = None,
-        broadcast: str = None,
-        weather: Weather = None
-    ):
-        self.state = STATE_PREGAME
-        self.event_id = event_id
-        self.home = home
-        self.away = away
-        self.start_time = start_time
-        self.venue = venue
-        self.broadcast = broadcast
-        self.weather = weather
+        venue: str | None = None,
+        broadcast: str | None = None,
+        weather: Weather | None = None
+    ) -> None:
+        self.state: str = STATE_PREGAME
+        self.event_id: str = event_id
+        self.home: Team = home
+        self.away: Team = away
+        self.start_time: str = start_time
+        self.venue: str | None = venue
+        self.broadcast: str | None = broadcast
+        self.weather: Weather | None = weather
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"PregameGame({self.away.abbreviation} @ {self.home.abbreviation})"
 
     @staticmethod
@@ -225,22 +225,22 @@ class LiveGame:
         quarter: str,
         clock: str,
         clock_running: bool = False,
-        situation: Situation = None,
-        last_play: LastPlay = None,
-        weather: Weather = None
-    ):
-        self.state = STATE_LIVE
-        self.event_id = event_id
-        self.home = home
-        self.away = away
-        self.quarter = quarter
-        self.clock = clock
-        self.clock_running = clock_running
-        self.situation = situation
-        self.last_play = last_play
-        self.weather = weather
+        situation: Situation | None = None,
+        last_play: LastPlay | None = None,
+        weather: Weather | None = None
+    ) -> None:
+        self.state: str = STATE_LIVE
+        self.event_id: str = event_id
+        self.home: TeamWithScore = home
+        self.away: TeamWithScore = away
+        self.quarter: str = quarter
+        self.clock: str = clock
+        self.clock_running: bool = clock_running
+        self.situation: Situation | None = situation
+        self.last_play: LastPlay | None = last_play
+        self.weather: Weather | None = weather
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"LiveGame({self.away.abbreviation} {self.away.score} @ {self.home.abbreviation} {self.home.score})"
 
     @staticmethod
@@ -280,15 +280,15 @@ class FinalGame:
         away: TeamWithScore,
         status: str,
         winner: str
-    ):
-        self.state = STATE_FINAL
-        self.event_id = event_id
-        self.home = home
-        self.away = away
-        self.status = status
-        self.winner = winner
+    ) -> None:
+        self.state: str = STATE_FINAL
+        self.event_id: str = event_id
+        self.home: TeamWithScore = home
+        self.away: TeamWithScore = away
+        self.status: str = status
+        self.winner: str = winner
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"FinalGame({self.away.abbreviation} {self.away.score} @ {self.home.abbreviation} {self.home.score} - {self.status})"
 
     @staticmethod
@@ -302,7 +302,7 @@ class FinalGame:
         )
 
 
-def parse_game_response(data: dict):
+def parse_game_response(data: dict) -> PregameGame | LiveGame | FinalGame:
     """
     Parse API JSON response into the appropriate game model.
 

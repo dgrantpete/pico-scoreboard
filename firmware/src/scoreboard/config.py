@@ -6,6 +6,7 @@ The config file is stored at the root of the Pico filesystem.
 """
 
 import json
+from hub75 import gamma
 
 # Default config path on Pico filesystem
 CONFIG_PATH = "/config.json"
@@ -28,7 +29,7 @@ _DEFAULTS = {
         "poll_interval_seconds": 30,
         "data_frequency_khz": 20000,
         "target_refresh_rate": 120,
-        "gamma": 2.2,
+        "gamma": {"type": "srgb"},
         "blanking_time_ns": 0
     },
     "colors": {
@@ -86,15 +87,15 @@ class Config:
         cfg.update("display", "brightness", 80)
     """
 
-    def __init__(self, path: str = CONFIG_PATH):
+    def __init__(self, path: str = CONFIG_PATH) -> None:
         """
         Initialize configuration from file.
 
         Args:
             path: Path to config.json (default: /config.json)
         """
-        self._path = path
-        self._data = self._load()
+        self._path: str = path
+        self._data: dict = self._load()
 
     def _load(self) -> dict:
         """Load config from file, merging with defaults."""
@@ -116,7 +117,7 @@ class Config:
         with open(self._path, 'w') as f:
             json.dump(self._data, f)
 
-    def update(self, section: str, key: str, value) -> None:
+    def update(self, section: str, key: str, value: object) -> None:
         """
         Update a configuration value and save to file.
 
@@ -129,7 +130,7 @@ class Config:
             self._data[section][key] = value
             self.save()
 
-    def get(self, section: str, key: str, default=None):
+    def get(self, section: str, key: str, default: object = None) -> object:
         """
         Get a configuration value.
 
@@ -214,9 +215,19 @@ class Config:
         return float(self._data["display"]["target_refresh_rate"])
 
     @property
-    def gamma(self) -> float:
-        """Gamma correction exponent (1.0-3.0)."""
-        return float(self._data["display"]["gamma"])
+    def gamma(self) -> gamma.SRGB | gamma.Power | None:
+        """Gamma correction setting (SRGB, Power, or None)."""
+        raw = self._data["display"]["gamma"]
+        if isinstance(raw, dict):
+            t = raw.get("type", "srgb")
+            if t == "power":
+                return gamma.Power(raw.get("value", 2.2))
+            elif t == "none":
+                return None
+            else:
+                return gamma.SRGB()
+        # Legacy float support: treat as Power gamma
+        return gamma.Power(float(raw))
 
     @property
     def blanking_time_ns(self) -> int:
