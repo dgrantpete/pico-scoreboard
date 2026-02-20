@@ -6,6 +6,7 @@
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
 	import { Slider } from "$lib/components/ui/slider";
+	import * as Select from "$lib/components/ui/select";
 	import { Separator } from "$lib/components/ui/separator";
 	import { Switch } from "$lib/components/ui/switch";
 	import { Label } from "$lib/components/ui/label";
@@ -27,7 +28,7 @@
 	import { picoApi } from "$lib/api";
 	import RebootOverlay from "$lib/components/RebootOverlay.svelte";
 	import MemoryChart from "$lib/components/MemoryChart.svelte";
-	import type { NetworkStatus, Config, Color } from "$lib/api/types";
+	import type { NetworkStatus, Config, Color, GammaConfig } from "$lib/api/types";
 
 	// Password visibility toggles
 	let showWifiPassword = $state(false);
@@ -109,6 +110,34 @@
 					b: parseInt(result[3], 16),
 				}
 			: { r: 255, g: 255, b: 255 };
+	}
+
+	// Gamma type options for the Select dropdown
+	const GAMMA_TYPE_OPTIONS = [
+		{ value: "srgb", label: "sRGB" },
+		{ value: "power", label: "Power" },
+		{ value: "none", label: "None (Linear)" },
+	] as const;
+
+	function gammaTypeLabel(config: GammaConfig): string {
+		return GAMMA_TYPE_OPTIONS.find((o) => o.value === config.type)?.label ?? config.type;
+	}
+
+	function handleGammaTypeChange(newType: string) {
+		if (newType === "power") {
+			settingsStore.updateDisplay("gamma", { type: "power", value: 2.2 });
+		} else if (newType === "none") {
+			settingsStore.updateDisplay("gamma", { type: "none" });
+		} else {
+			settingsStore.updateDisplay("gamma", { type: "srgb" });
+		}
+	}
+
+	function handleGammaPowerValueChange(value: number) {
+		settingsStore.updateDisplay("gamma", {
+			type: "power",
+			value: Math.round(value * 10) / 10,
+		});
 	}
 
 	onMount(() => {
@@ -625,22 +654,55 @@
 				<!-- Gamma -->
 				<div class="space-y-2">
 					<div class="flex items-center justify-between">
-						<Label>Gamma</Label>
+						<Label>Gamma Correction</Label>
 						<span class="text-sm text-muted-foreground">
-							{settingsStore.config.display.gamma.toFixed(1)}
+							{#if settingsStore.config.display.gamma.type === "power"}
+								Power ({settingsStore.config.display.gamma.value.toFixed(1)})
+							{:else}
+								{gammaTypeLabel(settingsStore.config.display.gamma)}
+							{/if}
 						</span>
 					</div>
-					<Slider
+					<Select.Root
 						type="single"
-						value={settingsStore.config.display.gamma}
-						onValueChange={(value) =>
-							settingsStore.updateDisplay("gamma", Math.round(value * 10) / 10)}
-						min={1.0}
-						max={3.0}
-						step={0.1}
-					/>
+						value={settingsStore.config.display.gamma.type}
+						onValueChange={handleGammaTypeChange}
+					>
+						<Select.Trigger>
+							{gammaTypeLabel(settingsStore.config.display.gamma)}
+						</Select.Trigger>
+						<Select.Content>
+							{#each GAMMA_TYPE_OPTIONS as option}
+								<Select.Item value={option.value} label={option.label} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					{#if settingsStore.config.display.gamma.type === "power"}
+						<div class="space-y-2 pt-2">
+							<div class="flex items-center justify-between">
+								<Label class="text-xs">Power Value</Label>
+								<span class="text-sm text-muted-foreground">
+									{settingsStore.config.display.gamma.value.toFixed(1)}
+								</span>
+							</div>
+							<Slider
+								type="single"
+								value={settingsStore.config.display.gamma.value}
+								onValueChange={handleGammaPowerValueChange}
+								min={1.0}
+								max={3.0}
+								step={0.1}
+							/>
+						</div>
+					{/if}
 					<p class="text-xs text-muted-foreground">
-						Gamma correction exponent. 2.2 is standard for sRGB content.
+						{#if settingsStore.config.display.gamma.type === "srgb"}
+							sRGB gamma with linear region. Best match for most content.
+						{:else if settingsStore.config.display.gamma.type === "power"}
+							Simple power function. 2.2 approximates sRGB.
+						{:else}
+							No gamma correction. Raw linear values sent to display.
+						{/if}
 					</p>
 				</div>
 

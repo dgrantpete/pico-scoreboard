@@ -17,13 +17,19 @@ export interface ApiConfig {
 
 export type ApiConfigUpdate = Partial<ApiConfig>;
 
+// Gamma correction configuration (discriminated union)
+export type GammaConfig =
+	| { type: "power"; value: number }
+	| { type: "srgb" }
+	| { type: "none" };
+
 // Display configuration
 export interface DisplayConfig {
 	brightness: number; // 0-100
 	poll_interval_seconds: number; // min: 1
 	data_frequency_khz: number; // min: 2, max: 50000, default: 20000
 	target_refresh_rate: number; // 30-240 Hz
-	gamma: number; // 1.0-3.0
+	gamma: GammaConfig;
 	blanking_time_ns: number; // 0-3000 nanoseconds
 }
 
