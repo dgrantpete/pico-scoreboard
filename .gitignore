@@ -58,6 +58,11 @@ firmware/lib/
 # Built/compressed frontend (populated by build.py)
 firmware/www/
 
+# MicroPython type stubs (copied from Hub75 driver project)
+firmware/typings/
+
+target/
+
 # MicroPico extension files
 firmware/.micropico/
 
