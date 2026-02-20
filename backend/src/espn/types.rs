@@ -56,6 +56,13 @@ pub struct EspnCompetitor {
     pub home_away: String,
     #[serde(default)]
     pub records: Vec<EspnRecord>,
+    pub curated_rank: Option<EspnCuratedRank>,
+}
+
+/// Curated rank for college sports
+#[derive(Debug, Deserialize)]
+pub struct EspnCuratedRank {
+    pub current: Option<u8>,
 }
 
 /// Team information
@@ -129,4 +136,44 @@ pub struct EspnBroadcast {
 #[serde(rename_all = "camelCase")]
 pub struct EspnMedia {
     pub short_name: String,
+}
+
+// ── Summary endpoint types (basketball single-game detail) ──
+
+/// Summary endpoint response
+#[derive(Debug, Deserialize)]
+pub struct EspnSummary {
+    pub header: EspnSummaryHeader,
+    pub boxscore: Option<EspnBoxscore>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EspnSummaryHeader {
+    pub id: String,
+    pub competitions: Vec<EspnSummaryCompetition>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EspnSummaryCompetition {
+    pub competitors: Vec<EspnCompetitor>,
+    pub status: EspnStatus,
+    pub venue: Option<EspnVenue>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EspnBoxscore {
+    pub teams: Vec<EspnBoxscoreTeam>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EspnBoxscoreTeam {
+    pub team: EspnTeam,
+    pub statistics: Vec<EspnBoxscoreStat>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EspnBoxscoreStat {
+    pub name: String,
+    pub display_value: String,
 }

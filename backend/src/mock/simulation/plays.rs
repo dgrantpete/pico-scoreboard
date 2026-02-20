@@ -3,7 +3,7 @@
 use rand::rngs::StdRng;
 use rand::Rng;
 
-use crate::game::types::{Down, PlayType, Possession, Quarter};
+use crate::football::types::{Down, FootballPeriod, PlayType, Possession};
 
 use super::state::{LiveState, SimulatedPlay};
 
@@ -33,7 +33,7 @@ pub fn generate_play(state: &mut LiveState) -> PlayOutcome {
     let down = state.down;
     let distance = state.distance;
     let yard_line = state.yard_line;
-    let quarter = state.quarter;
+    let period = state.period;
     let clock_seconds = state.clock_seconds;
     let possession = state.possession;
     let home_score = state.home_score;
@@ -51,7 +51,7 @@ pub fn generate_play(state: &mut LiveState) -> PlayOutcome {
             down,
             distance,
             yard_line,
-            quarter,
+            period,
             clock_seconds,
             possession,
             home_score,
@@ -60,7 +60,7 @@ pub fn generate_play(state: &mut LiveState) -> PlayOutcome {
     }
 
     // Regular play selection based on situation
-    let play_type = select_play_type(&mut state.rng, down, distance, quarter, clock_seconds, yard_line);
+    let play_type = select_play_type(&mut state.rng, down, distance, period, clock_seconds, yard_line);
 
     match play_type {
         PlayType::Rush => generate_rush_play(&mut state.rng, yard_line),
@@ -77,7 +77,7 @@ fn select_play_type(
     rng: &mut StdRng,
     down: Down,
     distance: u8,
-    quarter: Quarter,
+    period: FootballPeriod,
     clock_seconds: u16,
     yard_line: u8,
 ) -> PlayType {
@@ -85,7 +85,7 @@ fn select_play_type(
 
     // Two-minute drill: more passing
     let in_two_minute =
-        clock_seconds <= 120 && matches!(quarter, Quarter::Second | Quarter::Fourth);
+        clock_seconds <= 120 && matches!(period, FootballPeriod::Q2 | FootballPeriod::Q4);
 
     // Red zone adjustments
     let in_red_zone = yard_line >= 80;
@@ -203,7 +203,7 @@ fn generate_fourth_down_play(
     _down: Down,
     distance: u8,
     yard_line: u8,
-    quarter: Quarter,
+    period: FootballPeriod,
     clock_seconds: u16,
     possession: Possession,
     home_score: u8,
@@ -220,7 +220,7 @@ fn generate_fourth_down_play(
 
     // Late game desperation
     let desperate = clock_seconds < 120
-        && matches!(quarter, Quarter::Fourth)
+        && matches!(period, FootballPeriod::Q4)
         && ((possession == Possession::Home && home_score < away_score)
             || (possession == Possession::Away && away_score < home_score));
 

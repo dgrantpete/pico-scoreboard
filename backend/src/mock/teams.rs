@@ -1,4 +1,4 @@
-use crate::game::types::Color;
+use crate::shared::types::Color;
 
 /// NFL team data for mock generation
 pub struct NflTeam {

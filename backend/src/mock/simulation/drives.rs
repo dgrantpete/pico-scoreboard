@@ -2,7 +2,7 @@
 
 use rand::Rng;
 
-use crate::game::types::{Down, PlayType, Possession};
+use crate::football::types::{Down, PlayType, Possession};
 
 use super::plays::{PlayOutcome, ScoringPlay};
 use super::state::LiveState;

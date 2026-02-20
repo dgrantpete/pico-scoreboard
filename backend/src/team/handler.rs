@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::auth::ApiKey;
 use crate::error::AppError;
+use crate::sport::SportLeague;
 
 use super::image::{
     blend_with_background, decode_png, encode_png, encode_ppm_p6, encode_rgb565_raw,
@@ -34,7 +35,7 @@ fn parse_accept_header(headers: &HeaderMap) -> OutputFormat {
     OutputFormat::Png
 }
 
-/// GET /api/teams/{team_id}/logo
+/// GET /api/{league}/teams/{team_id}/logo
 ///
 /// Fetches team logo from ESPN CDN with optional processing.
 ///
@@ -45,8 +46,9 @@ fn parse_accept_header(headers: &HeaderMap) -> OutputFormat {
 /// - `image/x-rgb565`: Returns raw RGB565 bytes (2 bytes per pixel, little-endian)
 #[utoipa::path(
     get,
-    path = "/api/teams/{team_id}/logo",
+    path = "/api/{league}/teams/{team_id}/logo",
     params(
+        ("league" = String, Path, description = "League identifier (nfl, ncaaf, nba, ncaab)"),
         ("team_id" = String, Path, description = "Team abbreviation (e.g., 'dal', 'nyg')"),
         LogoQuery
     ),
@@ -70,10 +72,11 @@ fn parse_accept_header(headers: &HeaderMap) -> OutputFormat {
 pub async fn get_team_logo(
     _api_key: ApiKey,
     State(state): State<Arc<AppState>>,
-    Path(team_id): Path<String>,
+    Path((league, team_id)): Path<(String, String)>,
     Query(params): Query<LogoQuery>,
     headers: HeaderMap,
 ) -> Result<Response<Body>, AppError> {
+    let sport_league = SportLeague::from_league(&league)?;
     let output_format = parse_accept_header(&headers);
     let has_background = params.background_color.is_some();
 
@@ -95,7 +98,7 @@ pub async fn get_team_logo(
     // Fetch logo from ESPN
     let logo_bytes = state
         .espn_client
-        .fetch_logo(&team_id, params.width, params.height, request_transparent)
+        .fetch_logo(sport_league, &team_id, params.width, params.height, request_transparent)
         .await?;
 
     // Optimization: PNG without background can be returned as-is

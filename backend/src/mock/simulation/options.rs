@@ -6,7 +6,7 @@
 use serde::Deserialize;
 use utoipa::ToSchema;
 
-use crate::game::types::{Down, Possession, Quarter};
+use crate::football::types::{Down, FootballPeriod, Possession};
 
 /// Request body for creating a new game simulation.
 ///
@@ -78,8 +78,8 @@ pub struct CreateLiveOptions {
     /// Away team score. Default: 0.
     pub away_score: Option<u8>,
 
-    /// Current quarter. Default: First.
-    pub quarter: Option<Quarter>,
+    /// Current period. Default: Q1.
+    pub period: Option<FootballPeriod>,
     /// Game clock in "MM:SS" format (e.g., "8:42"). Default: "15:00".
     pub clock: Option<String>,
 

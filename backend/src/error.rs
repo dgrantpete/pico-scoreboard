@@ -33,6 +33,8 @@ pub enum AppError {
     Unauthorized,
     /// ESPN API response deserialization failed
     EspnDeserialize { path: String, message: String },
+    /// Invalid league path parameter
+    InvalidLeague(String),
 }
 
 /// Error response body
@@ -112,6 +114,14 @@ impl IntoResponse for AppError {
                 StatusCode::BAD_GATEWAY,
                 "espn_deserialize_error".to_string(),
                 format!("Failed to parse ESPN response at '{}': {}", path, message),
+            ),
+            AppError::InvalidLeague(league) => (
+                StatusCode::BAD_REQUEST,
+                "invalid_league".to_string(),
+                format!(
+                    "Invalid league '{}'. Valid leagues: nfl, ncaaf, nba, ncaab",
+                    league
+                ),
             ),
         };
 

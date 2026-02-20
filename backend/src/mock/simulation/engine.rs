@@ -1,6 +1,6 @@
 //! Simulation engine: time advancement, quarter transitions, state management.
 
-use crate::game::types::Quarter;
+use crate::football::types::{FootballPeriod, Possession};
 
 use super::drives::apply_play_outcome;
 use super::plays::{generate_play, outcome_to_play};
@@ -71,7 +71,7 @@ fn advance_to_target(state: &mut LiveState, target_game_seconds: u64) {
         // Handle two-minute warning
         if state.clock_seconds <= 120
             && state.clock_seconds > 115
-            && matches!(state.quarter, Quarter::Second | Quarter::Fourth)
+            && matches!(state.period, FootballPeriod::Q2 | FootballPeriod::Q4)
         {
             state.clock_running = false;
         }
@@ -85,19 +85,19 @@ fn is_game_over(state: &LiveState) -> bool {
 
 /// Check if we're at halftime.
 fn is_halftime(state: &LiveState) -> bool {
-    state.quarter == Quarter::Second && state.clock_seconds == 0
+    state.period == FootballPeriod::Q2 && state.clock_seconds == 0
 }
 
 /// Handle halftime transition.
 fn handle_halftime(state: &mut LiveState) {
-    state.quarter = Quarter::Third;
+    state.period = FootballPeriod::Q3;
     state.clock_seconds = 900; // 15:00
 
     // Second half kickoff - team that didn't receive first gets it
     // For simplicity, just flip possession
     state.possession = match state.possession {
-        crate::game::types::Possession::Home => crate::game::types::Possession::Away,
-        crate::game::types::Possession::Away => crate::game::types::Possession::Home,
+        Possession::Home => Possession::Away,
+        Possession::Away => Possession::Home,
     };
     state.kickoff_pending = true;
 
@@ -108,25 +108,25 @@ fn handle_halftime(state: &mut LiveState) {
 
 /// Handle end of quarter. Returns false if game is over.
 fn handle_quarter_end(state: &mut LiveState) -> bool {
-    match state.quarter {
-        Quarter::First => {
-            state.quarter = Quarter::Second;
+    match state.period {
+        FootballPeriod::Q1 => {
+            state.period = FootballPeriod::Q2;
             state.clock_seconds = 900;
             true
         }
-        Quarter::Second => {
+        FootballPeriod::Q2 => {
             // Halftime is handled separately
             true
         }
-        Quarter::Third => {
-            state.quarter = Quarter::Fourth;
+        FootballPeriod::Q3 => {
+            state.period = FootballPeriod::Q4;
             state.clock_seconds = 900;
             true
         }
-        Quarter::Fourth => {
+        FootballPeriod::Q4 => {
             // Check for overtime
             if state.home_score == state.away_score {
-                state.quarter = Quarter::Overtime;
+                state.period = FootballPeriod::OT;
                 state.clock_seconds = 600; // 10-minute OT in regular season
                 state.kickoff_pending = true;
                 // Reset timeouts for OT
@@ -138,27 +138,28 @@ fn handle_quarter_end(state: &mut LiveState) -> bool {
                 false
             }
         }
-        Quarter::Overtime => {
+        FootballPeriod::OT => {
             // In NFL OT, first score wins (simplified)
             // If still tied, go to double OT
             if state.home_score == state.away_score {
-                state.quarter = Quarter::DoubleOvertime;
+                state.period = FootballPeriod::OT2;
                 state.clock_seconds = 600;
                 true
             } else {
                 false
             }
         }
-        Quarter::DoubleOvertime => {
+        FootballPeriod::OT2 => {
             // Game over, even if tied (tie game)
             false
         }
+        _ => false,
     }
 }
 
 /// Determine if clock should be running based on play outcome.
 fn should_clock_run(outcome: &super::plays::PlayOutcome) -> bool {
-    use crate::game::types::PlayType;
+    use crate::football::types::PlayType;
 
     // Clock stops for:
     // - Incomplete passes

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::auth::ApiKey;
 use crate::error::{AppError, ErrorResponse};
-use crate::game::types::GameResponse;
+use crate::football::types::FootballGameResponse;
 use crate::AppState;
 
 use super::simulation::CreateGameRequest;
@@ -18,7 +18,7 @@ use super::simulation::CreateGameRequest;
     get,
     path = "/api/mock/games",
     responses(
-        (status = 200, description = "List of all mock games", body = Vec<GameResponse>),
+        (status = 200, description = "List of all mock games", body = Vec<FootballGameResponse>),
         (status = 401, description = "Missing or invalid API key", body = ErrorResponse),
     ),
     security(
@@ -29,9 +29,9 @@ use super::simulation::CreateGameRequest;
 pub async fn list_mock_games(
     _api_key: ApiKey,
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<GameResponse>>, AppError> {
+) -> Result<Json<Vec<FootballGameResponse>>, AppError> {
     let games = state.game_repository.list().await;
-    let responses: Vec<GameResponse> = games.iter().map(|g| g.to_game_response()).collect();
+    let responses: Vec<FootballGameResponse> = games.iter().map(|g| g.to_game_response()).collect();
     Ok(Json(responses))
 }
 
@@ -44,7 +44,7 @@ pub async fn list_mock_games(
         ("id" = String, Path, description = "Game ID (e.g., 'sim_1')"),
     ),
     responses(
-        (status = 200, description = "Mock game state", body = GameResponse),
+        (status = 200, description = "Mock game state", body = FootballGameResponse),
         (status = 401, description = "Missing or invalid API key", body = ErrorResponse),
         (status = 404, description = "Game not found", body = ErrorResponse),
     ),
@@ -57,7 +57,7 @@ pub async fn get_mock_game(
     _api_key: ApiKey,
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> Result<Json<GameResponse>, AppError> {
+) -> Result<Json<FootballGameResponse>, AppError> {
     let game = state
         .game_repository
         .get(&id)
@@ -74,7 +74,7 @@ pub async fn get_mock_game(
     path = "/api/mock/games",
     request_body = CreateGameRequest,
     responses(
-        (status = 201, description = "Game created successfully", body = GameResponse),
+        (status = 201, description = "Game created successfully", body = FootballGameResponse),
         (status = 400, description = "Invalid request body", body = ErrorResponse),
         (status = 401, description = "Missing or invalid API key", body = ErrorResponse),
     ),
@@ -87,7 +87,7 @@ pub async fn create_mock_game(
     _api_key: ApiKey,
     State(state): State<Arc<AppState>>,
     Json(request): Json<CreateGameRequest>,
-) -> Result<(StatusCode, Json<GameResponse>), AppError> {
+) -> Result<(StatusCode, Json<FootballGameResponse>), AppError> {
     let game = state.game_repository.create(request).await;
     Ok((StatusCode::CREATED, Json(game.to_game_response())))
 }

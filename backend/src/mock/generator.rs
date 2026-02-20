@@ -1,9 +1,10 @@
 use rand::Rng;
 
-use crate::game::types::{
-    Color, Down, FinalGame, FinalStatus, GameResponse, LiveGame, Possession, PregameGame, Quarter,
-    Situation, Team, TeamWithScore, Weather, Winner,
+use crate::football::types::{
+    Down, FootballFinal, FootballGameResponse, FootballLive, FootballPeriod, FootballPregame,
+    FootballTeamScore, Possession, Situation,
 };
+use crate::shared::types::{Color, FinalStatus, Team, Weather, Winner};
 
 use super::teams::{get_matchup, NflTeam};
 
@@ -40,7 +41,7 @@ impl Scenario {
 }
 
 /// Generate mock games based on scenario
-pub fn generate_games(scenario: Scenario, count: usize, seed: Option<u64>) -> Vec<GameResponse> {
+pub fn generate_games(scenario: Scenario, count: usize, seed: Option<u64>) -> Vec<FootballGameResponse> {
     let mut rng = match seed {
         Some(s) => rand::rngs::StdRng::seed_from_u64(s),
         None => rand::rngs::StdRng::seed_from_u64(rand::random()),
@@ -52,7 +53,7 @@ pub fn generate_games(scenario: Scenario, count: usize, seed: Option<u64>) -> Ve
 }
 
 /// Generate a single mock game by event ID
-pub fn generate_game_by_id(event_id: &str, scenario: Scenario) -> GameResponse {
+pub fn generate_game_by_id(event_id: &str, scenario: Scenario) -> FootballGameResponse {
     // Use event_id as seed for deterministic generation
     let seed: u64 = event_id
         .bytes()
@@ -78,7 +79,7 @@ fn generate_game_for_scenario(
     scenario: Scenario,
     index: usize,
     rng: &mut impl Rng,
-) -> GameResponse {
+) -> FootballGameResponse {
     match scenario {
         Scenario::Pregame => generate_pregame(index, rng),
         Scenario::Live => generate_live(index, rng, false),
@@ -96,10 +97,10 @@ fn generate_game_for_scenario(
     }
 }
 
-fn generate_pregame(index: usize, rng: &mut impl Rng) -> GameResponse {
+fn generate_pregame(index: usize, rng: &mut impl Rng) -> FootballGameResponse {
     let (home_team, away_team) = get_matchup(rng);
 
-    GameResponse::Pregame(PregameGame {
+    FootballGameResponse::Pregame(FootballPregame {
         event_id: format!("mock_{}", 1000 + index),
         home: team_from_nfl(home_team, rng),
         away: team_from_nfl(away_team, rng),
@@ -114,14 +115,14 @@ fn generate_pregame(index: usize, rng: &mut impl Rng) -> GameResponse {
     })
 }
 
-fn generate_live(index: usize, rng: &mut impl Rng, force_redzone: bool) -> GameResponse {
+fn generate_live(index: usize, rng: &mut impl Rng, force_redzone: bool) -> FootballGameResponse {
     let (home_team, away_team) = get_matchup(rng);
 
-    GameResponse::Live(LiveGame {
+    FootballGameResponse::Live(FootballLive {
         event_id: format!("mock_{}", 2000 + index),
         home: team_with_score_from_nfl(home_team, rng),
         away: team_with_score_from_nfl(away_team, rng),
-        quarter: generate_quarter(rng),
+        period: generate_period(rng),
         clock: generate_clock(rng),
         clock_running: rng.gen_bool(0.6), // 60% chance clock is running
         situation: Some(generate_situation(rng, force_redzone)),
@@ -134,7 +135,7 @@ fn generate_live(index: usize, rng: &mut impl Rng, force_redzone: bool) -> GameR
     })
 }
 
-fn generate_final(index: usize, rng: &mut impl Rng, overtime: bool) -> GameResponse {
+fn generate_final(index: usize, rng: &mut impl Rng, overtime: bool) -> FootballGameResponse {
     let (home_team, away_team) = get_matchup(rng);
 
     let home_score: u8 = rng.gen_range(0..=45);
@@ -154,19 +155,21 @@ fn generate_final(index: usize, rng: &mut impl Rng, overtime: bool) -> GameRespo
         FinalStatus::Final
     };
 
-    GameResponse::Final(FinalGame {
+    FootballGameResponse::Final(FootballFinal {
         event_id: format!("mock_{}", 3000 + index),
-        home: TeamWithScore {
+        home: FootballTeamScore {
             abbreviation: home_team.abbreviation.to_string(),
             color: color_clone(&home_team.color),
             record: Some(generate_record(rng)),
+            rank: None,
             score: home_score,
             timeouts: 0,
         },
-        away: TeamWithScore {
+        away: FootballTeamScore {
             abbreviation: away_team.abbreviation.to_string(),
             color: color_clone(&away_team.color),
             record: Some(generate_record(rng)),
+            rank: None,
             score: away_score,
             timeouts: 0,
         },
@@ -175,7 +178,7 @@ fn generate_final(index: usize, rng: &mut impl Rng, overtime: bool) -> GameRespo
     })
 }
 
-fn generate_overtime(index: usize, rng: &mut impl Rng) -> GameResponse {
+fn generate_overtime(index: usize, rng: &mut impl Rng) -> FootballGameResponse {
     let (home_team, away_team) = get_matchup(rng);
 
     // 50% chance of live OT vs final/OT
@@ -193,26 +196,28 @@ fn generate_overtime(index: usize, rng: &mut impl Rng) -> GameResponse {
             0
         };
 
-        GameResponse::Live(LiveGame {
+        FootballGameResponse::Live(FootballLive {
             event_id: format!("mock_{}", 4000 + index),
-            home: TeamWithScore {
+            home: FootballTeamScore {
                 abbreviation: home_team.abbreviation.to_string(),
                 color: color_clone(&home_team.color),
                 record: Some(generate_record(rng)),
+                rank: None,
                 score: tied_score + home_ot_points,
                 timeouts: rng.gen_range(0..=2),
             },
-            away: TeamWithScore {
+            away: FootballTeamScore {
                 abbreviation: away_team.abbreviation.to_string(),
                 color: color_clone(&away_team.color),
                 record: Some(generate_record(rng)),
+                rank: None,
                 score: tied_score + away_ot_points,
                 timeouts: rng.gen_range(0..=2),
             },
-            quarter: if rng.gen_bool(0.8) {
-                Quarter::Overtime
+            period: if rng.gen_bool(0.8) {
+                FootballPeriod::OT
             } else {
-                Quarter::DoubleOvertime
+                FootballPeriod::OT2
             },
             clock: generate_clock(rng),
             clock_running: rng.gen_bool(0.6),
@@ -237,14 +242,16 @@ fn team_from_nfl(nfl_team: &NflTeam, rng: &mut impl Rng) -> Team {
         abbreviation: nfl_team.abbreviation.to_string(),
         color: color_clone(&nfl_team.color),
         record: Some(generate_record(rng)),
+        rank: None,
     }
 }
 
-fn team_with_score_from_nfl(nfl_team: &NflTeam, rng: &mut impl Rng) -> TeamWithScore {
-    TeamWithScore {
+fn team_with_score_from_nfl(nfl_team: &NflTeam, rng: &mut impl Rng) -> FootballTeamScore {
+    FootballTeamScore {
         abbreviation: nfl_team.abbreviation.to_string(),
         color: color_clone(&nfl_team.color),
         record: Some(generate_record(rng)),
+        rank: None,
         score: rng.gen_range(0..=42),
         timeouts: rng.gen_range(0..=3),
     }
@@ -325,12 +332,12 @@ fn generate_weather(rng: &mut impl Rng) -> Weather {
     }
 }
 
-fn generate_quarter(rng: &mut impl Rng) -> Quarter {
+fn generate_period(rng: &mut impl Rng) -> FootballPeriod {
     match rng.gen_range(0..4) {
-        0 => Quarter::First,
-        1 => Quarter::Second,
-        2 => Quarter::Third,
-        _ => Quarter::Fourth,
+        0 => FootballPeriod::Q1,
+        1 => FootballPeriod::Q2,
+        2 => FootballPeriod::Q3,
+        _ => FootballPeriod::Q4,
     }
 }
 

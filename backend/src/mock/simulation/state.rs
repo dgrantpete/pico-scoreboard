@@ -1,18 +1,19 @@
 //! Internal game state types for simulation.
 //!
-//! These types maintain more detailed state than the public `GameResponse`,
+//! These types maintain more detailed state than the public `FootballGameResponse`,
 //! allowing for realistic game progression. Each state converts to the
-//! corresponding `GameResponse` variant.
+//! corresponding `FootballGameResponse` variant.
 
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use rand::rngs::StdRng;
 
-use crate::game::types::{
-    Color, Down, FinalGame, FinalStatus, GameResponse, LastPlay, LiveGame, PlayType, Possession,
-    PregameGame, Quarter, Situation, Team, TeamWithScore, Weather, Winner,
+use crate::football::types::{
+    Down, FootballFinal, FootballGameResponse, FootballLive, FootballPeriod, FootballPregame,
+    FootballTeamScore, LastPlay, PlayType, Possession, Situation,
 };
+use crate::shared::types::{Color, FinalStatus, Team, Weather, Winner};
 use crate::mock::teams::NflTeam;
 
 /// A simulated play with its effects.
@@ -38,12 +39,12 @@ pub struct SimulatedGame {
 }
 
 impl SimulatedGame {
-    /// Convert to the public `GameResponse` type.
-    pub fn to_game_response(&self) -> GameResponse {
+    /// Convert to the public `FootballGameResponse` type.
+    pub fn to_game_response(&self) -> FootballGameResponse {
         match &self.state {
-            GameState::Pregame(state) => GameResponse::Pregame(state.to_pregame_game(&self.id)),
-            GameState::Live(state) => GameResponse::Live(state.to_live_game(&self.id)),
-            GameState::Final(state) => GameResponse::Final(state.to_final_game(&self.id)),
+            GameState::Pregame(state) => FootballGameResponse::Pregame(state.to_pregame_game(&self.id)),
+            GameState::Live(state) => FootballGameResponse::Live(state.to_live_game(&self.id)),
+            GameState::Final(state) => FootballGameResponse::Final(state.to_final_game(&self.id)),
         }
     }
 
@@ -53,7 +54,7 @@ impl SimulatedGame {
     }
 }
 
-/// Internal game state - more detailed than GameResponse.
+/// Internal game state - more detailed than FootballGameResponse.
 pub enum GameState {
     Pregame(PregameState),
     Live(LiveState),
@@ -75,8 +76,8 @@ pub struct PregameState {
 }
 
 impl PregameState {
-    pub fn to_pregame_game(&self, event_id: &str) -> PregameGame {
-        PregameGame {
+    pub fn to_pregame_game(&self, event_id: &str) -> FootballPregame {
+        FootballPregame {
             event_id: event_id.to_string(),
             home: self.home_team.to_team(),
             away: self.away_team.to_team(),
@@ -113,7 +114,7 @@ pub struct LiveState {
     pub away_team: TeamInfo,
     pub home_score: u8,
     pub away_score: u8,
-    pub quarter: Quarter,
+    pub period: FootballPeriod,
     /// Seconds remaining in the quarter (900 = 15:00)
     pub clock_seconds: u16,
     pub clock_running: bool,
@@ -165,7 +166,7 @@ impl LiveState {
             away_team,
             home_score: 0,
             away_score: 0,
-            quarter: Quarter::First,
+            period: FootballPeriod::Q1,
             clock_seconds: 900, // 15:00
             clock_running: false,
             possession,
@@ -185,7 +186,7 @@ impl LiveState {
         }
     }
 
-    pub fn to_live_game(&self, event_id: &str) -> LiveGame {
+    pub fn to_live_game(&self, event_id: &str) -> FootballLive {
         let situation = if self.kickoff_pending {
             None // No situation during kickoff
         } else {
@@ -198,23 +199,25 @@ impl LiveState {
             })
         };
 
-        LiveGame {
+        FootballLive {
             event_id: event_id.to_string(),
-            home: TeamWithScore {
+            home: FootballTeamScore {
                 abbreviation: self.home_team.abbreviation.clone(),
                 color: self.home_team.color,
                 record: self.home_team.record.clone(),
+                rank: None,
                 score: self.home_score,
                 timeouts: self.home_timeouts,
             },
-            away: TeamWithScore {
+            away: FootballTeamScore {
                 abbreviation: self.away_team.abbreviation.clone(),
                 color: self.away_team.color,
                 record: self.away_team.record.clone(),
+                rank: None,
                 score: self.away_score,
                 timeouts: self.away_timeouts,
             },
-            quarter: self.quarter,
+            period: self.period,
             clock: format_clock(self.clock_seconds),
             clock_running: self.clock_running,
             situation,
@@ -236,16 +239,16 @@ impl LiveState {
             return false;
         }
 
-        match self.quarter {
-            Quarter::Fourth => self.home_score != self.away_score,
-            Quarter::Overtime | Quarter::DoubleOvertime => self.home_score != self.away_score,
+        match self.period {
+            FootballPeriod::Q4 => self.home_score != self.away_score,
+            FootballPeriod::OT | FootballPeriod::OT2 => self.home_score != self.away_score,
             _ => false,
         }
     }
 
     /// Transition to final state.
     pub fn to_final_state(self) -> FinalState {
-        let overtime = matches!(self.quarter, Quarter::Overtime | Quarter::DoubleOvertime);
+        let overtime = matches!(self.period, FootballPeriod::OT | FootballPeriod::OT2);
 
         FinalState {
             home_team: self.home_team,
@@ -267,7 +270,7 @@ pub struct FinalState {
 }
 
 impl FinalState {
-    pub fn to_final_game(&self, event_id: &str) -> FinalGame {
+    pub fn to_final_game(&self, event_id: &str) -> FootballFinal {
         let winner = if self.home_score > self.away_score {
             Winner::Home
         } else if self.away_score > self.home_score {
@@ -276,19 +279,21 @@ impl FinalState {
             Winner::Tie
         };
 
-        FinalGame {
+        FootballFinal {
             event_id: event_id.to_string(),
-            home: TeamWithScore {
+            home: FootballTeamScore {
                 abbreviation: self.home_team.abbreviation.clone(),
                 color: self.home_team.color,
                 record: self.home_team.record.clone(),
+                rank: None,
                 score: self.home_score,
                 timeouts: 0, // Timeouts don't matter for final
             },
-            away: TeamWithScore {
+            away: FootballTeamScore {
                 abbreviation: self.away_team.abbreviation.clone(),
                 color: self.away_team.color,
                 record: self.away_team.record.clone(),
+                rank: None,
                 score: self.away_score,
                 timeouts: 0,
             },
@@ -324,6 +329,7 @@ impl TeamInfo {
             abbreviation: self.abbreviation.clone(),
             color: self.color,
             record: self.record.clone(),
+            rank: None,
         }
     }
 }

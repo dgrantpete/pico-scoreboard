@@ -28,9 +28,9 @@ pub struct ServerConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct EspnConfig {
-    /// ESPN API scoreboard URL (default: NFL scoreboard)
-    #[serde(default = "default_scoreboard_url")]
-    pub scoreboard_url: String,
+    /// ESPN API base URL for sport endpoints
+    #[serde(default = "default_base_url")]
+    pub base_url: String,
 
     /// ESPN CDN combiner URL for team logos
     #[serde(default = "default_logo_url")]
@@ -57,8 +57,8 @@ fn default_timeout() -> u64 {
     10
 }
 
-fn default_scoreboard_url() -> String {
-    "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard".to_string()
+fn default_base_url() -> String {
+    "https://site.api.espn.com/apis/site/v2/sports".to_string()
 }
 
 fn default_logo_url() -> String {
@@ -81,7 +81,7 @@ impl Default for ServerConfig {
 impl Default for EspnConfig {
     fn default() -> Self {
         Self {
-            scoreboard_url: default_scoreboard_url(),
+            base_url: default_base_url(),
             logo_url: default_logo_url(),
             user_agent: default_user_agent(),
             timeout_secs: default_timeout(),

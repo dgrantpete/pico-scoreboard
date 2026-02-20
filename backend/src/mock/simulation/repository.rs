@@ -14,7 +14,8 @@ use super::options::{CreateFinalOptions, CreateGameRequest, CreateLiveOptions, C
 use super::state::{
     FinalState, GameState, LiveState, PregameState, SimulatedGame, TeamInfo, WeatherInfo,
 };
-use crate::game::types::{Down, Possession, Quarter};
+use crate::football::types::{Down, FootballPeriod, Possession};
+use crate::shared::types::Color;
 use crate::mock::teams::{get_matchup, NflTeam, NFL_TEAMS};
 
 /// Thread-safe repository for active game simulations.
@@ -135,7 +136,7 @@ fn clone_game_state(state: &GameState) -> GameState {
             away_team: l.away_team.clone(),
             home_score: l.home_score,
             away_score: l.away_score,
-            quarter: l.quarter,
+            period: l.period,
             clock_seconds: l.clock_seconds,
             clock_running: l.clock_running,
             possession: l.possession,
@@ -218,7 +219,7 @@ fn create_live_state(opts: CreateLiveOptions) -> LiveState {
 
     let (home_team, away_team) = resolve_teams(opts.home_team, opts.away_team, &mut rng);
 
-    let quarter = opts.quarter.unwrap_or(Quarter::First);
+    let period = opts.period.unwrap_or(FootballPeriod::Q1);
     let clock_seconds = opts
         .clock
         .and_then(|c| parse_clock(&c))
@@ -239,7 +240,7 @@ fn create_live_state(opts: CreateLiveOptions) -> LiveState {
         away_team,
         home_score: opts.home_score.unwrap_or(0),
         away_score: opts.away_score.unwrap_or(0),
-        quarter,
+        period,
         clock_seconds,
         clock_running: false,
         possession,
@@ -453,12 +454,12 @@ fn advance_game_state(state: &mut GameState) {
             GameState::Final(FinalState {
                 home_team: TeamInfo {
                     abbreviation: String::new(),
-                    color: crate::game::types::Color { r: 0, g: 0, b: 0 },
+                    color: Color { r: 0, g: 0, b: 0 },
                     record: None,
                 },
                 away_team: TeamInfo {
                     abbreviation: String::new(),
-                    color: crate::game::types::Color { r: 0, g: 0, b: 0 },
+                    color: Color { r: 0, g: 0, b: 0 },
                     record: None,
                 },
                 home_score: 0,
@@ -488,7 +489,7 @@ fn advance_game_state(state: &mut GameState) {
                 away_team: live.away_team.clone(),
                 home_score: live.home_score,
                 away_score: live.away_score,
-                overtime: matches!(live.quarter, Quarter::Overtime | Quarter::DoubleOvertime),
+                overtime: matches!(live.period, FootballPeriod::OT | FootballPeriod::OT2),
             };
             *state = GameState::Final(final_state);
         }
