@@ -20,8 +20,39 @@ pub fn parse_hex_color(hex: &str) -> Result<(u8, u8, u8), AppError> {
 }
 
 /// Resize a decoded image to the specified dimensions.
+///
+/// Uses premultiplied alpha to prevent transparent pixel RGB values from
+/// bleeding into visible edges during interpolation (the "gray fringe" problem).
+/// CatmullRom (bicubic) produces sharper results than Triangle (bilinear)
+/// without the ringing artifacts of Lanczos3.
 pub fn resize_image(img: &DynamicImage, width: u32, height: u32) -> RgbaImage {
-    image::imageops::resize(&img.to_rgba8(), width, height, FilterType::Triangle)
+    let mut rgba = img.to_rgba8();
+    premultiply_alpha(&mut rgba);
+    let mut resized = image::imageops::resize(&rgba, width, height, FilterType::CatmullRom);
+    unpremultiply_alpha(&mut resized);
+    resized
+}
+
+/// Multiply RGB channels by alpha, neutralizing hidden RGB values in transparent pixels.
+fn premultiply_alpha(img: &mut RgbaImage) {
+    for pixel in img.pixels_mut() {
+        let a = pixel[3] as u16;
+        pixel[0] = (pixel[0] as u16 * a / 255) as u8;
+        pixel[1] = (pixel[1] as u16 * a / 255) as u8;
+        pixel[2] = (pixel[2] as u16 * a / 255) as u8;
+    }
+}
+
+/// Restore straight alpha by dividing RGB channels by alpha.
+fn unpremultiply_alpha(img: &mut RgbaImage) {
+    for pixel in img.pixels_mut() {
+        let a = pixel[3] as u16;
+        if a > 0 && a < 255 {
+            pixel[0] = (pixel[0] as u16 * 255 / a).min(255) as u8;
+            pixel[1] = (pixel[1] as u16 * 255 / a).min(255) as u8;
+            pixel[2] = (pixel[2] as u16 * 255 / a).min(255) as u8;
+        }
+    }
 }
 
 /// Blend transparent pixels with a background color.
@@ -319,6 +350,39 @@ mod tests {
         img.put_pixel(0, 0, Rgba([0, 0, 0, 255]));
         let raw = encode_rgb565_raw(&img);
         assert_eq!(raw, vec![0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_premultiply_opaque_unchanged() {
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([100, 150, 200, 255]));
+        premultiply_alpha(&mut img);
+        assert_eq!(*img.get_pixel(0, 0), Rgba([100, 150, 200, 255]));
+    }
+
+    #[test]
+    fn test_premultiply_transparent_zeroes_rgb() {
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([255, 255, 255, 0])); // "dirty" transparent white
+        premultiply_alpha(&mut img);
+        assert_eq!(*img.get_pixel(0, 0), Rgba([0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn test_premultiply_roundtrip() {
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([100, 150, 200, 128]));
+        premultiply_alpha(&mut img);
+        // After premultiply: RGB scaled by 128/255 ≈ 0.502
+        let p = img.get_pixel(0, 0);
+        assert_eq!(p[3], 128); // alpha unchanged
+        unpremultiply_alpha(&mut img);
+        // Should roundtrip close to original (within ±1 due to integer rounding)
+        let p = img.get_pixel(0, 0);
+        assert!((p[0] as i16 - 100).unsigned_abs() <= 1);
+        assert!((p[1] as i16 - 150).unsigned_abs() <= 1);
+        assert!((p[2] as i16 - 200).unsigned_abs() <= 1);
+        assert_eq!(p[3], 128);
     }
 
 }

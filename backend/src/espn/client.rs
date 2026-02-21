@@ -1,6 +1,9 @@
 use bytes::Bytes;
+use lru::LruCache;
 use reqwest::Client;
 use serde::de::DeserializeOwned;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::types::{EspnEvent, EspnScoreboard, EspnSummary};
@@ -8,12 +11,17 @@ use crate::config::EspnConfig;
 use crate::error::AppError;
 use crate::sport::EspnLeague;
 
+/// Maximum number of 500x500 logos to cache in memory.
+/// Covers all NFL (32) + NBA (30) teams with room for college logos.
+const LOGO_CACHE_CAPACITY: usize = 64;
+
 /// HTTP client for ESPN API requests
 #[derive(Debug, Clone)]
 pub struct EspnClient {
     client: Client,
     base_url: String,
     logo_url: String,
+    logo_cache: Arc<Mutex<LruCache<String, Bytes>>>,
 }
 
 impl EspnClient {
@@ -29,6 +37,9 @@ impl EspnClient {
             client,
             base_url: config.base_url.clone(),
             logo_url: config.logo_url.clone(),
+            logo_cache: Arc::new(Mutex::new(LruCache::new(
+                NonZeroUsize::new(LOGO_CACHE_CAPACITY).unwrap(),
+            ))),
         }
     }
 
@@ -154,6 +165,7 @@ impl EspnClient {
 
     /// Fetch native 500x500 team logo from ESPN CDN as raw PNG bytes.
     ///
+    /// Results are cached in an LRU cache to avoid redundant ESPN CDN requests.
     /// For pro leagues (NFL, NBA), fetches directly from the CDN using the team abbreviation.
     /// For college leagues (NCAAF, NCAAB), first resolves the abbreviation to a logo URL
     /// via ESPN's teams API, since the CDN uses numeric team IDs for college.
@@ -162,6 +174,13 @@ impl EspnClient {
         league: impl EspnLeague,
         team_id: &str,
     ) -> Result<Bytes, AppError> {
+        let cache_key = format!("{}/{}", league.espn_logo_path(), team_id.to_lowercase());
+
+        // Check cache first
+        if let Some(cached) = self.logo_cache.lock().unwrap().get(&cache_key) {
+            return Ok(cached.clone());
+        }
+
         let url = if league.is_college() {
             self.resolve_college_logo_url(&league, team_id).await?
         } else {
@@ -189,6 +208,12 @@ impl EspnClient {
         let response = response.error_for_status().map_err(AppError::ImageFetch)?;
 
         let bytes = response.bytes().await.map_err(AppError::ImageFetch)?;
+
+        // Cache the result
+        self.logo_cache
+            .lock()
+            .unwrap()
+            .put(cache_key, bytes.clone());
 
         Ok(bytes)
     }
