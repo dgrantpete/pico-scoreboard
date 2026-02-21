@@ -1,7 +1,7 @@
 use crate::espn::types::{EspnCompetition, EspnCompetitor, EspnEvent, EspnLastPlay, EspnSituation};
 use crate::shared::transform::{get_broadcast, get_competitors, parse_hex_color, parse_rank};
 use crate::shared::types::Weather;
-use crate::sport::SportLeague;
+use crate::sport::{EspnLeague, FootballLeague};
 
 use super::types::{
     Down, FootballFinal, FootballGameResponse, FootballLive, FootballPeriod, FootballPregame,
@@ -11,16 +11,16 @@ use super::types::{
 use crate::shared::types::{FinalStatus, Winner};
 
 /// Transform an ESPN event into our football API response format
-pub fn transform(event: &EspnEvent, sport_league: SportLeague) -> FootballGameResponse {
+pub fn transform(event: &EspnEvent, league: FootballLeague) -> FootballGameResponse {
     let competition = &event.competitions[0];
     let state = event.status.status_type.state.as_str();
     let event_id = &event.id;
 
     match state {
-        "pre" => FootballGameResponse::Pregame(to_pregame(event, competition, event_id, sport_league)),
-        "in" => FootballGameResponse::Live(to_live(event, competition, event_id, sport_league)),
-        "post" => FootballGameResponse::Final(to_final(event, competition, event_id, sport_league)),
-        _ => FootballGameResponse::Pregame(to_pregame(event, competition, event_id, sport_league)),
+        "pre" => FootballGameResponse::Pregame(to_pregame(event, competition, event_id, league)),
+        "in" => FootballGameResponse::Live(to_live(event, competition, event_id, league)),
+        "post" => FootballGameResponse::Final(to_final(event, competition, event_id, league)),
+        _ => FootballGameResponse::Pregame(to_pregame(event, competition, event_id, league)),
     }
 }
 
@@ -29,10 +29,10 @@ fn to_pregame(
     event: &EspnEvent,
     competition: &EspnCompetition,
     event_id: &str,
-    sport_league: SportLeague,
+    league: FootballLeague,
 ) -> FootballPregame {
     let (home_competitor, away_competitor) = get_competitors(&competition.competitors);
-    let is_college = sport_league.is_college();
+    let is_college = league.is_college();
 
     let venue = competition.venue.as_ref();
     let is_outdoor = venue.map(|v| !v.indoor.unwrap_or(false)).unwrap_or(true);
@@ -62,10 +62,10 @@ fn to_live(
     event: &EspnEvent,
     competition: &EspnCompetition,
     event_id: &str,
-    sport_league: SportLeague,
+    league: FootballLeague,
 ) -> FootballLive {
     let (home_competitor, away_competitor) = get_competitors(&competition.competitors);
-    let is_college = sport_league.is_college();
+    let is_college = league.is_college();
     let situation = competition.situation.as_ref();
     let last_play = situation.and_then(|s| s.last_play.as_ref()).map(to_last_play);
 
@@ -104,10 +104,10 @@ fn to_final(
     event: &EspnEvent,
     competition: &EspnCompetition,
     event_id: &str,
-    sport_league: SportLeague,
+    league: FootballLeague,
 ) -> FootballFinal {
     let (home_competitor, away_competitor) = get_competitors(&competition.competitors);
-    let is_college = sport_league.is_college();
+    let is_college = league.is_college();
 
     let home_score = parse_score(&home_competitor.score);
     let away_score = parse_score(&away_competitor.score);

@@ -1,9 +1,4 @@
-use axum::{
-    extract::{Path, State},
-    response::{IntoResponse, Response},
-    routing::get,
-    Router,
-};
+use axum::{routing::get, Router};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -37,7 +32,8 @@ use espn::EspnClient;
         football::handler::get_game,
         basketball::handler::get_all_games,
         basketball::handler::get_game,
-        team::handler::get_team_logo,
+        team::handler::get_football_team_logo,
+        team::handler::get_basketball_team_logo,
         mock::handler::list_mock_games,
         mock::handler::get_mock_game,
         mock::handler::create_mock_game,
@@ -78,9 +74,8 @@ use espn::EspnClient;
     )),
     modifiers(&SecurityAddon),
     tags(
-        (name = "football", description = "Football game data endpoints (NFL, NCAAF)"),
-        (name = "basketball", description = "Basketball game data endpoints (NBA, NCAAB)"),
-        (name = "teams", description = "Team data endpoints"),
+        (name = "football", description = "Football game data and team logo endpoints (NFL, NCAAF)"),
+        (name = "basketball", description = "Basketball game data and team logo endpoints (NBA, NCAAB)"),
         (name = "mock", description = "Mock data endpoints for testing")
     )
 )]
@@ -108,50 +103,6 @@ pub struct AppState {
     pub espn_client: EspnClient,
     pub config: AppConfig,
     pub game_repository: mock::GameRepository,
-}
-
-// -- League dispatch handlers --
-
-/// Dispatch GET /api/{league}/games to the appropriate sport handler
-async fn league_all_games(
-    api_key: crate::auth::ApiKey,
-    state: State<Arc<AppState>>,
-    Path(league): Path<String>,
-) -> Result<Response, crate::error::AppError> {
-    let sport_league = crate::sport::SportLeague::from_league(&league)?;
-    match sport_league {
-        crate::sport::SportLeague::Nfl | crate::sport::SportLeague::Ncaaf => {
-            football::handler::get_all_games(api_key, state, Path(league))
-                .await
-                .map(|json| json.into_response())
-        }
-        crate::sport::SportLeague::Nba | crate::sport::SportLeague::Ncaab => {
-            basketball::handler::get_all_games(api_key, state, Path(league))
-                .await
-                .map(|json| json.into_response())
-        }
-    }
-}
-
-/// Dispatch GET /api/{league}/games/{event_id} to the appropriate sport handler
-async fn league_get_game(
-    api_key: crate::auth::ApiKey,
-    state: State<Arc<AppState>>,
-    Path((league, event_id)): Path<(String, String)>,
-) -> Result<Response, crate::error::AppError> {
-    let sport_league = crate::sport::SportLeague::from_league(&league)?;
-    match sport_league {
-        crate::sport::SportLeague::Nfl | crate::sport::SportLeague::Ncaaf => {
-            football::handler::get_game(api_key, state, Path((league, event_id)))
-                .await
-                .map(|json| json.into_response())
-        }
-        crate::sport::SportLeague::Nba | crate::sport::SportLeague::Ncaab => {
-            basketball::handler::get_game(api_key, state, Path((league, event_id)))
-                .await
-                .map(|json| json.into_response())
-        }
-    }
 }
 
 #[tokio::main]
@@ -208,14 +159,14 @@ async fn main() {
         .merge(SwaggerUi::new("/docs").url("/docs/openapi.json", ApiDoc::openapi()))
         .route("/", get(root))
         .route("/health", get(health))
-        // Game endpoints — dispatch by league
-        .route("/api/{league}/games", get(league_all_games))
-        .route("/api/{league}/games/{event_id}", get(league_get_game))
-        // Logo endpoint
-        .route(
-            "/api/{league}/teams/{team_id}/logo",
-            get(team::get_team_logo),
-        )
+        // Football endpoints
+        .route("/api/football/{league}/games", get(football::handler::get_all_games))
+        .route("/api/football/{league}/games/{event_id}", get(football::handler::get_game))
+        .route("/api/football/{league}/{team_id}/logo", get(team::get_football_team_logo))
+        // Basketball endpoints
+        .route("/api/basketball/{league}/games", get(basketball::handler::get_all_games))
+        .route("/api/basketball/{league}/games/{event_id}", get(basketball::handler::get_game))
+        .route("/api/basketball/{league}/{team_id}/logo", get(team::get_basketball_team_logo))
         // Mock endpoints (unchanged, NFL-only)
         .route(
             "/api/mock/games",

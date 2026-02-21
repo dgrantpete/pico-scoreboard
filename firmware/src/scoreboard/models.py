@@ -261,7 +261,7 @@ class LiveGame:
             event_id=data["event_id"],
             home=TeamWithScore.from_dict(data["home"]),
             away=TeamWithScore.from_dict(data["away"]),
-            quarter=data["quarter"],
+            quarter=data.get("quarter") or data.get("period", ""),
             clock=data["clock"],
             clock_running=data.get("clock_running", False),
             situation=situation,

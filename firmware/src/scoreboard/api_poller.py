@@ -19,7 +19,7 @@ from scoreboard.state import (
     format_quarter, format_situation, parse_pregame_datetime
 )
 from scoreboard.models import PregameGame, LiveGame, FinalGame
-from scoreboard.display import get_logo_framebuffer
+from scoreboard.display import get_logo_framebuffer, safe_team_color
 
 
 async def api_polling_loop(config: Config, api_client: ScoreboardApiClient) -> None:
@@ -115,6 +115,33 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient) -> N
                     display.possession = game.situation.possession if game.situation else ''
                     display.pregame_date = ''
                     display.pregame_time = ''
+
+                    # Pre-compute football field visualization for Core 1
+                    field = state.field
+                    if game.situation:
+                        sit = game.situation
+                        yl = sit.yard_line
+                        dist = sit.distance
+                        if sit.possession == 'away':
+                            abs_ball = yl
+                            abs_fd = min(yl + dist, 100)
+                            direction = 1
+                        else:
+                            abs_ball = 100 - yl
+                            abs_fd = max(100 - (yl + dist), 0)
+                            direction = -1
+                        field.ball_x = 14 + abs_ball
+                        field.first_down_x = 14 + abs_fd
+                        field.direction = direction
+                        field.home_color = safe_team_color(game.home.color, state.ui_colors.secondary)
+                        field.away_color = safe_team_color(game.away.color, state.ui_colors.secondary)
+                    else:
+                        field.ball_x = None
+                        field.first_down_x = None
+                        field.direction = 0
+                        field.home_color = 0
+                        field.away_color = 0
+
                     if game.last_play and game.last_play.text:
                         display.last_play_text = game.last_play.text
                     else:
@@ -126,11 +153,21 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient) -> N
                     display.pregame_date = ''
                     display.pregame_time = ''
                     display.last_play_text = ''
+                    state.field.ball_x = None
+                    state.field.first_down_x = None
+                    state.field.direction = 0
+                    state.field.home_color = 0
+                    state.field.away_color = 0
                 elif isinstance(game, PregameGame):
                     display.quarter = ''
                     display.situation = ''
                     display.possession = ''
                     display.last_play_text = ''
+                    state.field.ball_x = None
+                    state.field.first_down_x = None
+                    state.field.direction = 0
+                    state.field.home_color = 0
+                    state.field.away_color = 0
                     if game.start_time:
                         date_display, time_display = parse_pregame_datetime(game.start_time)
                         display.pregame_date = date_display

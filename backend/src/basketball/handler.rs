@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::auth::ApiKey;
 use crate::error::{AppError, ErrorResponse};
-use crate::sport::SportLeague;
+use crate::sport::BasketballLeague;
 use crate::AppState;
 
 use super::transform;
@@ -16,7 +16,8 @@ use super::types::{BasketballGameDetail, BasketballGameResponse};
 /// Fetches all basketball games from ESPN scoreboard
 #[utoipa::path(
     get,
-    path = "/api/{league}/games",
+    path = "/api/basketball/{league}/games",
+    operation_id = "get_all_basketball_games",
     params(
         ("league" = String, Path, description = "Basketball league: nba or ncaab")
     ),
@@ -36,12 +37,12 @@ pub async fn get_all_games(
     State(state): State<Arc<AppState>>,
     Path(league): Path<String>,
 ) -> Result<Json<Vec<BasketballGameResponse>>, AppError> {
-    let sport_league = SportLeague::basketball_from_league(&league)?;
-    let events = state.espn_client.fetch_all_games(sport_league).await?;
+    let basketball_league = BasketballLeague::from_league(&league)?;
+    let events = state.espn_client.fetch_all_games(basketball_league).await?;
 
     let responses: Vec<BasketballGameResponse> = events
         .iter()
-        .map(|e| transform::transform_from_scoreboard(e, sport_league))
+        .map(|e| transform::transform_from_scoreboard(e, basketball_league))
         .collect();
 
     Ok(Json(responses))
@@ -51,7 +52,8 @@ pub async fn get_all_games(
 /// Fetches a single basketball game detail from ESPN summary endpoint
 #[utoipa::path(
     get,
-    path = "/api/{league}/games/{event_id}",
+    path = "/api/basketball/{league}/games/{event_id}",
+    operation_id = "get_basketball_game",
     params(
         ("league" = String, Path, description = "Basketball league: nba or ncaab"),
         ("event_id" = String, Path, description = "ESPN event ID (numeric)")
@@ -72,7 +74,7 @@ pub async fn get_game(
     State(state): State<Arc<AppState>>,
     Path((league, event_id)): Path<(String, String)>,
 ) -> Result<Json<BasketballGameDetail>, AppError> {
-    let sport_league = SportLeague::basketball_from_league(&league)?;
+    let basketball_league = BasketballLeague::from_league(&league)?;
 
     // Validate event_id is numeric only
     if !event_id.chars().all(|c| c.is_ascii_digit()) {
@@ -81,10 +83,10 @@ pub async fn get_game(
 
     let summary = state
         .espn_client
-        .fetch_game_summary(sport_league, &event_id)
+        .fetch_game_summary(basketball_league, &event_id)
         .await?;
 
-    let response = transform::transform_from_summary(&summary, sport_league);
+    let response = transform::transform_from_summary(&summary, basketball_league);
 
     Ok(Json(response))
 }

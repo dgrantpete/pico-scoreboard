@@ -15,8 +15,14 @@ from scoreboard.state import StateBuffer, UiColors
 from scoreboard.config import Config
 from scoreboard.api_client import ScoreboardApiClient
 
-# Fixed color
+# Fixed colors
 BLACK = 0
+WHITE = rgb565(255, 255, 255)
+
+# Football field colors
+FIELD_GREEN = rgb565(0, 100, 0)
+FIELD_YELLOW = rgb565(255, 255, 0)
+FIELD_NAVY = rgb565(0, 0, 140)
 
 # Display dimensions
 DISPLAY_WIDTH = 128
@@ -64,6 +70,21 @@ SITUATION_Y = 22
 # Scores end at Y=43 (SCORE_Y + 16), display height is 64, free space is 21px
 # Using spleen_5x8 (8px tall): Y = 43 + (21 - 8) / 2 ≈ 49
 LAST_PLAY_Y = 49
+
+# Football field layout (replaces last play text)
+# Horizontal: |3px margin|1px border|10px away EZ|100px field|10px home EZ|1px border|3px margin|
+FIELD_OFFSET_X = 3        # Left margin / border X
+FIELD_AWAY_EZ_X = 4       # Away endzone start
+FIELD_START_X = 14         # Playing field start (pixel X = yard line)
+FIELD_HOME_EZ_X = 114     # Home endzone start
+FIELD_TOTAL_W = 122        # Total field width including borders
+# Vertical: 10px field (8px interior + 2px border) at bottom, ball marker above
+FIELD_Y = 54               # Top border Y
+FIELD_INTERIOR_Y = 55      # Interior top
+FIELD_INTERIOR_H = 8       # Interior height
+FIELD_TOTAL_H = 10         # Total height including borders
+# Ball marker sits above the field (3px tall, centered in the gap above)
+BALL_Y = 48                # Top of ball marker (Y=48..50)
 
 # Score flash animation constants
 FLASH_DURATION_MS = 3000   # How long to flash after scoring (3 seconds)
@@ -160,6 +181,80 @@ def draw_possession_arrow(display: Hub75Display, x: int, y: int, pointing_right:
         display.pixel(x, y + 2, color)
 
 
+def draw_ball_marker(display: Hub75Display, los_x: int, direction: int) -> None:
+    """
+    Draw ball and directional arrow above the field.
+
+    Ball is a 3x3 diamond shape at the line of scrimmage X position.
+    Arrow is a small triangle pointing in the direction of attack.
+    Both rendered in navy blue against the black background for visibility.
+
+        .X.              .X.
+      ? XXX ?   →   ◄ .XXX. ►
+        .X.              .X.
+    """
+    by = BALL_Y  # Top of ball (Y=48)
+
+    # Ball: 3x3 diamond
+    display.pixel(los_x, by, FIELD_NAVY)           # Top point
+    display.fill_rect(los_x - 1, by + 1, 3, 1, FIELD_NAVY)  # Middle row (3px wide)
+    display.pixel(los_x, by + 2, FIELD_NAVY)       # Bottom point
+
+    # Directional arrow (3px tall triangle, 1px gap from ball)
+    if direction == 1:
+        # Arrow pointing right
+        ax = los_x + 2
+        display.fill_rect(ax, by, 1, 3, FIELD_NAVY)      # Shaft
+        display.pixel(ax + 1, by + 1, FIELD_NAVY)         # Tip
+    elif direction == -1:
+        # Arrow pointing left
+        ax = los_x - 2
+        display.fill_rect(ax, by, 1, 3, FIELD_NAVY)      # Shaft
+        display.pixel(ax - 1, by + 1, FIELD_NAVY)         # Tip
+
+
+def draw_football_field(display: Hub75Display, field) -> None:
+    """
+    Draw football field visualization in the bottom area.
+
+    All positions and colors are pre-computed by Core 0 (zero allocations).
+    """
+    ball_x = field.ball_x
+    if ball_x is None:
+        return
+
+    first_down_x = field.first_down_x
+    direction = field.direction
+    home_color = field.home_color
+    away_color = field.away_color
+
+    # 1. Green turf (playing field interior)
+    display.fill_rect(FIELD_START_X, FIELD_INTERIOR_Y, 100, FIELD_INTERIOR_H, FIELD_GREEN)
+
+    # 2. Endzone fills
+    display.fill_rect(FIELD_AWAY_EZ_X, FIELD_INTERIOR_Y, 10, FIELD_INTERIOR_H, away_color)
+    display.fill_rect(FIELD_HOME_EZ_X, FIELD_INTERIOR_Y, 10, FIELD_INTERIOR_H, home_color)
+
+    # 3. White border
+    display.rect(FIELD_OFFSET_X, FIELD_Y, FIELD_TOTAL_W, FIELD_TOTAL_H, WHITE)
+
+    # 4. Ten-yard lines (white vertical lines at yards 10,20,...,90)
+    for yard in range(10, 100, 10):
+        x = FIELD_START_X + yard
+        display.fill_rect(x, FIELD_INTERIOR_Y, 1, FIELD_INTERIOR_H, WHITE)
+
+    # 5. First down line (yellow)
+    if first_down_x is not None and 14 <= first_down_x <= 113:
+        display.fill_rect(first_down_x, FIELD_INTERIOR_Y, 1, FIELD_INTERIOR_H, FIELD_YELLOW)
+
+    # 6. Line of scrimmage (navy blue)
+    los_x = max(14, min(ball_x, 113))
+    display.fill_rect(los_x, FIELD_INTERIOR_Y, 1, FIELD_INTERIOR_H, FIELD_NAVY)
+
+    # 7. Ball marker with directional arrow (above the field)
+    draw_ball_marker(display, los_x, direction)
+
+
 # Pre-allocated logo buffer pool
 _LOGO_POOL_SIZE = 8  # Max logos cached
 _LOGO_WIDTH = 24
@@ -204,6 +299,7 @@ def get_logo_framebuffer(api_client: ScoreboardApiClient, team_abbreviation: str
             team_id=key,
             width=_LOGO_WIDTH,
             height=_LOGO_HEIGHT,
+            background_color="000000",
             accept="image/x-rgb565"
         )
 
@@ -608,14 +704,8 @@ def render_live(display: Hub75Display, writer: FontWriter, game: LiveGame, state
             elif possession == 'home':
                 draw_possession_arrow(display, text_x + text_width + 2, arrow_y, True, home_color)
 
-    # Last play summary at bottom of display
-    last_play_text = display_data.last_play_text
-    if last_play_text:
-        animation_start_ms = state.animation_start_ms
-        render_scrolling_or_centered(
-            writer, last_play_text, LAST_PLAY_Y, DISPLAY_WIDTH,
-            colors.secondary, unscii_8, animation_start_ms, now_ms
-        )
+    # Football field visualization at bottom of display
+    draw_football_field(display, state.field)
 
 
 def render_final(display: Hub75Display, writer: FontWriter, game: FinalGame, state: StateBuffer, colors: UiColors, home_logo: framebuf.FrameBuffer | None, away_logo: framebuf.FrameBuffer | None, now_ms: int) -> None:

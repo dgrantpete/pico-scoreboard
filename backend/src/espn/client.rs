@@ -6,7 +6,7 @@ use std::time::Duration;
 use super::types::{EspnEvent, EspnScoreboard, EspnSummary};
 use crate::config::EspnConfig;
 use crate::error::AppError;
-use crate::sport::SportLeague;
+use crate::sport::EspnLeague;
 
 /// HTTP client for ESPN API requests
 #[derive(Debug, Clone)]
@@ -35,13 +35,13 @@ impl EspnClient {
     /// Fetch the full scoreboard from ESPN for a given sport/league
     pub async fn fetch_scoreboard(
         &self,
-        sport_league: SportLeague,
+        league: impl EspnLeague,
     ) -> Result<EspnScoreboard, AppError> {
         let url = format!(
             "{}/{}/{}/scoreboard",
             self.base_url,
-            sport_league.espn_sport(),
-            sport_league.espn_league()
+            league.espn_sport(),
+            league.espn_league()
         );
 
         let response = self
@@ -60,14 +60,14 @@ impl EspnClient {
     /// Fetch a game summary from ESPN (used for basketball single-game detail)
     pub async fn fetch_game_summary(
         &self,
-        sport_league: SportLeague,
+        league: impl EspnLeague,
         event_id: &str,
     ) -> Result<EspnSummary, AppError> {
         let url = format!(
             "{}/{}/{}/summary?event={}",
             self.base_url,
-            sport_league.espn_sport(),
-            sport_league.espn_league(),
+            league.espn_sport(),
+            league.espn_league(),
             event_id
         );
 
@@ -131,10 +131,10 @@ impl EspnClient {
     /// Fetch a single game by event ID from the scoreboard
     pub async fn fetch_game(
         &self,
-        sport_league: SportLeague,
+        league: impl EspnLeague,
         event_id: &str,
     ) -> Result<EspnEvent, AppError> {
-        let scoreboard = self.fetch_scoreboard(sport_league).await?;
+        let scoreboard = self.fetch_scoreboard(league).await?;
 
         scoreboard
             .events
@@ -146,38 +146,32 @@ impl EspnClient {
     /// Fetch all games from the current scoreboard
     pub async fn fetch_all_games(
         &self,
-        sport_league: SportLeague,
+        league: impl EspnLeague,
     ) -> Result<Vec<EspnEvent>, AppError> {
-        let scoreboard = self.fetch_scoreboard(sport_league).await?;
+        let scoreboard = self.fetch_scoreboard(league).await?;
         Ok(scoreboard.events)
     }
 
-    /// Fetch team logo from ESPN CDN as raw PNG bytes
+    /// Fetch native 500x500 team logo from ESPN CDN as raw PNG bytes.
     ///
-    /// # Arguments
-    /// * `sport_league` - The sport/league for the logo path
-    /// * `team_id` - Team abbreviation (e.g., "dal", "nyg")
-    /// * `width` - Desired width in pixels
-    /// * `height` - Desired height in pixels
-    /// * `transparent` - Whether to request transparent background
+    /// For pro leagues (NFL, NBA), fetches directly from the CDN using the team abbreviation.
+    /// For college leagues (NCAAF, NCAAB), first resolves the abbreviation to a logo URL
+    /// via ESPN's teams API, since the CDN uses numeric team IDs for college.
     pub async fn fetch_logo(
         &self,
-        sport_league: SportLeague,
+        league: impl EspnLeague,
         team_id: &str,
-        width: u32,
-        height: u32,
-        transparent: bool,
     ) -> Result<Bytes, AppError> {
-        // Build URL: {logo_url}?img=/i/teamlogos/{logo_path}/500/{team}.png&w={w}&h={h}&transparent={t}
-        let url = format!(
-            "{}?img=/i/teamlogos/{}/500/{}.png&w={}&h={}&transparent={}",
-            self.logo_url,
-            sport_league.espn_logo_path(),
-            team_id.to_lowercase(),
-            width,
-            height,
-            transparent
-        );
+        let url = if league.is_college() {
+            self.resolve_college_logo_url(&league, team_id).await?
+        } else {
+            format!(
+                "{}/i/teamlogos/{}/500/{}.png",
+                self.logo_url,
+                league.espn_logo_path(),
+                team_id.to_lowercase(),
+            )
+        };
 
         let response = self
             .client
@@ -198,6 +192,48 @@ impl EspnClient {
 
         Ok(bytes)
     }
+
+    /// Resolve a college team abbreviation to its ESPN logo URL via the teams API.
+    ///
+    /// ESPN's CDN uses numeric team IDs for college logos (e.g., ncaa/500/228.png),
+    /// not abbreviations. This method looks up the team by abbreviation to get the
+    /// correct logo URL.
+    async fn resolve_college_logo_url(
+        &self,
+        league: &impl EspnLeague,
+        team_id: &str,
+    ) -> Result<String, AppError> {
+        let url = format!(
+            "{}/{}/{}/teams/{}",
+            self.base_url,
+            league.espn_sport(),
+            league.espn_league(),
+            team_id.to_lowercase()
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(AppError::EspnRequest)?;
+
+        if !response.status().is_success() {
+            return Err(AppError::TeamNotFound(team_id.to_string()));
+        }
+
+        let body = response.text().await.map_err(AppError::EspnRequest)?;
+        let team_response: super::types::EspnTeamLookup =
+            self.deserialize_with_logging(&body, "team_lookup")?;
+
+        team_response
+            .team
+            .logos
+            .into_iter()
+            .next()
+            .map(|logo| logo.href)
+            .ok_or_else(|| AppError::TeamNotFound(team_id.to_string()))
+    }
 }
 
 impl Default for EspnClient {
@@ -214,7 +250,7 @@ mod tests {
     fn test_logo_url_format() {
         let client = EspnClient::default();
         // Just verify the URL is constructed correctly (don't actually fetch)
-        let expected_base = "https://a.espncdn.com/combiner/i";
+        let expected_base = "https://a.espncdn.com";
         assert!(client.logo_url.starts_with(expected_base));
     }
 

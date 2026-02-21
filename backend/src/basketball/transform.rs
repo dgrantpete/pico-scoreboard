@@ -2,7 +2,7 @@ use crate::espn::types::{EspnCompetitor, EspnEvent, EspnSummary};
 use crate::shared::transform::{
     determine_winner, get_broadcast, get_competitors, parse_hex_color, parse_rank, to_team,
 };
-use crate::sport::SportLeague;
+use crate::sport::{BasketballLeague, EspnLeague};
 
 use super::types::{
     BasketballFinal, BasketballFinalDetail, BasketballGameDetail, BasketballGameResponse,
@@ -16,17 +16,17 @@ use crate::shared::types::FinalStatus;
 /// Transform an ESPN scoreboard event into a basketball game response.
 pub fn transform_from_scoreboard(
     event: &EspnEvent,
-    sport_league: SportLeague,
+    league: BasketballLeague,
 ) -> BasketballGameResponse {
     let competition = &event.competitions[0];
     let (home, away) = get_competitors(&competition.competitors);
     let state = event.status.status_type.state.as_str();
 
     match state {
-        "pre" => BasketballGameResponse::Pregame(to_pregame(event, home, away, sport_league)),
-        "in" => BasketballGameResponse::Live(to_live(event, home, away, sport_league)),
-        "post" => BasketballGameResponse::Final(to_final(event, home, away, sport_league)),
-        _ => BasketballGameResponse::Pregame(to_pregame(event, home, away, sport_league)),
+        "pre" => BasketballGameResponse::Pregame(to_pregame(event, home, away, league)),
+        "in" => BasketballGameResponse::Live(to_live(event, home, away, league)),
+        "post" => BasketballGameResponse::Final(to_final(event, home, away, league)),
+        _ => BasketballGameResponse::Pregame(to_pregame(event, home, away, league)),
     }
 }
 
@@ -34,9 +34,9 @@ fn to_pregame(
     event: &EspnEvent,
     home: &EspnCompetitor,
     away: &EspnCompetitor,
-    sport_league: SportLeague,
+    league: BasketballLeague,
 ) -> BasketballPregame {
-    let is_college = sport_league.is_college();
+    let is_college = league.is_college();
     let venue = event.competitions[0].venue.as_ref();
 
     BasketballPregame {
@@ -53,15 +53,15 @@ fn to_live(
     event: &EspnEvent,
     home: &EspnCompetitor,
     away: &EspnCompetitor,
-    sport_league: SportLeague,
+    league: BasketballLeague,
 ) -> BasketballLive {
-    let is_college = sport_league.is_college();
+    let is_college = league.is_college();
 
     BasketballLive {
         event_id: event.id.clone(),
         home: to_team_score(home, is_college),
         away: to_team_score(away, is_college),
-        period: parse_period(event.status.period, sport_league),
+        period: parse_period(event.status.period, league),
         clock: event.status.display_clock.clone(),
     }
 }
@@ -70,13 +70,13 @@ fn to_final(
     event: &EspnEvent,
     home: &EspnCompetitor,
     away: &EspnCompetitor,
-    sport_league: SportLeague,
+    league: BasketballLeague,
 ) -> BasketballFinal {
-    let is_college = sport_league.is_college();
+    let is_college = league.is_college();
     let home_score = parse_score_u16(&home.score);
     let away_score = parse_score_u16(&away.score);
 
-    let regulation_periods = if sport_league.is_college() { 2 } else { 4 };
+    let regulation_periods = if league.is_college() { 2 } else { 4 };
 
     BasketballFinal {
         event_id: event.id.clone(),
@@ -106,12 +106,12 @@ fn to_team_score(competitor: &EspnCompetitor, is_college: bool) -> BasketballTea
 /// Transform an ESPN summary response into a basketball game detail.
 pub fn transform_from_summary(
     summary: &EspnSummary,
-    sport_league: SportLeague,
+    league: BasketballLeague,
 ) -> BasketballGameDetail {
     let competition = &summary.header.competitions[0];
     let (home, away) = get_competitors(&competition.competitors);
     let state = competition.status.status_type.state.as_str();
-    let is_college = sport_league.is_college();
+    let is_college = league.is_college();
 
     match state {
         "pre" => {
@@ -133,7 +133,7 @@ pub fn transform_from_summary(
                 event_id: summary.header.id.clone(),
                 home: to_team_score_detail(home, is_college, home_fouls),
                 away: to_team_score_detail(away, is_college, away_fouls),
-                period: parse_period(competition.status.period, sport_league),
+                period: parse_period(competition.status.period, league),
                 clock: competition.status.display_clock.clone(),
             })
         }
@@ -143,7 +143,7 @@ pub fn transform_from_summary(
             let home_score = parse_score_u16(&home.score);
             let away_score = parse_score_u16(&away.score);
 
-            let regulation_periods = if sport_league.is_college() { 2 } else { 4 };
+            let regulation_periods = if league.is_college() { 2 } else { 4 };
 
             BasketballGameDetail::Final(BasketballFinalDetail {
                 event_id: summary.header.id.clone(),
@@ -211,10 +211,10 @@ fn extract_fouls(summary: &EspnSummary, team_id: &str) -> u8 {
 /// Parse ESPN period number to BasketballPeriod.
 /// NBA: 1=Q1, 2=Q2, 3=Q3, 4=Q4, 5+=OT.
 /// NCAAB: 1=H1, 2=H2, 3+=OT.
-fn parse_period(period: u8, sport_league: SportLeague) -> BasketballPeriod {
+fn parse_period(period: u8, league: BasketballLeague) -> BasketballPeriod {
     // Check for halftime via status -- ESPN uses period 2 with halftime status,
     // but we handle that at the caller level. Here we just map period numbers.
-    if sport_league.is_college() {
+    if league.is_college() {
         match period {
             1 => BasketballPeriod::H1,
             2 => BasketballPeriod::H2,

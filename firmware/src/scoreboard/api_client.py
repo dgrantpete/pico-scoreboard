@@ -278,7 +278,7 @@ class ScoreboardApiClient:
             OSError: On network errors (WiFi disconnected, DNS failure, etc.)
         """
         gc.collect()
-        url = f"{self._config.api_url.rstrip('/')}/api/teams/{team_id}/logo"
+        url = f"{self._config.api_url.rstrip('/')}/api/football/nfl/{team_id}/logo"
         params = []
         if width is not None:
             params.append(f"width={width}")

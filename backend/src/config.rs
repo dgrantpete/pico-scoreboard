@@ -32,7 +32,7 @@ pub struct EspnConfig {
     #[serde(default = "default_base_url")]
     pub base_url: String,
 
-    /// ESPN CDN combiner URL for team logos
+    /// ESPN CDN base URL for team logos
     #[serde(default = "default_logo_url")]
     pub logo_url: String,
 
@@ -62,7 +62,7 @@ fn default_base_url() -> String {
 }
 
 fn default_logo_url() -> String {
-    "https://a.espncdn.com/combiner/i".to_string()
+    "https://a.espncdn.com".to_string()
 }
 
 fn default_user_agent() -> String {

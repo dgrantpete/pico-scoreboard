@@ -1,4 +1,4 @@
-use image::{DynamicImage, GenericImageView, ImageFormat, Rgba, RgbaImage};
+use image::{imageops::FilterType, DynamicImage, ImageFormat, Rgba, RgbaImage};
 use std::io::Cursor;
 
 use crate::error::AppError;
@@ -19,15 +19,19 @@ pub fn parse_hex_color(hex: &str) -> Result<(u8, u8, u8), AppError> {
     Ok((r, g, b))
 }
 
+/// Resize a decoded image to the specified dimensions.
+pub fn resize_image(img: &DynamicImage, width: u32, height: u32) -> RgbaImage {
+    image::imageops::resize(&img.to_rgba8(), width, height, FilterType::Triangle)
+}
+
 /// Blend transparent pixels with a background color.
 /// Uses standard alpha compositing: out = src * alpha + bg * (1 - alpha)
-pub fn blend_with_background(img: &DynamicImage, bg: (u8, u8, u8)) -> RgbaImage {
+pub fn blend_with_background(img: &RgbaImage, bg: (u8, u8, u8)) -> RgbaImage {
     let (width, height) = img.dimensions();
-    let rgba = img.to_rgba8();
 
     let mut output = RgbaImage::new(width, height);
 
-    for (x, y, pixel) in rgba.enumerate_pixels() {
+    for (x, y, pixel) in img.enumerate_pixels() {
         let Rgba([r, g, b, a]) = *pixel;
 
         if a == 255 {
@@ -199,8 +203,7 @@ mod tests {
         let mut img = RgbaImage::new(1, 1);
         img.put_pixel(0, 0, Rgba([100, 100, 100, 0])); // fully transparent
 
-        let dynamic = DynamicImage::ImageRgba8(img);
-        let result = blend_with_background(&dynamic, (255, 0, 0));
+        let result = blend_with_background(&img, (255, 0, 0));
 
         // Should be pure background color
         assert_eq!(*result.get_pixel(0, 0), Rgba([255, 0, 0, 255]));
@@ -211,8 +214,7 @@ mod tests {
         let mut img = RgbaImage::new(1, 1);
         img.put_pixel(0, 0, Rgba([100, 150, 200, 255])); // fully opaque
 
-        let dynamic = DynamicImage::ImageRgba8(img);
-        let result = blend_with_background(&dynamic, (255, 0, 0));
+        let result = blend_with_background(&img, (255, 0, 0));
 
         // Should be original color
         assert_eq!(*result.get_pixel(0, 0), Rgba([100, 150, 200, 255]));
@@ -223,8 +225,7 @@ mod tests {
         let mut img = RgbaImage::new(1, 1);
         img.put_pixel(0, 0, Rgba([0, 0, 0, 128])); // ~50% transparent black
 
-        let dynamic = DynamicImage::ImageRgba8(img);
-        let result = blend_with_background(&dynamic, (255, 255, 255)); // white bg
+        let result = blend_with_background(&img, (255, 255, 255)); // white bg
 
         // Should be roughly gray (127-128 range due to rounding)
         let pixel = result.get_pixel(0, 0);
@@ -319,4 +320,5 @@ mod tests {
         let raw = encode_rgb565_raw(&img);
         assert_eq!(raw, vec![0x00, 0x00]);
     }
+
 }

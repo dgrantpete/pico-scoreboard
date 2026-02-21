@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::ApiKey;
-use crate::error::AppError;
-use crate::sport::SportLeague;
+use crate::error::{AppError, ErrorResponse};
+use crate::sport::{BasketballLeague, EspnLeague, FootballLeague};
 
 use super::image::{
     blend_with_background, decode_png, encode_png, encode_ppm_p6, encode_rgb565_raw,
-    encode_rgb888_raw, parse_hex_color,
+    encode_rgb888_raw, parse_hex_color, resize_image,
 };
 use super::types::{LogoQuery, OutputFormat};
 
@@ -35,51 +35,16 @@ fn parse_accept_header(headers: &HeaderMap) -> OutputFormat {
     OutputFormat::Png
 }
 
-/// GET /api/{league}/teams/{team_id}/logo
-///
-/// Fetches team logo from ESPN CDN with optional processing.
-///
-/// Content negotiation via Accept header:
-/// - `image/png` or `*/*` (default): Returns PNG
-/// - `image/x-portable-pixmap`: Returns PPM P6 binary
-/// - `image/x-rgb888`: Returns raw RGB888 bytes (3 bytes per pixel, no header)
-/// - `image/x-rgb565`: Returns raw RGB565 bytes (2 bytes per pixel, little-endian)
-#[utoipa::path(
-    get,
-    path = "/api/{league}/teams/{team_id}/logo",
-    params(
-        ("league" = String, Path, description = "League identifier (nfl, ncaaf, nba, ncaab)"),
-        ("team_id" = String, Path, description = "Team abbreviation (e.g., 'dal', 'nyg')"),
-        LogoQuery
-    ),
-    responses(
-        (status = 200, description = "Logo image", content(
-            ("image/png"),
-            ("image/x-portable-pixmap"),
-            ("image/x-rgb888"),
-            ("image/x-rgb565")
-        )),
-        (status = 400, description = "Invalid parameters"),
-        (status = 401, description = "Missing or invalid API key"),
-        (status = 404, description = "Team not found"),
-        (status = 502, description = "Error fetching from ESPN"),
-    ),
-    security(
-        ("api_key" = [])
-    ),
-    tag = "teams"
-)]
-pub async fn get_team_logo(
+/// Shared implementation for fetching team logos from ESPN CDN.
+async fn get_team_logo_impl(
     _api_key: ApiKey,
-    State(state): State<Arc<AppState>>,
-    Path((league, team_id)): Path<(String, String)>,
-    Query(params): Query<LogoQuery>,
+    state: State<Arc<AppState>>,
+    league: impl EspnLeague,
+    team_id: String,
+    params: LogoQuery,
     headers: HeaderMap,
 ) -> Result<Response<Body>, AppError> {
-    let sport_league = SportLeague::from_league(&league)?;
     let output_format = parse_accept_header(&headers);
-    let has_background = params.background_color.is_some();
-
     // Parse background color early to fail fast on invalid input
     let background = if let Some(ref hex) = params.background_color {
         Some(parse_hex_color(hex)?)
@@ -87,38 +52,27 @@ pub async fn get_team_logo(
         None
     };
 
-    // Determine whether to request transparent image from ESPN
-    // - PNG without background: transparent=true, passthrough
-    // - PNG with background: transparent=true, blend
-    // - Raw formats without background: transparent=false, convert
-    // - Raw formats with background: transparent=true, blend, convert
     let supports_transparency = output_format == OutputFormat::Png;
-    let request_transparent = supports_transparency || has_background;
 
-    // Fetch logo from ESPN
+    // Fetch native 500x500 logo from ESPN CDN
     let logo_bytes = state
         .espn_client
-        .fetch_logo(sport_league, &team_id, params.width, params.height, request_transparent)
+        .fetch_logo(league, &team_id)
         .await?;
 
-    // Optimization: PNG without background can be returned as-is
-    if output_format == OutputFormat::Png && background.is_none() {
-        return Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, OutputFormat::Png.content_type())
-            .header(header::CACHE_CONTROL, "public, max-age=86400")
-            .body(Body::from(logo_bytes.to_vec()))
-            .unwrap());
-    }
-
-    // Decode the image for processing
+    // Decode and resize using Lanczos3 for high-quality downscaling
     let img = decode_png(&logo_bytes)?;
+    let resized = resize_image(&img, params.width, params.height);
 
-    // Apply background blending if requested
+    // Apply background blending
+    // For formats without alpha (RGB565, RGB888, PPM), always blend against black
+    // to prevent semi-transparent pixels from producing visible artifacts.
     let processed = if let Some(bg) = background {
-        blend_with_background(&img, bg)
+        blend_with_background(&resized, bg)
+    } else if !supports_transparency {
+        blend_with_background(&resized, (0, 0, 0))
     } else {
-        img.to_rgba8()
+        resized
     };
 
     // Encode to output format
@@ -147,4 +101,78 @@ pub async fn get_team_logo(
         .header(header::CACHE_CONTROL, "public, max-age=86400")
         .body(Body::from(output_bytes))
         .unwrap())
+}
+
+/// GET /api/football/{league}/{team_id}/logo
+///
+/// Fetches a football team logo from ESPN CDN with optional processing.
+#[utoipa::path(
+    get,
+    path = "/api/football/{league}/{team_id}/logo",
+    params(
+        ("league" = String, Path, description = "Football league: nfl or ncaaf"),
+        ("team_id" = String, Path, description = "Team abbreviation (e.g., 'dal', 'nyg')"),
+        LogoQuery
+    ),
+    responses(
+        (status = 200, description = "Logo image", content(
+            ("image/png"),
+            ("image/x-portable-pixmap"),
+            ("image/x-rgb888"),
+            ("image/x-rgb565")
+        )),
+        (status = 400, description = "Invalid parameters", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid API key", body = ErrorResponse),
+        (status = 404, description = "Team not found", body = ErrorResponse),
+        (status = 502, description = "Error fetching from ESPN", body = ErrorResponse),
+    ),
+    security(("api_key" = [])),
+    tag = "football"
+)]
+pub async fn get_football_team_logo(
+    api_key: ApiKey,
+    state: State<Arc<AppState>>,
+    Path((league, team_id)): Path<(String, String)>,
+    Query(params): Query<LogoQuery>,
+    headers: HeaderMap,
+) -> Result<Response<Body>, AppError> {
+    let football_league = FootballLeague::from_league(&league)?;
+    get_team_logo_impl(api_key, state, football_league, team_id, params, headers).await
+}
+
+/// GET /api/basketball/{league}/{team_id}/logo
+///
+/// Fetches a basketball team logo from ESPN CDN with optional processing.
+#[utoipa::path(
+    get,
+    path = "/api/basketball/{league}/{team_id}/logo",
+    params(
+        ("league" = String, Path, description = "Basketball league: nba or ncaab"),
+        ("team_id" = String, Path, description = "Team abbreviation (e.g., 'lal', 'bos')"),
+        LogoQuery
+    ),
+    responses(
+        (status = 200, description = "Logo image", content(
+            ("image/png"),
+            ("image/x-portable-pixmap"),
+            ("image/x-rgb888"),
+            ("image/x-rgb565")
+        )),
+        (status = 400, description = "Invalid parameters", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid API key", body = ErrorResponse),
+        (status = 404, description = "Team not found", body = ErrorResponse),
+        (status = 502, description = "Error fetching from ESPN", body = ErrorResponse),
+    ),
+    security(("api_key" = [])),
+    tag = "basketball"
+)]
+pub async fn get_basketball_team_logo(
+    api_key: ApiKey,
+    state: State<Arc<AppState>>,
+    Path((league, team_id)): Path<(String, String)>,
+    Query(params): Query<LogoQuery>,
+    headers: HeaderMap,
+) -> Result<Response<Body>, AppError> {
+    let basketball_league = BasketballLeague::from_league(&league)?;
+    get_team_logo_impl(api_key, state, basketball_league, team_id, params, headers).await
 }

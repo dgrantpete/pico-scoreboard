@@ -1,81 +1,107 @@
 use crate::error::AppError;
 
-/// Identifies a sport/league combination supported by the API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SportLeague {
-    Nfl,
-    Ncaaf,
-    Nba,
-    Ncaab,
+/// Trait for league types that can be used with the ESPN API.
+///
+/// Implemented by `FootballLeague` and `BasketballLeague` to provide
+/// sport-specific ESPN URL segments while keeping the ESPN client generic.
+pub trait EspnLeague {
+    /// ESPN API sport path segment (e.g., "football", "basketball").
+    fn espn_sport(&self) -> &'static str;
+
+    /// ESPN API league path segment (e.g., "nfl", "mens-college-basketball").
+    fn espn_league(&self) -> &'static str;
+
+    /// ESPN CDN logo path segment (e.g., "nfl", "ncaa").
+    fn espn_logo_path(&self) -> &'static str;
+
+    /// Whether this is a college league (affects ranking display, period format, etc.).
+    fn is_college(&self) -> bool;
 }
 
-impl SportLeague {
-    /// Parse from a league path parameter (e.g., "nfl", "ncaab").
+/// Football league identifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FootballLeague {
+    Nfl,
+    Ncaaf,
+}
+
+impl FootballLeague {
     pub fn from_league(s: &str) -> Result<Self, AppError> {
         match s {
             "nfl" => Ok(Self::Nfl),
             "ncaaf" => Ok(Self::Ncaaf),
-            "nba" => Ok(Self::Nba),
-            "ncaab" => Ok(Self::Ncaab),
-            _ => Err(AppError::InvalidLeague(s.to_string())),
+            _ => Err(AppError::InvalidLeague {
+                league: s.to_string(),
+                valid: "nfl, ncaaf",
+            }),
         }
     }
+}
 
-    /// Parse from a league path parameter, restricted to football leagues.
-    pub fn football_from_league(s: &str) -> Result<Self, AppError> {
-        match s {
-            "nfl" => Ok(Self::Nfl),
-            "ncaaf" => Ok(Self::Ncaaf),
-            _ => Err(AppError::InvalidLeague(s.to_string())),
-        }
+impl EspnLeague for FootballLeague {
+    fn espn_sport(&self) -> &'static str {
+        "football"
     }
 
-    /// Parse from a league path parameter, restricted to basketball leagues.
-    pub fn basketball_from_league(s: &str) -> Result<Self, AppError> {
-        match s {
-            "nba" => Ok(Self::Nba),
-            "ncaab" => Ok(Self::Ncaab),
-            _ => Err(AppError::InvalidLeague(s.to_string())),
-        }
-    }
-
-    /// ESPN API sport path segment.
-    pub fn espn_sport(&self) -> &'static str {
-        match self {
-            Self::Nfl | Self::Ncaaf => "football",
-            Self::Nba | Self::Ncaab => "basketball",
-        }
-    }
-
-    /// ESPN API league path segment.
-    pub fn espn_league(&self) -> &'static str {
+    fn espn_league(&self) -> &'static str {
         match self {
             Self::Nfl => "nfl",
             Self::Ncaaf => "college-football",
+        }
+    }
+
+    fn espn_logo_path(&self) -> &'static str {
+        match self {
+            Self::Nfl => "nfl",
+            Self::Ncaaf => "ncaa",
+        }
+    }
+
+    fn is_college(&self) -> bool {
+        matches!(self, Self::Ncaaf)
+    }
+}
+
+/// Basketball league identifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BasketballLeague {
+    Nba,
+    Ncaab,
+}
+
+impl BasketballLeague {
+    pub fn from_league(s: &str) -> Result<Self, AppError> {
+        match s {
+            "nba" => Ok(Self::Nba),
+            "ncaab" => Ok(Self::Ncaab),
+            _ => Err(AppError::InvalidLeague {
+                league: s.to_string(),
+                valid: "nba, ncaab",
+            }),
+        }
+    }
+}
+
+impl EspnLeague for BasketballLeague {
+    fn espn_sport(&self) -> &'static str {
+        "basketball"
+    }
+
+    fn espn_league(&self) -> &'static str {
+        match self {
             Self::Nba => "nba",
             Self::Ncaab => "mens-college-basketball",
         }
     }
 
-    /// ESPN CDN logo path segment for this league.
-    pub fn espn_logo_path(&self) -> &'static str {
+    fn espn_logo_path(&self) -> &'static str {
         match self {
-            Self::Nfl => "nfl",
-            Self::Ncaaf => "ncaa",
             Self::Nba => "nba",
             Self::Ncaab => "ncaa",
         }
     }
 
-    pub fn is_football(&self) -> bool {
-        matches!(self, Self::Nfl | Self::Ncaaf)
-    }
-
-    pub fn is_basketball(&self) -> bool {
-        matches!(self, Self::Nba | Self::Ncaab)
-    }
-
-    pub fn is_college(&self) -> bool {
-        matches!(self, Self::Ncaaf | Self::Ncaab)
+    fn is_college(&self) -> bool {
+        matches!(self, Self::Ncaab)
     }
 }

@@ -177,3 +177,21 @@ pub struct EspnBoxscoreStat {
     pub name: String,
     pub display_value: String,
 }
+
+// ── Team lookup types (for college logo resolution) ──
+
+/// Response from ESPN teams endpoint (e.g., /sports/football/college-football/teams/228)
+#[derive(Debug, Deserialize)]
+pub struct EspnTeamLookup {
+    pub team: EspnTeamDetail,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EspnTeamDetail {
+    pub logos: Vec<EspnLogo>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EspnLogo {
+    pub href: String,
+}

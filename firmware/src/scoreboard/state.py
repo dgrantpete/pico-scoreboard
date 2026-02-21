@@ -53,6 +53,17 @@ class ErrorState:
         self.lines: list[str] = []    # Up to 4 detail lines
 
 
+class FieldState:
+    """Pre-computed football field visualization state, set by Core 0."""
+
+    def __init__(self) -> None:
+        self.ball_x: int | None = None        # Absolute pixel X of ball (None = no field)
+        self.first_down_x: int | None = None  # Absolute pixel X of first down line
+        self.direction: int = 0               # 1 = attacking right, -1 = attacking left
+        self.home_color: int = 0              # Home endzone RGB565
+        self.away_color: int = 0              # Away endzone RGB565
+
+
 class UiColors:
     """Pre-computed UI colors (RGB565), set by Core 0."""
 
@@ -100,6 +111,7 @@ class StateBuffer:
         self.error: ErrorState = ErrorState()
         self.ui_colors: UiColors = UiColors()
         self.display: DisplayStrings = DisplayStrings()
+        self.field: FieldState = FieldState()
 
 
 # =============================================================================
@@ -201,6 +213,12 @@ class DoubleBufferedState:
         back.display.pregame_date = front.display.pregame_date
         back.display.pregame_time = front.display.pregame_time
         back.display.last_play_text = front.display.last_play_text
+
+        back.field.ball_x = front.field.ball_x
+        back.field.first_down_x = front.field.first_down_x
+        back.field.direction = front.field.direction
+        back.field.home_color = front.field.home_color
+        back.field.away_color = front.field.away_color
 
 
 # Singleton instance
@@ -417,8 +435,13 @@ _QUARTER_MAP = {
     "second": "Q2",
     "third": "Q3",
     "fourth": "Q4",
+    "Q1": "Q1",
+    "Q2": "Q2",
+    "Q3": "Q3",
+    "Q4": "Q4",
     "OT": "OT",
     "OT2": "2OT",
+    "Halftime": "HALF",
 }
 
 _DOWN_MAP = {

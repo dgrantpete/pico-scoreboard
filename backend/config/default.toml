@@ -7,6 +7,6 @@ port = 3000
 
 [espn]
 base_url = "https://site.api.espn.com/apis/site/v2/sports"
-logo_url = "https://a.espncdn.com/combiner/i"
+logo_url = "https://a.espncdn.com"
 user_agent = "pico-scoreboard/1.0"
 timeout_secs = 10
