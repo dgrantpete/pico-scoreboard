@@ -3,8 +3,10 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
-    /// API key for authentication (required, no default - must be set via env var)
-    pub api_key: String,
+    /// API key for authentication. When None, auth is disabled (development mode).
+    /// Set via APP_API_KEY env var or api_key in config files.
+    #[serde(default)]
+    pub api_key: Option<String>,
 
     /// Server configuration
     #[serde(default)]
@@ -91,7 +93,7 @@ impl Default for EspnConfig {
 
 impl AppConfig {
     pub fn load() -> Self {
-        Config::builder()
+        let config: Self = Config::builder()
             // 1. Base config file (committed - non-secret defaults)
             .add_source(File::with_name("config/default").required(false))
             // 2. Local config file (gitignored - secrets and local overrides)
@@ -109,7 +111,13 @@ impl AppConfig {
             .build()
             .expect("Failed to build configuration")
             .try_deserialize()
-            .expect("Failed to deserialize configuration - is APP_API_KEY set?")
+            .expect("Failed to deserialize configuration");
+
+        // Normalize empty string to None so APP_API_KEY="" is treated as unconfigured
+        Self {
+            api_key: config.api_key.filter(|k| !k.is_empty()),
+            ..config
+        }
     }
 
     /// Get the server bind address as "host:port"

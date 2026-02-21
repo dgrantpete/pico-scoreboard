@@ -18,13 +18,19 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = Arc::<AppState>::from_ref(state);
 
+        // If no API key is configured, skip authentication entirely
+        let expected_key = match &app_state.config.api_key {
+            Some(key) => key,
+            None => return Ok(ApiKey),
+        };
+
         let provided_key = parts
             .headers
             .get("x-api-key")
             .and_then(|v| v.to_str().ok())
             .ok_or(AppError::MissingApiKey)?;
 
-        if provided_key == app_state.config.api_key {
+        if provided_key == expected_key {
             Ok(ApiKey)
         } else {
             Err(AppError::Unauthorized)

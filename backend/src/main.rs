@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use utoipa::OpenApi;
-use utoipa_swagger_ui::SwaggerUi;
+use utoipa_scalar::{Scalar, Servable};
 
 mod auth;
 mod basketball;
@@ -90,7 +90,10 @@ impl utoipa::Modify for SecurityAddon {
                 "api_key",
                 utoipa::openapi::security::SecurityScheme::ApiKey(
                     utoipa::openapi::security::ApiKey::Header(
-                        utoipa::openapi::security::ApiKeyValue::new("X-Api-Key"),
+                        utoipa::openapi::security::ApiKeyValue::with_description(
+                            "X-Api-Key",
+                            "API key for authentication. When no key is configured on the server, authentication is disabled and this header is ignored.",
+                        ),
                     ),
                 ),
             );
@@ -133,6 +136,16 @@ async fn main() {
 
     // Load configuration
     let config = AppConfig::load();
+
+    if config.api_key.is_none() {
+        tracing::warn!(
+            "No API key configured - authentication is disabled. \
+             Set APP_API_KEY for production use."
+        );
+    } else {
+        tracing::info!("API key authentication is enabled");
+    }
+
     let bind_address = config.bind_address();
 
     // Create ESPN client with config
@@ -156,8 +169,7 @@ async fn main() {
 
     // Build router
     let app = Router::new()
-        .merge(SwaggerUi::new("/docs").url("/docs/openapi.json", ApiDoc::openapi()))
-        .route("/", get(root))
+        .merge(Scalar::with_url("/", ApiDoc::openapi()))
         .route("/health", get(health))
         // Football endpoints
         .route("/api/football/{league}/games", get(football::handler::get_all_games))
@@ -183,10 +195,6 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&bind_address).await.unwrap();
     tracing::info!("Server running on http://{}", bind_address);
     axum::serve(listener, app).await.unwrap();
-}
-
-async fn root() -> &'static str {
-    "Pico Scoreboard API"
 }
 
 async fn health() -> &'static str {

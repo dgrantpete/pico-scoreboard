@@ -16,9 +16,11 @@ use super::image::{
 };
 use super::types::{LogoQuery, OutputFormat};
 
-/// Determine output format from Accept header
+/// Determine output format from Accept header.
+/// Uses get_all() to check all Accept header values, since browsers and API
+/// clients may send multiple Accept headers (e.g., a default `*/*` plus a custom one).
 fn parse_accept_header(headers: &HeaderMap) -> OutputFormat {
-    if let Some(accept) = headers.get(header::ACCEPT) {
+    for accept in headers.get_all(header::ACCEPT) {
         if let Ok(accept_str) = accept.to_str() {
             if accept_str.contains("image/x-rgb565") {
                 return OutputFormat::Rgb565;
@@ -95,12 +97,25 @@ async fn get_team_logo_impl(
         }
     };
 
-    Ok(Response::builder()
+    let mut response = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CACHE_CONTROL, "public, max-age=86400")
-        .body(Body::from(output_bytes))
-        .unwrap())
+        .header(header::VARY, "Accept");
+
+    if matches!(output_format, OutputFormat::Png | OutputFormat::Ppm) {
+        let ext = match output_format {
+            OutputFormat::Png => "png",
+            OutputFormat::Ppm => "ppm",
+            _ => unreachable!(),
+        };
+        response = response.header(
+            header::CONTENT_DISPOSITION,
+            format!("inline; filename=\"logo.{ext}\""),
+        );
+    }
+
+    Ok(response.body(Body::from(output_bytes)).unwrap())
 }
 
 /// GET /api/football/{league}/{team_id}/logo

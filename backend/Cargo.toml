@@ -15,7 +15,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["json", "env-filter"] }
 serde_path_to_error = "0.1"
 utoipa = { version = "5", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "9", features = ["axum"] }
+utoipa-scalar = { version = "0.3", features = ["axum"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 bytes = "1.10"
 rand = "0.8"
