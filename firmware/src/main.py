@@ -171,6 +171,49 @@ def get_network_status() -> dict:
         }
 
 
+# Offset between Unix epoch (1970) and MicroPython epoch (2000)
+_EPOCH_OFFSET = 946684800
+
+
+def _sync_time_from_backend() -> None:
+    """
+    Fetch current time from the backend API and set the Pico's RTC.
+
+    This is needed so HMAC-signed redirect URLs have correct expiry timestamps.
+    If the sync fails, logs a warning and continues — the api_poller will still
+    work via direct X-Api-Key auth, but frontend redirects may fail.
+    """
+    try:
+        import urequests as req
+    except ImportError:
+        import requests as req
+
+    try:
+        url = f"{config.api_url.rstrip('/')}/time"
+        print(f"Syncing time from {url}...")
+        response = req.get(url)
+        try:
+            if response.status_code != 200:
+                print(f"Time sync failed: HTTP {response.status_code}")
+                return
+
+            import ujson
+            data = ujson.loads(response.content)
+            unix_ts = data['timestamp']
+
+            # Convert Unix timestamp to MicroPython epoch
+            pico_ts = unix_ts - _EPOCH_OFFSET
+            tm = time.gmtime(pico_ts)
+            # gmtime returns: (year, month, mday, hour, minute, second, weekday, yearday)
+            # RTC.datetime expects: (year, month, day, weekday, hours, minutes, seconds, subseconds)
+            machine.RTC().datetime((tm[0], tm[1], tm[2], tm[6], tm[3], tm[4], tm[5], 0))
+            print(f"RTC synced: {tm[0]}-{tm[1]:02d}-{tm[2]:02d} {tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d} UTC")
+        finally:
+            response.close()
+    except Exception as e:
+        print(f"Time sync failed: {e}")
+
+
 # Create API client for backend communication
 api_client: ScoreboardApiClient = ScoreboardApiClient(config)
 
@@ -524,9 +567,13 @@ async def main() -> None:
             )
             asyncio.create_task(run_dns_server(ap.ifconfig()[0]))
         else:
-            # Normal operation - start API polling
+            # Normal operation - sync time then start services
             app.setup_mode = False
             app.setup_reason = None
+
+            # Sync RTC from backend so HMAC signatures have correct timestamps
+            _sync_time_from_backend()
+
             update_startup_display(5, "Starting", "Services")
             # Explicit transition: startup → idle
             finish_startup('idle')
