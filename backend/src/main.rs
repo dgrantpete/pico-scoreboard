@@ -1,4 +1,4 @@
-use axum::{routing::get, Router};
+use axum::{Json, routing::get, Router};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -171,6 +171,7 @@ async fn main() {
     let app = Router::new()
         .merge(Scalar::with_url("/", ApiDoc::openapi()))
         .route("/health", get(health))
+        .route("/time", get(time))
         // Football endpoints
         .route("/api/football/{league}/games", get(football::handler::get_all_games))
         .route("/api/football/{league}/games/{event_id}", get(football::handler::get_game))
@@ -199,4 +200,10 @@ async fn main() {
 
 async fn health() -> &'static str {
     "OK"
+}
+
+async fn time() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "timestamp": chrono::Utc::now().timestamp()
+    }))
 }

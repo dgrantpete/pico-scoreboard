@@ -15,6 +15,7 @@ from scoreboard.state import StateBuffer, UiColors
 from scoreboard.config import Config
 from scoreboard.api_client import ScoreboardApiClient
 from scoreboard.sprites import field as field_sprite
+from scoreboard.sprites import ball as ball_sprite
 
 # Fixed colors
 BLACK = 0
@@ -67,9 +68,17 @@ SITUATION_Y = 22
 # Using spleen_5x8 (8px tall): Y = 43 + (21 - 8) / 2 ≈ 49
 LAST_PLAY_Y = 49
 
-# Football field sprite position (121x20, left-biased center, 1px bottom padding)
+# Football field sprite position (121x11, left-biased center, 1px bottom padding)
 FIELD_X = 3                # (128 - 121) // 2 = 3
-FIELD_Y = 43               # 64 - 20 - 1 = 43
+FIELD_Y = 52               # 64 - 11 - 1 = 52
+
+# Field perspective vanishing point (configurable)
+FIELD_VP_X = 63            # Roughly center of 128px display
+FIELD_VP_Y = -1            # Just above top edge of screen
+
+# Field line colors
+FIELD_YELLOW = rgb565(255, 255, 0)   # First down marker
+FIELD_NAVY = rgb565(0, 0, 140)       # Line of scrimmage
 
 # Score flash animation constants
 FLASH_DURATION_MS = 3000   # How long to flash after scoring (3 seconds)
@@ -167,10 +176,57 @@ def draw_possession_arrow(display: Hub75Display, x: int, y: int, pointing_right:
 
 
 def draw_football_field(display: Hub75Display, field) -> None:
-    """Draw football field sprite in the bottom area."""
+    """Draw football field with endzone colors, perspective lines, and ball."""
     if field.ball_x is None:
         return
+
+    # 1. Update endzone palette colors
+    field_sprite.palette.pixel(3, 0, field.away_color)
+    field_sprite.palette.pixel(4, 0, field.home_color)
+
+    # 2. Blit field sprite
     display.blit(field_sprite.data, FIELD_X, FIELD_Y, -1, field_sprite.palette)
+
+    # 3. Perspective lines (LOS and first down)
+    field_bottom_y = FIELD_Y + field_sprite.HEIGHT - 1  # 62
+    field_top_y = FIELD_Y                                # 52
+    t = (field_bottom_y - field_top_y) / (field_bottom_y - FIELD_VP_Y)
+
+    # Line of scrimmage (navy, 2px wide)
+    los_x = max(14, min(field.ball_x, 113))
+    for dx in range(2):
+        bx = los_x + dx
+        tx = round(bx + t * (FIELD_VP_X - bx))
+        display.line(bx, field_bottom_y, tx, field_top_y, FIELD_NAVY)
+
+    # First down marker (yellow, 2px wide)
+    if field.first_down_x is not None:
+        fd_x = max(14, min(field.first_down_x, 113))
+        for dx in range(2):
+            bx = fd_x + dx
+            tx = round(bx + t * (FIELD_VP_X - bx))
+            display.line(bx, field_bottom_y, tx, field_top_y, FIELD_YELLOW)
+
+    # 4. Ball sprite above the field at LOS position (aligned to top perspective)
+    los_top_x = round(los_x + t * (FIELD_VP_X - los_x))
+    ball_x = los_top_x - ball_sprite.WIDTH // 2
+    ball_y = FIELD_Y - ball_sprite.HEIGHT - 2
+    display.blit(ball_sprite.data, ball_x, ball_y, 0)
+
+    # 5. Direction arrow next to ball
+    direction = field.direction
+    if direction == 1:
+        # Arrow pointing right
+        ax = ball_x + ball_sprite.WIDTH + 1
+        ay = ball_y + ball_sprite.HEIGHT // 2
+        display.fill_rect(ax, ay - 1, 1, 3, FIELD_NAVY)
+        display.pixel(ax + 1, ay, FIELD_NAVY)
+    elif direction == -1:
+        # Arrow pointing left
+        ax = ball_x - 2
+        ay = ball_y + ball_sprite.HEIGHT // 2
+        display.fill_rect(ax + 1, ay - 1, 1, 3, FIELD_NAVY)
+        display.pixel(ax, ay, FIELD_NAVY)
 
 
 # Pre-allocated logo buffer pool

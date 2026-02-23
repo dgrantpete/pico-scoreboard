@@ -31,6 +31,10 @@ pub enum AppError {
     MissingApiKey,
     /// Invalid API key
     Unauthorized,
+    /// HMAC signature has expired
+    ExpiredSignature,
+    /// HMAC signature is invalid
+    InvalidSignature,
     /// ESPN API response deserialization failed
     EspnDeserialize { path: String, message: String },
     /// Invalid league path parameter
@@ -103,12 +107,22 @@ impl IntoResponse for AppError {
             AppError::MissingApiKey => (
                 StatusCode::UNAUTHORIZED,
                 "missing_api_key".to_string(),
-                "X-Api-Key header is required".to_string(),
+                "X-Api-Key header or valid signature is required".to_string(),
             ),
             AppError::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "unauthorized".to_string(),
                 "Invalid API key".to_string(),
+            ),
+            AppError::ExpiredSignature => (
+                StatusCode::UNAUTHORIZED,
+                "expired_signature".to_string(),
+                "Signature has expired".to_string(),
+            ),
+            AppError::InvalidSignature => (
+                StatusCode::UNAUTHORIZED,
+                "invalid_signature".to_string(),
+                "Invalid request signature".to_string(),
             ),
             AppError::EspnDeserialize { path, message } => (
                 StatusCode::BAD_GATEWAY,
