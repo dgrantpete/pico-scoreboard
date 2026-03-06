@@ -52,7 +52,7 @@ impl GameRepository {
 
         let state = match request {
             CreateGameRequest::Pregame(opts) => GameState::Pregame(create_pregame_state(opts)),
-            CreateGameRequest::Live(opts) => GameState::Live(create_live_state(opts)),
+            CreateGameRequest::Live(opts) => GameState::Live(Box::new(create_live_state(opts))),
             CreateGameRequest::Final(opts) => GameState::Final(create_final_state(opts)),
         };
 
@@ -131,7 +131,7 @@ fn clone_game_state(state: &GameState) -> GameState {
             seed: p.seed,
             time_scale: p.time_scale,
         }),
-        GameState::Live(l) => GameState::Live(LiveState {
+        GameState::Live(l) => GameState::Live(Box::new(LiveState {
             home_team: l.home_team.clone(),
             away_team: l.away_team.clone(),
             home_score: l.home_score,
@@ -153,7 +153,7 @@ fn clone_game_state(state: &GameState) -> GameState {
             time_scale: l.time_scale,
             kickoff_pending: l.kickoff_pending,
             weather: l.weather.clone(),
-        }),
+        })),
         GameState::Final(f) => GameState::Final(FinalState {
             home_team: f.home_team.clone(),
             away_team: f.away_team.clone(),
@@ -469,7 +469,7 @@ fn advance_game_state(state: &mut GameState) {
         );
 
         if let GameState::Pregame(pregame) = old_state {
-            *state = GameState::Live(pregame.to_live_state());
+            *state = GameState::Live(Box::new(pregame.into_live_state()));
         }
     }
 
@@ -482,16 +482,16 @@ fn advance_game_state(state: &mut GameState) {
     };
 
     // Transition live -> final if game over
-    if should_end_game {
-        if let GameState::Live(live) = state {
-            let final_state = FinalState {
-                home_team: live.home_team.clone(),
-                away_team: live.away_team.clone(),
-                home_score: live.home_score,
-                away_score: live.away_score,
-                overtime: matches!(live.period, FootballPeriod::OT | FootballPeriod::OT2),
-            };
-            *state = GameState::Final(final_state);
-        }
+    if should_end_game
+        && let GameState::Live(live) = state
+    {
+        let final_state = FinalState {
+            home_team: live.home_team.clone(),
+            away_team: live.away_team.clone(),
+            home_score: live.home_score,
+            away_score: live.away_score,
+            overtime: matches!(live.period, FootballPeriod::OT | FootballPeriod::OT2),
+        };
+        *state = GameState::Final(final_state);
     }
 }

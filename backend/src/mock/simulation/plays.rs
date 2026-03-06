@@ -136,9 +136,7 @@ fn select_play_type(
 
         // 3rd and short (1-3): power run or quick pass
         (Down::Third, 1..=3) => {
-            if in_red_zone && roll < 65 {
-                PlayType::Rush
-            } else if roll < 50 {
+            if (in_red_zone && roll < 65) || roll < 50 {
                 PlayType::Rush
             } else {
                 PlayType::PassReception

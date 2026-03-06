@@ -57,7 +57,7 @@ impl SimulatedGame {
 /// Internal game state - more detailed than FootballGameResponse.
 pub enum GameState {
     Pregame(PregameState),
-    Live(LiveState),
+    Live(Box<LiveState>),
     Final(FinalState),
 }
 
@@ -97,7 +97,7 @@ impl PregameState {
     }
 
     /// Transition to live state.
-    pub fn to_live_state(self) -> LiveState {
+    pub fn into_live_state(self) -> LiveState {
         LiveState::new(
             self.home_team,
             self.away_team,
@@ -247,7 +247,7 @@ impl LiveState {
     }
 
     /// Transition to final state.
-    pub fn to_final_state(self) -> FinalState {
+    pub fn into_final_state(self) -> FinalState {
         let overtime = matches!(self.period, FootballPeriod::OT | FootballPeriod::OT2);
 
         FinalState {
