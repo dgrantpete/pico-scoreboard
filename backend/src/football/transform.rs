@@ -1,5 +1,5 @@
 use crate::espn::types::{EspnCompetition, EspnCompetitor, EspnEvent, EspnLastPlay, EspnSituation};
-use crate::shared::transform::{get_broadcast, get_competitors, parse_hex_color, parse_rank};
+use crate::shared::transform::{get_broadcast, get_competitors, parse_espn_date, parse_hex_color, parse_rank};
 use crate::shared::types::Weather;
 use crate::sport::{EspnLeague, FootballLeague};
 
@@ -41,7 +41,7 @@ fn to_pregame(
         event_id: event_id.to_string(),
         home: crate::shared::transform::to_team(home_competitor, is_college),
         away: crate::shared::transform::to_team(away_competitor, is_college),
-        start_time: event.date.clone(),
+        start_time: parse_espn_date(&event.date),
         venue: venue.map(|v| v.full_name.clone()),
         broadcast: get_broadcast(event),
         weather: if is_outdoor {
@@ -90,7 +90,7 @@ fn to_live(
         event_id: event_id.to_string(),
         home: to_team_with_score(home_competitor, situation.and_then(|s| s.home_timeouts), is_college),
         away: to_team_with_score(away_competitor, situation.and_then(|s| s.away_timeouts), is_college),
-        period: parse_period(event.status.period),
+        period: parse_period(event.status.period, &event.status.status_type.id),
         clock: event.status.display_clock.clone(),
         clock_running,
         situation: situation.and_then(|s| to_situation(s, home_competitor, away_competitor)),
@@ -164,8 +164,12 @@ fn to_situation(
     })
 }
 
-/// Parse ESPN period number to our FootballPeriod enum
-fn parse_period(period: u8) -> FootballPeriod {
+/// Parse ESPN period number to our FootballPeriod enum.
+/// Status ID "23" = halftime.
+fn parse_period(period: u8, status_id: &str) -> FootballPeriod {
+    if status_id == "23" {
+        return FootballPeriod::Halftime;
+    }
     match period {
         1 => FootballPeriod::Q1,
         2 => FootballPeriod::Q2,

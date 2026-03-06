@@ -277,15 +277,16 @@ fn generate_record(rng: &mut impl Rng) -> String {
     }
 }
 
-fn generate_start_time(rng: &mut impl Rng) -> String {
-    // Generate ISO datetime format for firmware to parse
+fn generate_start_time(rng: &mut impl Rng) -> i64 {
     let hours = [13, 16, 20]; // Common NFL start times in 24-hour (1 PM, 4 PM, 8 PM ET)
     let hour = hours[rng.gen_range(0..hours.len())];
-    let minute = if rng.gen_bool(0.7) { 0 } else { 30 };
-    // Use a sample date - in real usage, ESPN provides the actual date
+    let minute: u32 = if rng.gen_bool(0.7) { 0 } else { 30 };
     let day = rng.gen_range(1..=28);
     let month = rng.gen_range(9..=12); // NFL season months
-    format!("2024-{:02}-{:02}T{:02}:{:02}:00Z", month, day, hour, minute)
+    chrono::NaiveDate::from_ymd_opt(2024, month, day)
+        .and_then(|d| d.and_hms_opt(hour, minute, 0))
+        .map(|dt| dt.and_utc().timestamp())
+        .unwrap_or(0)
 }
 
 fn generate_venue(rng: &mut impl Rng) -> String {

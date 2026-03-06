@@ -1,4 +1,5 @@
 use crate::espn::types::{EspnCompetition, EspnCompetitor, EspnEvent, EspnLastPlay, EspnSituation};
+use crate::shared::transform::parse_espn_date;
 
 use super::types::{
     Color, Down, FinalGame, FinalStatus, GameResponse, LastPlay, LiveGame, PlayType, Possession,
@@ -30,7 +31,7 @@ fn to_pregame(event: &EspnEvent, competition: &EspnCompetition, event_id: &str) 
         event_id: event_id.to_string(),
         home: to_team(home_competitor),
         away: to_team(away_competitor),
-        start_time: event.date.clone(),  // ISO datetime for firmware to parse
+        start_time: parse_espn_date(&event.date),
         venue: venue.map(|v| v.full_name.clone()),
         broadcast: get_broadcast(event),
         weather: if is_outdoor {

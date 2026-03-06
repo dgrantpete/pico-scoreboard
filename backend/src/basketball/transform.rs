@@ -1,6 +1,7 @@
 use crate::espn::types::{EspnCompetitor, EspnEvent, EspnSummary};
 use crate::shared::transform::{
-    determine_winner, get_broadcast, get_competitors, parse_hex_color, parse_rank, to_team,
+    determine_winner, get_broadcast, get_competitors, parse_espn_date, parse_hex_color, parse_rank,
+    to_team,
 };
 use crate::sport::{BasketballLeague, EspnLeague};
 
@@ -43,7 +44,7 @@ fn to_pregame(
         event_id: event.id.clone(),
         home: to_team(home, is_college),
         away: to_team(away, is_college),
-        start_time: event.date.clone(),
+        start_time: parse_espn_date(&event.date),
         venue: venue.map(|v| v.full_name.clone()),
         broadcast: get_broadcast(event),
     }
@@ -61,7 +62,7 @@ fn to_live(
         event_id: event.id.clone(),
         home: to_team_score(home, is_college),
         away: to_team_score(away, is_college),
-        period: parse_period(event.status.period, league),
+        period: parse_period(event.status.period, league, &event.status.status_type.id),
         clock: event.status.display_clock.clone(),
     }
 }
@@ -120,7 +121,7 @@ pub fn transform_from_summary(
                 event_id: summary.header.id.clone(),
                 home: to_team(home, is_college),
                 away: to_team(away, is_college),
-                start_time: competition.status.display_clock.clone(),
+                start_time: 0, // summary endpoint doesn't carry event date
                 venue: venue.map(|v| v.full_name.clone()),
                 broadcast: None, // summary doesn't carry broadcast info the same way
             })
@@ -133,7 +134,7 @@ pub fn transform_from_summary(
                 event_id: summary.header.id.clone(),
                 home: to_team_score_detail(home, is_college, home_fouls),
                 away: to_team_score_detail(away, is_college, away_fouls),
-                period: parse_period(competition.status.period, league),
+                period: parse_period(competition.status.period, league, &competition.status.status_type.id),
                 clock: competition.status.display_clock.clone(),
             })
         }
@@ -163,7 +164,7 @@ pub fn transform_from_summary(
                 event_id: summary.header.id.clone(),
                 home: to_team(home, is_college),
                 away: to_team(away, is_college),
-                start_time: competition.status.display_clock.clone(),
+                start_time: 0, // summary endpoint doesn't carry event date
                 venue: venue.map(|v| v.full_name.clone()),
                 broadcast: None,
             })
@@ -211,9 +212,11 @@ fn extract_fouls(summary: &EspnSummary, team_id: &str) -> u8 {
 /// Parse ESPN period number to BasketballPeriod.
 /// NBA: 1=Q1, 2=Q2, 3=Q3, 4=Q4, 5+=OT.
 /// NCAAB: 1=H1, 2=H2, 3+=OT.
-fn parse_period(period: u8, league: BasketballLeague) -> BasketballPeriod {
-    // Check for halftime via status -- ESPN uses period 2 with halftime status,
-    // but we handle that at the caller level. Here we just map period numbers.
+/// Status ID "23" = halftime.
+fn parse_period(period: u8, league: BasketballLeague, status_id: &str) -> BasketballPeriod {
+    if status_id == "23" {
+        return BasketballPeriod::Halftime;
+    }
     if league.is_college() {
         match period {
             1 => BasketballPeriod::H1,

@@ -81,7 +81,7 @@ impl PregameState {
             event_id: event_id.to_string(),
             home: self.home_team.to_team(),
             away: self.away_team.to_team(),
-            start_time: self.start_time.to_rfc3339(),
+            start_time: self.start_time.timestamp(),
             venue: Some(self.venue.clone()),
             broadcast: Some(self.broadcast.clone()),
             weather: self.weather.as_ref().map(|w| Weather {

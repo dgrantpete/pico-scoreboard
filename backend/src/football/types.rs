@@ -19,7 +19,7 @@ pub struct FootballPregame {
     pub event_id: String,
     pub home: Team,
     pub away: Team,
-    pub start_time: String,
+    pub start_time: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub venue: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

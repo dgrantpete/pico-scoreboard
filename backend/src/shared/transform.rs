@@ -1,6 +1,19 @@
+use chrono::DateTime;
+
 use crate::espn::types::{EspnCompetitor, EspnEvent};
 
 use super::types::{Color, Team, Winner};
+
+/// Parse an ESPN ISO 8601 date string to a Unix timestamp (seconds).
+/// Returns 0 if the date can't be parsed.
+pub fn parse_espn_date(date: &str) -> i64 {
+    DateTime::parse_from_rfc3339(date)
+        .map(|dt| dt.timestamp())
+        .unwrap_or_else(|_| {
+            tracing::warn!(date = date, "Failed to parse ESPN date as RFC 3339");
+            0
+        })
+}
 
 /// Parse a hex color string (without #) to RGB
 pub fn parse_hex_color(hex: &str) -> Color {
