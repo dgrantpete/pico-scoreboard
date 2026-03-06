@@ -38,6 +38,9 @@ backend/target/
 # Local config (secrets) - similar to appsettings.local.json in .NET
 backend/config/local.toml
 
+# MaxMind GeoIP database (large binary, license-gated download)
+backend/*.mmdb
+
 # Cargo.lock is typically committed for binaries, but gitignore if you prefer
 # backend/Cargo.lock
 
@@ -186,6 +189,7 @@ $RECYCLE.BIN/
 .env.*.local
 *.pem
 *.key
+.maxmind-key
 secrets.json
 credentials.json
 
@@ -238,3 +242,4 @@ htmlcov/
 
 openapi.json
 nul
+/docs

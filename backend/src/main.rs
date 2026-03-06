@@ -1,4 +1,4 @@
-use axum::{Json, routing::get, Router};
+use axum::{routing::get, Router};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -7,6 +7,7 @@ use utoipa_scalar::{Scalar, Servable};
 
 mod auth;
 mod basketball;
+mod clock;
 mod config;
 mod error;
 mod espn;
@@ -28,6 +29,7 @@ use espn::EspnClient;
         contact(name = "Pico Scoreboard"),
     ),
     paths(
+        clock::time,
         football::handler::get_all_games,
         football::handler::get_game,
         basketball::handler::get_all_games,
@@ -70,13 +72,15 @@ use espn::EspnClient;
         mock::simulation::CreatePregameOptions,
         mock::simulation::CreateLiveOptions,
         mock::simulation::CreateFinalOptions,
+        clock::TimeResponse,
         error::ErrorResponse,
     )),
     modifiers(&SecurityAddon),
     tags(
         (name = "football", description = "Football game data and team logo endpoints (NFL, NCAAF)"),
         (name = "basketball", description = "Basketball game data and team logo endpoints (NBA, NCAAB)"),
-        (name = "mock", description = "Mock data endpoints for testing")
+        (name = "mock", description = "Mock data endpoints for testing"),
+        (name = "clock", description = "Time and timezone endpoint")
     )
 )]
 struct ApiDoc;
@@ -106,6 +110,7 @@ pub struct AppState {
     pub espn_client: EspnClient,
     pub config: AppConfig,
     pub game_repository: mock::GameRepository,
+    pub geoip_reader: Option<maxminddb::Reader<memmap2::Mmap>>,
 }
 
 #[tokio::main]
@@ -154,11 +159,28 @@ async fn main() {
     // Create game repository for mock simulations
     let game_repository = mock::GameRepository::new();
 
+    // Load GeoIP database (optional — gracefully degrades if absent)
+    let geoip_reader = match maxminddb::Reader::open_mmap(&config.geoip.mmdb_path) {
+        Ok(reader) => {
+            tracing::info!(path = %config.geoip.mmdb_path, "GeoIP database loaded");
+            Some(reader)
+        }
+        Err(e) => {
+            tracing::warn!(
+                path = %config.geoip.mmdb_path,
+                error = %e,
+                "GeoIP database not available — /time will not include utc_offset"
+            );
+            None
+        }
+    };
+
     // Create shared application state
     let app_state = Arc::new(AppState {
         espn_client,
         config,
         game_repository,
+        geoip_reader,
     });
 
     // Build CORS layer
@@ -171,7 +193,7 @@ async fn main() {
     let app = Router::new()
         .merge(Scalar::with_url("/", ApiDoc::openapi()))
         .route("/health", get(health))
-        .route("/time", get(time))
+        .route("/time", get(clock::time))
         // Football endpoints
         .route("/api/football/{league}/games", get(football::handler::get_all_games))
         .route("/api/football/{league}/games/{event_id}", get(football::handler::get_game))
@@ -202,8 +224,3 @@ async fn health() -> &'static str {
     "OK"
 }
 
-async fn time() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "timestamp": chrono::Utc::now().timestamp()
-    }))
-}

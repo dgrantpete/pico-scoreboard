@@ -15,6 +15,10 @@ pub struct AppConfig {
     /// ESPN API configuration
     #[serde(default)]
     pub espn: EspnConfig,
+
+    /// GeoIP configuration
+    #[serde(default)]
+    pub geoip: GeoipConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +49,25 @@ pub struct EspnConfig {
     /// Request timeout in seconds (default: 10)
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GeoipConfig {
+    /// Path to MaxMind GeoLite2-City .mmdb file
+    #[serde(default = "default_mmdb_path")]
+    pub mmdb_path: String,
+}
+
+impl Default for GeoipConfig {
+    fn default() -> Self {
+        Self {
+            mmdb_path: default_mmdb_path(),
+        }
+    }
+}
+
+fn default_mmdb_path() -> String {
+    "/app/GeoLite2-City.mmdb".to_string()
 }
 
 fn default_host() -> String {

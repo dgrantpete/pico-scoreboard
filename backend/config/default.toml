@@ -10,3 +10,6 @@ base_url = "https://site.api.espn.com/apis/site/v2/sports"
 logo_url = "https://a.espncdn.com"
 user_agent = "pico-scoreboard/1.0"
 timeout_secs = 10
+
+[geoip]
+mmdb_path = "/app/GeoLite2-City.mmdb"

@@ -11,6 +11,7 @@ Usage:
     python tools/build.py flash        # Build and flash to device
     python tools/build.py run          # Build, flash, and open REPL
     python tools/build.py flash --no-build   # Flash without rebuilding
+    python tools/build.py deploy       # Deploy backend to Fly.io
 
 Prerequisites:
     pip install mpy-cross    # For .mpy compilation
@@ -219,12 +220,43 @@ def add_common_args(parser):
     )
 
 
+def deploy_backend():
+    """Deploy the Rust backend to Fly.io."""
+    key_file = root_directory / 'backend' / '.maxmind-key'
+    if not key_file.exists():
+        print(f"Error: {key_file.relative_to(root_directory)} not found.")
+        print("Create it with your MaxMind license key:")
+        print(f'  echo "your-key" > {key_file.relative_to(root_directory)}')
+        return False
+
+    license_key = key_file.read_text().strip()
+    if not license_key:
+        print(f"Error: {key_file.relative_to(root_directory)} is empty.")
+        return False
+
+    print("Deploying backend to Fly.io...")
+    result = subprocess.run(
+        ['fly', 'deploy', '--build-secret', f'MAXMIND_LICENSE_KEY={license_key}'],
+        cwd=root_directory / 'backend',
+        check=False
+    )
+    if result.returncode != 0:
+        print("Deploy failed!")
+        return False
+
+    print("Deploy complete!")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Build script for pico-scoreboard"
     )
 
     subparsers = parser.add_subparsers(dest='command')
+
+    # deploy subcommand
+    subparsers.add_parser('deploy', help='Deploy backend to Fly.io')
 
     # flash subcommand
     flash_parser = subparsers.add_parser('flash', help='Build and flash to device')
@@ -257,7 +289,11 @@ def main():
 
     args = parser.parse_args()
 
-    # Resolve output directory
+    # deploy command (doesn't use output_dir or firmware args)
+    if args.command == 'deploy':
+        return 0 if deploy_backend() else 1
+
+    # Resolve output directory (only needed for firmware commands)
     output_dir = args.output if args.output.is_absolute() else root_directory / args.output
 
     # Default command (no subcommand) = build only

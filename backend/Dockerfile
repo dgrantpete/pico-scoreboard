@@ -61,9 +61,11 @@ FROM debian:bookworm-slim AS runtime
 # Install runtime dependencies:
 # - ca-certificates: Required for HTTPS connections (verifying ESPN's SSL cert)
 # - libssl3: OpenSSL runtime library
+# - curl: Used at build time to download the MaxMind GeoIP database
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user for security.
@@ -79,6 +81,13 @@ COPY --from=builder /app/target/release/backend /app/backend
 
 # Copy the configuration file (provides defaults; secrets come from env vars)
 COPY --from=builder /app/config /app/config
+
+# Download MaxMind GeoLite2-City database for IP-to-timezone resolution.
+# This executes at build time — the .mmdb file is baked into the image.
+# The license key is mounted as a build secret and never appears in any layer.
+RUN --mount=type=secret,id=MAXMIND_LICENSE_KEY \
+    curl -sSL "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=$(cat /run/secrets/MAXMIND_LICENSE_KEY)&suffix=tar.gz" \
+    | tar -xz --strip-components=1 --wildcards "*.mmdb" -C /app/
 
 # Change ownership to our non-root user
 RUN chown -R appuser:appuser /app
