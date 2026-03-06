@@ -97,7 +97,6 @@ class StateBuffer:
         self.game_index: int = 0
         self.home_logo: framebuf.FrameBuffer | None = None
         self.away_logo: framebuf.FrameBuffer | None = None
-        self.error_message: str | None = None
         self.last_update_ms: int = 0
         self.dirty: bool = True
         self.clock_dirty: bool = False
@@ -173,7 +172,6 @@ class DoubleBufferedState:
         back.game_index = front.game_index
         back.home_logo = front.home_logo
         back.away_logo = front.away_logo
-        back.error_message = front.error_message
         back.last_update_ms = front.last_update_ms
         back.dirty = front.dirty
         back.clock_dirty = front.clock_dirty
@@ -279,7 +277,7 @@ def format_clock(seconds: int) -> str:
     return f"{minutes}:{secs:02d}"
 
 
-def set_mode(mode: str, error_message: str | None = None) -> None:
+def set_mode(mode: str) -> None:
     """
     Set display mode (called during setup/error states).
 
@@ -287,7 +285,6 @@ def set_mode(mode: str, error_message: str | None = None) -> None:
     """
     state = get_write_state()
     state.mode = mode
-    state.error_message = error_message
     state.dirty = True
     commit_state()
 
@@ -453,6 +450,9 @@ _DOWN_MAP = {
 
 _DAY_NAMES = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
 
+# Offset between Unix epoch (1970) and MicroPython epoch (2000)
+_EPOCH_OFFSET = 946684800
+
 
 def update_ui_colors(config: Config) -> None:
     """
@@ -566,45 +566,40 @@ def format_situation(situation: Situation | None) -> str:
     return f"{down_str} & {situation.distance}"
 
 
-def parse_pregame_datetime(iso_str: str) -> tuple[str, str]:
+def parse_pregame_datetime(timestamp: int, utc_offset: int = 0) -> tuple[str, str]:
     """
-    Parse ISO datetime string for pregame display.
+    Convert a Unix timestamp to local date and time strings for pregame display.
+
+    Args:
+        timestamp: Unix timestamp in seconds (UTC).
+        utc_offset: Seconds to add for local time (e.g., -18000 for EST).
 
     Returns:
-        Tuple of (date_display, time_display) strings
+        Tuple of (date_display, time_display) strings.
+        Returns ("", "") if timestamp is 0 (unknown).
     """
-    if 'T' not in iso_str:
-        time_str = iso_str
-        for tz in [" ET", " PT", " CT", " MT", " EST", " PST", " CST", " MST"]:
-            if time_str.endswith(tz):
-                time_str = time_str[:-len(tz)]
-                break
-        return ("", time_str)
+    if not timestamp:
+        return ("", "")
 
     try:
-        date_part = iso_str[0:10]
-        time_part = iso_str[11:16]
+        # Apply UTC offset to convert to local time, then to MicroPython epoch
+        local_ts = timestamp + utc_offset - _EPOCH_OFFSET
+        tm = time.gmtime(local_ts)
+        # gmtime returns: (year, month, mday, hour, minute, second, weekday, yearday)
 
-        year = int(date_part[0:4])
-        month = int(date_part[5:7])
-        day = int(date_part[8:10])
-
-        time_tuple = (year, month, day, 0, 0, 0, 0, 0)
-        timestamp = time.mktime(time_tuple)
-        weekday = time.localtime(timestamp)[6]
+        year, month, day, hour, minute = tm[0], tm[1], tm[2], tm[3], tm[4]
+        weekday = tm[6]  # 0=Monday, 6=Sunday
         day_abbr = _DAY_NAMES[weekday]
 
         date_display = f"{day_abbr} {month:02d}/{day:02d}"
 
-        hour = int(time_part[0:2])
-        minute = time_part[3:5]
         am_pm = "AM" if hour < 12 else "PM"
         if hour == 0:
             hour = 12
         elif hour > 12:
             hour -= 12
-        time_display = f"{hour}:{minute} {am_pm}"
+        time_display = f"{hour}:{minute:02d} {am_pm}"
 
         return (date_display, time_display)
-    except (ValueError, IndexError):
-        return ("", iso_str)
+    except (ValueError, OverflowError):
+        return ("", "")

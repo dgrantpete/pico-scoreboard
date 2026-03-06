@@ -218,16 +218,13 @@ class Config:
     def gamma(self) -> gamma.SRGB | gamma.Power | None:
         """Gamma correction setting (SRGB, Power, or None)."""
         raw = self._data["display"]["gamma"]
-        if isinstance(raw, dict):
-            t = raw.get("type", "srgb")
-            if t == "power":
-                return gamma.Power(raw.get("value", 2.2))
-            elif t == "none":
-                return None
-            else:
-                return gamma.SRGB()
-        # Legacy float support: treat as Power gamma
-        return gamma.Power(float(raw))
+        t = raw.get("type", "srgb")
+        if t == "power":
+            return gamma.Power(raw.get("value", 2.2))
+        elif t == "none":
+            return None
+        else:
+            return gamma.SRGB()
 
     @property
     def blanking_time_ns(self) -> int:

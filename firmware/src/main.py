@@ -1,3 +1,23 @@
+# GPIO Pin assignments
+# HUB75:
+#   GPIO 11-15: Address pins (A-E)
+#   GPIO 16-21: Data pins (R1, G1, B1, R2, G2, B2)
+#   GPIO 26: Clock
+#   GPIO 27: Latch
+#   GPIO 28: Output Enable (OE)
+#
+# VEML7700:
+#   GPIO 0: SDA
+#   GPIO 1: SCL
+#
+# Rotary Encoder:
+#   GPIO 2: Button
+#   GPIO 3: Channel A
+#   GPIO 4: Channel B
+#
+# Button A: GPIO 10
+# Button B: GPIO 22
+
 """
 Pico Scoreboard Web Server.
 
@@ -175,18 +195,18 @@ def get_network_status() -> dict:
 _EPOCH_OFFSET = 946684800
 
 
-def _sync_time_from_backend() -> None:
+def _sync_time_from_backend() -> int:
     """
     Fetch current time from the backend API and set the Pico's RTC.
 
     This is needed so HMAC-signed redirect URLs have correct expiry timestamps.
     If the sync fails, logs a warning and continues — the api_poller will still
     work via direct X-Api-Key auth, but frontend redirects may fail.
+
+    Returns:
+        UTC offset in seconds for local time display (0 if unknown).
     """
-    try:
-        import urequests as req
-    except ImportError:
-        import requests as req
+    import urequests as req
 
     try:
         url = f"{config.api_url.rstrip('/')}/time"
@@ -195,11 +215,12 @@ def _sync_time_from_backend() -> None:
         try:
             if response.status_code != 200:
                 print(f"Time sync failed: HTTP {response.status_code}")
-                return
+                return 0
 
             import ujson
             data = ujson.loads(response.content)
             unix_ts = data['timestamp']
+            utc_offset = data.get('utc_offset') or 0
 
             # Convert Unix timestamp to MicroPython epoch
             pico_ts = unix_ts - _EPOCH_OFFSET
@@ -208,10 +229,13 @@ def _sync_time_from_backend() -> None:
             # RTC.datetime expects: (year, month, day, weekday, hours, minutes, seconds, subseconds)
             machine.RTC().datetime((tm[0], tm[1], tm[2], tm[6], tm[3], tm[4], tm[5], 0))
             print(f"RTC synced: {tm[0]}-{tm[1]:02d}-{tm[2]:02d} {tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d} UTC")
+            print(f"UTC offset: {utc_offset}s ({utc_offset // 3600:+d}h)")
+            return utc_offset
         finally:
             response.close()
     except Exception as e:
         print(f"Time sync failed: {e}")
+        return 0
 
 
 # Create API client for backend communication
@@ -496,7 +520,7 @@ def start_display_thread(display: Hub75Display, writer: FontWriter, cfg: Config)
         try:
             _display_thread_healthy = True
             print("Display thread started on Core 1")
-            run_display_thread(display, writer, cfg)
+            run_display_thread(display, writer)
         except Exception as e:
             print(f"Display thread crashed: {e}")
             _display_thread_healthy = False
@@ -572,12 +596,12 @@ async def main() -> None:
             app.setup_reason = None
 
             # Sync RTC from backend so HMAC signatures have correct timestamps
-            _sync_time_from_backend()
+            utc_offset = _sync_time_from_backend()
 
             update_startup_display(5, "Starting", "Services")
             # Explicit transition: startup → idle
             finish_startup('idle')
-            asyncio.create_task(api_polling_loop(config, api_client))
+            asyncio.create_task(api_polling_loop(config, api_client, utc_offset))
 
     print("Starting web server on port 80...")
     await app.start_server(port=80)

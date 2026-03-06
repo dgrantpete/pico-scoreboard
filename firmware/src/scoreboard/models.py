@@ -180,7 +180,7 @@ class PregameGame:
         event_id: str,
         home: Team,
         away: Team,
-        start_time: str,
+        start_time: int,
         venue: str | None = None,
         broadcast: str | None = None,
         weather: Weather | None = None
@@ -189,7 +189,7 @@ class PregameGame:
         self.event_id: str = event_id
         self.home: Team = home
         self.away: Team = away
-        self.start_time: str = start_time
+        self.start_time: int = start_time
         self.venue: str | None = venue
         self.broadcast: str | None = broadcast
         self.weather: Weather | None = weather
@@ -261,7 +261,7 @@ class LiveGame:
             event_id=data["event_id"],
             home=TeamWithScore.from_dict(data["home"]),
             away=TeamWithScore.from_dict(data["away"]),
-            quarter=data.get("quarter") or data.get("period", ""),
+            quarter=data.get("quarter", ""),
             clock=data["clock"],
             clock_running=data.get("clock_running", False),
             situation=situation,

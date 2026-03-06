@@ -7,10 +7,7 @@ import ujson
 from .config import Config
 from .models import parse_game_response, PregameGame, LiveGame, FinalGame
 
-try:
-    import urequests as requests
-except ImportError:
-    import requests
+import urequests as requests
 
 # Pre-allocated response buffer to avoid heap fragmentation
 _MAX_RESPONSE_SIZE = 16_384

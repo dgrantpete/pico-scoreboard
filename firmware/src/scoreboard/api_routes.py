@@ -12,6 +12,7 @@ try:
     from typing import Callable
 except ImportError:
     pass
+
 from scoreboard.state import (
     update_ui_colors, update_display_frequency, update_display_brightness,
     update_display_refresh_rate, update_display_gamma, update_display_blanking_time

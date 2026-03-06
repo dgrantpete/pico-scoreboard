@@ -22,7 +22,7 @@ from scoreboard.models import PregameGame, LiveGame, FinalGame
 from scoreboard.display import get_logo_framebuffer, safe_team_color
 
 
-async def api_polling_loop(config: Config, api_client: ScoreboardApiClient) -> None:
+async def api_polling_loop(config: Config, api_client: ScoreboardApiClient, utc_offset: int = 0) -> None:
     """
     Background task that polls the API and cycles through all games.
 
@@ -33,6 +33,7 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient) -> N
     Args:
         config: Config instance with poll_interval_seconds
         api_client: ScoreboardApiClient instance
+        utc_offset: UTC offset in seconds for local time display
     """
     consecutive_failures: int = 0
     MAX_FAILURES_BEFORE_ERROR: int = 5
@@ -59,10 +60,8 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient) -> N
                 # Fetch logos for this game (blocking network calls, but we're on Core 0)
                 home_logo: framebuf.FrameBuffer | None = None
                 away_logo: framebuf.FrameBuffer | None = None
-                if hasattr(game, 'home') and hasattr(game.home, 'abbreviation'):
-                    home_logo = get_logo_framebuffer(api_client, game.home.abbreviation)
-                if hasattr(game, 'away') and hasattr(game.away, 'abbreviation'):
-                    away_logo = get_logo_framebuffer(api_client, game.away.abbreviation)
+                home_logo = get_logo_framebuffer(api_client, game.home.abbreviation)
+                away_logo = get_logo_framebuffer(api_client, game.away.abbreviation)
 
                 # Write complete state to back buffer
                 state = get_write_state()
@@ -87,7 +86,6 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient) -> N
                 state.game_index = game_index
                 state.home_logo = home_logo
                 state.away_logo = away_logo
-                state.error_message = None
                 state.last_update_ms = time.ticks_ms()
                 state.animation_start_ms = time.ticks_ms()  # Reset scroll animations
                 state.dirty = True
@@ -169,7 +167,7 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient) -> N
                     state.field.home_color = 0
                     state.field.away_color = 0
                     if game.start_time:
-                        date_display, time_display = parse_pregame_datetime(game.start_time)
+                        date_display, time_display = parse_pregame_datetime(game.start_time, utc_offset)
                         display.pregame_date = date_display
                         display.pregame_time = time_display
                     else:

@@ -297,53 +297,27 @@ def get_logo_framebuffer(api_client: ScoreboardApiClient, team_abbreviation: str
         return None
 
 
-def get_ui_colors(config: Config) -> dict:
-    """
-    Get UI colors from config, converted to RGB565.
-
-    Returns dict with color names mapped to RGB565 values.
-    """
-    def to_rgb565(color_dict: dict) -> int:
-        return rgb565(color_dict["r"], color_dict["g"], color_dict["b"])
-
-    return {
-        'primary': to_rgb565(config.get_color('primary')),
-        'secondary': to_rgb565(config.get_color('secondary')),
-        'accent': to_rgb565(config.get_color('accent')),
-        'clock_normal': to_rgb565(config.get_color('clock_normal')),
-        'clock_warning': to_rgb565(config.get_color('clock_warning')),
-    }
-
-
-def init_display(config: Config | None = None) -> tuple[Hub75Driver, Hub75Display, FontWriter]:
+def init_display(config: Config) -> tuple[Hub75Driver, Hub75Display, FontWriter]:
     """
     Initialize and return HUB75 display hardware.
 
     Returns:
         Tuple of (driver, display, writer)
     """
-    if config is not None:
-        data_freq = config.data_frequency_hz
-        brightness = config.brightness / 100.0
-        gamma = config.gamma
-        blanking_time = config.blanking_time_ns
-        target_refresh_rate = config.target_refresh_rate
-    else:
-        from hub75.driver import DEFAULT_DATA_FREQUENCY
-        data_freq = DEFAULT_DATA_FREQUENCY
-        brightness = 1.0
-        gamma = gamma_mod.SRGB()
-        blanking_time = 0
-        target_refresh_rate = 120.0
+    data_freq = config.data_frequency_hz
+    brightness = config.brightness / 100.0
+    gamma = config.gamma
+    blanking_time = config.blanking_time_ns
+    target_refresh_rate = config.target_refresh_rate
 
     driver = Hub75Driver(
         row_addressing=row_addressing.Direct(
-            base_pin=Pin(8, Pin.OUT),
+            base_pin=Pin(11, Pin.OUT),
             bit_count=5
         ),
         shift_register_depth=128,
-        output_enable_pin=Pin(7, Pin.OUT),
-        base_clock_pin=Pin(5, Pin.OUT),
+        output_enable_pin=Pin(28, Pin.OUT),
+        base_clock_pin=Pin(26, Pin.OUT),
         base_data_pin=Pin(16, Pin.OUT),
         data_frequency=data_freq,
         brightness=brightness,
@@ -354,11 +328,6 @@ def init_display(config: Config | None = None) -> tuple[Hub75Driver, Hub75Displa
     display = Hub75Display(driver)
     writer = FontWriter(display, default_font=unscii_8)
     return driver, display, writer
-
-
-def color_to_rgb565(color: Color) -> int:
-    """Convert a Color object to RGB565."""
-    return rgb565(color.r, color.g, color.b)
 
 
 def safe_team_color(color: Color, fallback_color: int) -> int:
@@ -384,31 +353,6 @@ def render_scrolling_or_centered(writer: FontWriter, text: str, y: int, width: i
         elapsed = time.ticks_diff(now_ms, animation_start_ms)
         offset = calculate_scroll_offset(text_width, width, elapsed)
         writer.text(text, -offset, y, color, font=font)
-
-
-def wrap_text(text: str, max_chars: int) -> list:
-    """Wrap text to fit within max_chars per line. Returns list of lines."""
-    if len(text) <= max_chars:
-        return [text]
-
-    lines = []
-    remaining = text
-
-    while remaining:
-        if len(remaining) <= max_chars:
-            lines.append(remaining)
-            break
-
-        break_point = remaining[:max_chars].rfind(' ')
-        if break_point <= 0:
-            break_point = max_chars - 1
-            lines.append(remaining[:break_point] + '-')
-            remaining = remaining[break_point:]
-        else:
-            lines.append(remaining[:break_point])
-            remaining = remaining[break_point + 1:]
-
-    return lines
 
 
 def draw_progress_bar(display: Hub75Display, x: int, y: int, width: int, height: int, progress: int, colors: UiColors) -> None:
@@ -493,6 +437,7 @@ def render_setup(display: Hub75Display, writer: FontWriter, state: StateBuffer, 
 
     # Render QR on right side if available
     text_area_width = DISPLAY_WIDTH
+    qr_y = 0
     if qr_fb is not None and qr_palette is not None and qr_width > 0:
         qr_x = DISPLAY_WIDTH - qr_width - 2
         qr_y = 2
@@ -542,13 +487,6 @@ def render_error(display: Hub75Display, writer: FontWriter, state: StateBuffer, 
     error = state.error
     title = error.title
     lines = error.lines
-
-    # Fall back to legacy error_message if new format not used
-    if not title and not lines:
-        legacy_message = state.error_message or ''
-        title = 'ERROR'
-        if legacy_message:
-            lines = [legacy_message[:25]]
 
     # Title in warning color at top
     writer.aligned_text(title or 'ERROR', 0, 0, DISPLAY_WIDTH, ALIGN_CENTER, colors.clock_warning, font=unscii_16)
@@ -779,7 +717,7 @@ def render_frame(display: Hub75Display, writer: FontWriter, state: StateBuffer, 
 # Display thread (runs on Core 1)
 # =============================================================================
 
-def run_display_thread(display: Hub75Display, writer: FontWriter, config: Config) -> None:
+def run_display_thread(display: Hub75Display, writer: FontWriter) -> None:
     """
     Main entry point for Core 1 display thread.
 
@@ -793,7 +731,6 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, config: Config
     """
     from scoreboard.state import get_display_state
 
-    _ = config  # Unused - colors are pre-computed in state.ui_colors
     print("Display thread starting on Core 1 (20 FPS)...")
 
     while True:
