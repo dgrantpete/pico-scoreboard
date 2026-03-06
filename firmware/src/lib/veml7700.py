@@ -139,6 +139,7 @@ class VEML7700:
         else:
             raise ValueError('Wrong integration time value. Use 25, 50, 100, 200, 400, 800')
 
+        self._buf = bytearray(2)
         self.init()
 
     def init(self):
@@ -157,21 +158,12 @@ class VEML7700:
         None
 
     def read_lux(self):
-        """ Reads the data from the sensor and returns the data.
+        """Read the current lux value from the sensor.
 
-            Returns:
-               the number of lux detect by this captor.
+        The caller is responsible for ensuring reads are spaced at least
+        as far apart as the configured integration time. Reading faster
+        won't error but will return stale data.
         """
-        #The frequency to read the sensor should be set greater than
-        # the integration time (and the power saving delay if set).
-        # Reading at a faster frequency will not cause an error, but
-        # will result in reading the previous data
-
-        self.lux = bytearray(2)
-
-        time.sleep(.04)  # 40ms
-
-        self.i2c.readfrom_mem_into(self.address, als, self.lux)
-        self.lux= self.lux[0]+self.lux[1]*256
-        self.lux=self.lux*self.gain
-        return(int(round(self.lux,0)))
+        self.i2c.readfrom_mem_into(self.address, als, self._buf)
+        raw = self._buf[0] + self._buf[1] * 256
+        return raw * self.gain

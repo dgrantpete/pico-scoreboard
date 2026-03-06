@@ -14,7 +14,7 @@ except ImportError:
     pass
 
 from scoreboard.state import (
-    update_ui_colors, update_display_frequency, update_display_brightness,
+    update_ui_colors, update_display_frequency,
     update_display_refresh_rate, update_display_gamma, update_display_blanking_time
 )
 
@@ -55,8 +55,6 @@ def create_api(config: Config, get_network_status: "Callable[[], dict]", api_cli
         if 'display' in data:
             if 'data_frequency_khz' in data['display']:
                 update_display_frequency(config)
-            if 'brightness' in data['display']:
-                update_display_brightness(config)
             if 'target_refresh_rate' in data['display']:
                 update_display_refresh_rate(config)
             if 'gamma' in data['display']:

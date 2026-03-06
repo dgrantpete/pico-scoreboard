@@ -506,16 +506,6 @@ def _recompute_refresh_rate(config: Config) -> None:
     print(f"Display refresh rate recomputed: {rate:.1f} Hz")
 
 
-def update_display_brightness(config: Config) -> None:
-    """Update display brightness at runtime."""
-    if _display_driver is None:
-        return
-
-    brightness = config.brightness / 100.0
-    _display_driver.set_brightness(brightness)
-    _recompute_refresh_rate(config)
-    print(f"Display brightness updated: {config.brightness}%")
-
 
 def update_display_refresh_rate(config: Config) -> None:
     """Update display target refresh rate at runtime."""

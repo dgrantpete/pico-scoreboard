@@ -48,6 +48,9 @@ from scoreboard.display import init_display, render_startup, run_display_thread
 from scoreboard.fonts import FontWriter
 from scoreboard.api_poller import api_polling_loop
 from hub75 import Hub75Display
+from machine import I2C, Pin
+from veml7700 import VEML7700
+from scoreboard import brightness
 
 # Reduce buffer size for memory-constrained environment
 Response.send_file_buffer_size = 512
@@ -546,6 +549,76 @@ async def watchdog_task() -> None:
             machine.reset()
 
 
+def _try_init_veml(i2c: I2C) -> VEML7700 | None:
+    """Attempt to create VEML7700 sensor. Returns None on failure."""
+    try:
+        sensor = VEML7700(i2c=i2c, it=100, gain=1)
+        print("VEML7700 OK")
+        return sensor
+    except Exception as e:
+        print(f"VEML7700 init failed: {e!r}")
+        return None
+
+
+# Light sensor state (initialized in __main__)
+_i2c: I2C | None = None
+_light_sensor: VEML7700 | None = None
+
+
+async def auto_brightness_loop(driver, cfg: Config) -> None:
+    """
+    Periodically read ambient light and update display brightness.
+
+    Sole owner of driver.set_brightness(). Reads config.brightness
+    as the user preference on every tick.
+    """
+    global _light_sensor
+
+    smoothed_lux = 0.0
+    ambient_bri = cfg.brightness / 100.0
+    initialized = False
+    retry_ticks = 0
+    log_ticks = 0
+
+    print("Auto-brightness loop started")
+
+    while True:
+        # Retry sensor init every 3s (15 ticks) if not available
+        if _light_sensor is None:
+            retry_ticks += 1
+            if retry_ticks >= 15 and _i2c is not None:
+                retry_ticks = 0
+                _light_sensor = _try_init_veml(_i2c)
+        else:
+            # Read sensor
+            try:
+                lux = _light_sensor.read_lux()
+                if not initialized:
+                    smoothed_lux = lux
+                    initialized = True
+                else:
+                    smoothed_lux = brightness.smooth_lux(smoothed_lux, lux)
+            except Exception as e:
+                print(f"VEML7700 read error: {e!r}")
+
+        # Compute brightness
+        target_ambient = brightness.lux_to_ambient(smoothed_lux)
+        ambient_bri = brightness.ramp(ambient_bri, target_ambient)
+        final = brightness.apply_preference(ambient_bri, cfg.brightness)
+
+        # Set
+        driver.set_brightness(final)
+
+        # Log every 5s (25 ticks at 200ms)
+        log_ticks += 1
+        if log_ticks >= 25:
+            log_ticks = 0
+            sensor_status = "ok" if _light_sensor is not None else "NONE"
+            print(f"AutoBri: sensor={sensor_status} lux={smoothed_lux:.1f} ambient={ambient_bri:.3f} pref={cfg.brightness} final={final:.3f}")
+
+        await asyncio.sleep_ms(200)
+
+
 async def main() -> None:
     """Main entry point."""
     global _display, _writer
@@ -557,6 +630,9 @@ async def main() -> None:
 
     # Start watchdog to monitor display thread health
     asyncio.create_task(watchdog_task())
+
+    # Start auto-brightness (runs in all modes)
+    asyncio.create_task(auto_brightness_loop(_driver, config))
 
     if not config.ssid:
         # No network configured - fresh setup mode
@@ -625,6 +701,11 @@ if __name__ == '__main__':
     from scoreboard.state import update_ui_colors
     update_ui_colors(config)
     print("UI colors initialized")
+
+    # Initialize light sensor for auto-brightness
+    print("Initializing VEML7700...")
+    _i2c = I2C(0, sda=Pin(0), scl=Pin(1), freq=100000)
+    _light_sensor = _try_init_veml(_i2c)
 
     # Show first startup step
     update_startup_display(1, "Display", "Initialized")
