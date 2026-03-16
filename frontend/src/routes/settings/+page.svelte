@@ -1,18 +1,5 @@
 <script lang="ts">
 	import { onMount, onDestroy } from "svelte";
-	import * as Card from "$lib/components/ui/card";
-	import * as AlertDialog from "$lib/components/ui/alert-dialog";
-	import * as Alert from "$lib/components/ui/alert";
-	import { Button } from "$lib/components/ui/button";
-	import { Input } from "$lib/components/ui/input";
-	import { Slider } from "$lib/components/ui/slider";
-	import * as Select from "$lib/components/ui/select";
-	import { Separator } from "$lib/components/ui/separator";
-	import { Switch } from "$lib/components/ui/switch";
-	import { Label } from "$lib/components/ui/label";
-	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { Progress } from "$lib/components/ui/progress";
-	import { cn } from "$lib/utils";
 	import Save from "@lucide/svelte/icons/save";
 	import Eye from "@lucide/svelte/icons/eye";
 	import EyeOff from "@lucide/svelte/icons/eye-off";
@@ -36,6 +23,10 @@
 
 	// Reset network dialog state
 	let showResetDialog = $state(false);
+
+	// Dialog element refs
+	let rebootDialog: HTMLDialogElement;
+	let resetDialog: HTMLDialogElement;
 
 	// Local binding for brightness slider
 	let brightnessValue = $derived(
@@ -90,9 +81,9 @@
 	}
 
 	function getUsageColor(percent: number): string {
-		if (percent >= 90) return "text-red-500";
-		if (percent >= 70) return "text-amber-500";
-		return "text-green-500";
+		if (percent >= 90) return 'oklch(0.637 0.237 25.331)';
+		if (percent >= 70) return 'oklch(0.769 0.188 70.08)';
+		return 'oklch(0.723 0.219 149.579)';
 	}
 
 	// Color conversion helpers
@@ -140,6 +131,19 @@
 		});
 	}
 
+	// Manage dialog open/close via $effect
+	$effect(() => {
+		if (!rebootDialog) return;
+		if (settingsStore.showRebootPrompt && !rebootDialog.open) rebootDialog.showModal();
+		else if (!settingsStore.showRebootPrompt && rebootDialog.open) rebootDialog.close();
+	});
+
+	$effect(() => {
+		if (!resetDialog) return;
+		if (showResetDialog && !resetDialog.open) resetDialog.showModal();
+		else if (!showResetDialog && resetDialog.open) resetDialog.close();
+	});
+
 	onMount(() => {
 		settingsStore.load().then(() => {
 			// Seed memory telemetry with initial status and start polling
@@ -179,68 +183,66 @@
 	}
 </script>
 
-<div class="mx-auto max-w-2xl space-y-6">
+<div class="settings-page">
 	<div>
-		<h2 class="text-2xl font-bold">Settings</h2>
-		<p class="text-muted-foreground">Configure your Pi Pico scoreboard</p>
+		<h2 class="page-title">Settings</h2>
+		<p class="page-description">Configure your Pi Pico scoreboard</p>
 	</div>
 
 	{#if settingsStore.isLoading}
 		<!-- Loading skeleton -->
-		<div class="space-y-6">
+		<div class="card-stack">
 			{#each { length: 4 } as _}
-				<Card.Root>
-					<Card.Header>
-						<Skeleton class="h-6 w-32" />
-						<Skeleton class="h-4 w-48" />
-					</Card.Header>
-					<Card.Content class="space-y-4">
+				<section class="card">
+					<header class="card-header">
+						<div class="skeleton" style="height: 1.5rem; width: 8rem;"></div>
+						<div class="skeleton" style="height: 1rem; width: 12rem;"></div>
+					</header>
+					<div class="card-content">
 						{#each { length: 2 } as _}
-							<div class="space-y-2">
-								<Skeleton class="h-4 w-24" />
-								<Skeleton class="h-9 w-full" />
+							<div class="field-group">
+								<div class="skeleton" style="height: 1rem; width: 6rem;"></div>
+								<div class="skeleton" style="height: 2.25rem; width: 100%;"></div>
 							</div>
 						{/each}
-					</Card.Content>
-				</Card.Root>
+					</div>
+				</section>
 			{/each}
 		</div>
 	{:else if settingsStore.error && !settingsStore.config}
 		<!-- Error state -->
-		<Card.Root class="border-destructive">
-			<Card.Header>
-				<Card.Title class="text-destructive">Connection Error</Card.Title>
-				<Card.Description>{settingsStore.error}</Card.Description>
-			</Card.Header>
-			<Card.Content>
-				<Button onclick={() => settingsStore.load()}>
-					<RefreshCw class="mr-2 h-4 w-4" />
+		<section class="card border-destructive">
+			<header class="card-header">
+				<h3 class="card-title text-destructive">Connection Error</h3>
+				<p class="card-description">{settingsStore.error}</p>
+			</header>
+			<div class="card-content">
+				<button class="btn default" onclick={() => settingsStore.load()}>
+					<RefreshCw />
 					Retry
-				</Button>
-			</Card.Content>
-		</Card.Root>
+				</button>
+			</div>
+		</section>
 	{:else if settingsStore.config}
 		<!-- Device Status -->
-		<Card.Root
-			class={settingsStore.status?.setup_mode ? "border-amber-500" : ""}
-		>
-			<Card.Header>
-				<Card.Title class="flex items-center gap-2">
+		<section class="card" class:border-warning={settingsStore.status?.setup_mode}>
+			<header class="card-header">
+				<h3 class="card-title">
 					{#if settingsStore.status?.mode === "station" && settingsStore.status?.connected}
-						<Wifi class="h-5 w-5 text-green-500" />
+						<Wifi class="icon-green" />
 						Connected to WiFi
 					{:else if settingsStore.status?.setup_mode && settingsStore.status?.setup_reason === "connection_failed"}
-						<WifiOff class="h-5 w-5 text-amber-500" />
+						<WifiOff class="icon-amber" />
 						Connection Failed
 					{:else if settingsStore.status?.setup_mode}
-						<WifiOff class="h-5 w-5 text-muted-foreground" />
+						<WifiOff class="icon-muted" />
 						Network Not Configured
 					{:else}
-						<WifiOff class="h-5 w-5 text-muted-foreground" />
+						<WifiOff class="icon-muted" />
 						Not Connected
 					{/if}
-				</Card.Title>
-				<Card.Description>
+				</h3>
+				<p class="card-description">
 					{#if settingsStore.status?.setup_mode && settingsStore.status?.setup_reason === "connection_failed"}
 						Could not connect to "{settingsStore.status.configured_ssid}"
 					{:else if settingsStore.status?.setup_mode}
@@ -250,56 +252,46 @@
 					{:else}
 						Current network connection status
 					{/if}
-				</Card.Description>
-			</Card.Header>
-			<Card.Content>
+				</p>
+			</header>
+			<div class="card-content">
 				{#if settingsStore.status?.setup_mode}
-					<Button href="#/setup">Complete Setup</Button>
+					<a href="#/setup" class="btn default">Complete Setup</a>
 				{:else if settingsStore.status}
-					<div class="grid grid-cols-2 gap-4 text-sm">
+					<div class="status-grid">
 						<div>
-							<span class="text-muted-foreground">Mode:</span>
-							<span class="ml-2 font-medium capitalize"
-								>{settingsStore.status.mode}</span
-							>
+							<span class="text-muted">Mode:</span>
+							<span class="status-value capitalize">{settingsStore.status.mode}</span>
 						</div>
 						<div>
-							<span class="text-muted-foreground">Connected:</span>
-							<span class="ml-2 font-medium"
-								>{settingsStore.status.connected ? "Yes" : "No"}</span
-							>
+							<span class="text-muted">Connected:</span>
+							<span class="status-value">{settingsStore.status.connected ? "Yes" : "No"}</span>
 						</div>
 						{#if settingsStore.status.mode === "station" && settingsStore.status.ip}
 							<div>
-								<span class="text-muted-foreground">IP Address:</span>
-								<span class="ml-2 font-medium">{settingsStore.status.ip}</span>
+								<span class="text-muted">IP Address:</span>
+								<span class="status-value">{settingsStore.status.ip}</span>
 							</div>
 							<div>
-								<span class="text-muted-foreground">Hostname:</span>
-								<span class="ml-2 font-medium"
-									>{settingsStore.status.hostname}</span
-								>
+								<span class="text-muted">Hostname:</span>
+								<span class="status-value">{settingsStore.status.hostname}</span>
 							</div>
 						{:else if settingsStore.status.mode === "ap"}
 							<div>
-								<span class="text-muted-foreground">AP Network:</span>
-								<span class="ml-2 font-medium"
-									>{settingsStore.status.ap_ssid}</span
-								>
+								<span class="text-muted">AP Network:</span>
+								<span class="status-value">{settingsStore.status.ap_ssid}</span>
 							</div>
 							<div>
-								<span class="text-muted-foreground">AP IP:</span>
-								<span class="ml-2 font-medium"
-									>{settingsStore.status.ap_ip}</span
-								>
+								<span class="text-muted">AP IP:</span>
+								<span class="status-value">{settingsStore.status.ap_ip}</span>
 							</div>
 						{/if}
 					</div>
 				{:else}
-					<p class="text-sm text-muted-foreground">Status unavailable</p>
+					<p class="text-sm text-muted">Status unavailable</p>
 				{/if}
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</section>
 
 		<!-- System Resources -->
 		{#if settingsStore.status}
@@ -307,72 +299,72 @@
 				settingsStore.status.flash_used,
 				settingsStore.status.flash_free
 			)}
-			<Card.Root>
-				<Card.Header>
-					<Card.Title>System Resources</Card.Title>
-					<Card.Description>Memory and storage usage over time</Card.Description>
-				</Card.Header>
-				<Card.Content class="space-y-6">
+			<section class="card">
+				<header class="card-header">
+					<h3 class="card-title">System Resources</h3>
+					<p class="card-description">Memory and storage usage over time</p>
+				</header>
+				<div class="card-content gap-lg">
 					<!-- Memory Usage Chart -->
-					<div class="space-y-2">
-						<div class="flex items-center justify-between">
-							<div class="flex items-center gap-2">
-								<Cpu class="h-4 w-4 text-muted-foreground" />
-								<span class="text-sm font-medium">Memory</span>
+					<div class="field-group">
+						<div class="row-between">
+							<div class="row-center">
+								<Cpu class="icon-muted" />
+								<span class="text-sm-medium">Memory</span>
 							</div>
 							{#if memoryTelemetryStore.latestStatus}
 								{@const memPercent = calcPercent(
 									memoryTelemetryStore.latestStatus.memory_used,
 									memoryTelemetryStore.latestStatus.memory_free
 								)}
-								<span class={cn("text-sm font-medium", getUsageColor(memPercent))}>
+								<span class="text-sm-medium" style="color: {getUsageColor(memPercent)}">
 									{memPercent}%
 								</span>
 							{/if}
 						</div>
 						<MemoryChart />
 						{#if memoryTelemetryStore.latestStatus}
-							<div class="flex justify-between text-xs text-muted-foreground">
+							<div class="row-between text-xs text-muted">
 								<span>{formatBytes(memoryTelemetryStore.latestStatus.memory_used)} used</span>
 								<span>{formatBytes(memoryTelemetryStore.latestStatus.memory_free)} free</span>
 							</div>
 						{/if}
 					</div>
 
-					<Separator />
+					<hr class="separator" />
 
 					<!-- Flash Storage Usage -->
-					<div class="space-y-2">
-						<div class="flex items-center justify-between">
-							<div class="flex items-center gap-2">
-								<HardDrive class="h-4 w-4 text-muted-foreground" />
-								<span class="text-sm font-medium">Flash Storage</span>
+					<div class="field-group">
+						<div class="row-between">
+							<div class="row-center">
+								<HardDrive class="icon-muted" />
+								<span class="text-sm-medium">Flash Storage</span>
 							</div>
-							<span class={cn("text-sm font-medium", getUsageColor(flashPercent))}>
+							<span class="text-sm-medium" style="color: {getUsageColor(flashPercent)}">
 								{flashPercent}%
 							</span>
 						</div>
-						<Progress value={flashPercent} max={100} />
-						<div class="flex justify-between text-xs text-muted-foreground">
+						<progress value={flashPercent} max={100}></progress>
+						<div class="row-between text-xs text-muted">
 							<span>{formatBytes(settingsStore.status.flash_used)} used</span>
 							<span>{formatBytes(settingsStore.status.flash_free)} free</span>
 						</div>
 					</div>
-				</Card.Content>
-			</Card.Root>
+				</div>
+			</section>
 		{/if}
 
 		<!-- Network Configuration -->
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>Network</Card.Title>
-				<Card.Description>WiFi connection settings</Card.Description>
-			</Card.Header>
-			<Card.Content class="space-y-4">
+		<section class="card">
+			<header class="card-header">
+				<h3 class="card-title">Network</h3>
+				<p class="card-description">WiFi connection settings</p>
+			</header>
+			<div class="card-content">
 				<!-- WiFi Settings -->
-				<div class="space-y-2">
-					<Label for="wifi-ssid">WiFi Network (SSID)</Label>
-					<Input
+				<div class="field-group">
+					<label for="wifi-ssid">WiFi Network (SSID)</label>
+					<input
 						id="wifi-ssid"
 						type="text"
 						placeholder="Enter network name"
@@ -384,11 +376,12 @@
 							)}
 					/>
 				</div>
-				<div class="space-y-2">
-					<Label for="wifi-password">WiFi Password</Label>
-					<div class="relative">
-						<Input
+				<div class="field-group">
+					<label for="wifi-password">WiFi Password</label>
+					<div class="input-wrapper">
+						<input
 							id="wifi-password"
+							class="input-with-toggle"
 							type={showWifiPassword ? "text" : "password"}
 							placeholder="Enter password"
 							value={settingsStore.config.network.password}
@@ -397,28 +390,25 @@
 									"password",
 									(e.target as HTMLInputElement).value,
 								)}
-							class="pr-10"
 						/>
-						<Button
-							variant="ghost"
-							size="sm"
-							class="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+						<button
+							class="btn ghost sm toggle-btn"
 							onclick={() => (showWifiPassword = !showWifiPassword)}
 						>
 							{#if showWifiPassword}
-								<EyeOff class="h-4 w-4 text-muted-foreground" />
+								<EyeOff class="icon-muted" />
 							{:else}
-								<Eye class="h-4 w-4 text-muted-foreground" />
+								<Eye class="icon-muted" />
 							{/if}
-						</Button>
+						</button>
 					</div>
 				</div>
 
-				<Separator />
+				<hr class="separator" />
 
-				<div class="space-y-2">
-					<Label for="device-name">Device Name</Label>
-					<Input
+				<div class="field-group">
+					<label for="device-name">Device Name</label>
+					<input
 						id="device-name"
 						type="text"
 						placeholder="scoreboard"
@@ -429,14 +419,14 @@
 								(e.target as HTMLInputElement).value,
 							)}
 					/>
-					<p class="text-xs text-muted-foreground">
+					<p class="hint">
 						Access the device at {settingsStore.config.network.device_name}.local
 					</p>
 				</div>
 
-				<div class="space-y-2">
-					<Label for="connect-timeout">Connection Timeout (seconds)</Label>
-					<Input
+				<div class="field-group">
+					<label for="connect-timeout">Connection Timeout (seconds)</label>
+					<input
 						id="connect-timeout"
 						type="number"
 						min="1"
@@ -451,44 +441,42 @@
 						}
 					}}
 					/>
-					<p class="text-xs text-muted-foreground">
+					<p class="hint">
 						Time to wait before falling back to setup mode
 					</p>
 				</div>
 
-				<Separator />
+				<hr class="separator" />
 
 				<!-- Reset Network -->
-				<div class="flex items-center justify-between">
-					<div class="space-y-0.5">
-						<Label>Reset Network</Label>
-						<p class="text-sm text-muted-foreground">
+				<div class="row-between">
+					<div class="label-group">
+						<label>Reset Network</label>
+						<p class="text-sm text-muted">
 							Clear WiFi credentials and return to setup mode
 						</p>
 					</div>
-					<Button
-						variant="destructive"
+					<button
+						class="btn destructive"
 						onclick={() => (showResetDialog = true)}
 						disabled={rebootStore.isActive}
 					>
 						Reset Network
-					</Button>
+					</button>
 				</div>
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</section>
 
 		<!-- Backend API Configuration -->
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>Backend API</Card.Title>
-				<Card.Description
-					>Connection settings for the scores API</Card.Description
-				>
-			</Card.Header>
-			<Card.Content class="space-y-4">
-				<div class="space-y-2">
-					<Label for="api-url">API URL</Label>
-					<Input
+		<section class="card">
+			<header class="card-header">
+				<h3 class="card-title">Backend API</h3>
+				<p class="card-description">Connection settings for the scores API</p>
+			</header>
+			<div class="card-content">
+				<div class="field-group">
+					<label for="api-url">API URL</label>
+					<input
 						id="api-url"
 						type="url"
 						placeholder="https://api.example.com"
@@ -500,11 +488,12 @@
 							)}
 					/>
 				</div>
-				<div class="space-y-2">
-					<Label for="api-key">API Key</Label>
-					<div class="relative">
-						<Input
+				<div class="field-group">
+					<label for="api-key">API Key</label>
+					<div class="input-wrapper">
+						<input
 							id="api-key"
+							class="input-with-toggle"
 							type={showApiKey ? "text" : "password"}
 							placeholder="Enter API key"
 							value={settingsStore.config.api.key}
@@ -513,70 +502,63 @@
 									"key",
 									(e.target as HTMLInputElement).value,
 								)}
-							class="pr-10"
 						/>
-						<Button
-							variant="ghost"
-							size="sm"
-							class="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+						<button
+							class="btn ghost sm toggle-btn"
 							onclick={() => (showApiKey = !showApiKey)}
 						>
 							{#if showApiKey}
-								<EyeOff class="h-4 w-4 text-muted-foreground" />
+								<EyeOff class="icon-muted" />
 							{:else}
-								<Eye class="h-4 w-4 text-muted-foreground" />
+								<Eye class="icon-muted" />
 							{/if}
-						</Button>
+						</button>
 					</div>
 				</div>
 
-				<Separator />
+				<hr class="separator" />
 
-				<div class="flex items-center justify-between">
-					<div class="space-y-0.5">
-						<Label>Mock Mode</Label>
-						<p class="text-sm text-muted-foreground">
+				<div class="row-between">
+					<div class="label-group">
+						<label>Mock Mode</label>
+						<p class="text-sm text-muted">
 							Use procedurally generated test data instead of live ESPN data
 						</p>
 					</div>
-					<Switch
-						checked={settingsStore.config.api.mock}
-						onCheckedChange={(checked) => settingsStore.updateApi("mock", checked)}
-					/>
+					<label class="switch">
+						<input type="checkbox" checked={settingsStore.config?.api.mock} onchange={() => settingsStore.updateApi("mock", !settingsStore.config?.api.mock)} />
+						<span class="switch-track"><span class="switch-thumb"></span></span>
+					</label>
 				</div>
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</section>
 
 		<!-- Display Settings -->
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>Display</Card.Title>
-				<Card.Description
-					>LED matrix brightness and refresh settings</Card.Description
-				>
-			</Card.Header>
-			<Card.Content class="space-y-6">
-				<div class="space-y-2">
-					<div class="flex items-center justify-between">
-						<Label>Brightness</Label>
-						<span class="text-sm text-muted-foreground"
-							>{settingsStore.config.display.brightness}%</span
-						>
+		<section class="card">
+			<header class="card-header">
+				<h3 class="card-title">Display</h3>
+				<p class="card-description">LED matrix brightness and refresh settings</p>
+			</header>
+			<div class="card-content gap-lg">
+				<div class="field-group">
+					<div class="row-between">
+						<label>Brightness</label>
+						<span class="text-sm text-muted">{settingsStore.config.display.brightness}%</span>
 					</div>
-					<Slider
-						type="single"
+					<input
+						type="range"
 						value={brightnessValue}
-						onValueChange={handleBrightnessChange}
+						oninput={(e) => handleBrightnessChange((e.currentTarget as HTMLInputElement).valueAsNumber)}
 						max={100}
 						step={1}
 					/>
 				</div>
 
-				<Separator />
+				<hr class="separator" />
 
-				<div class="space-y-2">
-					<Label for="poll-interval">Poll Interval (seconds)</Label>
-					<Input
+				<div class="field-group">
+					<label for="poll-interval">Poll Interval (seconds)</label>
+					<input
 						id="poll-interval"
 						type="number"
 						min="1"
@@ -591,71 +573,71 @@
 						}
 					}}
 					/>
-					<p class="text-xs text-muted-foreground">
+					<p class="hint">
 						How often to fetch game updates from the API
 					</p>
 				</div>
 
-				<Separator />
+				<hr class="separator" />
 
 				<!-- Data Frequency (logarithmic scale) -->
-				<div class="space-y-2">
-					<div class="flex items-center justify-between">
-						<Label>Data Frequency</Label>
-						<span class="text-sm text-muted-foreground">
+				<div class="field-group">
+					<div class="row-between">
+						<label>Data Frequency</label>
+						<span class="text-sm text-muted">
 							{formatFrequency(freqDisplayKhz)}
 						</span>
 					</div>
-					<Slider
-						type="single"
+					<input
+						type="range"
 						value={freqSliderValue ?? freqToSlider(settingsStore.config.display.data_frequency_khz)}
-						onValueChange={(value) => {
-							freqSliderValue = value;
+						oninput={(e) => {
+							freqSliderValue = (e.currentTarget as HTMLInputElement).valueAsNumber;
 						}}
-						onValueCommit={(value) => {
-							settingsStore.updateDisplay("data_frequency_khz", sliderToFreq(value));
+						onchange={(e) => {
+							settingsStore.updateDisplay("data_frequency_khz", sliderToFreq((e.currentTarget as HTMLInputElement).valueAsNumber));
 							freqSliderValue = null;
 						}}
 						min={0}
 						max={100}
 						step={0.1}
 					/>
-					<p class="text-xs text-muted-foreground">
+					<p class="hint">
 						LED matrix data clock speed. Very low values allow observing bitplane scanning.
 					</p>
 				</div>
 
-				<Separator />
+				<hr class="separator" />
 
 				<!-- Target Refresh Rate -->
-				<div class="space-y-2">
-					<div class="flex items-center justify-between">
-						<Label>Refresh Rate</Label>
-						<span class="text-sm text-muted-foreground">
+				<div class="field-group">
+					<div class="row-between">
+						<label>Refresh Rate</label>
+						<span class="text-sm text-muted">
 							{settingsStore.config.display.target_refresh_rate} Hz
 						</span>
 					</div>
-					<Slider
-						type="single"
+					<input
+						type="range"
 						value={settingsStore.config.display.target_refresh_rate}
-						onValueChange={(value) =>
-							settingsStore.updateDisplay("target_refresh_rate", value)}
+						oninput={(e) =>
+							settingsStore.updateDisplay("target_refresh_rate", (e.currentTarget as HTMLInputElement).valueAsNumber)}
 						min={30}
 						max={240}
 						step={1}
 					/>
-					<p class="text-xs text-muted-foreground">
+					<p class="hint">
 						Target display refresh rate. Lower values save power but may cause flicker.
 					</p>
 				</div>
 
-				<Separator />
+				<hr class="separator" />
 
 				<!-- Gamma -->
-				<div class="space-y-2">
-					<div class="flex items-center justify-between">
-						<Label>Gamma Correction</Label>
-						<span class="text-sm text-muted-foreground">
+				<div class="field-group">
+					<div class="row-between">
+						<label>Gamma Correction</label>
+						<span class="text-sm text-muted">
 							{#if settingsStore.config.display.gamma.type === "power"}
 								Power ({settingsStore.config.display.gamma.value.toFixed(1)})
 							{:else}
@@ -663,39 +645,33 @@
 							{/if}
 						</span>
 					</div>
-					<Select.Root
-						type="single"
+					<select
 						value={settingsStore.config.display.gamma.type}
-						onValueChange={handleGammaTypeChange}
+						onchange={(e) => handleGammaTypeChange((e.currentTarget as HTMLSelectElement).value)}
 					>
-						<Select.Trigger>
-							{gammaTypeLabel(settingsStore.config.display.gamma)}
-						</Select.Trigger>
-						<Select.Content>
-							{#each GAMMA_TYPE_OPTIONS as option}
-								<Select.Item value={option.value} label={option.label} />
-							{/each}
-						</Select.Content>
-					</Select.Root>
+						{#each GAMMA_TYPE_OPTIONS as option}
+							<option value={option.value}>{option.label}</option>
+						{/each}
+					</select>
 					{#if settingsStore.config.display.gamma.type === "power"}
-						<div class="space-y-2 pt-2">
-							<div class="flex items-center justify-between">
-								<Label class="text-xs">Power Value</Label>
-								<span class="text-sm text-muted-foreground">
+						<div class="field-group nested">
+							<div class="row-between">
+								<label class="text-xs">Power Value</label>
+								<span class="text-sm text-muted">
 									{settingsStore.config.display.gamma.value.toFixed(1)}
 								</span>
 							</div>
-							<Slider
-								type="single"
+							<input
+								type="range"
 								value={settingsStore.config.display.gamma.value}
-								onValueChange={handleGammaPowerValueChange}
+								oninput={(e) => handleGammaPowerValueChange((e.currentTarget as HTMLInputElement).valueAsNumber)}
 								min={1.0}
 								max={3.0}
 								step={0.1}
 							/>
 						</div>
 					{/if}
-					<p class="text-xs text-muted-foreground">
+					<p class="hint">
 						{#if settingsStore.config.display.gamma.type === "srgb"}
 							sRGB gamma with linear region. Best match for most content.
 						{:else if settingsStore.config.display.gamma.type === "power"}
@@ -706,43 +682,43 @@
 					</p>
 				</div>
 
-				<Separator />
+				<hr class="separator" />
 
 				<!-- Dead Time (Blanking Time) -->
-				<div class="space-y-2">
-					<div class="flex items-center justify-between">
-						<Label>Dead Time</Label>
-						<span class="text-sm text-muted-foreground">
+				<div class="field-group">
+					<div class="row-between">
+						<label>Dead Time</label>
+						<span class="text-sm text-muted">
 							{settingsStore.config.display.blanking_time_ns} ns
 						</span>
 					</div>
-					<Slider
-						type="single"
+					<input
+						type="range"
 						value={settingsStore.config.display.blanking_time_ns}
-						onValueChange={(value) =>
-							settingsStore.updateDisplay("blanking_time_ns", value)}
+						oninput={(e) =>
+							settingsStore.updateDisplay("blanking_time_ns", (e.currentTarget as HTMLInputElement).valueAsNumber)}
 						min={0}
 						max={3000}
 						step={10}
 					/>
-					<p class="text-xs text-muted-foreground">
+					<p class="hint">
 						Output-enable blanking time. Reduces ghosting but dims the display.
 					</p>
 				</div>
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</section>
 
 		<!-- Display Colors -->
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>Display Colors</Card.Title>
-				<Card.Description>Customize UI colors on the LED matrix</Card.Description>
-			</Card.Header>
-			<Card.Content class="space-y-4">
-				<div class="flex items-center justify-between">
-					<div class="space-y-0.5">
-						<Label>Primary</Label>
-						<p class="text-sm text-muted-foreground">Dividers, status text, quarter display</p>
+		<section class="card">
+			<header class="card-header">
+				<h3 class="card-title">Display Colors</h3>
+				<p class="card-description">Customize UI colors on the LED matrix</p>
+			</header>
+			<div class="card-content">
+				<div class="row-between">
+					<div class="label-group">
+						<label>Primary</label>
+						<p class="text-sm text-muted">Dividers, status text, quarter display</p>
 					</div>
 					<input
 						type="color"
@@ -752,16 +728,16 @@
 								"primary",
 								hexToRgb((e.target as HTMLInputElement).value),
 							)}
-						class="h-9 w-14 cursor-pointer rounded border"
+						class="color-picker"
 					/>
 				</div>
 
-				<Separator />
+				<hr class="separator" />
 
-				<div class="flex items-center justify-between">
-					<div class="space-y-0.5">
-						<Label>Secondary</Label>
-						<p class="text-sm text-muted-foreground">Venue text, subtle elements</p>
+				<div class="row-between">
+					<div class="label-group">
+						<label>Secondary</label>
+						<p class="text-sm text-muted">Venue text, subtle elements</p>
 					</div>
 					<input
 						type="color"
@@ -771,16 +747,16 @@
 								"secondary",
 								hexToRgb((e.target as HTMLInputElement).value),
 							)}
-						class="h-9 w-14 cursor-pointer rounded border"
+						class="color-picker"
 					/>
 				</div>
 
-				<Separator />
+				<hr class="separator" />
 
-				<div class="flex items-center justify-between">
-					<div class="space-y-0.5">
-						<Label>Accent</Label>
-						<p class="text-sm text-muted-foreground">Highlights, start time</p>
+				<div class="row-between">
+					<div class="label-group">
+						<label>Accent</label>
+						<p class="text-sm text-muted">Highlights, start time</p>
 					</div>
 					<input
 						type="color"
@@ -790,16 +766,16 @@
 								"accent",
 								hexToRgb((e.target as HTMLInputElement).value),
 							)}
-						class="h-9 w-14 cursor-pointer rounded border"
+						class="color-picker"
 					/>
 				</div>
 
-				<Separator />
+				<hr class="separator" />
 
-				<div class="flex items-center justify-between">
-					<div class="space-y-0.5">
-						<Label>Clock (Normal)</Label>
-						<p class="text-sm text-muted-foreground">Game clock when time remaining</p>
+				<div class="row-between">
+					<div class="label-group">
+						<label>Clock (Normal)</label>
+						<p class="text-sm text-muted">Game clock when time remaining</p>
 					</div>
 					<input
 						type="color"
@@ -809,16 +785,16 @@
 								"clock_normal",
 								hexToRgb((e.target as HTMLInputElement).value),
 							)}
-						class="h-9 w-14 cursor-pointer rounded border"
+						class="color-picker"
 					/>
 				</div>
 
-				<Separator />
+				<hr class="separator" />
 
-				<div class="flex items-center justify-between">
-					<div class="space-y-0.5">
-						<Label>Clock (Warning)</Label>
-						<p class="text-sm text-muted-foreground">Low time warning, errors</p>
+				<div class="row-between">
+					<div class="label-group">
+						<label>Clock (Warning)</label>
+						<p class="text-sm text-muted">Low time warning, errors</p>
 					</div>
 					<input
 						type="color"
@@ -828,22 +804,22 @@
 								"clock_warning",
 								hexToRgb((e.target as HTMLInputElement).value),
 							)}
-						class="h-9 w-14 cursor-pointer rounded border"
+						class="color-picker"
 					/>
 				</div>
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</section>
 
 		<!-- Advanced Settings -->
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>Advanced</Card.Title>
-				<Card.Description>Server and caching configuration</Card.Description>
-			</Card.Header>
-			<Card.Content class="space-y-4">
-				<div class="space-y-2">
-					<Label for="cache-max-age">Cache Max Age (seconds)</Label>
-					<Input
+		<section class="card">
+			<header class="card-header">
+				<h3 class="card-title">Advanced</h3>
+				<p class="card-description">Server and caching configuration</p>
+			</header>
+			<div class="card-content">
+				<div class="field-group">
+					<label for="cache-max-age">Cache Max Age (seconds)</label>
+					<input
 						id="cache-max-age"
 						type="number"
 						min="0"
@@ -858,102 +834,550 @@
 						}
 					}}
 					/>
-					<p class="text-xs text-muted-foreground">
+					<p class="hint">
 						HTTP cache duration for static content (0 = no caching)
 					</p>
 				</div>
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</section>
 
 		<!-- Error banner -->
 		{#if settingsStore.error}
-			<Alert.Root variant="destructive">
-				<Alert.Description class="flex items-center justify-between">
+			<div class="alert destructive" role="alert">
+				<div class="row-between">
 					<span>{settingsStore.error}</span>
-					<Button
-						variant="ghost"
-						size="sm"
+					<button
+						class="btn ghost sm"
 						onclick={() => settingsStore.clearError()}
 					>
 						Dismiss
-					</Button>
-				</Alert.Description>
-			</Alert.Root>
+					</button>
+				</div>
+			</div>
 		{/if}
 
 		<!-- Action Buttons -->
-		<div class="flex justify-between pb-8">
-			<Button
-				variant="outline"
+		<div class="action-bar">
+			<button
+				class="btn outline"
 				onclick={() => settingsStore.reboot()}
 				disabled={rebootStore.isActive}
 			>
-				<RotateCcw class="mr-2 h-4 w-4" />
+				<RotateCcw />
 				Reboot Device
-			</Button>
+			</button>
 
-			<div class="flex gap-2">
-				<Button
-					variant="outline"
+			<div class="action-group">
+				<button
+					class="btn outline"
 					onclick={() => settingsStore.discard()}
 					disabled={!settingsStore.isDirty || settingsStore.isSaving}
 				>
 					Discard
-				</Button>
-				<Button
+				</button>
+				<button
+					class="btn default"
 					onclick={() => settingsStore.save()}
 					disabled={!settingsStore.isDirty || settingsStore.isSaving}
 				>
-					<Save class="mr-2 h-4 w-4" />
+					<Save />
 					{settingsStore.isSaving ? "Saving..." : "Save Changes"}
-				</Button>
+				</button>
 			</div>
 		</div>
 	{/if}
 </div>
 
 <!-- Reboot Prompt Dialog -->
-<AlertDialog.Root open={settingsStore.showRebootPrompt}>
-	<AlertDialog.Content>
-		<AlertDialog.Header>
-			<AlertDialog.Title>Network Settings Changed</AlertDialog.Title>
-			<AlertDialog.Description>
-				Network configuration has been updated. A reboot is required for changes
-				to take effect. Would you like to reboot now?
-			</AlertDialog.Description>
-		</AlertDialog.Header>
-		<AlertDialog.Footer>
-			<AlertDialog.Cancel onclick={() => settingsStore.dismissRebootPrompt()}>
-				Later
-			</AlertDialog.Cancel>
-			<AlertDialog.Action onclick={() => settingsStore.reboot()}
-				>Reboot Now</AlertDialog.Action
-			>
-		</AlertDialog.Footer>
-	</AlertDialog.Content>
-</AlertDialog.Root>
+<dialog bind:this={rebootDialog} class="dialog" onclose={() => settingsStore.dismissRebootPrompt()}>
+	<h2>Network Settings Changed</h2>
+	<p>
+		Network configuration has been updated. A reboot is required for changes
+		to take effect. Would you like to reboot now?
+	</p>
+	<footer class="dialog-footer">
+		<button class="btn outline" onclick={() => settingsStore.dismissRebootPrompt()}>Later</button>
+		<button class="btn default" onclick={() => settingsStore.reboot()}>Reboot Now</button>
+	</footer>
+</dialog>
 
 <!-- Reset Network Confirmation Dialog -->
-<AlertDialog.Root open={showResetDialog}>
-	<AlertDialog.Content>
-		<AlertDialog.Header>
-			<AlertDialog.Title>Reset Network Settings?</AlertDialog.Title>
-			<AlertDialog.Description>
-				This will clear your WiFi credentials and reboot the device into setup
-				mode. You'll need to reconnect to the scoreboard's WiFi network to
-				reconfigure it.
-			</AlertDialog.Description>
-		</AlertDialog.Header>
-		<AlertDialog.Footer>
-			<AlertDialog.Cancel onclick={() => (showResetDialog = false)}>
-				Cancel
-			</AlertDialog.Cancel>
-			<AlertDialog.Action onclick={handleResetNetwork}
-				>Reset & Reboot</AlertDialog.Action
-			>
-		</AlertDialog.Footer>
-	</AlertDialog.Content>
-</AlertDialog.Root>
+<dialog bind:this={resetDialog} class="dialog" onclose={() => (showResetDialog = false)}>
+	<h2>Reset Network Settings?</h2>
+	<p>
+		This will clear your WiFi credentials and reboot the device into setup
+		mode. You'll need to reconnect to the scoreboard's WiFi network to
+		reconfigure it.
+	</p>
+	<footer class="dialog-footer">
+		<button class="btn outline" onclick={() => (showResetDialog = false)}>Cancel</button>
+		<button class="btn default" onclick={handleResetNetwork}>Reset & Reboot</button>
+	</footer>
+</dialog>
 
 <!-- Reboot Overlay (handles the actual reboot process) -->
 <RebootOverlay />
+
+<style>
+	/* Layout */
+	.settings-page {
+		max-width: 42rem;
+		margin-inline: auto;
+		display: flex;
+		flex-direction: column;
+		gap: 1.5rem;
+	}
+
+	.page-title {
+		font-size: 1.5rem;
+		font-weight: 700;
+	}
+
+	.page-description {
+		color: var(--muted-foreground);
+	}
+
+	.card-stack {
+		display: flex;
+		flex-direction: column;
+		gap: 1.5rem;
+	}
+
+	/* Card */
+	.card {
+		background: var(--card);
+		color: var(--card-foreground);
+		border: 1px solid var(--border);
+		border-radius: 0.75rem;
+		box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
+	}
+
+	.card.border-destructive {
+		border-color: var(--destructive);
+	}
+
+	.card.border-warning {
+		border-color: oklch(0.769 0.188 70.08);
+	}
+
+	.card-header {
+		padding: 1.5rem;
+		padding-block-end: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.375rem;
+	}
+
+	.card-title {
+		font-weight: 600;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.card-title.text-destructive {
+		color: var(--destructive);
+	}
+
+	.card-description {
+		color: var(--muted-foreground);
+		font-size: 0.875rem;
+	}
+
+	.card-content {
+		padding: 1.5rem;
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+	}
+
+	.card-content.gap-lg {
+		gap: 1.5rem;
+	}
+
+	/* Skeleton */
+	.skeleton {
+		background: var(--muted);
+		border-radius: 0.375rem;
+		animation: shimmer 2s infinite;
+	}
+
+	/* Form elements */
+	.field-group {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.field-group.nested {
+		padding-block-start: 0.5rem;
+	}
+
+	label {
+		font-size: 0.875rem;
+		font-weight: 500;
+	}
+
+	input[type="text"],
+	input[type="password"],
+	input[type="url"],
+	input[type="number"] {
+		height: 2.25rem;
+		width: 100%;
+		border-radius: 0.375rem;
+		border: 1px solid var(--input);
+		background: transparent;
+		padding-inline: 0.75rem;
+		font-size: 0.875rem;
+
+		&::placeholder {
+			color: var(--muted-foreground);
+		}
+
+		&:focus-visible {
+			outline: none;
+			border-color: var(--ring);
+			box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+		}
+	}
+
+	.input-with-toggle {
+		padding-inline-end: 2.5rem;
+	}
+
+	.input-wrapper {
+		position: relative;
+	}
+
+	.toggle-btn {
+		position: absolute;
+		right: 0;
+		top: 0;
+		height: 100%;
+		padding-inline: 0.75rem;
+
+		&:hover {
+			background: transparent !important;
+		}
+	}
+
+	input[type="range"] {
+		appearance: none;
+		-webkit-appearance: none;
+		width: 100%;
+		height: 0.5rem;
+		border-radius: 9999px;
+		background: var(--secondary);
+		outline: none;
+
+		&::-webkit-slider-thumb {
+			-webkit-appearance: none;
+			height: 1.25rem;
+			width: 1.25rem;
+			border-radius: 50%;
+			background: var(--primary);
+			cursor: pointer;
+			border: 2px solid var(--background);
+			box-shadow: 0 1px 3px oklch(0 0 0 / 15%);
+		}
+	}
+
+	select {
+		height: 2.25rem;
+		width: 100%;
+		border-radius: 0.375rem;
+		border: 1px solid var(--input);
+		background: var(--card);
+		padding-inline: 0.75rem;
+		font-size: 0.875rem;
+
+		&:focus-visible {
+			outline: none;
+			border-color: var(--ring);
+			box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+		}
+	}
+
+	/* Switch */
+	.switch {
+		position: relative;
+		display: inline-flex;
+		cursor: pointer;
+	}
+
+	.switch input {
+		position: absolute;
+		opacity: 0;
+		width: 0;
+		height: 0;
+	}
+
+	.switch-track {
+		width: 2.75rem;
+		height: 1.5rem;
+		border-radius: 9999px;
+		background: var(--input);
+		transition: background 0.2s;
+		display: flex;
+		align-items: center;
+		padding: 0.125rem;
+	}
+
+	.switch input:checked + .switch-track {
+		background: var(--primary);
+	}
+
+	.switch-thumb {
+		width: 1.25rem;
+		height: 1.25rem;
+		border-radius: 50%;
+		background: var(--background);
+		transition: transform 0.2s;
+		box-shadow: 0 1px 2px oklch(0 0 0 / 15%);
+	}
+
+	.switch input:checked + .switch-track .switch-thumb {
+		transform: translateX(1.25rem);
+	}
+
+	/* Progress */
+	progress {
+		width: 100%;
+		height: 0.5rem;
+		border-radius: 9999px;
+		overflow: hidden;
+		appearance: none;
+	}
+
+	progress::-webkit-progress-bar {
+		background: var(--secondary);
+		border-radius: 9999px;
+	}
+
+	progress::-webkit-progress-value {
+		background: var(--primary);
+		border-radius: 9999px;
+	}
+
+	/* Separator */
+	.separator {
+		border: none;
+		border-top: 1px solid var(--border);
+	}
+
+	/* Color picker */
+	.color-picker {
+		height: 2.25rem;
+		width: 3.5rem;
+		cursor: pointer;
+		border-radius: 0.375rem;
+		border: 1px solid var(--border);
+	}
+
+	/* Dialog */
+	.dialog {
+		border: 1px solid var(--border);
+		border-radius: 0.75rem;
+		background: var(--card);
+		color: var(--card-foreground);
+		padding: 1.5rem;
+		max-width: 28rem;
+		width: calc(100% - 2rem);
+		box-shadow: 0 10px 25px oklch(0 0 0 / 25%);
+	}
+
+	.dialog::backdrop {
+		background: oklch(0 0 0 / 80%);
+	}
+
+	.dialog h2 {
+		font-size: 1.125rem;
+		font-weight: 600;
+		margin-block-end: 0.5rem;
+	}
+
+	.dialog p {
+		color: var(--muted-foreground);
+		font-size: 0.875rem;
+		margin-block-end: 1rem;
+	}
+
+	.dialog-footer {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.5rem;
+	}
+
+	/* Alert */
+	.alert {
+		border-radius: 0.75rem;
+		padding: 1rem;
+	}
+
+	.alert.destructive {
+		border: 1px solid var(--destructive);
+		color: var(--destructive);
+	}
+
+	/* Buttons */
+	.btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+		border-radius: 0.375rem;
+		font-size: 0.875rem;
+		font-weight: 500;
+		cursor: pointer;
+		border: none;
+		transition: background-color 0.15s;
+		outline: none;
+		height: 2.25rem;
+		padding-inline: 1rem;
+
+		&:disabled {
+			opacity: 0.5;
+			pointer-events: none;
+		}
+
+		&:focus-visible {
+			box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+		}
+
+		&.default {
+			background: var(--primary);
+			color: var(--primary-foreground);
+		}
+
+		&.outline {
+			background: var(--card);
+			border: 1px solid var(--border);
+
+			&:hover {
+				background: var(--accent);
+			}
+		}
+
+		&.ghost {
+			background: transparent;
+
+			&:hover {
+				background: var(--accent);
+			}
+		}
+
+		&.destructive {
+			background: var(--destructive);
+			color: white;
+		}
+
+		&.sm {
+			height: 2rem;
+			padding-inline: 0.75rem;
+			font-size: 0.75rem;
+		}
+	}
+
+	.btn :global(svg) {
+		width: 1rem;
+		height: 1rem;
+	}
+
+	/* Utility helpers */
+	.row-between {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+	}
+
+	.row-center {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.status-grid {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 1rem;
+		font-size: 0.875rem;
+	}
+
+	.label-group {
+		display: flex;
+		flex-direction: column;
+		gap: 0.125rem;
+	}
+
+	.text-muted {
+		color: var(--muted-foreground);
+	}
+
+	.text-sm {
+		font-size: 0.875rem;
+	}
+
+	.text-sm.text-muted {
+		font-size: 0.875rem;
+		color: var(--muted-foreground);
+	}
+
+	.text-xs {
+		font-size: 0.75rem;
+	}
+
+	.text-xs.text-muted {
+		font-size: 0.75rem;
+		color: var(--muted-foreground);
+	}
+
+	.text-sm-medium {
+		font-size: 0.875rem;
+		font-weight: 500;
+	}
+
+	.hint {
+		font-size: 0.75rem;
+		color: var(--muted-foreground);
+	}
+
+	.capitalize {
+		text-transform: capitalize;
+	}
+
+	.status-value {
+		margin-inline-start: 0.5rem;
+		font-weight: 500;
+	}
+
+	/* Icon helpers (applied via class on Lucide components) */
+	:global(.icon-green) {
+		width: 1.25rem;
+		height: 1.25rem;
+		color: oklch(0.723 0.219 149.579);
+	}
+
+	:global(.icon-amber) {
+		width: 1.25rem;
+		height: 1.25rem;
+		color: oklch(0.769 0.188 70.08);
+	}
+
+	:global(.icon-muted) {
+		width: 1rem;
+		height: 1rem;
+		color: var(--muted-foreground);
+	}
+
+	/* Action bar */
+	.action-bar {
+		display: flex;
+		justify-content: space-between;
+		padding-block-end: 2rem;
+	}
+
+	.action-group {
+		display: flex;
+		gap: 0.5rem;
+	}
+</style>

@@ -2,7 +2,6 @@
 	import '../app.css';
 	import { page } from '$app/state';
 	import { browser } from '$app/environment';
-	import { Button } from '$lib/components/ui/button';
 	import Settings from '@lucide/svelte/icons/settings';
 	import Sun from '@lucide/svelte/icons/sun';
 	import Moon from '@lucide/svelte/icons/moon';
@@ -72,47 +71,158 @@
 	<title>NFL Scoreboard</title>
 </svelte:head>
 
-<div class="min-h-screen bg-background">
-	<header class="border-b">
-		<div class="container mx-auto flex h-14 items-center justify-between px-4">
-			<div class="flex items-center gap-2">
-				<span class="text-xl">🏈</span>
-				<h1 class="text-lg font-semibold">NFL Scoreboard</h1>
+<div class="layout">
+	<header class="header">
+		<div class="header-inner">
+			<div class="logo">
+				<span class="logo-emoji">&#x1F3C8;</span>
+				<h1 class="logo-title">NFL Scoreboard</h1>
 			</div>
-			<nav class="flex items-center gap-1">
-				<Button
-					variant="ghost"
-					size="sm"
+			<nav class="nav">
+				<button
+					class="btn btn-ghost btn-sm icon-btn"
 					onclick={cycleTheme}
 					title="Theme: {themeLabel}"
 				>
 					{#if themeMode === 'auto'}
-						<Monitor class="h-4 w-4" />
+						<Monitor />
 					{:else if themeMode === 'light'}
-						<Sun class="h-4 w-4" />
+						<Sun />
 					{:else}
-						<Moon class="h-4 w-4" />
+						<Moon />
 					{/if}
-				</Button>
-				<Button
-					variant={page.url.pathname === '/' ? 'default' : 'ghost'}
-					size="sm"
+				</button>
+				<a
 					href="#/"
+					class="btn btn-sm {page.url.pathname === '/' ? 'btn-default' : 'btn-ghost'}"
 				>
 					Scores
-				</Button>
-				<Button
-					variant={page.url.pathname === '/settings' ? 'default' : 'ghost'}
-					size="sm"
+				</a>
+				<a
 					href="#/settings"
+					class="btn btn-sm btn-icon {page.url.pathname === '/settings' ? 'btn-default' : 'btn-ghost'}"
 				>
-					<Settings class="h-4 w-4" />
-				</Button>
+					<Settings />
+				</a>
 			</nav>
 		</div>
 	</header>
 
-	<main class="container mx-auto px-4 py-8">
+	<main class="main">
 		{@render children()}
 	</main>
 </div>
+
+<style>
+	.layout {
+		min-block-size: 100vh;
+		background-color: var(--background);
+	}
+
+	.header {
+		border-block-end: 1px solid var(--border);
+	}
+
+	.header-inner {
+		max-inline-size: 1200px;
+		margin-inline: auto;
+		display: flex;
+		block-size: 3.5rem;
+		align-items: center;
+		justify-content: space-between;
+		padding-inline: 1rem;
+	}
+
+	.logo {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.logo-emoji {
+		font-size: 1.25rem;
+	}
+
+	.logo-title {
+		font-size: 1.125rem;
+		font-weight: 600;
+	}
+
+	.nav {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
+	}
+
+	/* ---- Button base ---- */
+	.btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.375rem;
+		border: none;
+		border-radius: 0.375rem;
+		font-weight: 500;
+		cursor: pointer;
+		transition: background-color 150ms ease, color 150ms ease;
+		white-space: nowrap;
+		text-decoration: none;
+		line-height: 1;
+
+		&:focus-visible {
+			outline: 2px solid var(--ring);
+			outline-offset: 2px;
+		}
+	}
+
+	/* ---- Size: small ---- */
+	.btn-sm {
+		block-size: 2rem;
+		padding-inline: 0.75rem;
+		font-size: 0.875rem;
+	}
+
+	/* ---- Variant: ghost ---- */
+	.btn-ghost {
+		background-color: transparent;
+		color: var(--foreground);
+
+		&:hover {
+			background-color: var(--accent);
+			color: var(--accent-foreground);
+		}
+	}
+
+	/* ---- Variant: default ---- */
+	.btn-default {
+		background-color: var(--primary);
+		color: var(--primary-foreground);
+
+		&:hover {
+			background-color: var(--primary);
+			opacity: 0.9;
+		}
+	}
+
+	/* ---- Icon-only buttons ---- */
+	.icon-btn,
+	.btn-icon {
+		padding-inline: 0;
+		inline-size: 2rem;
+	}
+
+	/* ---- Icon sizing (Lucide SVGs) ---- */
+	.btn :global(svg) {
+		inline-size: 1rem;
+		block-size: 1rem;
+		flex-shrink: 0;
+	}
+
+	/* ---- Main content ---- */
+	.main {
+		max-inline-size: 1200px;
+		margin-inline: auto;
+		padding-inline: 1rem;
+		padding-block: 2rem;
+	}
+</style>

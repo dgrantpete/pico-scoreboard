@@ -1,11 +1,5 @@
 <script lang="ts">
 	import { onMount } from "svelte";
-	import * as Card from "$lib/components/ui/card";
-	import * as Alert from "$lib/components/ui/alert";
-	import { Button } from "$lib/components/ui/button";
-	import { Input } from "$lib/components/ui/input";
-	import { Label } from "$lib/components/ui/label";
-	import { Skeleton } from "$lib/components/ui/skeleton";
 	import Eye from "@lucide/svelte/icons/eye";
 	import EyeOff from "@lucide/svelte/icons/eye-off";
 	import Wifi from "@lucide/svelte/icons/wifi";
@@ -85,75 +79,75 @@
 	}
 </script>
 
-<div class="mx-auto max-w-2xl space-y-6">
+<div class="setup-page">
 	{#if isLoading}
 		<!-- Loading skeleton -->
-		<div class="space-y-6">
-			<Skeleton class="h-8 w-64" />
-			<Skeleton class="h-4 w-96" />
+		<div class="stack">
+			<div class="skeleton" style="height: 2rem; width: 16rem;"></div>
+			<div class="skeleton" style="height: 1rem; width: 24rem;"></div>
 			{#each { length: 2 } as _}
-				<Card.Root>
-					<Card.Header>
-						<Skeleton class="h-6 w-32" />
-					</Card.Header>
-					<Card.Content class="space-y-4">
+				<section class="card">
+					<header class="card-header">
+						<div class="skeleton" style="height: 1.5rem; width: 8rem;"></div>
+					</header>
+					<div class="card-content stack">
 						{#each { length: 2 } as _}
-							<div class="space-y-2">
-								<Skeleton class="h-4 w-24" />
-								<Skeleton class="h-9 w-full" />
+							<div class="field-group">
+								<div class="skeleton" style="height: 1rem; width: 6rem;"></div>
+								<div class="skeleton" style="height: 2.25rem; width: 100%;"></div>
 							</div>
 						{/each}
-					</Card.Content>
-				</Card.Root>
+					</div>
+				</section>
 			{/each}
 		</div>
 	{:else if error && !config}
 		<!-- Error state when we couldn't load at all -->
-		<Card.Root class="border-destructive">
-			<Card.Header>
-				<Card.Title class="text-destructive">Connection Error</Card.Title>
-				<Card.Description>{error}</Card.Description>
-			</Card.Header>
-			<Card.Content>
-				<Button onclick={() => window.location.reload()}>
-					<RefreshCw class="mr-2 h-4 w-4" />
+		<section class="card destructive-border">
+			<header class="card-header">
+				<h3 class="card-title destructive-text">Connection Error</h3>
+				<p class="card-description">{error}</p>
+			</header>
+			<div class="card-content">
+				<button class="btn default" onclick={() => window.location.reload()}>
+					<RefreshCw />
 					Retry
-				</Button>
-			</Card.Content>
-		</Card.Root>
+				</button>
+			</div>
+		</section>
 	{:else}
 		<!-- Header with context-aware messaging -->
-		<div class="space-y-2">
+		<div class="header-group">
 			{#if status?.setup_reason === "connection_failed"}
-				<div class="flex items-center gap-3">
-					<div class="rounded-full bg-amber-100 p-2 dark:bg-amber-900">
-						<TriangleAlert class="h-6 w-6 text-amber-600 dark:text-amber-400" />
+				<div class="header-row">
+					<div class="icon-circle amber">
+						<TriangleAlert />
 					</div>
-					<h2 class="text-2xl font-bold">Connection Issue</h2>
+					<h2 class="page-title">Connection Issue</h2>
 				</div>
-				<p class="text-muted-foreground">
+				<p class="subtitle">
 					We couldn't connect to "<span class="font-medium">{status.configured_ssid}</span
 					>". Check your credentials or try a different network.
 				</p>
 			{:else if status?.setup_mode}
-				<div class="flex items-center gap-3">
-					<div class="rounded-full bg-primary/10 p-2">
-						<Wifi class="h-6 w-6 text-primary" />
+				<div class="header-row">
+					<div class="icon-circle primary">
+						<Wifi />
 					</div>
-					<h2 class="text-2xl font-bold">Welcome to Scoreboard Setup</h2>
+					<h2 class="page-title">Welcome to Scoreboard Setup</h2>
 				</div>
-				<p class="text-muted-foreground">
+				<p class="subtitle">
 					Let's get your scoreboard connected to WiFi so it can fetch live game
 					scores.
 				</p>
 			{:else}
-				<div class="flex items-center gap-3">
-					<div class="rounded-full bg-green-100 p-2 dark:bg-green-900">
-						<Wifi class="h-6 w-6 text-green-600 dark:text-green-400" />
+				<div class="header-row">
+					<div class="icon-circle green">
+						<Wifi />
 					</div>
-					<h2 class="text-2xl font-bold">Network Configuration</h2>
+					<h2 class="page-title">Network Configuration</h2>
 				</div>
-				<p class="text-muted-foreground">
+				<p class="subtitle">
 					Your scoreboard is already connected. You can update your network
 					settings below if needed.
 				</p>
@@ -161,118 +155,383 @@
 		</div>
 
 		<!-- WiFi Configuration -->
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>WiFi Configuration</Card.Title>
-				<Card.Description>
+		<section class="card">
+			<header class="card-header">
+				<h3 class="card-title">WiFi Configuration</h3>
+				<p class="card-description">
 					Connect your scoreboard to your home WiFi network
-				</Card.Description>
-			</Card.Header>
-			<Card.Content class="space-y-4">
-				<div class="space-y-2">
-					<Label for="wifi-ssid">WiFi Network (SSID)</Label>
-					<Input
+				</p>
+			</header>
+			<div class="card-content stack">
+				<div class="field-group">
+					<label for="wifi-ssid">WiFi Network (SSID)</label>
+					<input
 						id="wifi-ssid"
 						type="text"
 						placeholder="Enter network name"
 						bind:value={ssid}
 					/>
 				</div>
-				<div class="space-y-2">
-					<Label for="wifi-password">WiFi Password</Label>
-					<div class="relative">
-						<Input
+				<div class="field-group">
+					<label for="wifi-password">WiFi Password</label>
+					<div class="password-wrapper">
+						<input
 							id="wifi-password"
 							type={showPassword ? "text" : "password"}
 							placeholder="Enter password"
 							bind:value={password}
-							class="pr-10"
 						/>
-						<Button
-							variant="ghost"
-							size="sm"
-							class="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+						<button
+							class="btn ghost sm toggle-btn"
 							onclick={() => (showPassword = !showPassword)}
 						>
 							{#if showPassword}
-								<EyeOff class="h-4 w-4 text-muted-foreground" />
+								<EyeOff />
 							{:else}
-								<Eye class="h-4 w-4 text-muted-foreground" />
+								<Eye />
 							{/if}
-						</Button>
+						</button>
 					</div>
 				</div>
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</section>
 
 		<!-- API Configuration -->
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>API Configuration</Card.Title>
-				<Card.Description>
+		<section class="card">
+			<header class="card-header">
+				<h3 class="card-title">API Configuration</h3>
+				<p class="card-description">
 					Connection settings for fetching live scores
-				</Card.Description>
-			</Card.Header>
-			<Card.Content class="space-y-4">
-				<div class="space-y-2">
-					<Label for="api-url">API URL</Label>
-					<Input
+				</p>
+			</header>
+			<div class="card-content stack">
+				<div class="field-group">
+					<label for="api-url">API URL</label>
+					<input
 						id="api-url"
 						type="url"
 						placeholder="https://api.example.com"
 						bind:value={apiUrl}
 					/>
 				</div>
-				<div class="space-y-2">
-					<Label for="api-key">API Key</Label>
-					<div class="relative">
-						<Input
+				<div class="field-group">
+					<label for="api-key">API Key</label>
+					<div class="password-wrapper">
+						<input
 							id="api-key"
 							type={showApiKey ? "text" : "password"}
 							placeholder="Enter API key"
 							bind:value={apiKey}
-							class="pr-10"
 						/>
-						<Button
-							variant="ghost"
-							size="sm"
-							class="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+						<button
+							class="btn ghost sm toggle-btn"
 							onclick={() => (showApiKey = !showApiKey)}
 						>
 							{#if showApiKey}
-								<EyeOff class="h-4 w-4 text-muted-foreground" />
+								<EyeOff />
 							{:else}
-								<Eye class="h-4 w-4 text-muted-foreground" />
+								<Eye />
 							{/if}
-						</Button>
+						</button>
 					</div>
 				</div>
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</section>
 
 		<!-- Error banner -->
 		{#if error}
-			<Alert.Root variant="destructive">
-				<Alert.Description>{error}</Alert.Description>
-			</Alert.Root>
+			<div class="alert destructive" role="alert">
+				<p>{error}</p>
+			</div>
 		{/if}
 
 		<!-- Submit button -->
-		<div class="flex justify-end pb-8">
-			<Button
+		<div class="submit-row">
+			<button
+				class="btn default lg"
 				onclick={handleSubmit}
 				disabled={!isValid || isSaving || rebootStore.isActive}
-				size="lg"
 			>
 				{#if isSaving}
 					Saving...
 				{:else}
 					Connect & Restart
 				{/if}
-			</Button>
+			</button>
 		</div>
 	{/if}
 </div>
 
 <!-- Reboot Overlay -->
 <RebootOverlay />
+
+<style>
+	.setup-page {
+		max-width: 42rem;
+		margin-inline: auto;
+		display: flex;
+		flex-direction: column;
+		gap: 1.5rem;
+	}
+
+	.stack {
+		display: flex;
+		flex-direction: column;
+		gap: 1.5rem;
+	}
+
+	/* Skeleton loading */
+	.skeleton {
+		background: var(--muted);
+		border-radius: 0.375rem;
+		animation: shimmer 2s infinite;
+	}
+
+	/* Card */
+	.card {
+		background: var(--card);
+		color: var(--card-foreground);
+		border: 1px solid var(--border);
+		border-radius: 0.75rem;
+		box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
+
+		&.destructive-border {
+			border-color: var(--destructive);
+		}
+	}
+
+	.card-header {
+		padding: 1.5rem;
+		padding-block-end: 0;
+	}
+
+	.card-title {
+		font-weight: 600;
+		font-size: 1rem;
+
+		&.destructive-text {
+			color: var(--destructive);
+		}
+	}
+
+	.card-description {
+		color: var(--muted-foreground);
+		font-size: 0.875rem;
+		margin-block-start: 0.25rem;
+	}
+
+	.card-content {
+		padding: 1.5rem;
+	}
+
+	/* Header */
+	.header-group {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.header-row {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.page-title {
+		font-size: 1.5rem;
+		font-weight: 700;
+	}
+
+	.subtitle {
+		color: var(--muted-foreground);
+	}
+
+	.font-medium {
+		font-weight: 500;
+	}
+
+	/* Icon circles */
+	.icon-circle {
+		border-radius: 50%;
+		padding: 0.5rem;
+
+		& :global(svg) {
+			width: 1.5rem;
+			height: 1.5rem;
+		}
+
+		&.amber {
+			background: oklch(0.962 0.059 95.617);
+
+			& :global(svg) {
+				color: oklch(0.666 0.179 58.318);
+			}
+		}
+
+		&.green {
+			background: oklch(0.962 0.052 153.211);
+
+			& :global(svg) {
+				color: oklch(0.627 0.194 149.214);
+			}
+		}
+
+		&.primary {
+			background: oklch(from var(--primary) l c h / 10%);
+
+			& :global(svg) {
+				color: var(--primary);
+			}
+		}
+	}
+
+	:global(.dark) .icon-circle {
+		&.amber {
+			background: oklch(0.356 0.09 56.09);
+
+			& :global(svg) {
+				color: oklch(0.828 0.159 84.429);
+			}
+		}
+
+		&.green {
+			background: oklch(0.356 0.101 150.091);
+
+			& :global(svg) {
+				color: oklch(0.792 0.209 151.711);
+			}
+		}
+	}
+
+	/* Form fields */
+	.field-group {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	label {
+		font-size: 0.875rem;
+		font-weight: 500;
+	}
+
+	input[type="text"],
+	input[type="password"],
+	input[type="url"] {
+		height: 2.25rem;
+		width: 100%;
+		border-radius: 0.375rem;
+		border: 1px solid var(--input);
+		background: transparent;
+		padding-inline: 0.75rem;
+		font-size: 0.875rem;
+
+		&::placeholder {
+			color: var(--muted-foreground);
+		}
+
+		&:focus-visible {
+			outline: none;
+			border-color: var(--ring);
+			box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+		}
+	}
+
+	.password-wrapper {
+		position: relative;
+
+		& input {
+			padding-inline-end: 2.5rem;
+		}
+	}
+
+	/* Buttons */
+	.btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+		border-radius: 0.375rem;
+		font-size: 0.875rem;
+		font-weight: 500;
+		cursor: pointer;
+		border: none;
+		transition: background-color 0.15s;
+		outline: none;
+		height: 2.25rem;
+		padding-inline: 1rem;
+
+		&:disabled {
+			opacity: 0.5;
+			pointer-events: none;
+		}
+
+		&:focus-visible {
+			box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+		}
+
+		&.default {
+			background: var(--primary);
+			color: var(--primary-foreground);
+		}
+
+		&.ghost {
+			background: transparent;
+
+			&:hover {
+				background: var(--accent);
+				color: var(--accent-foreground);
+			}
+		}
+
+		&.sm {
+			height: 2rem;
+			padding-inline: 0.75rem;
+		}
+
+		&.lg {
+			height: 2.75rem;
+			padding-inline: 1.5rem;
+			font-size: 1rem;
+		}
+
+		& :global(svg) {
+			width: 1rem;
+			height: 1rem;
+		}
+	}
+
+	.toggle-btn {
+		position: absolute;
+		inset-inline-end: 0;
+		inset-block-start: 0;
+		height: 100%;
+
+		& :global(svg) {
+			color: var(--muted-foreground);
+		}
+
+		&:hover {
+			background: transparent;
+		}
+	}
+
+	/* Alert */
+	.alert {
+		border-radius: 0.75rem;
+		padding: 1rem;
+		border: 1px solid var(--border);
+
+		&.destructive {
+			border-color: var(--destructive);
+			color: var(--destructive);
+		}
+	}
+
+	/* Submit */
+	.submit-row {
+		display: flex;
+		justify-content: flex-end;
+		padding-block-end: 2rem;
+	}
+</style>

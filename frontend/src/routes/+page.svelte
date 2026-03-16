@@ -1,9 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import * as Card from '$lib/components/ui/card';
-	import { Button } from '$lib/components/ui/button';
 	import TeamLogo from '$lib/components/team-logo.svelte';
-	import { Badge } from '$lib/components/ui/badge';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -170,175 +167,163 @@
 	}
 </script>
 
-<div class="flex flex-col items-center gap-6">
+<div class="page">
 	{#if isLoading}
 		<!-- Loading State -->
-		<Card.Root class="w-full max-w-md">
-			<Card.Content class="p-6">
-				<div class="flex flex-col items-center gap-4">
-					<RefreshCw class="h-8 w-8 animate-spin text-muted-foreground" />
-					<p class="text-muted-foreground">Loading games...</p>
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<div class="card narrow">
+			<div class="card-body center-col">
+				<RefreshCw class="icon-lg spinning muted" />
+				<p class="text-muted">Loading games...</p>
+			</div>
+		</div>
 	{:else if status?.setup_mode}
 		<!-- Setup Mode Guidance -->
-		<Card.Root class="w-full max-w-md border-amber-500">
-			<Card.Content class="p-6">
-				<div class="flex flex-col items-center gap-4 text-center">
-					<div class="rounded-full bg-amber-100 p-3 dark:bg-amber-900">
-						<WifiOff class="h-8 w-8 text-amber-600 dark:text-amber-400" />
-					</div>
-					<div>
-						<h3 class="text-lg font-semibold">Network Setup Required</h3>
-						{#if status.setup_reason === 'connection_failed'}
-							<p class="mt-1 text-sm text-muted-foreground">
-								We couldn't connect to your WiFi network. Please check your
-								network settings to view live scores.
-							</p>
-						{:else}
-							<p class="mt-1 text-sm text-muted-foreground">
-								Your scoreboard needs to be connected to WiFi to fetch live
-								game scores.
-							</p>
-						{/if}
-					</div>
-					<Button href="#/setup">Go to Setup</Button>
+		<div class="card narrow amber-border">
+			<div class="card-body center-col text-center">
+				<div class="amber-icon-circle">
+					<WifiOff class="icon-lg amber-icon" />
 				</div>
-			</Card.Content>
-		</Card.Root>
+				<div>
+					<h3 class="heading">Network Setup Required</h3>
+					{#if status.setup_reason === 'connection_failed'}
+						<p class="subtext">
+							We couldn't connect to your WiFi network. Please check your
+							network settings to view live scores.
+						</p>
+					{:else}
+						<p class="subtext">
+							Your scoreboard needs to be connected to WiFi to fetch live
+							game scores.
+						</p>
+					{/if}
+				</div>
+				<a href="#/setup" class="btn default">Go to Setup</a>
+			</div>
+		</div>
 	{:else if error}
 		<!-- Error State -->
-		<Card.Root class="w-full max-w-md">
-			<Card.Content class="p-6">
-				<div class="flex flex-col items-center gap-4 text-center">
-					<p class="text-destructive font-medium">Failed to load games</p>
-					<p class="text-sm text-muted-foreground">{error}</p>
-					<Button variant="outline" onclick={refreshScores} disabled={isRefreshing}>
-						<RefreshCw class="mr-2 h-4 w-4 {isRefreshing ? 'animate-spin' : ''}" />
-						Retry
-					</Button>
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<div class="card narrow">
+			<div class="card-body center-col text-center">
+				<p class="text-error">Failed to load games</p>
+				<p class="subtext">{error}</p>
+				<button class="btn outline" onclick={refreshScores} disabled={isRefreshing}>
+					<RefreshCw class="icon-sm {isRefreshing ? 'spinning' : ''}" />
+					Retry
+				</button>
+			</div>
+		</div>
 	{:else if games.length === 0}
 		<!-- Empty State -->
-		<Card.Root class="w-full max-w-md">
-			<Card.Content class="p-6">
-				<div class="flex flex-col items-center gap-4 text-center">
-					<p class="text-muted-foreground">No games available</p>
-					<Button variant="outline" onclick={refreshScores} disabled={isRefreshing}>
-						<RefreshCw class="mr-2 h-4 w-4 {isRefreshing ? 'animate-spin' : ''}" />
-						Refresh
-					</Button>
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<div class="card narrow">
+			<div class="card-body center-col text-center">
+				<p class="text-muted">No games available</p>
+				<button class="btn outline" onclick={refreshScores} disabled={isRefreshing}>
+					<RefreshCw class="icon-sm {isRefreshing ? 'spinning' : ''}" />
+					Refresh
+				</button>
+			</div>
+		</div>
 	{:else if currentGame && homeTeam && awayTeam}
 		<!-- Game Card -->
-		<Card.Root class="w-full max-w-md">
-			<Card.Content class="p-6">
+		<div class="card narrow">
+			<div class="card-body">
 				<!-- Status Bar -->
-				<div class="mb-4 flex items-center justify-center gap-2 text-sm">
+				<div class="status-bar">
 					{#if currentGame.status === 'active'}
-						<span class="relative flex h-2 w-2">
-							<span
-								class="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75"
-							></span>
-							<span class="relative inline-flex h-2 w-2 rounded-full bg-red-500"></span>
+						<span class="live-dot">
+							<span class="live-dot-ping"></span>
+							<span class="live-dot-solid"></span>
 						</span>
-						<Badge variant="destructive">LIVE</Badge>
-						<span class="text-muted-foreground">•</span>
+						<span class="badge destructive">LIVE</span>
+						<span class="text-muted">&bull;</span>
 					{/if}
-					<span class="font-medium">{currentGame.quarter}</span>
+					<span class="quarter-label">{currentGame.quarter}</span>
 					{#if currentGame.timeRemaining}
-						<span class="text-muted-foreground">{currentGame.timeRemaining}</span>
+						<span class="text-muted">{currentGame.timeRemaining}</span>
 					{/if}
 				</div>
 
 				<!-- Scoreboard -->
-				<div class="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+				<div class="scoreboard">
 					<!-- Away Team -->
-					<div class="text-center">
+					<div class="team-col">
 						<TeamLogo
 							teamId={awayTeam.abbreviation.toLowerCase()}
 							teamName={awayTeam.abbreviation}
 							abbreviation={awayTeam.abbreviation}
 							primaryColor={rgbToCss(awayTeam.color)}
 						/>
-						<div class="text-lg font-bold">{awayTeam.abbreviation}</div>
-						<div class="mt-2 text-4xl font-bold tabular-nums">
+						<div class="team-abbr">{awayTeam.abbreviation}</div>
+						<div class="score">
 							{currentGame.awayScore}
 						</div>
 						{#if currentGame.possession === 'away'}
-							<div class="mt-1 text-lg">🏈</div>
+							<div class="possession">🏈</div>
 						{:else}
-							<div class="mt-1 h-7"></div>
+							<div class="possession-spacer"></div>
 						{/if}
 					</div>
 
 					<!-- Divider -->
-					<div class="flex flex-col items-center gap-1">
-						<span class="text-2xl font-bold text-muted-foreground">@</span>
+					<div class="divider">
+						<span class="at-symbol">@</span>
 					</div>
 
 					<!-- Home Team -->
-					<div class="text-center">
+					<div class="team-col">
 						<TeamLogo
 							teamId={homeTeam.abbreviation.toLowerCase()}
 							teamName={homeTeam.abbreviation}
 							abbreviation={homeTeam.abbreviation}
 							primaryColor={rgbToCss(homeTeam.color)}
 						/>
-						<div class="text-lg font-bold">{homeTeam.abbreviation}</div>
-						<div class="mt-2 text-4xl font-bold tabular-nums">
+						<div class="team-abbr">{homeTeam.abbreviation}</div>
+						<div class="score">
 							{currentGame.homeScore}
 						</div>
 						{#if currentGame.possession === 'home'}
-							<div class="mt-1 text-lg">🏈</div>
+							<div class="possession">🏈</div>
 						{:else}
-							<div class="mt-1 h-7"></div>
+							<div class="possession-spacer"></div>
 						{/if}
 					</div>
 				</div>
 
 				<!-- Game Details -->
 				{#if currentGame.status === 'active' && currentGame.down}
-					<div class="mt-4 flex items-center justify-center gap-2">
+					<div class="game-details">
 						{#if currentGame.redZone}
-							<Badge variant="destructive">RED ZONE</Badge>
+							<span class="badge destructive">RED ZONE</span>
 						{/if}
-						<span class="text-sm font-medium">
+						<span class="down-distance">
 							{formatDownAndDistance(currentGame.down, currentGame.distance)}
 						</span>
 					</div>
 				{/if}
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</div>
 
 		<!-- Controls -->
-		<div class="flex items-center gap-4">
-			<Button variant="outline" size="icon" onclick={prevGame} disabled={games.length <= 1}>
-				<ChevronLeft class="h-4 w-4" />
-			</Button>
+		<div class="controls">
+			<button class="btn outline icon" onclick={prevGame} disabled={games.length <= 1}>
+				<ChevronLeft />
+			</button>
 
-			<Button variant="outline" onclick={refreshScores} disabled={isRefreshing}>
-				<RefreshCw class="mr-2 h-4 w-4 {isRefreshing ? 'animate-spin' : ''}" />
+			<button class="btn outline" onclick={refreshScores} disabled={isRefreshing}>
+				<RefreshCw class="icon-sm {isRefreshing ? 'spinning' : ''}" />
 				Refresh
-			</Button>
+			</button>
 
-			<Button variant="outline" size="icon" onclick={nextGame} disabled={games.length <= 1}>
-				<ChevronRight class="h-4 w-4" />
-			</Button>
+			<button class="btn outline icon" onclick={nextGame} disabled={games.length <= 1}>
+				<ChevronRight />
+			</button>
 		</div>
 
 		<!-- Game Counter -->
-		<div class="flex items-center gap-2 text-sm text-muted-foreground">
+		<div class="game-dots">
 			{#each games as _, i}
 				<button
-					class="h-2 w-2 rounded-full transition-colors {i === currentGameIndex
-						? 'bg-primary'
-						: 'bg-muted-foreground/30'}"
+					class="dot {i === currentGameIndex ? 'active' : ''}"
 					onclick={() => (currentGameIndex = i)}
 					aria-label="Go to game {i + 1}"
 				></button>
@@ -346,3 +331,306 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	.page {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 1.5rem;
+	}
+
+	.card {
+		background: var(--card);
+		color: var(--card-foreground);
+		border: 1px solid var(--border);
+		border-radius: 0.75rem;
+		box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
+
+		&.narrow {
+			width: 100%;
+			max-width: 28rem;
+		}
+
+		&.amber-border {
+			border-color: oklch(0.769 0.188 70.08);
+		}
+	}
+
+	.card-body {
+		padding: 1.5rem;
+
+		&.center-col {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			gap: 1rem;
+		}
+	}
+
+	.text-center {
+		text-align: center;
+	}
+
+	.text-muted {
+		color: var(--muted-foreground);
+	}
+
+	.text-error {
+		color: var(--destructive);
+		font-weight: 500;
+	}
+
+	.subtext {
+		margin-block-start: 0.25rem;
+		font-size: 0.875rem;
+		color: var(--muted-foreground);
+	}
+
+	.heading {
+		font-size: 1.125rem;
+		font-weight: 600;
+	}
+
+	/* Amber icon circle for setup mode */
+	.amber-icon-circle {
+		border-radius: 9999px;
+		padding: 0.75rem;
+		background: oklch(0.962 0.059 95.617);
+	}
+
+	:global(.dark) .amber-icon-circle {
+		background: oklch(0.356 0.09 56.09);
+	}
+
+	/* Icon sizing helpers via :global for Lucide svgs */
+	:global(.icon-lg) {
+		width: 2rem;
+		height: 2rem;
+	}
+
+	:global(.icon-sm) {
+		width: 1rem;
+		height: 1rem;
+	}
+
+	:global(.spinning) {
+		animation: spin 1s linear infinite;
+	}
+
+	:global(.muted) {
+		color: var(--muted-foreground);
+	}
+
+	:global(.amber-icon) {
+		color: oklch(0.666 0.179 58.318);
+	}
+
+	:global(.dark .amber-icon) {
+		color: oklch(0.828 0.159 84.429);
+	}
+
+	/* Button styles */
+	.btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+		border-radius: 0.375rem;
+		font-size: 0.875rem;
+		font-weight: 500;
+		white-space: nowrap;
+		cursor: pointer;
+		border: none;
+		transition: background-color 0.15s, color 0.15s;
+		outline: none;
+		height: 2.25rem;
+		padding-inline: 1rem;
+
+		&:disabled {
+			opacity: 0.5;
+			pointer-events: none;
+		}
+
+		&:focus-visible {
+			box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+		}
+
+		&.default {
+			background: var(--primary);
+			color: var(--primary-foreground);
+		}
+
+		&.outline {
+			background: var(--card);
+			border: 1px solid var(--border);
+
+			&:hover {
+				background: var(--accent);
+				color: var(--accent-foreground);
+			}
+		}
+
+		&.icon {
+			width: 2.25rem;
+			padding: 0;
+		}
+
+		& :global(svg) {
+			width: 1rem;
+			height: 1rem;
+		}
+	}
+
+	/* Badge styles */
+	.badge {
+		display: inline-flex;
+		align-items: center;
+		border-radius: 9999px;
+		padding-block: 0.125rem;
+		padding-inline: 0.625rem;
+		font-size: 0.75rem;
+		font-weight: 500;
+
+		&.destructive {
+			background: var(--destructive);
+			color: white;
+		}
+	}
+
+	/* Live indicator dot */
+	.live-dot {
+		position: relative;
+		display: flex;
+		block-size: 0.5rem;
+		inline-size: 0.5rem;
+	}
+
+	.live-dot-ping {
+		position: absolute;
+		display: inline-flex;
+		block-size: 100%;
+		inline-size: 100%;
+		border-radius: 9999px;
+		background: oklch(0.704 0.191 22.216);
+		opacity: 0.75;
+		animation: ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;
+	}
+
+	.live-dot-solid {
+		position: relative;
+		display: inline-flex;
+		block-size: 0.5rem;
+		inline-size: 0.5rem;
+		border-radius: 9999px;
+		background: var(--destructive);
+	}
+
+	/* Status bar */
+	.status-bar {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+		font-size: 0.875rem;
+		margin-block-end: 1rem;
+	}
+
+	.quarter-label {
+		font-weight: 500;
+	}
+
+	/* Scoreboard grid */
+	.scoreboard {
+		display: grid;
+		grid-template-columns: 1fr auto 1fr;
+		align-items: center;
+		gap: 1rem;
+	}
+
+	.team-col {
+		text-align: center;
+	}
+
+	.team-abbr {
+		font-size: 1.125rem;
+		font-weight: 700;
+	}
+
+	.score {
+		margin-block-start: 0.5rem;
+		font-size: 2.25rem;
+		font-weight: 700;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.possession {
+		margin-block-start: 0.25rem;
+		font-size: 1.125rem;
+	}
+
+	.possession-spacer {
+		margin-block-start: 0.25rem;
+		block-size: 1.75rem;
+	}
+
+	.divider {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.25rem;
+	}
+
+	.at-symbol {
+		font-size: 1.5rem;
+		font-weight: 700;
+		color: var(--muted-foreground);
+	}
+
+	/* Game details (down & distance) */
+	.game-details {
+		margin-block-start: 1rem;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+	}
+
+	.down-distance {
+		font-size: 0.875rem;
+		font-weight: 500;
+	}
+
+	/* Controls row */
+	.controls {
+		display: flex;
+		align-items: center;
+		gap: 1rem;
+	}
+
+	/* Game counter dots */
+	.game-dots {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		font-size: 0.875rem;
+		color: var(--muted-foreground);
+	}
+
+	.dot {
+		block-size: 0.5rem;
+		inline-size: 0.5rem;
+		border-radius: 9999px;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+		transition: background-color 0.15s;
+		background: var(--muted-foreground);
+		opacity: 0.3;
+
+		&.active {
+			background: var(--primary);
+			opacity: 1;
+		}
+	}
+</style>
