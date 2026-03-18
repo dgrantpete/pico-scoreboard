@@ -7,6 +7,9 @@ The config file is stored at the root of the Pico filesystem.
 
 import json
 from hub75 import gamma
+from scoreboard.logger import NONE, ERROR, DEBUG
+
+_LOG_LEVEL_MAP = {"none": NONE, "error": ERROR, "debug": DEBUG}
 
 # Default config path on Pico filesystem
 CONFIG_PATH = "/config.json"
@@ -38,6 +41,9 @@ _DEFAULTS = {
         "accent": {"r": 255, "g": 255, "b": 0},         # Yellow - highlights, time
         "clock_normal": {"r": 0, "g": 255, "b": 0},     # Green - clock with time remaining
         "clock_warning": {"r": 255, "g": 10, "b": 10}   # Red - low time, errors
+    },
+    "log": {
+        "level": "debug"
     },
     "server": {
         "cache_max_age_seconds": 600
@@ -105,12 +111,13 @@ class Config:
 
             return _deep_merge(_deep_copy(_DEFAULTS), data)
         except (OSError, ValueError):
-            # File doesn't exist or is invalid JSON - use defaults
             return _deep_copy(_DEFAULTS)
 
     def reload(self) -> None:
         """Reload configuration from file."""
         self._data = self._load()
+        if self.log_level >= DEBUG:
+            print(f"[CONFIG] reloaded: {self._path}")
 
     def save(self) -> None:
         """Write current configuration to file."""
@@ -129,6 +136,8 @@ class Config:
         if section in self._data:
             self._data[section][key] = value
             self.save()
+            if self.log_level >= DEBUG:
+                print(f"[CONFIG] updated: {section}.{key}={value}")
 
     def get(self, section: str, key: str, default: object = None) -> object:
         """
@@ -236,6 +245,12 @@ class Config:
     def cache_max_age_seconds(self) -> int:
         """Cache-Control max-age for static content (0 = no caching)."""
         return self._data["server"]["cache_max_age_seconds"]
+
+    # Log properties
+    @property
+    def log_level(self) -> int:
+        """Log level as integer: NONE=0, ERROR=1, DEBUG=2."""
+        return _LOG_LEVEL_MAP.get(self._data["log"]["level"], DEBUG)
 
     # Color properties
     def get_color(self, name: str) -> dict:

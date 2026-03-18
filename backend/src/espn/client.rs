@@ -2,11 +2,13 @@ use bytes::Bytes;
 use lru::LruCache;
 use reqwest::Client;
 use serde::de::DeserializeOwned;
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::OnceCell;
 
-use super::types::{EspnEvent, EspnScoreboard, EspnSummary};
+use super::types::{EspnEvent, EspnScoreboard, EspnSummary, EspnTeamsListResponse};
 use crate::config::EspnConfig;
 use crate::error::AppError;
 use crate::sport::EspnLeague;
@@ -15,6 +17,9 @@ use crate::sport::EspnLeague;
 /// Covers all NFL (32) + NBA (30) teams with room for college logos.
 const LOGO_CACHE_CAPACITY: usize = 64;
 
+/// Maximum number of pages to fetch when building the college team abbreviation map.
+const MAX_TEAM_LIST_PAGES: usize = 20;
+
 /// HTTP client for ESPN API requests
 #[derive(Debug, Clone)]
 pub struct EspnClient {
@@ -22,6 +27,10 @@ pub struct EspnClient {
     base_url: String,
     logo_url: String,
     logo_cache: Arc<Mutex<LruCache<String, Bytes>>>,
+    /// Cached abbreviation/ID → logo URL map for NCAAF teams
+    ncaaf_abbrev_map: Arc<OnceCell<HashMap<String, String>>>,
+    /// Cached abbreviation/ID → logo URL map for NCAAB teams
+    ncaab_abbrev_map: Arc<OnceCell<HashMap<String, String>>>,
 }
 
 impl EspnClient {
@@ -40,6 +49,8 @@ impl EspnClient {
             logo_cache: Arc::new(Mutex::new(LruCache::new(
                 NonZeroUsize::new(LOGO_CACHE_CAPACITY).unwrap(),
             ))),
+            ncaaf_abbrev_map: Arc::new(OnceCell::new()),
+            ncaab_abbrev_map: Arc::new(OnceCell::new()),
         }
     }
 
@@ -218,46 +229,101 @@ impl EspnClient {
         Ok(bytes)
     }
 
-    /// Resolve a college team abbreviation to its ESPN logo URL via the teams API.
+    /// Resolve a college team identifier (abbreviation or numeric ID) to its ESPN logo URL.
     ///
-    /// ESPN's CDN uses numeric team IDs for college logos (e.g., ncaa/500/228.png),
-    /// not abbreviations. This method looks up the team by abbreviation to get the
-    /// correct logo URL.
+    /// Uses a cached map built from ESPN's teams list endpoint. The map is populated
+    /// once per league on first request and reused for all subsequent lookups.
     async fn resolve_college_logo_url(
         &self,
         league: &impl EspnLeague,
         team_id: &str,
     ) -> Result<String, AppError> {
-        let url = format!(
-            "{}/{}/{}/teams/{}",
-            self.base_url,
-            league.espn_sport(),
-            league.espn_league(),
-            team_id.to_lowercase()
-        );
+        let map = self.get_college_team_map(league).await?;
+        let key = team_id.to_lowercase();
 
-        let response = self
-            .client
-            .get(&url)
-            .send()
+        map.get(&key)
+            .cloned()
+            .ok_or_else(|| AppError::TeamNotFound(team_id.to_string()))
+    }
+
+    /// Get or initialize the college team abbreviation→logo URL map for a league.
+    async fn get_college_team_map(
+        &self,
+        league: &impl EspnLeague,
+    ) -> Result<&HashMap<String, String>, AppError> {
+        let cell = if league.espn_league() == "college-football" {
+            &self.ncaaf_abbrev_map
+        } else {
+            &self.ncaab_abbrev_map
+        };
+
+        cell.get_or_try_init(|| self.fetch_college_team_map(league))
             .await
-            .map_err(AppError::EspnRequest)?;
+    }
 
-        if !response.status().is_success() {
-            return Err(AppError::TeamNotFound(team_id.to_string()));
+    /// Fetch all college teams for a league by paginating through ESPN's teams list API.
+    ///
+    /// Builds a HashMap mapping both lowercase abbreviation and numeric ID to the
+    /// team's first logo URL. Paginates with `limit=500&page=N` until an empty page
+    /// is returned (capped at `MAX_TEAM_LIST_PAGES` pages).
+    async fn fetch_college_team_map(
+        &self,
+        league: &impl EspnLeague,
+    ) -> Result<HashMap<String, String>, AppError> {
+        let mut map = HashMap::new();
+
+        for page in 1..=MAX_TEAM_LIST_PAGES {
+            let url = format!(
+                "{}/{}/{}/teams?limit=500&page={}",
+                self.base_url,
+                league.espn_sport(),
+                league.espn_league(),
+                page
+            );
+
+            let response = self
+                .client
+                .get(&url)
+                .send()
+                .await
+                .map_err(AppError::EspnRequest)?;
+
+            let body = response.text().await.map_err(AppError::EspnRequest)?;
+            let teams_response: EspnTeamsListResponse =
+                self.deserialize_with_logging(&body, "teams_list")?;
+
+            let mut page_had_teams = false;
+
+            for sport in &teams_response.sports {
+                for league_entry in &sport.leagues {
+                    for entry in &league_entry.teams {
+                        page_had_teams = true;
+                        if let Some(logo) = entry.team.logos.first() {
+                            let logo_url = logo.href.clone();
+                            // Map by lowercase abbreviation (skip teams without one)
+                            if let Some(ref abbrev) = entry.team.abbreviation {
+                                map.insert(abbrev.to_lowercase(), logo_url.clone());
+                            }
+                            // Also map by numeric ID
+                            map.insert(entry.team.id.clone(), logo_url);
+                        }
+                    }
+                }
+            }
+
+            if !page_had_teams {
+                break;
+            }
         }
 
-        let body = response.text().await.map_err(AppError::EspnRequest)?;
-        let team_response: super::types::EspnTeamLookup =
-            self.deserialize_with_logging(&body, "team_lookup")?;
+        tracing::info!(
+            sport = league.espn_sport(),
+            league = league.espn_league(),
+            team_count = map.len(),
+            "Built college team abbreviation map"
+        );
 
-        team_response
-            .team
-            .logos
-            .into_iter()
-            .next()
-            .map(|logo| logo.href)
-            .ok_or_else(|| AppError::TeamNotFound(team_id.to_string()))
+        Ok(map)
     }
 }
 
@@ -285,6 +351,196 @@ mod tests {
         assert_eq!(
             client.base_url,
             "https://site.api.espn.com/apis/site/v2/sports"
+        );
+    }
+
+    use crate::sport::{BasketballLeague, FootballLeague};
+
+    /// PNG files start with these 4 magic bytes.
+    const PNG_MAGIC: [u8; 4] = [0x89, 0x50, 0x4E, 0x47];
+
+    fn assert_png(bytes: &[u8], label: &str) {
+        assert!(
+            bytes.len() > 4,
+            "{label}: expected non-empty PNG but got {} bytes",
+            bytes.len()
+        );
+        assert_eq!(
+            &bytes[..4],
+            &PNG_MAGIC,
+            "{label}: first 4 bytes are not PNG magic"
+        );
+    }
+
+    // ── NFL (pro) ──
+
+    #[tokio::test]
+    #[ignore]
+    async fn nfl_logo_dal() {
+        let client = EspnClient::default();
+        let bytes = client
+            .fetch_logo(FootballLeague::Nfl, "dal")
+            .await
+            .expect("failed to fetch DAL logo");
+        assert_png(&bytes, "NFL DAL");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn nfl_logo_kc() {
+        let client = EspnClient::default();
+        let bytes = client
+            .fetch_logo(FootballLeague::Nfl, "kc")
+            .await
+            .expect("failed to fetch KC logo");
+        assert_png(&bytes, "NFL KC");
+    }
+
+    // ── NBA (pro) ──
+
+    #[tokio::test]
+    #[ignore]
+    async fn nba_logo_lal() {
+        let client = EspnClient::default();
+        let bytes = client
+            .fetch_logo(BasketballLeague::Nba, "lal")
+            .await
+            .expect("failed to fetch LAL logo");
+        assert_png(&bytes, "NBA LAL");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn nba_logo_bos() {
+        let client = EspnClient::default();
+        let bytes = client
+            .fetch_logo(BasketballLeague::Nba, "bos")
+            .await
+            .expect("failed to fetch BOS logo");
+        assert_png(&bytes, "NBA BOS");
+    }
+
+    // ── NCAAF (college football) ──
+
+    #[tokio::test]
+    #[ignore]
+    async fn ncaaf_logo_by_abbreviation() {
+        let client = EspnClient::default();
+        let bytes = client
+            .fetch_logo(FootballLeague::Ncaaf, "usu")
+            .await
+            .expect("failed to fetch NCAAF USU logo");
+        assert_png(&bytes, "NCAAF USU");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn ncaaf_logo_by_abbreviation_clemson() {
+        let client = EspnClient::default();
+        let bytes = client
+            .fetch_logo(FootballLeague::Ncaaf, "clem")
+            .await
+            .expect("failed to fetch NCAAF CLEM logo");
+        assert_png(&bytes, "NCAAF CLEM");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn ncaaf_logo_by_numeric_id() {
+        let client = EspnClient::default();
+        let bytes = client
+            .fetch_logo(FootballLeague::Ncaaf, "328")
+            .await
+            .expect("failed to fetch NCAAF team 328 (Utah State) logo");
+        assert_png(&bytes, "NCAAF 328");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn ncaaf_logo_case_insensitive() {
+        let client = EspnClient::default();
+        for variant in ["USU", "usu", "Usu"] {
+            let bytes = client
+                .fetch_logo(FootballLeague::Ncaaf, variant)
+                .await
+                .unwrap_or_else(|e| panic!("failed to fetch NCAAF '{variant}': {e:?}"));
+            assert_png(&bytes, &format!("NCAAF {variant}"));
+        }
+    }
+
+    // ── NCAAB (college basketball) ──
+
+    #[tokio::test]
+    #[ignore]
+    async fn ncaab_logo_by_abbreviation() {
+        let client = EspnClient::default();
+        let bytes = client
+            .fetch_logo(BasketballLeague::Ncaab, "duke")
+            .await
+            .expect("failed to fetch NCAAB DUKE logo");
+        assert_png(&bytes, "NCAAB DUKE");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn ncaab_logo_by_abbreviation_usu() {
+        let client = EspnClient::default();
+        let bytes = client
+            .fetch_logo(BasketballLeague::Ncaab, "usu")
+            .await
+            .expect("failed to fetch NCAAB USU logo");
+        assert_png(&bytes, "NCAAB USU");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn ncaab_logo_by_numeric_id() {
+        let client = EspnClient::default();
+        let bytes = client
+            .fetch_logo(BasketballLeague::Ncaab, "150")
+            .await
+            .expect("failed to fetch NCAAB team 150 (Duke) logo");
+        assert_png(&bytes, "NCAAB 150");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn ncaab_logo_case_insensitive() {
+        let client = EspnClient::default();
+        for variant in ["DUKE", "duke", "Duke"] {
+            let bytes = client
+                .fetch_logo(BasketballLeague::Ncaab, variant)
+                .await
+                .unwrap_or_else(|e| panic!("failed to fetch NCAAB '{variant}': {e:?}"));
+            assert_png(&bytes, &format!("NCAAB {variant}"));
+        }
+    }
+
+    // ── Error cases ──
+
+    #[tokio::test]
+    #[ignore]
+    async fn college_logo_invalid_team() {
+        let client = EspnClient::default();
+        let result = client
+            .fetch_logo(FootballLeague::Ncaaf, "zzzzzzz")
+            .await;
+        assert!(
+            result.is_err(),
+            "expected error for invalid NCAAF team 'zzzzzzz'"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn college_logo_invalid_team_ncaab() {
+        let client = EspnClient::default();
+        let result = client
+            .fetch_logo(BasketballLeague::Ncaab, "zzzzzzz")
+            .await;
+        assert!(
+            result.is_err(),
+            "expected error for invalid NCAAB team 'zzzzzzz'"
         );
     }
 }

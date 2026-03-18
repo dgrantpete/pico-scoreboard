@@ -13,10 +13,11 @@ import time
 import framebuf
 import uasyncio as asyncio
 from scoreboard.config import Config
+from scoreboard.logger import DEBUG, ERROR
 from scoreboard.api_client import ScoreboardApiClient
 from scoreboard.state import (
     get_write_state, commit_state, parse_clock, set_error,
-    format_quarter, format_situation, parse_pregame_datetime
+    format_period, format_situation, parse_pregame_datetime
 )
 from scoreboard.models import PregameGame, LiveGame, FinalGame
 from scoreboard.display import get_logo_framebuffer, safe_team_color
@@ -44,11 +45,12 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient, utc_
     # Initial delay to let system stabilize
     await asyncio.sleep(2)
 
-    print(f"API poller started (interval: {config.poll_interval_seconds}s, cycling all games)")
+    if config.log_level >= DEBUG:
+        print(f"[API] poller started: interval={config.poll_interval_seconds}s")
 
     while True:
         try:
-            games = api_client.get_all_games_safe()
+            games = await api_client.get_all_games_safe()
 
             if games:
                 consecutive_failures = 0
@@ -57,11 +59,13 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient, utc_
                 game_index = (game_index + 1) % len(games)
                 game = games[game_index]
 
-                # Fetch logos for this game (blocking network calls, but we're on Core 0)
+                # Fetch logos for this game (async network calls on Core 0)
                 home_logo: framebuf.FrameBuffer | None = None
                 away_logo: framebuf.FrameBuffer | None = None
-                home_logo = get_logo_framebuffer(api_client, game.home.abbreviation)
-                away_logo = get_logo_framebuffer(api_client, game.away.abbreviation)
+                home_logo = await get_logo_framebuffer(api_client, game.home.abbreviation)
+                away_logo = await get_logo_framebuffer(api_client, game.away.abbreviation)
+                if config.log_level >= DEBUG:
+                    print(f"[API] logos fetched: home={home_logo is not None} away={away_logo is not None}")
 
                 # Write complete state to back buffer
                 state = get_write_state()
@@ -75,10 +79,14 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient, utc_
                         game.home.abbreviation == prev_game.home.abbreviation
                     )
                     if same_matchup:
-                        if game.home.score > prev_game.home.score:
+                        home_scored = game.home.score > prev_game.home.score
+                        away_scored = game.away.score > prev_game.away.score
+                        if home_scored:
                             state.home_scored_ms = time.ticks_ms()
-                        if game.away.score > prev_game.away.score:
+                        if away_scored:
                             state.away_scored_ms = time.ticks_ms()
+                        if (home_scored or away_scored) and config.log_level >= DEBUG:
+                            print(f"[API] scores changed: home={home_scored} away={away_scored}")
 
                 state.mode = 'game'
                 state.game = game
@@ -100,6 +108,8 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient, utc_
                     if (game.clock_running
                             and prev_clock_seconds is not None
                             and new_clock_seconds == prev_clock_seconds):
+                        if config.log_level >= DEBUG:
+                            print(f"[API] stale clock detected: was_running, not advancing, clock={new_clock_seconds}s")
                         game.clock_running = False
 
                     state.clock_seconds = new_clock_seconds
@@ -108,7 +118,7 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient, utc_
                 # Pre-format display strings for Core 1 (no allocations on display thread)
                 display = state.display
                 if isinstance(game, LiveGame):
-                    display.quarter = format_quarter(game.quarter)
+                    display.period = format_period(game.period)
                     display.situation = format_situation(game.situation) if game.situation else ''
                     display.possession = game.situation.possession if game.situation else ''
                     display.pregame_date = ''
@@ -145,7 +155,7 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient, utc_
                     else:
                         display.last_play_text = ''
                 elif isinstance(game, FinalGame):
-                    display.quarter = ''
+                    display.period = ''
                     display.situation = ''
                     display.possession = ''
                     display.pregame_date = ''
@@ -157,7 +167,7 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient, utc_
                     state.field.home_color = 0
                     state.field.away_color = 0
                 elif isinstance(game, PregameGame):
-                    display.quarter = ''
+                    display.period = ''
                     display.situation = ''
                     display.possession = ''
                     display.last_play_text = ''
@@ -174,10 +184,18 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient, utc_
                         display.pregame_date = ''
                         display.pregame_time = ''
 
+                if config.log_level >= DEBUG:
+                    print(f"[API] display strings formatted for game state")
+
                 # Atomic swap - display thread now sees this state
                 commit_state()
 
-                print(f"Game {game_index + 1}/{len(games)}: {game}")
+                if config.log_level >= DEBUG:
+                    home = game.home.abbreviation
+                    away = game.away.abbreviation
+                    home_score = game.home.score if isinstance(game, (LiveGame, FinalGame)) else '-'
+                    away_score = game.away.score if isinstance(game, (LiveGame, FinalGame)) else '-'
+                    print(f"[API] game {game_index + 1}/{len(games)}: {home} vs {away} status={game.state} score={away_score}-{home_score}")
             else:
                 # No games is a normal state, not an error
                 consecutive_failures = 0
@@ -189,11 +207,13 @@ async def api_polling_loop(config: Config, api_client: ScoreboardApiClient, utc_
                 state.dirty = True
                 commit_state()
 
-                print("No games scheduled")
+                if config.log_level >= DEBUG:
+                    print("[API] no games scheduled: api_returned_empty")
 
         except Exception as e:
             consecutive_failures += 1
-            print(f"API polling error ({consecutive_failures}): {e}")
+            if config.log_level >= ERROR:
+                print(f"[API] polling error: attempt={consecutive_failures} game_index={game_index} {e}")
 
             if consecutive_failures >= MAX_FAILURES_BEFORE_ERROR:
                 set_error('API ERROR', [

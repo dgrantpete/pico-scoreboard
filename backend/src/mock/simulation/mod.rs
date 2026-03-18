@@ -3,7 +3,7 @@
 //! This module provides:
 //! - `GameRepository`: Thread-safe storage for active game simulations
 //! - `CreateGameRequest`: Discriminated union for creating games in different states
-//! - `SimulatedGame`: Internal game state that converts to standard `GameResponse`
+//! - `SimulatedGame`: Internal game state that converts to standard `FootballGameResponse`
 //! - Simulation engine for realistic play-by-play progression
 
 mod drives;

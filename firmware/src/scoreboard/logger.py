@@ -1,0 +1,3 @@
+NONE = 0
+ERROR = 1
+DEBUG = 2

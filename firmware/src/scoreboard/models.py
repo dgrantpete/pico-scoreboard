@@ -10,13 +10,16 @@ STATE_PREGAME = "pregame"
 STATE_LIVE = "live"
 STATE_FINAL = "final"
 
-# Quarters
-QUARTER_FIRST = "first"
-QUARTER_SECOND = "second"
-QUARTER_THIRD = "third"
-QUARTER_FOURTH = "fourth"
-QUARTER_OT = "OT"
-QUARTER_OT2 = "OT2"
+# Periods
+PERIOD_Q1 = "Q1"
+PERIOD_Q2 = "Q2"
+PERIOD_Q3 = "Q3"
+PERIOD_Q4 = "Q4"
+PERIOD_OT = "OT"
+PERIOD_OT2 = "OT2"
+PERIOD_OT3 = "OT3"
+PERIOD_OT4 = "OT4"
+PERIOD_HALFTIME = "Halftime"
 
 # Downs
 DOWN_FIRST = "first"
@@ -222,7 +225,7 @@ class LiveGame:
         event_id: str,
         home: TeamWithScore,
         away: TeamWithScore,
-        quarter: str,
+        period: str,
         clock: str,
         clock_running: bool = False,
         situation: Situation | None = None,
@@ -233,7 +236,7 @@ class LiveGame:
         self.event_id: str = event_id
         self.home: TeamWithScore = home
         self.away: TeamWithScore = away
-        self.quarter: str = quarter
+        self.period: str = period
         self.clock: str = clock
         self.clock_running: bool = clock_running
         self.situation: Situation | None = situation
@@ -261,7 +264,7 @@ class LiveGame:
             event_id=data["event_id"],
             home=TeamWithScore.from_dict(data["home"]),
             away=TeamWithScore.from_dict(data["away"]),
-            quarter=data.get("quarter", ""),
+            period=data.get("period", ""),
             clock=data["clock"],
             clock_running=data.get("clock_running", False),
             situation=situation,

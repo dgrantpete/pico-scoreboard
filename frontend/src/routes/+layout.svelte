@@ -1,8 +1,6 @@
 <script lang="ts">
 	import '../app.css';
-	import { page } from '$app/state';
 	import { browser } from '$app/environment';
-	import Settings from '@lucide/svelte/icons/settings';
 	import Sun from '@lucide/svelte/icons/sun';
 	import Moon from '@lucide/svelte/icons/moon';
 	import Monitor from '@lucide/svelte/icons/monitor';
@@ -78,33 +76,19 @@
 				<span class="logo-emoji">&#x1F3C8;</span>
 				<h1 class="logo-title">NFL Scoreboard</h1>
 			</div>
-			<nav class="nav">
-				<button
-					class="btn btn-ghost btn-sm icon-btn"
-					onclick={cycleTheme}
-					title="Theme: {themeLabel}"
-				>
-					{#if themeMode === 'auto'}
-						<Monitor />
-					{:else if themeMode === 'light'}
-						<Sun />
-					{:else}
-						<Moon />
-					{/if}
-				</button>
-				<a
-					href="#/"
-					class="btn btn-sm {page.url.pathname === '/' ? 'btn-default' : 'btn-ghost'}"
-				>
-					Scores
-				</a>
-				<a
-					href="#/settings"
-					class="btn btn-sm btn-icon {page.url.pathname === '/settings' ? 'btn-default' : 'btn-ghost'}"
-				>
-					<Settings />
-				</a>
-			</nav>
+			<button
+				class="btn btn-ghost btn-sm icon-btn"
+				onclick={cycleTheme}
+				title="Theme: {themeLabel}"
+			>
+				{#if themeMode === 'auto'}
+					<Monitor />
+				{:else if themeMode === 'light'}
+					<Sun />
+				{:else}
+					<Moon />
+				{/if}
+			</button>
 		</div>
 	</header>
 
@@ -148,12 +132,6 @@
 		font-weight: 600;
 	}
 
-	.nav {
-		display: flex;
-		align-items: center;
-		gap: 0.25rem;
-	}
-
 	/* ---- Button base ---- */
 	.btn {
 		display: inline-flex;
@@ -193,20 +171,8 @@
 		}
 	}
 
-	/* ---- Variant: default ---- */
-	.btn-default {
-		background-color: var(--primary);
-		color: var(--primary-foreground);
-
-		&:hover {
-			background-color: var(--primary);
-			opacity: 0.9;
-		}
-	}
-
 	/* ---- Icon-only buttons ---- */
-	.icon-btn,
-	.btn-icon {
+	.icon-btn {
 		padding-inline: 0;
 		inline-size: 2rem;
 	}

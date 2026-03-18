@@ -257,5 +257,4 @@ def main():
         time.sleep_ms(50)  # ~20 FPS
 
 
-if __name__ == '__main__':
-    main()
+main()

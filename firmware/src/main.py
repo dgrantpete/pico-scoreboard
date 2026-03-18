@@ -51,9 +51,10 @@ from hub75 import Hub75Display
 from machine import I2C, Pin
 from veml7700 import VEML7700
 from scoreboard import brightness
+from scoreboard.logger import DEBUG, ERROR
 
 # Reduce buffer size for memory-constrained environment
-Response.send_file_buffer_size = 512
+Response.send_file_buffer_size = 2048
 
 app: Microdot = Microdot()
 config: Config = Config()
@@ -194,50 +195,40 @@ def get_network_status() -> dict:
         }
 
 
-# Offset between Unix epoch (1970) and MicroPython epoch (2000)
-_EPOCH_OFFSET = 946684800
-
-
-def _sync_time_from_backend() -> int:
+async def _sync_time_from_backend() -> int:
     """
     Fetch current time from the backend API and set the Pico's RTC.
-
-    This is needed so HMAC-signed redirect URLs have correct expiry timestamps.
-    If the sync fails, logs a warning and continues — the api_poller will still
-    work via direct X-Api-Key auth, but frontend redirects may fail.
 
     Returns:
         UTC offset in seconds for local time display (0 if unknown).
     """
-    import urequests as req
+    import aiohttp
 
     try:
         url = f"{config.api_url.rstrip('/')}/time"
-        print(f"Syncing time from {url}...")
-        response = req.get(url)
-        try:
-            if response.status_code != 200:
-                print(f"Time sync failed: HTTP {response.status_code}")
-                return 0
+        if config.log_level >= DEBUG:
+            print(f"[TIME] sync started: url={url}")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, ssl=True) as resp:
+                if resp.status != 200:
+                    if config.log_level >= ERROR:
+                        print(f"[TIME] sync failed: http={resp.status}")
+                    return 0
 
-            import ujson
-            data = ujson.loads(response.content)
-            unix_ts = data['timestamp']
-            utc_offset = data.get('utc_offset') or 0
+                data = await resp.json()
+                unix_ts = data['timestamp']
+                utc_offset = data.get('utc_offset') or 0
 
-            # Convert Unix timestamp to MicroPython epoch
-            pico_ts = unix_ts - _EPOCH_OFFSET
-            tm = time.gmtime(pico_ts)
-            # gmtime returns: (year, month, mday, hour, minute, second, weekday, yearday)
-            # RTC.datetime expects: (year, month, day, weekday, hours, minutes, seconds, subseconds)
-            machine.RTC().datetime((tm[0], tm[1], tm[2], tm[6], tm[3], tm[4], tm[5], 0))
-            print(f"RTC synced: {tm[0]}-{tm[1]:02d}-{tm[2]:02d} {tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d} UTC")
-            print(f"UTC offset: {utc_offset}s ({utc_offset // 3600:+d}h)")
-            return utc_offset
-        finally:
-            response.close()
+                tm = time.gmtime(unix_ts)
+                # gmtime returns: (year, month, mday, hour, minute, second, weekday, yearday)
+                # RTC.datetime expects: (year, month, day, weekday, hours, minutes, seconds, subseconds)
+                machine.RTC().datetime((tm[0], tm[1], tm[2], tm[6], tm[3], tm[4], tm[5], 0))
+                if config.log_level >= DEBUG:
+                    print(f"[TIME] rtc synced: {tm[0]:04d}-{tm[1]:02d}-{tm[2]:02d} {tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d} UTC offset={utc_offset}s")
+                return utc_offset
     except Exception as e:
-        print(f"Time sync failed: {e}")
+        if config.log_level >= ERROR:
+            print(f"[TIME] sync failed: {e}")
         return 0
 
 
@@ -245,7 +236,7 @@ def _sync_time_from_backend() -> int:
 api_client: ScoreboardApiClient = ScoreboardApiClient(config)
 
 # Create and mount API under /api prefix
-api: Microdot = create_api(config, get_network_status, api_client)
+api: Microdot = create_api(config, get_network_status)
 app.mount(api, url_prefix='/api')
 
 
@@ -330,8 +321,9 @@ def start_ap_mode() -> network.WLAN:
         machine.idle()  # Low-power wait instead of hot loop
 
     app.ap = ap  # Store on app object for routes to access
-    print(f"AP Mode active. Connect to: {config.device_name}")
-    print(f"IP: {ap.ifconfig()[0]}")
+    if config.log_level >= DEBUG:
+        print(f"[WIFI] ap mode started: ssid={config.device_name}")
+        print(f"[WIFI] ap ip: {ap.ifconfig()[0]}")
     return ap
 
 
@@ -351,6 +343,8 @@ def get_wlan_status_string(status: int) -> str:
 
 def reset_wlan(wlan: network.WLAN) -> None:
     """Full reset of WLAN interface to clear stale state."""
+    if config.log_level >= DEBUG:
+        print("[WIFI] reset attempt: deinit -> reinit, pm=0xa11140")
     try:
         wlan.disconnect()
     except:
@@ -388,7 +382,8 @@ def start_station_mode() -> network.WLAN | None:
         The STA WLAN interface if connected, None if timed out
     """
     if not config.ssid:
-        print("Error: WiFi SSID not configured")
+        if config.log_level >= ERROR:
+            print("[WIFI] connection failed: no ssid configured")
         return None
 
     # Set country code for proper channel/power configuration
@@ -402,33 +397,33 @@ def start_station_mode() -> network.WLAN | None:
     noip_extension = 15  # Extra time if we reach LINK_NOIP state
 
     for attempt in range(1, max_retries + 1):
-        print(f"=== WiFi Connection Attempt {attempt}/{max_retries} ===")
+        if config.log_level >= DEBUG:
+            print(f"[WIFI] connection attempt: {attempt}/{max_retries}")
 
         # Full reset before each attempt
         reset_wlan(wlan)
 
         # Scan for available networks
-        print("Scanning...")
+        if config.log_level >= DEBUG:
+            print("[WIFI] scan started")
         update_startup_display(2, "WiFi scan", "Scanning...")
         target_found = False
         try:
             networks = wlan.scan()
-            print(f"Found {len(networks)} networks:")
             update_startup_display(2, "WiFi scan", f"Found {len(networks)}")
             for net in networks:
                 ssid = net[0].decode('utf-8', 'replace')
-                channel = net[2]
-                rssi = net[3]
-                is_target = ssid == config.ssid
-                if is_target:
+                if ssid == config.ssid:
                     target_found = True
-                marker = "  <-- TARGET" if is_target else ""
-                print(f"  '{ssid}' ch:{channel} rssi:{rssi}dBm{marker}")
+            if config.log_level >= DEBUG:
+                print(f"[WIFI] scan complete: found={len(networks)}, target_visible={target_found}")
         except Exception as e:
-            print(f"Scan failed: {e}")
+            if config.log_level >= ERROR:
+                print(f"[WIFI] scan failed: {e}")
             update_startup_display(2, "WiFi scan", "Scan failed")
 
-        print(f"Connecting to '{config.ssid}'...")
+        if config.log_level >= DEBUG:
+            print(f"[WIFI] connecting to ssid={config.ssid}")
         # Show SSID in detail line (up to 20 chars), attempt counter in operation
         ssid_display = config.ssid[:20] if len(config.ssid) > 20 else config.ssid
         update_startup_display(3, f"Connecting ({attempt}/{max_retries})", ssid_display)
@@ -456,7 +451,8 @@ def start_station_mode() -> network.WLAN | None:
 
             # Handle BADAUTH - break to try next attempt
             if status == -3:  # LINK_BADAUTH
-                print("Authentication failed - wrong password?")
+                if config.log_level >= ERROR:
+                    print("[WIFI] auth failed: bad_auth detected, clearing password")
                 app.setup_reason = "bad_auth"
                 time.sleep(1)
                 break
@@ -464,6 +460,8 @@ def start_station_mode() -> network.WLAN | None:
             # Handle early LINK_FAIL - retry connect within same attempt
             if status == -1 and elapsed < 5 and retry_connect_count < 2:
                 retry_connect_count += 1
+                if config.log_level >= DEBUG:
+                    print(f"[WIFI] early fail retry: attempt={retry_connect_count}/2")
                 wlan.connect(config.ssid, config.password)
                 time.sleep(1)
                 continue
@@ -482,18 +480,21 @@ def start_station_mode() -> network.WLAN | None:
         if wlan.isconnected():
             ip = wlan.ifconfig()[0]
             if ip and ip != '0.0.0.0':
-                status_str = ' -> '.join(status_history) if status_history else 'DIRECT'
-                print(f"Status: {status_str}")
-                print(f"Connected! IP: {ip}")
-                print(f"Hostname: {config.device_name}.local")
+                if config.log_level >= DEBUG:
+                    status_str = ' -> '.join(status_history) if status_history else 'DIRECT'
+                    print(f"[WIFI] status: {status_str}")
+                    print(f"[WIFI] connected: ip={ip}")
+                    print(f"[WIFI] hostname: {config.device_name}.local")
                 update_startup_display(4, "Connected", ip)
                 app.wlan = wlan
                 return wlan
             else:
-                print("Connected but no valid IP, retrying...")
+                if config.log_level >= DEBUG:
+                    print("[WIFI] connected but no valid ip, retrying")
 
     # All retries exhausted
-    print(f"All {max_retries} connection attempts failed")
+    if config.log_level >= ERROR:
+        print(f"[WIFI] all attempts failed: {max_retries} retries exhausted")
     update_startup_display(4, "WiFi", "FAILED")
     wlan.active(False)
     return None
@@ -522,10 +523,12 @@ def start_display_thread(display: Hub75Display, writer: FontWriter, cfg: Config)
         global _display_thread_healthy
         try:
             _display_thread_healthy = True
-            print("Display thread started on Core 1")
-            run_display_thread(display, writer)
+            if config.log_level >= DEBUG:
+                print("[DISPLAY] thread started: core=1")
+            run_display_thread(display, writer, config)
         except Exception as e:
-            print(f"Display thread crashed: {e}")
+            if config.log_level >= ERROR:
+                print(f"[DISPLAY] thread crashed: {e}")
             _display_thread_healthy = False
 
     _thread.start_new_thread(wrapper, ())
@@ -544,7 +547,8 @@ async def watchdog_task() -> None:
     while True:
         await asyncio.sleep(30)
         if not _display_thread_healthy:
-            print("Display thread unhealthy, resetting device...")
+            if config.log_level >= ERROR:
+                print("[DISPLAY] watchdog triggered: unhealthy, resetting")
             await asyncio.sleep(1)
             machine.reset()
 
@@ -553,10 +557,12 @@ def _try_init_veml(i2c: I2C) -> VEML7700 | None:
     """Attempt to create VEML7700 sensor. Returns None on failure."""
     try:
         sensor = VEML7700(i2c=i2c, it=100, gain=1)
-        print("VEML7700 OK")
+        if config.log_level >= DEBUG:
+            print("[MAIN] sensor ok: veml7700")
         return sensor
     except Exception as e:
-        print(f"VEML7700 init failed: {e!r}")
+        if config.log_level >= ERROR:
+            print(f"[MAIN] sensor init failed: veml7700 {e}")
         return None
 
 
@@ -578,9 +584,9 @@ async def auto_brightness_loop(driver, cfg: Config) -> None:
     ambient_bri = cfg.brightness / 100.0
     initialized = False
     retry_ticks = 0
-    log_ticks = 0
 
-    print("Auto-brightness loop started")
+    if cfg.log_level >= DEBUG:
+        print("[DISPLAY] auto-brightness started")
 
     while True:
         # Retry sensor init every 3s (15 ticks) if not available
@@ -599,7 +605,8 @@ async def auto_brightness_loop(driver, cfg: Config) -> None:
                 else:
                     smoothed_lux = brightness.smooth_lux(smoothed_lux, lux)
             except Exception as e:
-                print(f"VEML7700 read error: {e!r}")
+                if cfg.log_level >= ERROR:
+                    print(f"[DISPLAY] brightness sensor error: {e}")
 
         # Compute brightness
         target_ambient = brightness.lux_to_ambient(smoothed_lux)
@@ -608,13 +615,6 @@ async def auto_brightness_loop(driver, cfg: Config) -> None:
 
         # Set
         driver.set_brightness(final)
-
-        # Log every 5s (25 ticks at 200ms)
-        log_ticks += 1
-        if log_ticks >= 25:
-            log_ticks = 0
-            sensor_status = "ok" if _light_sensor is not None else "NONE"
-            print(f"AutoBri: sensor={sensor_status} lux={smoothed_lux:.1f} ambient={ambient_bri:.3f} pref={cfg.brightness} final={final:.3f}")
 
         await asyncio.sleep_ms(200)
 
@@ -636,74 +636,84 @@ async def main() -> None:
 
     if not config.ssid:
         # No network configured - fresh setup mode
-        print("No WiFi configured. Starting setup mode...")
         app.setup_mode = True
         app.setup_reason = "no_network_configured"
         ap = start_ap_mode()
+        ap_ip = ap.ifconfig()[0]
+        if config.log_level >= DEBUG:
+            print(f"[MAIN] mode change: startup -> setup (reason=no_network_configured, ap_ssid={config.device_name}, ap_ip={ap_ip})")
         # Explicit transition: startup → setup
         finish_startup('setup',
             reason="no_config",
             ap_ssid=config.device_name,
-            ap_ip=ap.ifconfig()[0]
+            ap_ip=ap_ip
         )
-        asyncio.create_task(run_dns_server(ap.ifconfig()[0]))
+        asyncio.create_task(run_dns_server(config, ap_ip))
     else:
         # Try to connect to configured network
         wlan = start_station_mode()
         if wlan is None:
             # Connection failed - emergency setup mode
-            print("Connection failed. Starting setup mode...")
             app.setup_mode = True
             # app.setup_reason may already be set to "bad_auth" from the connection loop
             if app.setup_reason is None:
                 app.setup_reason = "connection_failed"
             ap = start_ap_mode()
+            ap_ip = ap.ifconfig()[0]
+            if config.log_level >= DEBUG:
+                print(f"[MAIN] mode change: startup -> setup (reason={app.setup_reason}, ap_ssid={config.device_name}, ap_ip={ap_ip})")
             # Explicit transition: startup → setup
             finish_startup('setup',
                 reason=app.setup_reason if app.setup_reason == "bad_auth" else "connection_failed",
                 ap_ssid=config.device_name,
-                ap_ip=ap.ifconfig()[0],
+                ap_ip=ap_ip,
                 wifi_ssid=config.ssid
             )
-            asyncio.create_task(run_dns_server(ap.ifconfig()[0]))
+            asyncio.create_task(run_dns_server(config, ap_ip))
         else:
             # Normal operation - sync time then start services
             app.setup_mode = False
             app.setup_reason = None
 
-            # Sync RTC from backend so HMAC signatures have correct timestamps
-            utc_offset = _sync_time_from_backend()
+            # Sync RTC from backend for accurate timestamps
+            utc_offset = await _sync_time_from_backend()
 
             update_startup_display(5, "Starting", "Services")
+            if config.log_level >= DEBUG:
+                print(f"[MAIN] mode change: startup -> idle (time_sync_ok={utc_offset != 0})")
             # Explicit transition: startup → idle
             finish_startup('idle')
             asyncio.create_task(api_polling_loop(config, api_client, utc_offset))
 
-    print("Starting web server on port 80...")
+    if config.log_level >= DEBUG:
+        print("[MAIN] web server starting: port=80")
     await app.start_server(port=80)
 
 
 if __name__ == '__main__':
     # Initialize display before asyncio for startup progress
-    print("Initializing display...")
+    if config.log_level >= DEBUG:
+        print("[MAIN] display init started")
     _driver, _display, _writer = init_display(config)
     set_display_driver(_driver)
-    print("Display initialized")
+    if config.log_level >= DEBUG:
+        print("[MAIN] display initialized")
 
     # Initialize glyph caches on Core 0 (before display thread starts)
     # This pre-caches digits for zero-allocation rendering
     from scoreboard.fonts import unscii_16
     _writer.init_clock(unscii_16)   # Clock digits + colon
     _writer.init_digits(unscii_16)  # Score digits
-    print("Glyph caches initialized")
+    if config.log_level >= DEBUG:
+        print("[MAIN] glyph caches initialized")
 
     # Pre-compute UI colors on Core 0 (before display thread starts)
     from scoreboard.state import update_ui_colors
     update_ui_colors(config)
-    print("UI colors initialized")
+    if config.log_level >= DEBUG:
+        print("[MAIN] ui colors initialized")
 
     # Initialize light sensor for auto-brightness
-    print("Initializing VEML7700...")
     _i2c = I2C(0, sda=Pin(0), scl=Pin(1), freq=100000)
     _light_sensor = _try_init_veml(_i2c)
 

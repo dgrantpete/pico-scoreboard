@@ -178,16 +178,40 @@ pub struct EspnBoxscoreStat {
     pub display_value: String,
 }
 
-// ── Team lookup types (for college logo resolution) ──
+// ── Teams list types (for college logo resolution via abbreviation map) ──
 
-/// Response from ESPN teams endpoint (e.g., /sports/football/college-football/teams/228)
+/// Response from ESPN teams list endpoint
+/// (e.g., /sports/football/college-football/teams?limit=500&page=1)
 #[derive(Debug, Deserialize)]
-pub struct EspnTeamLookup {
-    pub team: EspnTeamDetail,
+pub struct EspnTeamsListResponse {
+    #[serde(default)]
+    pub sports: Vec<EspnTeamsListSport>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct EspnTeamDetail {
+pub struct EspnTeamsListSport {
+    #[serde(default)]
+    pub leagues: Vec<EspnTeamsListLeague>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EspnTeamsListLeague {
+    #[serde(default)]
+    pub teams: Vec<EspnTeamsListEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EspnTeamsListEntry {
+    pub team: EspnTeamsListTeam,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EspnTeamsListTeam {
+    pub id: String,
+    /// Some ESPN team entries (e.g., all-star or placeholder teams) omit abbreviation.
+    #[serde(default)]
+    pub abbreviation: Option<String>,
+    #[serde(default)]
     pub logos: Vec<EspnLogo>,
 }
 

@@ -94,22 +94,35 @@ export interface RebootResponse {
 	message: string;
 }
 
-// Game API types
 export interface Color {
 	r: number;
 	g: number;
 	b: number;
 }
 
+// Game types (matching backend FootballGameResponse)
+
 export interface Team {
 	abbreviation: string;
 	color: Color;
 	record?: string;
+	rank?: number;
 }
 
-export interface TeamWithScore extends Team {
+export interface TeamScore {
+	abbreviation: string;
+	color: Color;
+	record?: string;
+	rank?: number;
 	score: number;
 	timeouts: number;
+}
+
+export type Period = 'Q1' | 'Q2' | 'Q3' | 'Q4' | 'OT' | 'OT2' | 'OT3' | 'OT4' | 'Halftime';
+
+export interface LastPlay {
+	play_type: string;
+	text?: string;
 }
 
 export interface Situation {
@@ -120,35 +133,43 @@ export interface Situation {
 	red_zone: boolean;
 }
 
+export interface Weather {
+	temp: number;
+	description: string;
+}
+
 export interface PregameGame {
 	state: 'pregame';
 	event_id: string;
 	home: Team;
 	away: Team;
-	start_time: string;
+	start_time: number;
 	venue?: string;
 	broadcast?: string;
-	weather?: { temp: number; description: string };
+	weather?: Weather;
 }
 
 export interface LiveGame {
 	state: 'live';
 	event_id: string;
-	home: TeamWithScore;
-	away: TeamWithScore;
-	quarter: 'first' | 'second' | 'third' | 'fourth' | 'OT' | 'OT2';
+	home: TeamScore;
+	away: TeamScore;
+	period: Period;
 	clock: string;
+	clock_running: boolean;
 	situation?: Situation;
-	weather?: { temp: number; description: string };
+	last_play?: LastPlay;
+	weather?: Weather;
 }
 
 export interface FinalGame {
 	state: 'final';
 	event_id: string;
-	home: TeamWithScore;
-	away: TeamWithScore;
+	home: TeamScore;
+	away: TeamScore;
 	status: 'final' | 'final/OT';
 	winner: 'home' | 'away' | 'tie';
 }
 
-export type GameResponse = PregameGame | LiveGame | FinalGame;
+export type Game = PregameGame | LiveGame | FinalGame;
+

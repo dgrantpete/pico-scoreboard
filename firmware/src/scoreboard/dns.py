@@ -7,14 +7,16 @@ This triggers captive portal detection on most devices when they connect to AP m
 
 import socket
 import uasyncio as asyncio
+from scoreboard.logger import DEBUG
 
 
-async def run_dns_server(ip_address: str = '192.168.4.1') -> None:
+async def run_dns_server(config, ip_address: str = '192.168.4.1') -> None:
     """
     Simple DNS server that responds to all queries with the given IP.
     Runs as an async task alongside the web server.
 
     Args:
+        config: Config instance for log level access
         ip_address: The IP to return for all DNS queries (default: 192.168.4.1)
     """
     # Convert IP string to bytes
@@ -25,7 +27,8 @@ async def run_dns_server(ip_address: str = '192.168.4.1') -> None:
     sock.setblocking(False)
     sock.bind(('0.0.0.0', 53))
 
-    print(f"DNS server started, redirecting all queries to {ip_address}")
+    if config.log_level >= DEBUG:
+        print(f"[MAIN] dns server started: ip={ip_address}")
 
     while True:
         try:

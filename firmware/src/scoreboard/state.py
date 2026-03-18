@@ -14,6 +14,7 @@ import framebuf
 
 from hub75 import Hub75Driver, gamma as gamma_mod
 from scoreboard.config import Config
+from scoreboard.logger import DEBUG, ERROR
 from scoreboard.models import PregameGame, LiveGame, FinalGame, Situation
 
 
@@ -79,7 +80,7 @@ class DisplayStrings:
     """Pre-formatted display strings, set by Core 0 when game updates."""
 
     def __init__(self) -> None:
-        self.quarter: str = ''         # "Q1", "Q2", "OT", etc.
+        self.period: str = ''          # "Q1", "Q2", "OT", etc.
         self.situation: str = ''       # "3rd & 7" or ''
         self.possession: str = ''      # "home", "away", or '' (for possession arrow)
         self.pregame_date: str = ''    # "SUN 01/15"
@@ -205,7 +206,7 @@ class DoubleBufferedState:
         back.ui_colors.clock_normal = front.ui_colors.clock_normal
         back.ui_colors.clock_warning = front.ui_colors.clock_warning
 
-        back.display.quarter = front.display.quarter
+        back.display.period = front.display.period
         back.display.situation = front.display.situation
         back.display.possession = front.display.possession
         back.display.pregame_date = front.display.pregame_date
@@ -359,11 +360,16 @@ _qr_palette.pixel(0, 0, 0xFFFF)  # Index 0: white (QR background/light modules)
 _qr_palette.pixel(1, 0, 0x0000)  # Index 1: black (QR dark modules)
 
 
+_QR_QUIET_ZONE = 4  # Minimum quiet zone per QR spec (4 modules)
+
+
 def _generate_wifi_qr(ssid: str, password: str = '') -> tuple[framebuf.FrameBuffer, int, int, framebuf.FrameBuffer]:
     """
-    Generate a QR code encoding WiFi credentials.
+    Generate a QR code encoding WiFi credentials with quiet zone.
 
     Uses lazy import of miqro to avoid loading it at startup when not needed.
+    The returned framebuffer includes a white quiet zone border around the QR
+    code, which is required by the QR spec for reliable scanning.
     """
     from miqro import QRCode
 
@@ -373,7 +379,18 @@ def _generate_wifi_qr(ssid: str, password: str = '') -> tuple[framebuf.FrameBuff
         wifi_str = f"WIFI:T:nopass;S:{ssid};;"
 
     qr = QRCode(wifi_str)
-    return (qr.data, qr.width, qr.height, _qr_palette)
+
+    # Add quiet zone: create a larger framebuffer and blit QR into the center.
+    # In MONO_HLSB, a zeroed bytearray = all pixels at index 0 = white via palette.
+    pad = _QR_QUIET_ZONE
+    padded_w = qr.width + pad * 2
+    padded_h = qr.height + pad * 2
+    row_bytes = (padded_w + 7) // 8
+    padded_buf = bytearray(row_bytes * padded_h)
+    padded_fb = framebuf.FrameBuffer(padded_buf, padded_w, padded_h, framebuf.MONO_HLSB)
+    padded_fb.blit(qr.data, pad, pad)
+
+    return (padded_fb, padded_w, padded_h, _qr_palette)
 
 
 def set_setup_mode(reason: str, ap_ssid: str = '', ap_ip: str = '', wifi_ssid: str = '') -> None:
@@ -399,7 +416,7 @@ def set_setup_mode(reason: str, ap_ssid: str = '', ap_ip: str = '', wifi_ssid: s
             setup.qr_height = qr_h
             setup.qr_palette = qr_palette
         except Exception as e:
-            print(f"QR generation failed: {e}")
+            print(f"[MAIN] qr generation failed: {e}")
             setup.qr_fb = None
             setup.qr_width = 0
             setup.qr_height = 0
@@ -427,17 +444,15 @@ def set_error(title: str, lines: list[str] | None = None) -> None:
 # Pre-computed display values (set by Core 0, read by Core 1)
 # =============================================================================
 
-_QUARTER_MAP = {
-    "first": "Q1",
-    "second": "Q2",
-    "third": "Q3",
-    "fourth": "Q4",
+_PERIOD_MAP = {
     "Q1": "Q1",
     "Q2": "Q2",
     "Q3": "Q3",
     "Q4": "Q4",
     "OT": "OT",
     "OT2": "2OT",
+    "OT3": "3OT",
+    "OT4": "4OT",
     "Halftime": "HALF",
 }
 
@@ -450,8 +465,6 @@ _DOWN_MAP = {
 
 _DAY_NAMES = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
 
-# Offset between Unix epoch (1970) and MicroPython epoch (2000)
-_EPOCH_OFFSET = 946684800
 
 
 def update_ui_colors(config: Config) -> None:
@@ -473,6 +486,8 @@ def update_ui_colors(config: Config) -> None:
         colors.clock_normal = to_rgb565(config.get_color('clock_normal'))
         colors.clock_warning = to_rgb565(config.get_color('clock_warning'))
         buf.dirty = True
+    if config.log_level >= DEBUG:
+        print("[CONFIG] ui colors updated from config")
 
 
 # =============================================================================
@@ -495,7 +510,8 @@ def update_display_frequency(config: Config) -> None:
 
     data_freq = config.data_frequency_hz
     _display_driver.set_frequency(data_freq)
-    print(f"Display frequency updated: data={data_freq // 1000}kHz")
+    if config.log_level >= DEBUG:
+        print(f"[CONFIG] display frequency updated: {data_freq // 1000}kHz")
 
 
 def _recompute_refresh_rate(config: Config) -> None:
@@ -503,7 +519,8 @@ def _recompute_refresh_rate(config: Config) -> None:
     if _display_driver is None:
         return
     rate = _display_driver.set_target_refresh_rate(config.target_refresh_rate)
-    print(f"Display refresh rate recomputed: {rate:.1f} Hz")
+    if config.log_level >= DEBUG:
+        print(f"[CONFIG] refresh rate recomputed due to blanking time change: {rate:.1f}Hz")
 
 
 
@@ -513,7 +530,8 @@ def update_display_refresh_rate(config: Config) -> None:
         return
 
     rate = _display_driver.set_target_refresh_rate(config.target_refresh_rate)
-    print(f"Display refresh rate updated: {rate:.1f} Hz")
+    if config.log_level >= DEBUG:
+        print(f"[CONFIG] display refresh rate updated: {rate:.1f}Hz")
 
 
 def update_display_gamma(config: Config) -> None:
@@ -523,12 +541,13 @@ def update_display_gamma(config: Config) -> None:
 
     gamma_value = config.gamma
     _display_driver.set_gamma(gamma_value)
-    if gamma_value is None:
-        print("Display gamma updated: none (linear)")
-    elif isinstance(gamma_value, gamma_mod.Power):
-        print(f"Display gamma updated: power ({gamma_value.value})")
-    else:
-        print("Display gamma updated: sRGB")
+    if config.log_level >= DEBUG:
+        if gamma_value is None:
+            print("[CONFIG] display gamma updated: none (linear)")
+        elif isinstance(gamma_value, gamma_mod.Power):
+            print(f"[CONFIG] display gamma updated: power={gamma_value.value}")
+        else:
+            print("[CONFIG] display gamma updated: srgb")
 
 
 def update_display_blanking_time(config: Config) -> None:
@@ -538,14 +557,15 @@ def update_display_blanking_time(config: Config) -> None:
 
     _display_driver.set_blanking_time(config.blanking_time_ns)
     _recompute_refresh_rate(config)
-    print(f"Display blanking time updated: {config.blanking_time_ns}ns")
+    if config.log_level >= DEBUG:
+        print(f"[CONFIG] display blanking time updated: {config.blanking_time_ns}ns")
 
 
-def format_quarter(quarter: str) -> str:
-    """Format quarter for display. Uses module-level dict (no allocation)."""
-    if not quarter:
+def format_period(period: str) -> str:
+    """Format period for display. Uses module-level dict (no allocation)."""
+    if not period:
         return ""
-    return _QUARTER_MAP.get(quarter, quarter[:3].upper())
+    return _PERIOD_MAP.get(period, period[:3].upper())
 
 
 def format_situation(situation: Situation | None) -> str:
@@ -572,8 +592,8 @@ def parse_pregame_datetime(timestamp: int, utc_offset: int = 0) -> tuple[str, st
         return ("", "")
 
     try:
-        # Apply UTC offset to convert to local time, then to MicroPython epoch
-        local_ts = timestamp + utc_offset - _EPOCH_OFFSET
+        # Apply UTC offset to convert to local time
+        local_ts = timestamp + utc_offset
         tm = time.gmtime(local_ts)
         # gmtime returns: (year, month, mday, hour, minute, second, weekday, yearday)
 

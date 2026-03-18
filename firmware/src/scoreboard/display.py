@@ -14,6 +14,7 @@ from scoreboard.models import Color, PregameGame, LiveGame, FinalGame, STATE_PRE
 from scoreboard.state import StateBuffer, UiColors
 from scoreboard.config import Config
 from scoreboard.api_client import ScoreboardApiClient
+from scoreboard.logger import DEBUG, ERROR
 from scoreboard.sprites import field as field_sprite
 from scoreboard.sprites import ball as ball_sprite
 
@@ -240,11 +241,11 @@ _logo_cache = {}  # team_abbr -> (slot_index, FrameBuffer)
 _logo_lru = []    # LRU order: oldest first
 _free_slots = set(range(_LOGO_POOL_SIZE))
 
-print(f"Pre-allocated {_LOGO_POOL_SIZE} logo buffers ({_LOGO_POOL_SIZE * _LOGO_BUFFER_SIZE // 1024} KB)")
+print(f"[DISPLAY] logo pool initialized: {_LOGO_POOL_SIZE} buffers ({_LOGO_POOL_SIZE * _LOGO_BUFFER_SIZE // 1024} KB)")
 
 
 
-def get_logo_framebuffer(api_client: ScoreboardApiClient, team_abbreviation: str) -> framebuf.FrameBuffer | None:
+async def get_logo_framebuffer(api_client: ScoreboardApiClient, team_abbreviation: str) -> framebuf.FrameBuffer | None:
     """
     Get logo framebuffer from cache or fetch from API.
 
@@ -266,10 +267,11 @@ def get_logo_framebuffer(api_client: ScoreboardApiClient, team_abbreviation: str
         evict_key = _logo_lru.pop(0)
         slot_index = _logo_cache[evict_key][0]
         del _logo_cache[evict_key]
-        print(f"Evicted logo {evict_key} from slot {slot_index}")
+        if api_client._config.log_level >= DEBUG:
+            print(f"[LOGO] evicted: team={evict_key} slot={slot_index}/{_LOGO_POOL_SIZE}")
 
     try:
-        status, body = api_client.get_team_logo_raw(
+        status, body = await api_client.get_team_logo_raw(
             team_id=key,
             width=_LOGO_WIDTH,
             height=_LOGO_HEIGHT,
@@ -278,7 +280,8 @@ def get_logo_framebuffer(api_client: ScoreboardApiClient, team_abbreviation: str
         )
 
         if status != 200:
-            print(f"Logo fetch failed for {key}: HTTP {status}")
+            if api_client._config.log_level >= ERROR:
+                print(f"[LOGO] fetch failed: team={key} status={status}")
             _free_slots.add(slot_index)
             return None
 
@@ -288,11 +291,13 @@ def get_logo_framebuffer(api_client: ScoreboardApiClient, team_abbreviation: str
 
         _logo_cache[key] = (slot_index, fb)
         _logo_lru.append(key)
-        print(f"Cached logo for {key} (slot {slot_index}/{_LOGO_POOL_SIZE})")
+        if api_client._config.log_level >= DEBUG:
+            print(f"[LOGO] cached: team={key} slot={slot_index}/{_LOGO_POOL_SIZE}")
         return fb
 
     except Exception as e:
-        print(f"Logo fetch error for {key}: {e}")
+        if api_client._config.log_level >= ERROR:
+            print(f"[LOGO] fetch error: team={key} error_type={type(e).__name__} {e}")
         _free_slots.add(slot_index)
         return None
 
@@ -564,7 +569,7 @@ def render_live(display: Hub75Display, writer: FontWriter, game: LiveGame, state
 
     # Quarter and situation from pre-formatted state (no allocation)
     display_data = state.display
-    quarter_display = display_data.quarter
+    quarter_display = display_data.period
     situation_str = display_data.situation
 
     # Quarter (left 1/3) and Clock (right 2/3) on same line
@@ -717,7 +722,7 @@ def render_frame(display: Hub75Display, writer: FontWriter, state: StateBuffer, 
 # Display thread (runs on Core 1)
 # =============================================================================
 
-def run_display_thread(display: Hub75Display, writer: FontWriter) -> None:
+def run_display_thread(display: Hub75Display, writer: FontWriter, config: Config = None) -> None:
     """
     Main entry point for Core 1 display thread.
 
@@ -731,7 +736,8 @@ def run_display_thread(display: Hub75Display, writer: FontWriter) -> None:
     """
     from scoreboard.state import get_display_state
 
-    print("Display thread starting on Core 1 (20 FPS)...")
+    if config is not None and config.log_level >= DEBUG:
+        print("[DISPLAY] thread starting: core=1 rate=20fps")
 
     while True:
         try:
@@ -746,7 +752,8 @@ def run_display_thread(display: Hub75Display, writer: FontWriter) -> None:
             display.show()
 
         except Exception as e:
-            print(f"Display thread error: {e}")
+            if config is not None and config.log_level >= ERROR:
+                print(f"[DISPLAY] thread error: {e}")
 
         # Constant 20 FPS for all animations
         time.sleep_ms(50)
