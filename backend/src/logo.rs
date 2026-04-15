@@ -1,4 +1,4 @@
-use image::{imageops::FilterType, DynamicImage, ImageFormat, Rgba, RgbaImage};
+use image::{DynamicImage, ImageFormat, Rgba, RgbaImage, imageops::FilterType};
 use std::io::Cursor;
 
 use crate::error::AppError;
@@ -209,18 +209,10 @@ mod tests {
 
         // Check header
         let header_end = ppm.iter().position(|&b| b == b'\n').unwrap() + 1;
-        let header_end = header_end
-            + ppm[header_end..]
-                .iter()
-                .position(|&b| b == b'\n')
-                .unwrap()
-            + 1;
-        let header_end = header_end
-            + ppm[header_end..]
-                .iter()
-                .position(|&b| b == b'\n')
-                .unwrap()
-            + 1;
+        let header_end =
+            header_end + ppm[header_end..].iter().position(|&b| b == b'\n').unwrap() + 1;
+        let header_end =
+            header_end + ppm[header_end..].iter().position(|&b| b == b'\n').unwrap() + 1;
 
         let header = std::str::from_utf8(&ppm[..header_end]).unwrap();
         assert_eq!(header, "P6\n10 20\n255\n");
@@ -384,5 +376,4 @@ mod tests {
         assert!((p[2] as i16 - 200).unsigned_abs() <= 1);
         assert_eq!(p[3], 128);
     }
-
 }

@@ -128,8 +128,8 @@ impl AppConfig {
             //    APP_ESPN__TIMEOUT_SECS → espn.timeout_secs
             .add_source(
                 Environment::with_prefix("APP")
-                    .prefix_separator("_")  // Handle the underscore between "APP" and the rest
-                    .separator("__"),       // Double underscore for nested fields
+                    .prefix_separator("_") // Handle the underscore between "APP" and the rest
+                    .separator("__"), // Double underscore for nested fields
             )
             .build()
             .expect("Failed to build configuration")

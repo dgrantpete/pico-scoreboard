@@ -9,24 +9,14 @@ use utoipa::ToSchema;
 /// Application error types
 #[derive(Debug)]
 pub enum AppError {
-    /// Error making request to ESPN API
-    EspnRequest(reqwest::Error),
     /// Error fetching image from ESPN CDN
     ImageFetch(reqwest::Error),
     /// Error decoding or encoding image
     ImageDecode(String),
     /// Invalid hex color format
     InvalidColor(String),
-    /// Team logo not found (ESPN returned 404)
+    /// Team abbreviation not found at ESPN CDN
     TeamNotFound(String),
-    /// Game not found in scoreboard
-    GameNotFound(String),
-    /// Invalid event ID format
-    InvalidEventId(String),
-    /// Invalid mock scenario
-    InvalidScenario(String),
-    /// Mock game not found in repository
-    MockGameNotFound(String),
     /// Missing API key header
     MissingApiKey,
     /// Invalid API key
@@ -35,16 +25,24 @@ pub enum AppError {
     ExpiredSignature,
     /// HMAC signature is invalid
     InvalidSignature,
-    /// ESPN API response deserialization failed
-    EspnDeserialize { path: String, message: String },
-    /// Invalid league path parameter
-    InvalidLeague { league: String, valid: &'static str },
+    /// Network / HTTP status failure against ESPN
+    EspnRequest(reqwest::Error),
+    /// ESPN JSON response failed to deserialize
+    EspnDeserialize {
+        url: String,
+        json_path: String,
+        message: String,
+    },
+    /// Game ID not found or not currently live
+    GameNotFound(String),
+    /// Team color hex string could not be parsed
+    InvalidTeamColor { team: String, raw: String },
 }
 
 /// Error response body
 #[derive(Serialize, ToSchema)]
 pub struct ErrorResponse {
-    /// Error code (e.g., "game_not_found", "unauthorized")
+    /// Error code (e.g., "unauthorized")
     pub error: String,
     /// Human-readable error message
     pub message: String,
@@ -53,11 +51,6 @@ pub struct ErrorResponse {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, error, message) = match self {
-            AppError::EspnRequest(e) => (
-                StatusCode::BAD_GATEWAY,
-                "espn_error".to_string(),
-                format!("Failed to fetch data from ESPN: {}", e),
-            ),
             AppError::ImageFetch(e) => (
                 StatusCode::BAD_GATEWAY,
                 "image_fetch_error".to_string(),
@@ -76,33 +69,10 @@ impl IntoResponse for AppError {
                     c
                 ),
             ),
-            AppError::TeamNotFound(team) => (
+            AppError::TeamNotFound(abbrev) => (
                 StatusCode::NOT_FOUND,
                 "team_not_found".to_string(),
-                format!("Team '{}' not found", team),
-            ),
-            AppError::GameNotFound(id) => (
-                StatusCode::NOT_FOUND,
-                "game_not_found".to_string(),
-                format!("Game with ID '{}' not found on current scoreboard", id),
-            ),
-            AppError::InvalidEventId(id) => (
-                StatusCode::BAD_REQUEST,
-                "invalid_event_id".to_string(),
-                format!("Event ID '{}' is invalid. Must be numeric.", id),
-            ),
-            AppError::InvalidScenario(s) => (
-                StatusCode::BAD_REQUEST,
-                "invalid_scenario".to_string(),
-                format!(
-                    "Invalid scenario '{}'. Valid options: pregame, live, final, mixed, redzone, overtime",
-                    s
-                ),
-            ),
-            AppError::MockGameNotFound(id) => (
-                StatusCode::NOT_FOUND,
-                "mock_game_not_found".to_string(),
-                format!("Mock game with ID '{}' not found", id),
+                format!("Team '{}' not found", abbrev),
             ),
             AppError::MissingApiKey => (
                 StatusCode::UNAUTHORIZED,
@@ -124,15 +94,33 @@ impl IntoResponse for AppError {
                 "invalid_signature".to_string(),
                 "Invalid request signature".to_string(),
             ),
-            AppError::EspnDeserialize { path, message } => (
+            AppError::EspnRequest(e) => (
+                StatusCode::BAD_GATEWAY,
+                "espn_request_error".to_string(),
+                format!("ESPN upstream request failed: {}", e),
+            ),
+            AppError::EspnDeserialize {
+                json_path, message, ..
+            } => (
                 StatusCode::BAD_GATEWAY,
                 "espn_deserialize_error".to_string(),
-                format!("Failed to parse ESPN response at '{}': {}", path, message),
+                format!(
+                    "Upstream response at {} failed to parse: {}",
+                    json_path, message
+                ),
             ),
-            AppError::InvalidLeague { league, valid } => (
-                StatusCode::BAD_REQUEST,
-                "invalid_league".to_string(),
-                format!("Invalid league '{}'. Valid leagues: {}", league, valid),
+            AppError::GameNotFound(id) => (
+                StatusCode::NOT_FOUND,
+                "game_not_found".to_string(),
+                format!("Game '{}' not found or not live", id),
+            ),
+            AppError::InvalidTeamColor { team, raw } => (
+                StatusCode::BAD_GATEWAY,
+                "invalid_team_color".to_string(),
+                format!(
+                    "Upstream returned invalid team color for '{}': '{}'",
+                    team, raw
+                ),
             ),
         };
 

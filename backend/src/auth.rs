@@ -5,8 +5,8 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::sync::Arc;
 
-use crate::error::AppError;
 use crate::AppState;
+use crate::error::AppError;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -56,7 +56,9 @@ where
             }
 
             if let (Some(expires_str), Some(sig)) = (expires_val, sig_val) {
-                let expires: i64 = expires_str.parse().map_err(|_| AppError::InvalidSignature)?;
+                let expires: i64 = expires_str
+                    .parse()
+                    .map_err(|_| AppError::InvalidSignature)?;
 
                 // Check expiry
                 if expires < Utc::now().timestamp() {
