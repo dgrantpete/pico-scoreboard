@@ -40,13 +40,11 @@ import hashlib
 import _thread
 from microdot import Microdot, Request, Response, send_file
 from scoreboard import Config
-from scoreboard.api_client import ScoreboardApiClient
-from scoreboard.state import set_mode, set_startup_step, finish_startup, set_display_driver
+from scoreboard.state import set_startup_step, finish_startup, set_display_driver
 from scoreboard.dns import run_dns_server
 from scoreboard.api_routes import create_api
 from scoreboard.display import init_display, render_startup, run_display_thread
 from scoreboard.fonts import FontWriter
-from scoreboard.api_poller import api_polling_loop
 from hub75 import Hub75Display
 from machine import I2C, Pin
 from veml7700 import VEML7700
@@ -231,9 +229,6 @@ async def _sync_time_from_backend() -> int:
             print(f"[TIME] sync failed: {e}")
         return 0
 
-
-# Create API client for backend communication
-api_client: ScoreboardApiClient = ScoreboardApiClient(config)
 
 # Create and mount API under /api prefix
 api: Microdot = create_api(config, get_network_status)
@@ -683,7 +678,6 @@ async def main() -> None:
                 print(f"[MAIN] mode change: startup -> idle (time_sync_ok={utc_offset != 0})")
             # Explicit transition: startup → idle
             finish_startup('idle')
-            asyncio.create_task(api_polling_loop(config, api_client, utc_offset))
 
     if config.log_level >= DEBUG:
         print("[MAIN] web server starting: port=80")

@@ -8,14 +8,12 @@ Uses double buffering with lock-protected swap for thread-safe state sharing:
 - Lock-protected swap + carry-forward when update is complete
 """
 
-import time
 import _thread
 import framebuf
 
 from hub75 import Hub75Driver, gamma as gamma_mod
 from scoreboard.config import Config
-from scoreboard.logger import DEBUG, ERROR
-from scoreboard.models import PregameGame, LiveGame, FinalGame, Situation
+from scoreboard.logger import DEBUG
 
 
 # =============================================================================
@@ -54,17 +52,6 @@ class ErrorState:
         self.lines: list[str] = []    # Up to 4 detail lines
 
 
-class FieldState:
-    """Pre-computed football field visualization state, set by Core 0."""
-
-    def __init__(self) -> None:
-        self.ball_x: int | None = None        # Absolute pixel X of ball (None = no field)
-        self.first_down_x: int | None = None  # Absolute pixel X of first down line
-        self.direction: int = 0               # 1 = attacking right, -1 = attacking left
-        self.home_color: int = 0              # Home endzone RGB565
-        self.away_color: int = 0              # Away endzone RGB565
-
-
 class UiColors:
     """Pre-computed UI colors (RGB565), set by Core 0."""
 
@@ -76,42 +63,18 @@ class UiColors:
         self.clock_warning: int = 0xFFFF
 
 
-class DisplayStrings:
-    """Pre-formatted display strings, set by Core 0 when game updates."""
-
-    def __init__(self) -> None:
-        self.period: str = ''          # "Q1", "Q2", "OT", etc.
-        self.situation: str = ''       # "3rd & 7" or ''
-        self.possession: str = ''      # "home", "away", or '' (for possession arrow)
-        self.pregame_date: str = ''    # "SUN 01/15"
-        self.pregame_time: str = ''    # "7:30 PM"
-        self.last_play_text: str = ''  # Last play description for live games
-
-
 class StateBuffer:
     """Complete display state snapshot. Pre-allocated, mutated in place."""
 
     def __init__(self) -> None:
         self.mode: str = 'idle'
-        self.game: PregameGame | LiveGame | FinalGame | None = None
-        self.games: list[PregameGame | LiveGame | FinalGame] = []
-        self.game_index: int = 0
-        self.home_logo: framebuf.FrameBuffer | None = None
-        self.away_logo: framebuf.FrameBuffer | None = None
         self.last_update_ms: int = 0
         self.dirty: bool = True
-        self.clock_dirty: bool = False
-        self.clock_seconds: int | None = None
-        self.clock_last_tick_ms: int = 0
-        self.animation_start_ms: int = 0   # Reset scrolling animations on each API poll
-        self.home_scored_ms: int = 0       # Score flash timestamp (set by Core 0)
-        self.away_scored_ms: int = 0       # Score flash timestamp (set by Core 0)
+        self.animation_start_ms: int = 0   # Reset scrolling animations when state changes
         self.startup: StartupState = StartupState()
         self.setup: SetupState = SetupState()
         self.error: ErrorState = ErrorState()
         self.ui_colors: UiColors = UiColors()
-        self.display: DisplayStrings = DisplayStrings()
-        self.field: FieldState = FieldState()
 
 
 # =============================================================================
@@ -168,19 +131,9 @@ class DoubleBufferedState:
 
         # Scalar and reference fields
         back.mode = front.mode
-        back.game = front.game
-        back.games = front.games
-        back.game_index = front.game_index
-        back.home_logo = front.home_logo
-        back.away_logo = front.away_logo
         back.last_update_ms = front.last_update_ms
         back.dirty = front.dirty
-        back.clock_dirty = front.clock_dirty
-        back.clock_seconds = front.clock_seconds
-        back.clock_last_tick_ms = front.clock_last_tick_ms
         back.animation_start_ms = front.animation_start_ms
-        back.home_scored_ms = front.home_scored_ms
-        back.away_scored_ms = front.away_scored_ms
 
         # Sub-objects: field-by-field to preserve pre-allocated instances
         back.startup.step = front.startup.step
@@ -206,19 +159,6 @@ class DoubleBufferedState:
         back.ui_colors.clock_normal = front.ui_colors.clock_normal
         back.ui_colors.clock_warning = front.ui_colors.clock_warning
 
-        back.display.period = front.display.period
-        back.display.situation = front.display.situation
-        back.display.possession = front.display.possession
-        back.display.pregame_date = front.display.pregame_date
-        back.display.pregame_time = front.display.pregame_time
-        back.display.last_play_text = front.display.last_play_text
-
-        back.field.ball_x = front.field.ball_x
-        back.field.first_down_x = front.field.first_down_x
-        back.field.direction = front.field.direction
-        back.field.home_color = front.field.home_color
-        back.field.away_color = front.field.away_color
-
 
 # Singleton instance
 _double_buffer: DoubleBufferedState = DoubleBufferedState()
@@ -240,42 +180,6 @@ def get_write_state() -> StateBuffer:
 def commit_state() -> None:
     """Swap buffers — makes back buffer visible to display thread."""
     _double_buffer.swap()
-
-
-def parse_clock(clock_str: str) -> int:
-    """
-    Parse clock string to total seconds.
-
-    Args:
-        clock_str: Clock string like "3:45", "0:05", or "15:00"
-
-    Returns:
-        Total seconds as integer (e.g., "3:45" -> 225)
-    """
-    if ':' in clock_str:
-        parts = clock_str.split(':')
-        return int(parts[0]) * 60 + int(parts[1])
-    try:
-        return int(clock_str)
-    except ValueError:
-        return 0
-
-
-def format_clock(seconds: int) -> str:
-    """
-    Format seconds back to clock string.
-
-    Args:
-        seconds: Total seconds (e.g., 225)
-
-    Returns:
-        Clock string like "3:45"
-    """
-    if seconds < 0:
-        seconds = 0
-    minutes = seconds // 60
-    secs = seconds % 60
-    return f"{minutes}:{secs:02d}"
 
 
 def set_mode(mode: str) -> None:
@@ -444,29 +348,6 @@ def set_error(title: str, lines: list[str] | None = None) -> None:
 # Pre-computed display values (set by Core 0, read by Core 1)
 # =============================================================================
 
-_PERIOD_MAP = {
-    "Q1": "Q1",
-    "Q2": "Q2",
-    "Q3": "Q3",
-    "Q4": "Q4",
-    "OT": "OT",
-    "OT2": "2OT",
-    "OT3": "3OT",
-    "OT4": "4OT",
-    "Halftime": "HALF",
-}
-
-_DOWN_MAP = {
-    "first": "1st",
-    "second": "2nd",
-    "third": "3rd",
-    "fourth": "4th",
-}
-
-_DAY_NAMES = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
-
-
-
 def update_ui_colors(config: Config) -> None:
     """
     Pre-compute UI colors on Core 0. Call at startup and when config changes.
@@ -559,57 +440,3 @@ def update_display_blanking_time(config: Config) -> None:
     _recompute_refresh_rate(config)
     if config.log_level >= DEBUG:
         print(f"[CONFIG] display blanking time updated: {config.blanking_time_ns}ns")
-
-
-def format_period(period: str) -> str:
-    """Format period for display. Uses module-level dict (no allocation)."""
-    if not period:
-        return ""
-    return _PERIOD_MAP.get(period, period[:3].upper())
-
-
-def format_situation(situation: Situation | None) -> str:
-    """Format down and distance for display."""
-    if situation is None:
-        return ''
-    down_str = _DOWN_MAP.get(situation.down, situation.down)
-    return f"{down_str} & {situation.distance}"
-
-
-def parse_pregame_datetime(timestamp: int, utc_offset: int = 0) -> tuple[str, str]:
-    """
-    Convert a Unix timestamp to local date and time strings for pregame display.
-
-    Args:
-        timestamp: Unix timestamp in seconds (UTC).
-        utc_offset: Seconds to add for local time (e.g., -18000 for EST).
-
-    Returns:
-        Tuple of (date_display, time_display) strings.
-        Returns ("", "") if timestamp is 0 (unknown).
-    """
-    if not timestamp:
-        return ("", "")
-
-    try:
-        # Apply UTC offset to convert to local time
-        local_ts = timestamp + utc_offset
-        tm = time.gmtime(local_ts)
-        # gmtime returns: (year, month, mday, hour, minute, second, weekday, yearday)
-
-        year, month, day, hour, minute = tm[0], tm[1], tm[2], tm[3], tm[4]
-        weekday = tm[6]  # 0=Monday, 6=Sunday
-        day_abbr = _DAY_NAMES[weekday]
-
-        date_display = f"{day_abbr} {month:02d}/{day:02d}"
-
-        am_pm = "AM" if hour < 12 else "PM"
-        if hour == 0:
-            hour = 12
-        elif hour > 12:
-            hour -= 12
-        time_display = f"{hour}:{minute:02d} {am_pm}"
-
-        return (date_display, time_display)
-    except (ValueError, OverflowError):
-        return ("", "")

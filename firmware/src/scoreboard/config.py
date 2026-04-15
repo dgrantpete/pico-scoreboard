@@ -24,8 +24,7 @@ _DEFAULTS = {
     },
     "api": {
         "url": "",
-        "key": "",
-        "mock": False
+        "key": ""
     },
     "display": {
         "brightness": 100,
@@ -191,11 +190,6 @@ class Config:
     def api_key(self) -> str:
         """API key for X-Api-Key header."""
         return self._data["api"]["key"]
-
-    @property
-    def api_mock(self) -> bool:
-        """Whether to use mock endpoints (/api/mock/games) instead of real ones."""
-        return self._data["api"].get("mock", False)
 
     # Display properties
     @property
