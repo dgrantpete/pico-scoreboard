@@ -17,11 +17,15 @@ Prerequisites:
     pip install mpy-cross    # For .mpy compilation
 """
 
+import json
 import shutil
 import subprocess
 import argparse
 import time
 from pathlib import Path
+
+from compile_layout import compile_all as compile_layout_all
+from compile_fonts import compile_all as compile_fonts_all
 
 # Directory structure
 root_directory = Path(__file__).parent.parent
@@ -38,13 +42,27 @@ COPY_ONLY_FILES = [
 ]
 
 # Files/directories to skip entirely (glob patterns)
+# Note: Path.full_match matches against the whole path and `*` does not cross
+# separators, so these patterns need a `**/` prefix to match at any depth.
 SKIP_FILES = [
-    '*/__pycache__/*',  # Python cache files
-    '*.pyc',            # Compiled Python cache
+    '**/__pycache__/**',  # Python cache directories
+    '**/*.pyc',           # Compiled Python cache
 ]
 
 # Files to skip in release builds (glob patterns)
 DEV_ONLY_FILES = []  # None currently, but available for future use
+
+
+def _load_build_config() -> dict:
+    """Load default argument values from tools/build.config.json if present."""
+    config_path = Path(__file__).parent / 'build.config.json'
+    if not config_path.exists():
+        return {}
+    with open(config_path) as f:
+        return json.load(f)
+
+
+_build_config = _load_build_config()
 
 
 def build_frontend() -> bool:
@@ -177,8 +195,15 @@ def flash_device(source_dir: Path, port: str = None, repl: bool = False):
         print("Flash complete!")
 
 
-def do_build(output_dir: Path, configuration: str, arch: str) -> bool:
+def do_build(output_dir: Path, configuration: str, arch: str, no_assets: bool = False) -> bool:
     """Execute the build pipeline."""
+    # Regenerate layout/font modules from firmware/assets/ (source of truth)
+    if not no_assets:
+        print("Compiling layout modules...")
+        compile_layout_all()
+        print("Compiling font modules...")
+        compile_fonts_all()
+
     # Build frontend
     if not build_frontend():
         return False
@@ -199,24 +224,35 @@ def do_build(output_dir: Path, configuration: str, arch: str) -> bool:
 
 
 def add_common_args(parser):
-    """Add common arguments to a parser."""
+    """Add common arguments to a parser.
+
+    Defaults are sourced from tools/build.config.json when present, with
+    hardcoded fallbacks if the file is missing or a key is absent.
+    """
     parser.add_argument(
         '-o', '--output',
         type=Path,
-        default='pico',
-        help='Output directory (default: pico)'
+        default=Path(_build_config.get('output', 'pico')),
+        help='Output directory (default from build.config.json, else "pico")'
     )
     parser.add_argument(
         '-c', '--configuration',
         choices=['dev', 'release'],
-        default='release',
-        help='Build configuration: dev copies .py files, release compiles to .mpy (default: release)'
+        default=_build_config.get('configuration', 'release'),
+        help='Build configuration: dev copies .py files, release compiles to .mpy '
+             '(default from build.config.json, else "release")'
     )
     parser.add_argument(
         '-a', '--arch',
         choices=['armv7emsp', 'armv6m', 'all'],
-        default='all',
-        help='Target architecture for mpy-cross: RP2040=armv6m, RP2350=armv7emsp (default: all)'
+        default=_build_config.get('arch', 'armv7emsp'),
+        help='Target architecture for mpy-cross: RP2040=armv6m, RP2350=armv7emsp '
+             '(default from build.config.json, else "armv7emsp")'
+    )
+    parser.add_argument(
+        '--no-assets',
+        action='store_true',
+        help='Skip sprite/font regeneration (fast iteration when only firmware .py changed)'
     )
 
 
@@ -298,14 +334,14 @@ def main():
 
     # Default command (no subcommand) = build only
     if args.command is None:
-        if not do_build(output_dir, args.configuration, args.arch):
+        if not do_build(output_dir, args.configuration, args.arch, args.no_assets):
             return 1
         return 0
 
     # flash command
     elif args.command == 'flash':
         if not args.no_build:
-            if not do_build(output_dir, args.configuration, args.arch):
+            if not do_build(output_dir, args.configuration, args.arch, args.no_assets):
                 return 1
         elif not output_dir.exists():
             print(f"Error: {output_dir} does not exist. Run build first or remove --no-build.")
@@ -317,7 +353,7 @@ def main():
     # run command
     elif args.command == 'run':
         if not args.no_build:
-            if not do_build(output_dir, args.configuration, args.arch):
+            if not do_build(output_dir, args.configuration, args.arch, args.no_assets):
                 return 1
         elif not output_dir.exists():
             print(f"Error: {output_dir} does not exist. Run build first or remove --no-build.")
