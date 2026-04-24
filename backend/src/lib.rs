@@ -43,6 +43,9 @@ use espn::EspnClient;
         mlb::Count,
         mlb::Bases,
         mlb::AtBat,
+        mlb::LastPlay,
+        mlb::Inning,
+        mlb::InningHalf,
     )),
     modifiers(&SecurityAddon),
     tags(

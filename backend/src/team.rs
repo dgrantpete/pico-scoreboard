@@ -139,10 +139,10 @@ pub async fn get_team_logo(
     );
 
     let logo_bytes = state.espn_client.fetch_logo(&url).await.map_err(|e| {
-        if let AppError::ImageFetch(ref req_err) = e {
-            if req_err.status() == Some(StatusCode::NOT_FOUND) {
-                return AppError::TeamNotFound(abbrev.clone());
-            }
+        if let AppError::ImageFetch(ref req_err) = e
+            && req_err.status() == Some(StatusCode::NOT_FOUND)
+        {
+            return AppError::TeamNotFound(abbrev.clone());
         }
         e
     })?;
