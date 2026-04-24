@@ -16,6 +16,11 @@ ALIGN_LEFT: int = 0
 ALIGN_CENTER: int = 1
 ALIGN_RIGHT: int = 2
 
+# Transparency sentinel. Matches the MAGENTA_RGB565 constant in display.py
+# and the _TRANSPARENT_RGB565 used by tools/compile_layout.py. Used as the
+# blit key when draw() is called with bgcolor=None.
+MAGENTA_RGB565: int = 0xF81F
+
 
 @micropython.viper
 def rgb565(r: int, g: int, b: int) -> int:
@@ -340,6 +345,75 @@ class FontWriter:
             start_x = x
 
         return self.text(string, start_x, y, color, bgcolor, font)
+
+    def draw(
+        self,
+        region,
+        text: str,
+        font,
+        align: int,
+        elapsed_ms: int,
+        color: int,
+        bgcolor=None,
+    ) -> None:
+        """
+        Draw text into a Region, auto-scrolling on overflow.
+
+        Glyph blits are clipped to the region's bounds automatically — no
+        manual fill_rect masking required. Scrolling activates when the
+        measured text is wider than the region. Hardcoded to 30 px/sec with
+        2000 ms dwell at each end, matching the current pitcher/batter feel.
+
+        Args:
+            region: Region (or any framebuffer-like object exposing `.width`
+                and supporting fill()/blit()). Sizes and stride are opaque.
+            text: String to render.
+            font: Font module (unscii_8, unscii_16, spleen_5x8). None = default.
+            align: ALIGN_LEFT | ALIGN_CENTER | ALIGN_RIGHT. Ignored while scrolling.
+            elapsed_ms: Milliseconds since animation_start_ms. Only consulted
+                when text overflows and scrolling activates.
+            color: Foreground color (RGB565).
+            bgcolor: Optional background color (RGB565). If omitted, non-glyph
+                pixels in the region are left untouched (transparent via the
+                MAGENTA_RGB565 blit key).
+        """
+        if font is None:
+            font = self._default_font
+        if font is None:
+            raise ValueError("No font specified and no default set")
+
+        width = region.width
+
+        if bgcolor is not None:
+            region.fill(bgcolor)
+            self._palette.pixel(0, 0, bgcolor)
+            key = -1
+        else:
+            self._palette.pixel(0, 0, MAGENTA_RGB565)
+            key = MAGENTA_RGB565
+        self._palette.pixel(1, 0, color)
+
+        text_w = self.measure(text, font)
+
+        if text_w <= width:
+            if align == ALIGN_CENTER:
+                cursor_x = (width - text_w) // 2
+            elif align == ALIGN_RIGHT:
+                cursor_x = width - text_w
+            else:
+                cursor_x = 0
+        else:
+            from scoreboard.display import calculate_scroll_offset
+            cursor_x = -calculate_scroll_offset(text_w, width, elapsed_ms)
+
+        spec = self._glyph_spec
+        for char in text:
+            glyph_data, char_height, char_width = font.get_ch(char)
+            spec[0] = glyph_data
+            spec[1] = char_width
+            spec[2] = char_height
+            region.blit(spec, cursor_x, 0, key, self._palette)
+            cursor_x += char_width
 
     def measure(self, string: str, font=None) -> int:
         """Measure text width in pixels."""

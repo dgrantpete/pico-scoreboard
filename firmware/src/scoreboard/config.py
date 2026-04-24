@@ -29,6 +29,7 @@ _DEFAULTS = {
     "display": {
         "brightness": 100,
         "poll_interval_seconds": 30,
+        "game_rotation_seconds": 60,
         "data_frequency_khz": 20000,
         "target_refresh_rate": 120,
         "gamma": {"type": "srgb"},
@@ -65,6 +66,20 @@ def _deep_merge(base: dict, override: dict) -> dict:
             result[key] = value
 
     return result
+
+
+class CadenceError(ValueError):
+    """Raised when poll_interval_seconds >= game_rotation_seconds."""
+    pass
+
+
+def _validate_cadence(poll_interval: int, rotation: int) -> None:
+    # Rotation must strictly exceed poll interval so the inner poll for the
+    # current game fires at least once before rotation advances the index.
+    if poll_interval >= rotation:
+        raise CadenceError(
+            f"poll_interval_seconds ({poll_interval}) must be < game_rotation_seconds ({rotation})"
+        )
 
 
 def _deep_copy(d: dict) -> dict:
@@ -108,9 +123,15 @@ class Config:
             with open(self._path, 'r') as f:
                 data = json.load(f)
 
-            return _deep_merge(_deep_copy(_DEFAULTS), data)
+            merged = _deep_merge(_deep_copy(_DEFAULTS), data)
         except (OSError, ValueError):
-            return _deep_copy(_DEFAULTS)
+            merged = _deep_copy(_DEFAULTS)
+
+        _validate_cadence(
+            merged["display"]["poll_interval_seconds"],
+            merged["display"]["game_rotation_seconds"],
+        )
+        return merged
 
     def reload(self) -> None:
         """Reload configuration from file."""
@@ -131,12 +152,23 @@ class Config:
             section: Top-level section (e.g., "network", "api", "display")
             key: Key within section (e.g., "ssid", "url", "brightness")
             value: New value to set
+
+        Raises:
+            CadenceError: If the write would violate poll_interval < game_rotation.
         """
-        if section in self._data:
-            self._data[section][key] = value
-            self.save()
-            if self.log_level >= DEBUG:
-                print(f"[CONFIG] updated: {section}.{key}={value}")
+        if section not in self._data:
+            return
+
+        if section == "display" and key in ("poll_interval_seconds", "game_rotation_seconds"):
+            display = self._data["display"]
+            poll = value if key == "poll_interval_seconds" else display["poll_interval_seconds"]
+            rotation = value if key == "game_rotation_seconds" else display["game_rotation_seconds"]
+            _validate_cadence(int(poll), int(rotation))  # type: ignore[arg-type]
+
+        self._data[section][key] = value
+        self.save()
+        if self.log_level >= DEBUG:
+            print(f"[CONFIG] updated: {section}.{key}={value}")
 
     def get(self, section: str, key: str, default: object = None) -> object:
         """
@@ -201,6 +233,11 @@ class Config:
     def poll_interval_seconds(self) -> int:
         """How often to poll the API in seconds."""
         return self._data["display"]["poll_interval_seconds"]
+
+    @property
+    def game_rotation_seconds(self) -> int:
+        """How often to rotate to the next live game in seconds."""
+        return self._data["display"]["game_rotation_seconds"]
 
     @property
     def data_frequency_khz(self) -> int:

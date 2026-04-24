@@ -39,13 +39,14 @@ import rp2
 import hashlib
 import _thread
 from microdot import Microdot, Request, Response, send_file
-from scoreboard import Config
-from scoreboard.state import set_startup_step, finish_startup, set_display_driver
+from scoreboard import Config, ScoreboardApiClient
+from scoreboard.mlb_poller import MlbPoller
+from scoreboard.state import set_startup_step, finish_startup, set_display_driver, get_display_state
 from scoreboard.dns import run_dns_server
 from scoreboard.api_routes import create_api
-from scoreboard.display import init_display, render_startup, run_display_thread
+from scoreboard.display import init_display, run_display_thread, Regions
 from scoreboard.fonts import FontWriter
-from hub75 import Hub75Display
+from hub75 import Hub75Display, Hub75Driver
 from machine import I2C, Pin
 from veml7700 import VEML7700
 from scoreboard import brightness
@@ -76,33 +77,22 @@ def _compute_index_etag() -> str | None:
 
 INDEX_ETAG: str | None = _compute_index_etag()
 
-# Display components (initialized before asyncio for startup display)
-_display: Hub75Display | None = None
-_writer: FontWriter | None = None
-_display_thread_started: bool = False
-
 def update_startup_display(step: int, operation: str, detail: str = '') -> None:
-    """
-    Update startup progress on the display.
-
-    Before the display thread starts, renders directly to the display.
-    After the display thread starts, only updates state — the display
-    thread handles rendering to avoid dual-core framebuffer races.
-    """
-    global _display, _writer
-    if _display is None or _writer is None:
-        return
-
-    from scoreboard.state import get_display_state
+    """Update startup progress state. The display thread renders it on its next tick."""
     set_startup_step(step, 5, operation, detail)
 
-    if _display_thread_started:
-        return  # Display thread handles rendering now
 
-    # Direct rendering (only before display thread starts)
+def _resize_setup_regions_for_qr(regions: Regions) -> None:
+    """
+    Resize setup-screen text regions to fit beside the current QR code.
+
+    Must be called on Core 0 after finish_startup('setup', ...) has generated
+    the QR. Reads QR dimensions from state (which was just committed by
+    finish_startup) and rebuilds the affected Regions so text won't overlap
+    the QR footprint.
+    """
     state = get_display_state()
-    render_startup(_display, _writer, state, state.ui_colors)
-    _display.show()
+    regions.update_for_qr(state.setup.qr_width, state.setup.qr_height)
 
 
 # Track setup mode state
@@ -495,11 +485,17 @@ def start_station_mode() -> network.WLAN | None:
     return None
 
 
-# Display thread health tracking
+# TODO(tech-debt): this module-level bool is an ad-hoc cross-thread sync primitive —
+# Core 1 writes it inside start_display_thread's wrapper, Core 0's watchdog_task
+# reads it. It functions, but a mutable global as a sync flag is not good practice.
+# Replace with an explicit shared-state object (e.g. a small ThreadHealth class
+# passed into both start_display_thread and watchdog_task) so ownership shows up
+# in the signatures instead of being hidden at module scope. Don't leave this as-is
+# long-term.
 _display_thread_healthy: bool = False
 
 
-def start_display_thread(display: Hub75Display, writer: FontWriter, cfg: Config) -> None:
+def start_display_thread(display: Hub75Display, writer: FontWriter, regions: Regions, cfg: Config) -> None:
     """
     Spawn display loop on Core 1.
 
@@ -509,18 +505,16 @@ def start_display_thread(display: Hub75Display, writer: FontWriter, cfg: Config)
     Args:
         display: Hub75Display instance (pre-initialized)
         writer: FontWriter instance (pre-initialized)
+        regions: Pre-allocated framebuffer regions for all text slots
         cfg: Config instance for UI colors
     """
-    global _display_thread_healthy, _display_thread_started
-    _display_thread_started = True
-
     def wrapper():
         global _display_thread_healthy
         try:
             _display_thread_healthy = True
             if config.log_level >= DEBUG:
                 print("[DISPLAY] thread started: core=1")
-            run_display_thread(display, writer, config)
+            run_display_thread(display, writer, regions, config)
         except Exception as e:
             if config.log_level >= ERROR:
                 print(f"[DISPLAY] thread crashed: {e}")
@@ -561,7 +555,11 @@ def _try_init_veml(i2c: I2C) -> VEML7700 | None:
         return None
 
 
-# Light sensor state (initialized in __main__)
+# TODO(tech-debt): these are module-level globals because auto_brightness_loop
+# retries VEML7700 init at runtime by mutating _light_sensor. That mutation makes
+# them true shared runtime state rather than boot-time constants, but they'd be
+# cleaner as a small LightSensor class that owns its own retry state and i2c bus.
+# Refactor when touching auto_brightness_loop next; don't leave this as-is long-term.
 _i2c: I2C | None = None
 _light_sensor: VEML7700 | None = None
 
@@ -614,20 +612,13 @@ async def auto_brightness_loop(driver, cfg: Config) -> None:
         await asyncio.sleep_ms(200)
 
 
-async def main() -> None:
-    """Main entry point."""
-    global _display, _writer
-
-    # Start display thread on Core 1 (runs in all modes)
-    # _display and _writer are guaranteed non-None here (set in __main__ before asyncio.run)
-    assert _display is not None and _writer is not None
-    start_display_thread(_display, _writer, config)
-
+async def main(regions: Regions, driver: Hub75Driver) -> None:
+    """Main entry point. Display thread is already running by the time we get here."""
     # Start watchdog to monitor display thread health
     asyncio.create_task(watchdog_task())
 
     # Start auto-brightness (runs in all modes)
-    asyncio.create_task(auto_brightness_loop(_driver, config))
+    asyncio.create_task(auto_brightness_loop(driver, config))
 
     if not config.ssid:
         # No network configured - fresh setup mode
@@ -643,6 +634,7 @@ async def main() -> None:
             ap_ssid=config.device_name,
             ap_ip=ap_ip
         )
+        _resize_setup_regions_for_qr(regions)
         asyncio.create_task(run_dns_server(config, ap_ip))
     else:
         # Try to connect to configured network
@@ -664,6 +656,7 @@ async def main() -> None:
                 ap_ip=ap_ip,
                 wifi_ssid=config.ssid
             )
+            _resize_setup_regions_for_qr(regions)
             asyncio.create_task(run_dns_server(config, ap_ip))
         else:
             # Normal operation - sync time then start services
@@ -679,39 +672,54 @@ async def main() -> None:
             # Explicit transition: startup → idle
             finish_startup('idle')
 
+            api_client = ScoreboardApiClient(config)
+            poller = MlbPoller(config, api_client)
+            asyncio.create_task(poller.run())
+            if config.log_level >= DEBUG:
+                print("[MAIN] mlb poller task started")
+
     if config.log_level >= DEBUG:
         print("[MAIN] web server starting: port=80")
     await app.start_server(port=80)
 
 
 if __name__ == '__main__':
-    # Initialize display before asyncio for startup progress
+    # Initialize display hardware and rendering primitives. All Core-0-only
+    # setup (glyph caches, UI colors, state) happens here before the display
+    # thread is spawned — once the thread is running, Core 0 must not touch
+    # the framebuffer directly.
     if config.log_level >= DEBUG:
         print("[MAIN] display init started")
-    _driver, _display, _writer = init_display(config)
-    set_display_driver(_driver)
+    driver, display, writer, regions = init_display(config)
+    set_display_driver(driver)
     if config.log_level >= DEBUG:
         print("[MAIN] display initialized")
 
-    # Initialize glyph caches on Core 0 (before display thread starts)
-    # This pre-caches digits for zero-allocation rendering
+    # Pre-cache digit glyphs for zero-allocation score/clock rendering on Core 1.
     from scoreboard.fonts import unscii_16
-    _writer.init_clock(unscii_16)   # Clock digits + colon
-    _writer.init_digits(unscii_16)  # Score digits
+    writer.init_clock(unscii_16)   # Clock digits + colon
+    writer.init_digits(unscii_16)  # Score digits
     if config.log_level >= DEBUG:
         print("[MAIN] glyph caches initialized")
 
-    # Pre-compute UI colors on Core 0 (before display thread starts)
+    # Pre-compute UI colors into both state buffers so the first rendered
+    # frame has correct colors rather than white defaults.
     from scoreboard.state import update_ui_colors
     update_ui_colors(config)
     if config.log_level >= DEBUG:
         print("[MAIN] ui colors initialized")
 
-    # Initialize light sensor for auto-brightness
+    # Initialize light sensor for auto-brightness. See the tech-debt note on
+    # _i2c / _light_sensor above — these remain module-level for now.
     _i2c = I2C(0, sda=Pin(0), scl=Pin(1), freq=100000)
     _light_sensor = _try_init_veml(_i2c)
 
-    # Show first startup step
+    # Commit the first startup step to state. The display thread (spawned
+    # next) will render it on its first tick.
     update_startup_display(1, "Display", "Initialized")
 
-    asyncio.run(main())
+    # Spawn the Core-1 render loop. From this point on, Core 0 only mutates
+    # state; Core 1 owns the framebuffer.
+    start_display_thread(display, writer, regions, config)
+
+    asyncio.run(main(regions, driver))

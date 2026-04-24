@@ -6,22 +6,84 @@ no_games, setup, error), the logo caching system, animation primitives,
 and the Core 1 display thread.
 """
 
+import math
 import time
 import framebuf
 from machine import Pin
 from hub75 import Hub75Driver, Hub75Display, row_addressing
-from scoreboard.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, ALIGN_CENTER
+from hub75.native import pack_hsv_to_rgb565
+from scoreboard.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, ALIGN_LEFT, ALIGN_CENTER
+from scoreboard.inning_half import Top, Bottom
 from scoreboard.state import StateBuffer, UiColors
 from scoreboard.config import Config
 from scoreboard.api_client import ScoreboardApiClient
 from scoreboard.logger import DEBUG, ERROR
+from scoreboard.layout import field as field_sprite
+from scoreboard.layout import base_marker as base_marker_sprite
+from scoreboard.layout import dot as dot_sprite
+from scoreboard.layout import inning_top as inning_top_sprite
+from scoreboard.layout import inning_bottom as inning_bottom_sprite
+from scoreboard.layout import first_base as first_base_loc
+from scoreboard.layout import second_base as second_base_loc
+from scoreboard.layout import third_base as third_base_loc
+from scoreboard.layout import away_logo as away_logo_loc
+from scoreboard.layout import home_logo as home_logo_loc
+from scoreboard.layout import away_score as away_score_loc
+from scoreboard.layout import home_score as home_score_loc
+from scoreboard.layout import inning as inning_loc
+from scoreboard.layout import ball_label as ball_label_loc
+from scoreboard.layout import ball_values as ball_values_loc
+from scoreboard.layout import strike_label as strike_label_loc
+from scoreboard.layout import strike_values as strike_values_loc
+from scoreboard.layout import out_label as out_label_loc
+from scoreboard.layout import out_values as out_values_loc
+from scoreboard.layout import pitcher_label as pitcher_label_loc
+from scoreboard.layout import pitcher_name as pitcher_name_loc
+from scoreboard.layout import batter_label as batter_label_loc
+from scoreboard.layout import batter_name as batter_name_loc
 
 # Fixed colors
 BLACK = 0
 WHITE = rgb565(255, 255, 255)
+DIM_GRAY = rgb565(96, 96, 96)
+
+
+# Minimum brightest-channel value for team colors. Teams whose primary is
+# darker than this (e.g. Yankees/Brewers navy, White Sox near-black) get
+# scaled up proportionally so the text stays legible on the black panel.
+# Preserves hue for chromatic colors; near-neutrals move toward bright gray.
+_TEAM_COLOR_MIN_CHANNEL = 128
+
+
+def _team_color_to_rgb565(packed: int) -> int:
+    r = (packed >> 16) & 0xFF
+    g = (packed >> 8) & 0xFF
+    b = packed & 0xFF
+    m = r if r >= g and r >= b else (g if g >= b else b)
+    if m < _TEAM_COLOR_MIN_CHANNEL:
+        if m == 0:
+            r = g = b = _TEAM_COLOR_MIN_CHANNEL
+        else:
+            scale = _TEAM_COLOR_MIN_CHANNEL / m
+            r = int(r * scale)
+            g = int(g * scale)
+            b = int(b * scale)
+    return rgb565(r, g, b)
+
+
+_TWO_PI = 2.0 * math.pi
+
+
+def pulse(now_ms: int, hz: float = 1.0) -> float:
+    """Sine-wave factor in [0.0, 1.0], cycling at `hz` cycles per second.
+
+    Callers map the factor into whatever range they need — e.g.
+    `V = 191 + int(pulse(now_ms) * 64)` for a subtle 75%→100% HSV brightness sweep.
+    """
+    return (math.sin(now_ms * hz * _TWO_PI / 1000.0) + 1.0) * 0.5
 
 # Bright magenta, used as the transparency sentinel for compiled sprites.
-# Matches _TRANSPARENT_RGB565 in tools/sprites/build.py. Sprites emit a
+# Matches _TRANSPARENT_RGB565 in tools/compile_layout.py. Sprites emit a
 # per-module `KEY` constant that's already in the right form for their
 # format (palette index for paletted sprites, this RGB565 value for RGB565
 # sprites, or -1 for sprites with no transparent pixels) — prefer passing
@@ -31,6 +93,12 @@ MAGENTA_RGB565 = 0xF81F
 # Display dimensions
 DISPLAY_WIDTH = 128
 DISPLAY_HEIGHT = 64
+
+
+_ORDINALS = (
+    "", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th",
+    "10th", "11th", "12th", "13th", "14th", "15th", "16th", "17th", "18th", "19th", "20th",
+)
 
 
 # =============================================================================
@@ -69,6 +137,171 @@ def calculate_scroll_offset(
     else:
         # Phase 3: Paused at end
         return max_scroll
+
+
+class Region(framebuf.FrameBuffer):
+    """
+    A sub-view framebuffer over a rectangular region of a parent display.
+
+    Stride is computed from the parent's width, so writes into the Region
+    clip to its bounds automatically — no manual fill_rect masking required.
+
+    The parent must expose `.width` and `.buffer` (e.g. Hub75Display, or
+    another Region — Regions can be nested). RGB565 is assumed.
+    """
+
+    def __init__(self, parent, x: int, y: int, width: int, height: int):
+        parent_width = parent.width
+        # RGB565 = 2 bytes per pixel
+        offset = (y * parent_width + x) * 2
+        view = memoryview(parent.buffer)[offset:]
+        super().__init__(view, width, height, framebuf.RGB565, parent_width)
+        self._view = view
+        self._width = width
+        self._height = height
+
+    @property
+    def buffer(self) -> memoryview:
+        return self._view
+
+    @property
+    def width(self) -> int:
+        return self._width
+
+    @property
+    def height(self) -> int:
+        return self._height
+
+
+class Regions:
+    """
+    Pre-allocated framebuffer regions for every text slot the scoreboard draws.
+
+    Built once on Core 0 at display init and passed through to render
+    functions. Avoids per-frame Region allocation on Core 1.
+
+    Regions covering dynamic screens (startup, idle, no_games, setup, error)
+    span across screen boundaries; rendering each screen fills the display
+    with BLACK first, then draws into whichever regions that screen uses.
+
+    Setup-mode text regions span the full display width even though a QR
+    code may overlap part of that area on the right. render_setup draws text
+    first and blits the QR on top, so QR visibility is preserved at the cost
+    of potential truncation of very long SSIDs when a QR is present.
+    """
+
+    def __init__(self, display: Hub75Display):
+        # Stored so update_for_qr() can rebuild setup regions against the same display.
+        self._display = display
+
+        # --- Game screen ---
+        self.inning = Region(display, inning_loc.X, inning_loc.Y, inning_loc.WIDTH, inning_loc.HEIGHT)
+        self.ball_label = Region(display, ball_label_loc.X, ball_label_loc.Y, ball_label_loc.WIDTH, ball_label_loc.HEIGHT)
+        self.strike_label = Region(display, strike_label_loc.X, strike_label_loc.Y, strike_label_loc.WIDTH, strike_label_loc.HEIGHT)
+        self.out_label = Region(display, out_label_loc.X, out_label_loc.Y, out_label_loc.WIDTH, out_label_loc.HEIGHT)
+        self.pitcher_label = Region(display, pitcher_label_loc.X, pitcher_label_loc.Y, pitcher_label_loc.WIDTH, pitcher_label_loc.HEIGHT)
+        self.batter_label = Region(display, batter_label_loc.X, batter_label_loc.Y, batter_label_loc.WIDTH, batter_label_loc.HEIGHT)
+        self.pitcher_name = Region(display, pitcher_name_loc.X, pitcher_name_loc.Y, pitcher_name_loc.WIDTH, pitcher_name_loc.HEIGHT)
+        self.batter_name = Region(display, batter_name_loc.X, batter_name_loc.Y, batter_name_loc.WIDTH, batter_name_loc.HEIGHT)
+
+        # --- Startup screen ---
+        self.startup_title = Region(display, 0, 4, DISPLAY_WIDTH, 16)
+        # Step counter sits to the right of the progress bar.
+        # bar_x = (DISPLAY_WIDTH - 80) // 2 = 24, so step x = 24 + 80 + 4 = 108.
+        self.startup_step = Region(display, 108, 24, DISPLAY_WIDTH - 108, 8)
+        self.startup_operation = Region(display, 0, 42, DISPLAY_WIDTH, 8)
+        self.startup_detail = Region(display, 0, 54, DISPLAY_WIDTH, 8)
+
+        # --- Idle screen ---
+        self.idle_title = Region(display, 0, 16, DISPLAY_WIDTH, 16)
+        self.idle_subtitle = Region(display, 0, 40, DISPLAY_WIDTH, 8)
+
+        # --- No Games screen ---
+        self.no_games_title = Region(display, 0, 20, DISPLAY_WIDTH, 16)
+        self.no_games_subtitle = Region(display, 0, 40, DISPLAY_WIDTH, 8)
+
+        # --- Setup screen ---
+        # Initialized at full width (no QR). Rebuilt via update_for_qr() on
+        # Core 0 whenever the QR code is (re)generated so text never overlaps
+        # the QR's footprint. Lines whose y-range sits entirely below the QR
+        # stay full width.
+        self.setup_title = Region(display, 2, 0, DISPLAY_WIDTH - 2, 16)
+        self.setup_line_18 = Region(display, 2, 18, DISPLAY_WIDTH - 2, 8)
+        self.setup_line_28 = Region(display, 2, 28, DISPLAY_WIDTH - 2, 8)
+        self.setup_line_44 = Region(display, 2, 44, DISPLAY_WIDTH - 2, 8)
+        self.setup_line_54 = Region(display, 2, 54, DISPLAY_WIDTH - 2, 8)
+
+        # --- Error screen ---
+        self.error_title = Region(display, 0, 0, DISPLAY_WIDTH, 16)
+        self.error_line_0 = Region(display, 0, 24, DISPLAY_WIDTH, 8)
+        self.error_line_1 = Region(display, 0, 34, DISPLAY_WIDTH, 8)
+        self.error_line_2 = Region(display, 0, 44, DISPLAY_WIDTH, 8)
+        self.error_line_3 = Region(display, 0, 54, DISPLAY_WIDTH, 8)
+
+    def update_for_qr(self, qr_width: int, qr_height: int) -> None:
+        """
+        Recompute setup-screen text regions so they never overlap the QR code.
+
+        MUST be called on Core 0 only. Invoke after set_setup_mode()
+        regenerates the QR (or clears it). Lines whose vertical range
+        intersects the QR get narrowed to end 4px before the QR's left edge;
+        lines fully below the QR stay at full width.
+
+        Args:
+            qr_width: QR framebuffer width in px (includes quiet zone). 0 = no QR.
+            qr_height: QR framebuffer height in px (includes quiet zone).
+        """
+        display = self._display
+        left_pad = 2
+        full_width = DISPLAY_WIDTH - left_pad
+
+        if qr_width <= 0:
+            narrow_width = full_width
+            qr_top = 0
+            qr_bottom = 0
+        else:
+            # QR sits at (DISPLAY_WIDTH - qr_width - 2, 2); matches render_setup's blit.
+            qr_top = 2
+            qr_bottom = qr_top + qr_height
+            qr_x = DISPLAY_WIDTH - qr_width - 2
+            # 4px visual gap between text's right edge and QR's left edge.
+            narrow_width = qr_x - 4 - left_pad
+            if narrow_width < 0:
+                narrow_width = 0
+
+        def width_for(y_top: int, height: int) -> int:
+            y_bottom = y_top + height
+            if qr_bottom > 0 and y_top < qr_bottom and y_bottom > qr_top:
+                return narrow_width
+            return full_width
+
+        self.setup_title = Region(display, left_pad, 0, width_for(0, 16), 16)
+        self.setup_line_18 = Region(display, left_pad, 18, width_for(18, 8), 8)
+        self.setup_line_28 = Region(display, left_pad, 28, width_for(28, 8), 8)
+        self.setup_line_44 = Region(display, left_pad, 44, width_for(44, 8), 8)
+        self.setup_line_54 = Region(display, left_pad, 54, width_for(54, 8), 8)
+
+
+def _draw_count_dots(display: Hub75Display, slice_mod: object, filled_count: int, filled_color: int | None = None) -> None:
+    n_dots = (slice_mod.WIDTH + 1) // (dot_sprite.WIDTH + 1)  # type: ignore[attr-defined]
+    default_outline = dot_sprite.palette.pixel(1, 0)
+    default_fill = dot_sprite.palette.pixel(2, 0)
+    # When `filled_color` is provided, every dot's outline tracks it (so the
+    # ring on unfilled dots also pulses) and filled dots' interiors match,
+    # keeping the whole dot reading as one color.
+    active = filled_color if filled_color is not None else default_outline
+    dot_sprite.palette.pixel(1, 0, active)
+    for i in range(n_dots):
+        dot_sprite.palette.pixel(2, 0, active if i < filled_count else default_fill)
+        display.blit(
+            dot_sprite.data,
+            slice_mod.X + i * (dot_sprite.WIDTH + 1),  # type: ignore[attr-defined]
+            slice_mod.Y,  # type: ignore[attr-defined]
+            MAGENTA_RGB565,
+            dot_sprite.palette
+        )
+    dot_sprite.palette.pixel(1, 0, default_outline)
+    dot_sprite.palette.pixel(2, 0, default_fill)
 
 
 # =============================================================================
@@ -152,12 +385,12 @@ async def get_logo_framebuffer(api_client: ScoreboardApiClient, cache_key: str, 
         return None
 
 
-def init_display(config: Config) -> tuple[Hub75Driver, Hub75Display, FontWriter]:
+def init_display(config: Config) -> tuple[Hub75Driver, Hub75Display, FontWriter, Regions]:
     """
     Initialize and return HUB75 display hardware.
 
     Returns:
-        Tuple of (driver, display, writer)
+        Tuple of (driver, display, writer, regions)
     """
     data_freq = config.data_frequency_hz
     brightness = config.brightness / 100.0
@@ -166,7 +399,7 @@ def init_display(config: Config) -> tuple[Hub75Driver, Hub75Display, FontWriter]
     target_refresh_rate = config.target_refresh_rate
 
     driver = Hub75Driver(
-        row_addressing=row_addressing.Direct(
+        row_addressing=row_addressing.Binary(
             base_pin=Pin(11, Pin.OUT),
             bit_count=5
         ),
@@ -182,7 +415,8 @@ def init_display(config: Config) -> tuple[Hub75Driver, Hub75Display, FontWriter]
     )
     display = Hub75Display(driver)
     writer = FontWriter(display, default_font=unscii_8)
-    return driver, display, writer
+    regions = Regions(display)
+    return driver, display, writer, regions
 
 
 def draw_progress_bar(display: Hub75Display, x: int, y: int, width: int, height: int, progress: int, colors: UiColors) -> None:
@@ -199,7 +433,7 @@ def draw_progress_bar(display: Hub75Display, x: int, y: int, width: int, height:
 # Render functions for each display mode
 # =============================================================================
 
-def render_startup(display: Hub75Display, writer: FontWriter, state: StateBuffer, colors: UiColors) -> None:
+def render_startup(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors) -> None:
     """Render startup/boot progress screen."""
     display.fill(BLACK)
 
@@ -209,8 +443,7 @@ def render_startup(display: Hub75Display, writer: FontWriter, state: StateBuffer
     operation = startup.operation
     detail = startup.detail
 
-    # Title "BOOTING" at top
-    writer.aligned_text("BOOTING", 0, 4, DISPLAY_WIDTH, ALIGN_CENTER, colors.accent, font=unscii_16)
+    writer.draw(regions.startup_title, "BOOTING", unscii_16, ALIGN_CENTER, 0, colors.accent)
 
     # Progress bar (80px wide, centered) at Y=24
     bar_width = 80
@@ -218,51 +451,41 @@ def render_startup(display: Hub75Display, writer: FontWriter, state: StateBuffer
     progress = int((step - 1) / total * 100) + (100 // total) // 2
     draw_progress_bar(display, bar_x, 24, bar_width, 8, progress, colors)
 
-    # Step indicator to the right of progress bar
-    step_text = f"{step}/{total}"
-    writer.text(step_text, bar_x + bar_width + 4, 24, colors.secondary, font=spleen_5x8)
+    writer.draw(regions.startup_step, f"{step}/{total}", spleen_5x8, ALIGN_LEFT, 0, colors.secondary)
 
-    # Operation text (truncate to 25 chars)
     if len(operation) > 25:
         operation = operation[:24] + '.'
-    writer.aligned_text(operation, 0, 42, DISPLAY_WIDTH, ALIGN_CENTER, colors.primary, font=spleen_5x8)
+    writer.draw(regions.startup_operation, operation, spleen_5x8, ALIGN_CENTER, 0, colors.primary)
 
-    # Detail text (truncate to 25 chars)
     if detail:
         if len(detail) > 25:
             detail = detail[:24] + '.'
-        writer.aligned_text(detail, 0, 54, DISPLAY_WIDTH, ALIGN_CENTER, colors.secondary, font=spleen_5x8)
+        writer.draw(regions.startup_detail, detail, spleen_5x8, ALIGN_CENTER, 0, colors.secondary)
 
 
-def render_idle(display: Hub75Display, writer: FontWriter, colors: UiColors) -> None:
+def render_idle(display: Hub75Display, writer: FontWriter, regions: Regions, colors: UiColors) -> None:
     """Render idle/waiting screen."""
     display.fill(BLACK)
-
-    # TEMPORARY: blit the mini field sprite plus base markers at the first
-    # and third base slice coordinates, to verify the compiled sprite pipeline
-    # (absolute layers, relative layers, slice coords, palettes) works end-to-end.
-    # TODO: REMOVE after verification — replaced by real scoreboard rendering.
-    from scoreboard.sprites import field as _field_test
-    from scoreboard.sprites import base_marker as _base_marker_test
-    from scoreboard.sprites import first_base as _first_base_test
-    from scoreboard.sprites import third_base as _third_base_test
-    display.blit(_field_test.data, _field_test.X, _field_test.Y, _field_test.KEY, _field_test.palette)  # type: ignore
-    display.blit(_base_marker_test.data, _first_base_test.X, _first_base_test.Y, _base_marker_test.KEY, _base_marker_test.palette)  # type: ignore
-    display.blit(_base_marker_test.data, _third_base_test.X, _third_base_test.Y, _base_marker_test.KEY, _base_marker_test.palette)  # type: ignore
-
-    writer.aligned_text("PICO", 0, 16, DISPLAY_WIDTH, ALIGN_CENTER, colors.primary, font=unscii_16)
-    writer.aligned_text("SCOREBOARD", 0, 40, DISPLAY_WIDTH, ALIGN_CENTER, colors.accent)
+    writer.draw(regions.idle_title, "PICO", unscii_16, ALIGN_CENTER, 0, colors.primary)
+    writer.draw(regions.idle_subtitle, "SCOREBOARD", unscii_8, ALIGN_CENTER, 0, colors.accent)
 
 
-def render_no_games(display: Hub75Display, writer: FontWriter, colors: UiColors) -> None:
+def render_no_games(display: Hub75Display, writer: FontWriter, regions: Regions, colors: UiColors) -> None:
     """Render no games scheduled screen."""
     display.fill(BLACK)
-    writer.aligned_text("NO GAMES", 0, 20, DISPLAY_WIDTH, ALIGN_CENTER, colors.primary, font=unscii_16)
-    writer.aligned_text("scheduled", 0, 40, DISPLAY_WIDTH, ALIGN_CENTER, colors.secondary, font=spleen_5x8)
+    writer.draw(regions.no_games_title, "NO GAMES", unscii_16, ALIGN_CENTER, 0, colors.primary)
+    writer.draw(regions.no_games_subtitle, "scheduled", spleen_5x8, ALIGN_CENTER, 0, colors.secondary)
 
 
-def render_setup(display: Hub75Display, writer: FontWriter, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
-    """Render setup mode screen with WiFi QR code and contextual information."""
+def render_setup(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
+    """
+    Render setup mode screen with WiFi QR code and contextual information.
+
+    Text is drawn first into full-width regions, then the QR (if available)
+    is blitted on top. Long text that would have scrolled under the old
+    narrow text-area behavior will now only scroll if it exceeds full
+    display width.
+    """
     display.fill(BLACK)
 
     setup = state.setup
@@ -270,60 +493,39 @@ def render_setup(display: Hub75Display, writer: FontWriter, state: StateBuffer, 
     ap_ssid = setup.ap_ssid or 'scoreboard'
     ap_ip = setup.ap_ip or '192.168.4.1'
     wifi_ssid = setup.wifi_ssid or ''
-    animation_start_ms = state.animation_start_ms
-
-    # Get QR code from state (generated on Core 0)
-    qr_fb = setup.qr_fb
-    qr_width = setup.qr_width
-    qr_height = setup.qr_height
-    qr_palette = setup.qr_palette
-
-    # Render QR on right side if available
-    text_area_width = DISPLAY_WIDTH
-    qr_y = 0
-    if qr_fb is not None and qr_palette is not None and qr_width > 0:
-        qr_x = DISPLAY_WIDTH - qr_width - 2
-        qr_y = 2
-        display.blit(qr_fb, qr_x, qr_y, -1, qr_palette) # type: ignore
-        text_area_width = qr_x - 4
-
-    # Calculate where QR code ends vertically
-    qr_bottom = qr_y + qr_height if qr_height > 0 else 0
-
-    def render_scrolling_text(text: str, y: int, color: int, width: int | None = None) -> None:
-        if width is None:
-            width = DISPLAY_WIDTH if y >= qr_bottom else text_area_width
-        pixel_width = writer.measure(text, spleen_5x8)
-        if pixel_width > width and width > 0:
-            elapsed = time.ticks_diff(now_ms, animation_start_ms)
-            offset = calculate_scroll_offset(pixel_width, width, elapsed)
-            writer.text(text, 2 - offset, y, color, font=spleen_5x8)
-        else:
-            writer.text(text, 2, y, color, font=spleen_5x8)
+    elapsed_ms = time.ticks_diff(now_ms, state.animation_start_ms)
 
     if reason == 'bad_auth':
-        writer.text("WRONG PASS", 2, 0, colors.clock_warning, font=unscii_16)
-        render_scrolling_text(f'for "{wifi_ssid}"', 18, colors.primary)
-        render_scrolling_text(f'Scan/join "{ap_ssid}"', 28, colors.secondary)
-        writer.text(f"Then go to {ap_ip}", 2, 44, colors.secondary, font=spleen_5x8)
-        writer.text("to fix password", 2, 54, colors.accent, font=spleen_5x8)
+        writer.draw(regions.setup_title, "WRONG PASS", unscii_16, ALIGN_LEFT, 0, colors.clock_warning)
+        writer.draw(regions.setup_line_18, f'for "{wifi_ssid}"', spleen_5x8, ALIGN_LEFT, elapsed_ms, colors.primary)
+        writer.draw(regions.setup_line_28, f'Scan/join "{ap_ssid}"', spleen_5x8, ALIGN_LEFT, elapsed_ms, colors.secondary)
+        writer.draw(regions.setup_line_44, f"Then go to {ap_ip}", spleen_5x8, ALIGN_LEFT, 0, colors.secondary)
+        writer.draw(regions.setup_line_54, "to fix password", spleen_5x8, ALIGN_LEFT, 0, colors.accent)
 
     elif reason == 'connection_failed':
-        writer.text("WIFI FAIL", 2, 0, colors.clock_warning, font=unscii_16)
-        render_scrolling_text(f'"{wifi_ssid}"', 18, colors.primary)
-        render_scrolling_text(f'Scan/join "{ap_ssid}"', 28, colors.secondary)
-        writer.text(f"Then go to {ap_ip}", 2, 44, colors.secondary, font=spleen_5x8)
-        writer.text("to reconfigure", 2, 54, colors.accent, font=spleen_5x8)
+        writer.draw(regions.setup_title, "WIFI FAIL", unscii_16, ALIGN_LEFT, 0, colors.clock_warning)
+        writer.draw(regions.setup_line_18, f'"{wifi_ssid}"', spleen_5x8, ALIGN_LEFT, elapsed_ms, colors.primary)
+        writer.draw(regions.setup_line_28, f'Scan/join "{ap_ssid}"', spleen_5x8, ALIGN_LEFT, elapsed_ms, colors.secondary)
+        writer.draw(regions.setup_line_44, f"Then go to {ap_ip}", spleen_5x8, ALIGN_LEFT, 0, colors.secondary)
+        writer.draw(regions.setup_line_54, "to reconfigure", spleen_5x8, ALIGN_LEFT, 0, colors.accent)
 
     else:
-        writer.text("SETUP", 2, 0, colors.accent, font=unscii_16)
-        writer.text("Scan QR or join", 2, 18, colors.primary, font=spleen_5x8)
-        render_scrolling_text(f'"{ap_ssid}" WiFi', 28, colors.secondary)
-        writer.text("Then go to", 2, 44, colors.secondary, font=spleen_5x8)
-        writer.text(ap_ip, 2, 54, colors.accent, font=spleen_5x8)
+        writer.draw(regions.setup_title, "SETUP", unscii_16, ALIGN_LEFT, 0, colors.accent)
+        writer.draw(regions.setup_line_18, "Scan QR or join", spleen_5x8, ALIGN_LEFT, 0, colors.primary)
+        writer.draw(regions.setup_line_28, f'"{ap_ssid}" WiFi', spleen_5x8, ALIGN_LEFT, elapsed_ms, colors.secondary)
+        writer.draw(regions.setup_line_44, "Then go to", spleen_5x8, ALIGN_LEFT, 0, colors.secondary)
+        writer.draw(regions.setup_line_54, ap_ip, spleen_5x8, ALIGN_LEFT, 0, colors.accent)
+
+    # QR on top so it stays readable even if text drew underneath it.
+    qr_fb = setup.qr_fb
+    qr_width = setup.qr_width
+    qr_palette = setup.qr_palette
+    if qr_fb is not None and qr_palette is not None and qr_width > 0:
+        qr_x = DISPLAY_WIDTH - qr_width - 2
+        display.blit(qr_fb, qr_x, 2, -1, qr_palette)  # type: ignore
 
 
-def render_error(display: Hub75Display, writer: FontWriter, state: StateBuffer, colors: UiColors) -> None:
+def render_error(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors) -> None:
     """Render error screen with multi-line details."""
     display.fill(BLACK)
 
@@ -331,18 +533,94 @@ def render_error(display: Hub75Display, writer: FontWriter, state: StateBuffer, 
     title = error.title
     lines = error.lines
 
-    # Title in warning color at top
-    writer.aligned_text(title or 'ERROR', 0, 0, DISPLAY_WIDTH, ALIGN_CENTER, colors.clock_warning, font=unscii_16)
+    writer.draw(regions.error_title, title or 'ERROR', unscii_16, ALIGN_CENTER, 0, colors.clock_warning)
 
-    # Detail lines (up to 4, using spleen_5x8)
-    y_start = 24
-    line_height = 10
+    line_regions = (regions.error_line_0, regions.error_line_1, regions.error_line_2, regions.error_line_3)
     for i, line in enumerate(lines[:4]):
         display_line = line[:25] if len(line) > 25 else line
-        writer.aligned_text(display_line, 0, y_start + (i * line_height), DISPLAY_WIDTH, ALIGN_CENTER, colors.primary, font=spleen_5x8)
+        writer.draw(line_regions[i], display_line, spleen_5x8, ALIGN_CENTER, 0, colors.primary)
 
 
-def render_frame(display: Hub75Display, writer: FontWriter, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
+def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
+    display.fill(BLACK)
+
+    live = state.game.live
+    if live is None:
+        render_idle(display, writer, regions, colors)
+        return
+
+    # --- Sprites ---
+
+    display.blit(field_sprite.data, field_sprite.X, field_sprite.Y, MAGENTA_RGB565, field_sprite.palette)  # type: ignore
+
+    if live.bases.first:
+        display.blit(base_marker_sprite.data, first_base_loc.X, first_base_loc.Y, MAGENTA_RGB565, base_marker_sprite.palette)  # type: ignore
+    if live.bases.second:
+        display.blit(base_marker_sprite.data, second_base_loc.X, second_base_loc.Y, MAGENTA_RGB565, base_marker_sprite.palette)  # type: ignore
+    if live.bases.third:
+        display.blit(base_marker_sprite.data, third_base_loc.X, third_base_loc.Y, MAGENTA_RGB565, base_marker_sprite.palette)  # type: ignore
+
+    if state.away_logo is not None:
+        display.blit(state.away_logo, away_logo_loc.X, away_logo_loc.Y)
+    if state.home_logo is not None:
+        display.blit(state.home_logo, home_logo_loc.X, home_logo_loc.Y)
+
+    half = live.inning.half
+    if isinstance(half, Top):
+        display.blit(inning_top_sprite.data, inning_top_sprite.X, inning_top_sprite.Y, MAGENTA_RGB565, inning_top_sprite.palette)  # type: ignore
+    elif isinstance(half, Bottom):
+        display.blit(inning_bottom_sprite.data, inning_bottom_sprite.X, inning_bottom_sprite.Y, MAGENTA_RGB565, inning_bottom_sprite.palette)  # type: ignore
+
+    # --- Count dots ---
+
+    balls_critical = live.count.balls == 3
+    strikes_critical = live.count.strikes == 2
+    outs_critical = live.count.outs == 2
+
+    if balls_critical or strikes_critical or outs_critical:
+        v = 191 + int(pulse(now_ms) * 64)
+        pulsed = pack_hsv_to_rgb565(0, 0, v)
+    else:
+        pulsed = None
+
+    _draw_count_dots(display, ball_values_loc, live.count.balls, pulsed if balls_critical else None)
+    _draw_count_dots(display, strike_values_loc, live.count.strikes, pulsed if strikes_critical else None)
+    _draw_count_dots(display, out_values_loc, live.count.outs, pulsed if outs_critical else None)
+
+    # --- Text ---
+    # Scores stay on the zero-alloc integer() path.
+    writer.integer(live.away.score, away_score_loc.X, away_score_loc.Y, away_score_loc.WIDTH, ALIGN_CENTER, WHITE, font=unscii_16)
+    writer.integer(live.home.score, home_score_loc.X, home_score_loc.Y, home_score_loc.WIDTH, ALIGN_CENTER, WHITE, font=unscii_16)
+
+    inning_num = live.inning.number
+    inning_text = _ORDINALS[inning_num] if inning_num < len(_ORDINALS) else str(inning_num)
+    writer.draw(regions.inning, inning_text, unscii_8, ALIGN_CENTER, 0, WHITE)
+
+    writer.draw(regions.ball_label, "B", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
+    writer.draw(regions.strike_label, "S", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
+    writer.draw(regions.out_label, "O", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
+
+    if isinstance(half, Top):
+        pitch_color = _team_color_to_rgb565(live.home.colors.primary)
+        bat_color = _team_color_to_rgb565(live.away.colors.primary)
+    elif isinstance(half, Bottom):
+        pitch_color = _team_color_to_rgb565(live.away.colors.primary)
+        bat_color = _team_color_to_rgb565(live.home.colors.primary)
+    else:
+        pitch_color = DIM_GRAY
+        bat_color = DIM_GRAY
+
+    at_bat = live.at_bat
+    if at_bat is not None:
+        elapsed_ms = time.ticks_diff(now_ms, state.animation_start_ms)
+        writer.draw(regions.pitcher_name, at_bat.pitcher, spleen_5x8, ALIGN_CENTER, elapsed_ms, pitch_color)
+        writer.draw(regions.batter_name, at_bat.batter, spleen_5x8, ALIGN_CENTER, elapsed_ms, bat_color)
+
+    writer.draw(regions.pitcher_label, "PIT", unscii_8, ALIGN_LEFT, 0, pitch_color)
+    writer.draw(regions.batter_label, "BAT", unscii_8, ALIGN_LEFT, 0, bat_color)
+
+
+def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
     """
     Render a frame based on current display state.
 
@@ -352,24 +630,26 @@ def render_frame(display: Hub75Display, writer: FontWriter, state: StateBuffer, 
     mode = state.mode
 
     if mode == 'startup':
-        render_startup(display, writer, state, colors)
+        render_startup(display, writer, regions, state, colors)
     elif mode == 'idle':
-        render_idle(display, writer, colors)
+        render_idle(display, writer, regions, colors)
     elif mode == 'no_games':
-        render_no_games(display, writer, colors)
+        render_no_games(display, writer, regions, colors)
     elif mode == 'setup':
-        render_setup(display, writer, state, colors, now_ms)
+        render_setup(display, writer, regions, state, colors, now_ms)
     elif mode == 'error':
-        render_error(display, writer, state, colors)
+        render_error(display, writer, regions, state, colors)
+    elif mode == 'game':
+        render_game(display, writer, regions, state, colors, now_ms)
     else:
-        render_idle(display, writer, colors)
+        render_idle(display, writer, regions, colors)
 
 
 # =============================================================================
 # Display thread (runs on Core 1)
 # =============================================================================
 
-def run_display_thread(display: Hub75Display, writer: FontWriter, config: Config | None = None) -> None:
+def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regions, config: Config | None = None) -> None:
     """
     Main entry point for Core 1 display thread.
 
@@ -380,6 +660,7 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, config: Config
     IMPORTANT: This function runs on Core 1 with ZERO memory allocations.
     All display hardware (PIO, DMA) is accessed exclusively from this thread.
     UI colors are pre-computed on Core 0 and read from state.ui_colors.
+    Regions are pre-allocated on Core 0 and read-only here.
     """
     from scoreboard.state import get_display_state
 
@@ -395,7 +676,7 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, config: Config
 
             # Render frame using pre-computed colors (no allocation!)
             colors = state.ui_colors
-            render_frame(display, writer, state, colors, now_ms)
+            render_frame(display, writer, regions, state, colors, now_ms)
             display.show()
 
         except Exception as e:

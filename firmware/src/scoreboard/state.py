@@ -14,6 +14,7 @@ import framebuf
 from hub75 import Hub75Driver, gamma as gamma_mod
 from scoreboard.config import Config
 from scoreboard.logger import DEBUG
+from scoreboard.mlb import LiveGame
 
 
 # =============================================================================
@@ -52,6 +53,15 @@ class ErrorState:
         self.lines: list[str] = []    # Up to 4 detail lines
 
 
+class MlbGameSnapshot:
+    """Current MLB game for the display thread to read. Plain data — no methods."""
+
+    def __init__(self) -> None:
+        self.game_id: str = ''
+        self.live: LiveGame | None = None
+        self.fetched_ms: int = 0
+
+
 class UiColors:
     """Pre-computed UI colors (RGB565), set by Core 0."""
 
@@ -75,6 +85,9 @@ class StateBuffer:
         self.setup: SetupState = SetupState()
         self.error: ErrorState = ErrorState()
         self.ui_colors: UiColors = UiColors()
+        self.game: MlbGameSnapshot = MlbGameSnapshot()
+        self.home_logo: framebuf.FrameBuffer | None = None
+        self.away_logo: framebuf.FrameBuffer | None = None
 
 
 # =============================================================================
@@ -152,6 +165,13 @@ class DoubleBufferedState:
 
         back.error.title = front.error.title
         back.error.lines = front.error.lines
+
+        back.game.game_id = front.game.game_id
+        back.game.live = front.game.live
+        back.game.fetched_ms = front.game.fetched_ms
+
+        back.home_logo = front.home_logo
+        back.away_logo = front.away_logo
 
         back.ui_colors.primary = front.ui_colors.primary
         back.ui_colors.secondary = front.ui_colors.secondary
