@@ -566,7 +566,7 @@
 					onchange={(e) => {
 						const input = e.target as HTMLInputElement;
 						const value = parseInt(input.value);
-						if (!isNaN(value) && value >= 1) {
+						if (!isNaN(value) && value >= 1 && value < (settingsStore.config?.display.game_rotation_seconds ?? Infinity)) {
 							settingsStore.updateDisplay("poll_interval_seconds", value);
 						} else {
 							input.value = String(settingsStore.config?.display.poll_interval_seconds ?? "");
@@ -575,6 +575,30 @@
 					/>
 					<p class="hint">
 						How often to fetch game updates from the API
+					</p>
+				</div>
+
+				<hr class="separator" />
+
+				<div class="field-group">
+					<label for="game-rotation">Game Rotation (seconds)</label>
+					<input
+						id="game-rotation"
+						type="number"
+						min="1"
+						value={settingsStore.config.display.game_rotation_seconds}
+					onchange={(e) => {
+						const input = e.target as HTMLInputElement;
+						const value = parseInt(input.value);
+						if (!isNaN(value) && value >= 1 && value > (settingsStore.config?.display.poll_interval_seconds ?? 0)) {
+							settingsStore.updateDisplay("game_rotation_seconds", value);
+						} else {
+							input.value = String(settingsStore.config?.display.game_rotation_seconds ?? "");
+						}
+					}}
+					/>
+					<p class="hint">
+						How often to cycle between games when multiple are live
 					</p>
 				</div>
 

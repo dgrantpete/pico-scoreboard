@@ -27,6 +27,7 @@ export type GammaConfig =
 export interface DisplayConfig {
 	brightness: number; // 0-100
 	poll_interval_seconds: number; // min: 1
+	game_rotation_seconds: number; // min: 1, default: 60
 	data_frequency_khz: number; // min: 2, max: 50000, default: 20000
 	target_refresh_rate: number; // 30-240 Hz
 	gamma: GammaConfig;
@@ -99,77 +100,4 @@ export interface Color {
 	g: number;
 	b: number;
 }
-
-// Game types (matching backend FootballGameResponse)
-
-export interface Team {
-	abbreviation: string;
-	color: Color;
-	record?: string;
-	rank?: number;
-}
-
-export interface TeamScore {
-	abbreviation: string;
-	color: Color;
-	record?: string;
-	rank?: number;
-	score: number;
-	timeouts: number;
-}
-
-export type Period = 'Q1' | 'Q2' | 'Q3' | 'Q4' | 'OT' | 'OT2' | 'OT3' | 'OT4' | 'Halftime';
-
-export interface LastPlay {
-	play_type: string;
-	text?: string;
-}
-
-export interface Situation {
-	down: 'first' | 'second' | 'third' | 'fourth';
-	distance: number;
-	yard_line: number;
-	possession: 'home' | 'away';
-	red_zone: boolean;
-}
-
-export interface Weather {
-	temp: number;
-	description: string;
-}
-
-export interface PregameGame {
-	state: 'pregame';
-	event_id: string;
-	home: Team;
-	away: Team;
-	start_time: number;
-	venue?: string;
-	broadcast?: string;
-	weather?: Weather;
-}
-
-export interface LiveGame {
-	state: 'live';
-	event_id: string;
-	home: TeamScore;
-	away: TeamScore;
-	period: Period;
-	clock: string;
-	clock_running: boolean;
-	situation?: Situation;
-	last_play?: LastPlay;
-	weather?: Weather;
-}
-
-export interface FinalGame {
-	state: 'final';
-	event_id: string;
-	home: TeamScore;
-	away: TeamScore;
-	status: 'final' | 'final/OT';
-	winner: 'home' | 'away' | 'tie';
-}
-
-export type Game = PregameGame | LiveGame | FinalGame;
 
