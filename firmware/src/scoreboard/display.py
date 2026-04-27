@@ -41,6 +41,7 @@ from scoreboard.layout import pitcher_label as pitcher_label_loc
 from scoreboard.layout import pitcher_name as pitcher_name_loc
 from scoreboard.layout import batter_label as batter_label_loc
 from scoreboard.layout import batter_name as batter_name_loc
+from scoreboard.layout import play_text as play_text_loc
 
 # Fixed colors
 BLACK = 0
@@ -93,6 +94,13 @@ MAGENTA_RGB565 = 0xF81F
 # Display dimensions
 DISPLAY_WIDTH = 128
 DISPLAY_HEIGHT = 64
+
+# Play-by-play flash: how long the most-recent play text preempts the
+# pitcher/batter view after a new play is detected, plus scroll tunables
+# for that window specifically (kept separate from the default scroll feel).
+PLAY_TEXT_DISPLAY_MS = 3000
+PLAY_TEXT_SCROLL_PAUSE_MS = 300
+PLAY_TEXT_SCROLL_PX_PER_SEC = 30
 
 
 _ORDINALS = (
@@ -203,6 +211,7 @@ class Regions:
         self.batter_label = Region(display, batter_label_loc.X, batter_label_loc.Y, batter_label_loc.WIDTH, batter_label_loc.HEIGHT)
         self.pitcher_name = Region(display, pitcher_name_loc.X, pitcher_name_loc.Y, pitcher_name_loc.WIDTH, pitcher_name_loc.HEIGHT)
         self.batter_name = Region(display, batter_name_loc.X, batter_name_loc.Y, batter_name_loc.WIDTH, batter_name_loc.HEIGHT)
+        self.play_text = Region(display, play_text_loc.X, play_text_loc.Y, play_text_loc.WIDTH, play_text_loc.HEIGHT)
 
         # --- Startup screen ---
         self.startup_title = Region(display, 0, 4, DISPLAY_WIDTH, 16)
@@ -610,14 +619,26 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
         pitch_color = DIM_GRAY
         bat_color = DIM_GRAY
 
-    at_bat = live.at_bat
-    if at_bat is not None:
-        elapsed_ms = time.ticks_diff(now_ms, state.animation_start_ms)
-        writer.draw(regions.pitcher_name, at_bat.pitcher, spleen_5x8, ALIGN_CENTER, elapsed_ms, pitch_color)
-        writer.draw(regions.batter_name, at_bat.batter, spleen_5x8, ALIGN_CENTER, elapsed_ms, bat_color)
+    play = state.game.play
+    play_elapsed = time.ticks_diff(now_ms, play.updated_ms)
+    show_play = bool(play.text) and play.updated_ms != 0 and play_elapsed < PLAY_TEXT_DISPLAY_MS
 
-    writer.draw(regions.pitcher_label, "PIT", unscii_8, ALIGN_LEFT, 0, pitch_color)
-    writer.draw(regions.batter_label, "BAT", unscii_8, ALIGN_LEFT, 0, bat_color)
+    if show_play:
+        writer.draw(
+            regions.play_text, play.text, spleen_5x8,
+            ALIGN_LEFT, play_elapsed, WHITE,
+            pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
+            pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
+        )
+    else:
+        at_bat = live.at_bat
+        if at_bat is not None:
+            elapsed_ms = time.ticks_diff(now_ms, state.animation_start_ms)
+            writer.draw(regions.pitcher_name, at_bat.pitcher, spleen_5x8, ALIGN_CENTER, elapsed_ms, pitch_color)
+            writer.draw(regions.batter_name, at_bat.batter, spleen_5x8, ALIGN_CENTER, elapsed_ms, bat_color)
+
+        writer.draw(regions.pitcher_label, "PIT", unscii_8, ALIGN_LEFT, 0, pitch_color)
+        writer.draw(regions.batter_label, "BAT", unscii_8, ALIGN_LEFT, 0, bat_color)
 
 
 def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:

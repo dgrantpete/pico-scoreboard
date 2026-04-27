@@ -355,14 +355,17 @@ class FontWriter:
         elapsed_ms: int,
         color: int,
         bgcolor=None,
+        pause_ms: int = 2000,
+        pixels_per_second: int = 30,
     ) -> None:
         """
         Draw text into a Region, auto-scrolling on overflow.
 
         Glyph blits are clipped to the region's bounds automatically — no
         manual fill_rect masking required. Scrolling activates when the
-        measured text is wider than the region. Hardcoded to 30 px/sec with
-        2000 ms dwell at each end, matching the current pitcher/batter feel.
+        measured text is wider than the region. Defaults to 30 px/sec with
+        2000 ms dwell at each end, matching the pitcher/batter feel; callers
+        can override either via `pause_ms` / `pixels_per_second`.
 
         Args:
             region: Region (or any framebuffer-like object exposing `.width`
@@ -376,6 +379,8 @@ class FontWriter:
             bgcolor: Optional background color (RGB565). If omitted, non-glyph
                 pixels in the region are left untouched (transparent via the
                 MAGENTA_RGB565 blit key).
+            pause_ms: Dwell at each end of the scroll cycle (overflow only).
+            pixels_per_second: Scroll speed (overflow only).
         """
         if font is None:
             font = self._default_font
@@ -404,7 +409,10 @@ class FontWriter:
                 cursor_x = 0
         else:
             from scoreboard.display import calculate_scroll_offset
-            cursor_x = -calculate_scroll_offset(text_w, width, elapsed_ms)
+            cursor_x = -calculate_scroll_offset(
+                text_w, width, elapsed_ms,
+                pause_ms=pause_ms, pixels_per_second=pixels_per_second,
+            )
 
         spec = self._glyph_spec
         for char in text:

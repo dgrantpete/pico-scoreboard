@@ -53,6 +53,20 @@ class ErrorState:
         self.lines: list[str] = []    # Up to 4 detail lines
 
 
+class PlayState:
+    """Most-recent play display state. Plain data — no methods.
+
+    `id` is used by the poller to detect when a new play has arrived;
+    `text` + `updated_ms` are read by the display thread to render the
+    scrolling play description for a short window after each change.
+    """
+
+    def __init__(self) -> None:
+        self.id: str = ''          # ESPN play id — poller compares to detect changes
+        self.text: str = ''        # Play description — rendered by display thread
+        self.updated_ms: int = 0   # time.ticks_ms() when id last changed
+
+
 class MlbGameSnapshot:
     """Current MLB game for the display thread to read. Plain data — no methods."""
 
@@ -60,6 +74,7 @@ class MlbGameSnapshot:
         self.game_id: str = ''
         self.live: LiveGame | None = None
         self.fetched_ms: int = 0
+        self.play: PlayState = PlayState()
 
 
 class UiColors:
@@ -169,6 +184,9 @@ class DoubleBufferedState:
         back.game.game_id = front.game.game_id
         back.game.live = front.game.live
         back.game.fetched_ms = front.game.fetched_ms
+        back.game.play.id = front.game.play.id
+        back.game.play.text = front.game.play.text
+        back.game.play.updated_ms = front.game.play.updated_ms
 
         back.home_logo = front.home_logo
         back.away_logo = front.away_logo

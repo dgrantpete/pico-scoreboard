@@ -105,6 +105,19 @@ class MlbPoller:
         state.game.game_id = game_id
         state.game.live = live
         state.game.fetched_ms = time.ticks_ms()
+
+        # Most-recent play flash: the display thread briefly surfaces the play
+        # text whenever the id changes. The back buffer's previous play.id is
+        # carried forward by DoubleBufferedState._sync_after_swap, so this
+        # comparison is against the last committed value — no poller-local
+        # state needed. Game rotation also legitimately trips this (new game,
+        # different ids) so viewers can catch up on the newest play.
+        new_play_id = live.last_play.id
+        if new_play_id != state.game.play.id:
+            state.game.play.id = new_play_id
+            state.game.play.text = live.last_play.text
+            state.game.play.updated_ms = time.ticks_ms()
+
         state.home_logo = home_logo
         state.away_logo = away_logo
         if self._animation_reset:
