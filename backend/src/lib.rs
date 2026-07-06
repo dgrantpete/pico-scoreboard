@@ -13,6 +13,7 @@ pub mod espn;
 pub mod logo;
 pub mod mlb;
 pub mod team;
+pub mod wire;
 
 use config::AppConfig;
 use espn::EspnClient;
