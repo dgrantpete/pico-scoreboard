@@ -159,17 +159,88 @@ def copy_frontend_build(output_dir: Path) -> bool:
     return True
 
 
+def _mpremote(args: list, port: str = None, timeout: float = None, quiet: bool = False):
+    """Run one mpremote invocation with a hang guard.
+
+    Returns the CompletedProcess, or None if the command timed out (a hung
+    mpremote must never strand the flash flow — see micropython#13476).
+
+    Always prefixes `resume`: without it, mpremote SOFT-RESETS the board
+    before the first command of a session. Against a running scoreboard that
+    soft reset can wedge TinyUSB via the Core 1 thread (micropython#8494) —
+    the historical ~50% flash failure — and against a safe-mode REPL it
+    re-runs main.py, restarting the app and defeating safe mode entirely.
+    """
+    cmd = ['mpremote']
+    if port:
+        cmd.extend(['connect', port, '+'])
+    cmd.append('resume')
+    cmd.extend(args)
+    try:
+        return subprocess.run(cmd, timeout=timeout, capture_output=quiet)
+    except subprocess.TimeoutExpired:
+        return None
+
+
+# Runs on the device to schedule a safe-mode boot: main.py consumes the
+# /update flag and skips the application (no Core 1 thread, no PIO/DMA),
+# leaving a REPL that mpremote can reliably talk to. machine.reset() is a
+# HARD reset — it re-initializes both cores and USB, avoiding the
+# soft-reset/TinyUSB-spinlock lockup (micropython#8494).
+_UPDATE_MODE_SNIPPET = "f=open('/update','w'); f.close(); import machine; machine.reset()"
+
+
+def enter_update_mode(port: str = None) -> bool:
+    """Reboot the running firmware into safe mode and confirm it took.
+
+    Confirmation uses a filesystem op (`fs ls`) because fs commands are
+    exactly what hangs while a Core 1 thread is running — a fast response
+    proves the app did not start.
+    """
+    print("Requesting reboot into safe (update) mode...")
+    # --no-follow: machine.reset() kills the connection mid-exec; don't wait.
+    _mpremote(['exec', '--no-follow', _UPDATE_MODE_SNIPPET], port, timeout=15, quiet=True)
+
+    # Hard reset -> USB re-enumerates; give the OS a moment, then probe.
+    time.sleep(4)
+    for _ in range(3):
+        probe = _mpremote(['fs', 'ls', ':'], port, timeout=8, quiet=True)
+        if probe is not None and probe.returncode == 0:
+            print("Device is in safe mode.")
+            return True
+        time.sleep(2)
+    return False
+
+
 def flash_device(source_dir: Path, port: str = None, repl: bool = False):
-    """Flash files to Pico using mpremote."""
+    """Flash files to Pico using mpremote.
+
+    Flashing into a *running* scoreboard is unreliable by design: with the
+    Core 1 display thread up, mpremote fs commands hang (micropython#13476)
+    and soft resets can wedge USB (micropython#8494). So: reboot into safe
+    mode first, copy with the app stopped, then hard-reset into the new
+    firmware.
+    """
     print(f"Flashing {source_dir.relative_to(root_directory)}/ to device...")
 
-    # Build command for copy + reset
-    cmd_parts = ['mpremote']
-    if port:
-        cmd_parts.extend(['connect', port, '+'])
-    cmd_parts.extend(['cp', '-r', f'{source_dir.as_posix()}/.', ':', '+', 'reset'])
+    if not enter_update_mode(port):
+        print("")
+        print("Could not confirm safe mode automatically. Manual fallback:")
+        print("  1. Hold Button A (GPIO 10) while power-cycling or resetting the Pico")
+        print("  2. Keep holding for ~2 seconds after power-up")
+        print("  3. The app skips startup and the REPL is free")
+        input("Press Enter once the device has rebooted in safe mode... ")
 
-    subprocess.run(cmd_parts, check=True)
+    copy = _mpremote(['cp', '-r', f'{source_dir.as_posix()}/.', ':'], port, timeout=600)
+    if copy is None or copy.returncode != 0:
+        raise SystemExit(
+            "mpremote copy failed or hung. Use the Button A fallback above, "
+            "then re-run: python tools/build.py flash --no-build"
+        )
+
+    # Hard reset into the (new) firmware; the /update flag was consumed at
+    # the safe-mode boot, so this boot starts the app normally.
+    _mpremote(['reset'], port, timeout=15, quiet=True)
 
     if repl:
         # Wait for device to reconnect after reset

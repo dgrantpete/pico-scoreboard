@@ -15,7 +15,7 @@
 #   GPIO 3: Channel A
 #   GPIO 4: Channel B
 #
-# Button A: GPIO 10 (skip to next game)
+# Button A: GPIO 10 (skip to next game; held at power-up = safe mode)
 # Button B: GPIO 22 (toggle rotation lock)
 #
 # PIO allocation: PIO0 = HUB75 driver, PIO1 = buttons (SM0 = A, SM1 = B)
@@ -30,6 +30,50 @@ Automatically enters setup mode (AP) when no WiFi is configured
 or when connection to the configured network fails. Once properly
 configured, connects to the specified WiFi network.
 """
+
+# --- Safe-mode escape hatch -------------------------------------------------
+# MUST stay first: once the Core 1 display thread starts, mpremote filesystem
+# commands hang (micropython#13476) and a soft reset can wedge TinyUSB via a
+# spinlock held by the dying core (micropython#8494) — flashing a *running*
+# scoreboard is inherently unreliable. Skipping the app entirely leaves a
+# clean single-core REPL that mpremote can always talk to.
+#
+# Two triggers:
+#   - Button A (GPIO 10, active-low) held at power-up — the manual escape,
+#     works even when the firmware wedges USB (hold + power-cycle).
+#   - /update flag file — written by `tools/build.py flash`, consumed here,
+#     so the tool can reboot the device into a flashable state on its own.
+
+def _safe_mode_requested() -> bool:
+    import machine
+    import os
+    import time
+
+    try:
+        pin = machine.Pin(10, machine.Pin.IN, machine.Pin.PULL_UP)
+        time.sleep_ms(5)  # let the pull-up settle before sampling
+        if pin.value() == 0:
+            print("[BOOT] safe mode: Button A held at power-up")
+            return True
+    except Exception:
+        pass
+
+    try:
+        os.stat('/update')
+        os.remove('/update')
+        print("[BOOT] safe mode: /update flag consumed")
+        return True
+    except OSError:
+        pass
+
+    return False
+
+
+if _safe_mode_requested():
+    import sys
+    print("[BOOT] application NOT started — REPL is free for mpremote/flashing")
+    sys.exit()
+# ----------------------------------------------------------------------------
 
 import network
 import time
