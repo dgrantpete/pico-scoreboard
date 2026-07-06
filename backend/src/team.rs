@@ -8,6 +8,7 @@ use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::AppState;
+use crate::auth::ApiKey;
 use crate::error::{AppError, ErrorResponse};
 use crate::logo::{
     blend_with_background, decode_png, encode_png, encode_ppm_p6, encode_rgb565_raw,
@@ -51,6 +52,11 @@ pub struct LogoQuery {
 fn default_size() -> u32 {
     128
 }
+
+/// Largest resize dimension the endpoint will perform. The panel is 128px
+/// wide, so 512 leaves generous headroom for browser use while keeping an
+/// unauthenticated-sized request from asking for a multi-hundred-MB resize.
+const MAX_DIMENSION: u32 = 512;
 
 /// Supported output formats, selected via the Accept header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToSchema)]
@@ -110,17 +116,28 @@ fn parse_accept_header(headers: &HeaderMap) -> OutputFormat {
             ("image/x-rgb565")
         )),
         (status = 400, description = "Invalid parameters", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid API key", body = ErrorResponse),
         (status = 404, description = "Team not found", body = ErrorResponse),
         (status = 502, description = "Error fetching from ESPN", body = ErrorResponse),
     ),
+    security(("api_key" = [])),
     tag = "team"
 )]
 pub async fn get_team_logo(
     State(state): State<Arc<AppState>>,
+    _auth: ApiKey,
     Path((league, abbrev)): Path<(League, String)>,
     Query(params): Query<LogoQuery>,
     headers: HeaderMap,
 ) -> Result<Response<Body>, AppError> {
+    if !(1..=MAX_DIMENSION).contains(&params.width) || !(1..=MAX_DIMENSION).contains(&params.height)
+    {
+        return Err(AppError::InvalidDimensions {
+            width: params.width,
+            height: params.height,
+        });
+    }
+
     let output_format = parse_accept_header(&headers);
 
     let background = if let Some(ref hex) = params.background_color {

@@ -3,7 +3,7 @@ use lru::LruCache;
 use reqwest::Client;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::config::EspnConfig;
 use crate::error::AppError;
@@ -11,11 +11,18 @@ use crate::error::AppError;
 /// Maximum number of native-resolution logos to cache in memory.
 const LOGO_CACHE_CAPACITY: usize = 64;
 
-/// HTTP client for ESPN with an in-memory logo cache.
+/// How long a cached JSON response stays fresh. ESPN's scoreboard feed is the
+/// same URL for every game and every device, so a poll cycle across a fleet
+/// of Picos collapses into (at most) one upstream fetch per TTL window.
+const JSON_CACHE_TTL: Duration = Duration::from_secs(5);
+
+/// HTTP client for ESPN with in-memory logo and JSON caches.
 #[derive(Debug, Clone)]
 pub struct EspnClient {
     client: Client,
     logo_cache: Arc<Mutex<LruCache<String, Bytes>>>,
+    /// Single-slot TTL cache of the last JSON response: (fetched_at, url, body).
+    json_cache: Arc<Mutex<Option<(Instant, String, Bytes)>>>,
 }
 
 impl EspnClient {
@@ -32,6 +39,7 @@ impl EspnClient {
             logo_cache: Arc::new(Mutex::new(LruCache::new(
                 NonZeroUsize::new(LOGO_CACHE_CAPACITY).unwrap(),
             ))),
+            json_cache: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -72,6 +80,36 @@ impl EspnClient {
         &self,
         url: &str,
     ) -> Result<T, AppError> {
+        let bytes = self.fetch_json_bytes(url).await?;
+        Self::deserialize_logged(url, &bytes)
+    }
+
+    /// Like `fetch_json`, but serves from a short-TTL cache keyed by URL.
+    ///
+    /// Use for endpoints that many clients poll for identical data (the MLB
+    /// scoreboard). Each cache hit still deserializes — cheap next to the
+    /// upstream round-trip it saves.
+    pub async fn fetch_json_cached<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+    ) -> Result<T, AppError> {
+        {
+            let cache = self.json_cache.lock().unwrap();
+            if let Some((fetched_at, cached_url, bytes)) = cache.as_ref()
+                && cached_url == url
+                && fetched_at.elapsed() < JSON_CACHE_TTL
+            {
+                return Self::deserialize_logged(url, bytes);
+            }
+        }
+
+        let bytes = self.fetch_json_bytes(url).await?;
+        let value = Self::deserialize_logged(url, &bytes)?;
+        *self.json_cache.lock().unwrap() = Some((Instant::now(), url.to_string(), bytes));
+        Ok(value)
+    }
+
+    async fn fetch_json_bytes(&self, url: &str) -> Result<Bytes, AppError> {
         let resp = self.client.get(url).send().await.map_err(|e| {
             tracing::error!(url = %url, error = %e, "ESPN request failed");
             AppError::EspnRequest(e)
@@ -83,12 +121,17 @@ impl EspnClient {
             AppError::EspnRequest(e)
         })?;
 
-        let bytes = resp.bytes().await.map_err(|e| {
+        resp.bytes().await.map_err(|e| {
             tracing::error!(url = %url, error = %e, "ESPN body read failed");
             AppError::EspnRequest(e)
-        })?;
+        })
+    }
 
-        let de = &mut serde_json::Deserializer::from_slice(&bytes);
+    fn deserialize_logged<T: serde::de::DeserializeOwned>(
+        url: &str,
+        bytes: &Bytes,
+    ) -> Result<T, AppError> {
+        let de = &mut serde_json::Deserializer::from_slice(bytes);
         match serde_path_to_error::deserialize::<_, T>(de) {
             Ok(value) => Ok(value),
             Err(err) => {
@@ -96,11 +139,10 @@ impl EspnClient {
                 let inner = err.into_inner();
                 tracing::error!(
                     url = %url,
-                    http_status = %http_status.as_u16(),
                     json_path = %json_path,
                     error = %inner,
                     payload_bytes = bytes.len(),
-                    payload = %String::from_utf8_lossy(&bytes),
+                    payload = %String::from_utf8_lossy(bytes),
                     "ESPN JSON deserialization failed"
                 );
                 Err(AppError::EspnDeserialize {

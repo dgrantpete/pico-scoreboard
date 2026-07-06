@@ -15,16 +15,14 @@ pub enum AppError {
     ImageDecode(String),
     /// Invalid hex color format
     InvalidColor(String),
+    /// Requested image dimensions outside the allowed range
+    InvalidDimensions { width: u32, height: u32 },
     /// Team abbreviation not found at ESPN CDN
     TeamNotFound(String),
     /// Missing API key header
     MissingApiKey,
     /// Invalid API key
     Unauthorized,
-    /// HMAC signature has expired
-    ExpiredSignature,
-    /// HMAC signature is invalid
-    InvalidSignature,
     /// Network / HTTP status failure against ESPN
     EspnRequest(reqwest::Error),
     /// ESPN JSON response failed to deserialize
@@ -37,6 +35,19 @@ pub enum AppError {
     GameNotFound(String),
     /// Team color hex string could not be parsed
     InvalidTeamColor { team: String, raw: String },
+}
+
+impl AppError {
+    /// Fill in the upstream URL on an `EspnDeserialize` error whose producer
+    /// didn't have it in scope (the transformation helpers in `mlb.rs`).
+    pub fn with_url(mut self, request_url: &str) -> Self {
+        if let AppError::EspnDeserialize { ref mut url, .. } = self
+            && url.is_empty()
+        {
+            *url = request_url.to_string();
+        }
+        self
+    }
 }
 
 /// Error response body
@@ -74,25 +85,23 @@ impl IntoResponse for AppError {
                 "team_not_found".to_string(),
                 format!("Team '{}' not found", abbrev),
             ),
+            AppError::InvalidDimensions { width, height } => (
+                StatusCode::BAD_REQUEST,
+                "invalid_dimensions".to_string(),
+                format!(
+                    "Requested dimensions {}x{} outside allowed range 1..=512",
+                    width, height
+                ),
+            ),
             AppError::MissingApiKey => (
                 StatusCode::UNAUTHORIZED,
                 "missing_api_key".to_string(),
-                "X-Api-Key header or valid signature is required".to_string(),
+                "X-Api-Key header is required".to_string(),
             ),
             AppError::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "unauthorized".to_string(),
                 "Invalid API key".to_string(),
-            ),
-            AppError::ExpiredSignature => (
-                StatusCode::UNAUTHORIZED,
-                "expired_signature".to_string(),
-                "Signature has expired".to_string(),
-            ),
-            AppError::InvalidSignature => (
-                StatusCode::UNAUTHORIZED,
-                "invalid_signature".to_string(),
-                "Invalid request signature".to_string(),
             ),
             AppError::EspnRequest(e) => (
                 StatusCode::BAD_GATEWAY,
