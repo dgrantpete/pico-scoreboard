@@ -3,7 +3,8 @@
 import machine
 import uasyncio as asyncio
 from microdot import Microdot, Request
-from scoreboard.config import Config
+from scoreboard.config import Config, CadenceError
+from scoreboard.logger import DEBUG
 
 try:
     from typing import Callable
@@ -31,15 +32,17 @@ def create_api(config: Config, get_network_status: "Callable[[], dict]") -> Micr
         return config.raw
 
     @api.put('/config')
-    async def update_config(request: Request) -> dict:
-        """Merge provided fields into existing config."""
+    async def update_config(request: Request) -> dict | tuple:
+        """Merge provided fields into existing config (single flash write)."""
         data = request.json
         if data is None:
             return config.raw
-        for section, values in data.items():
-            if section in config.raw and isinstance(values, dict):
-                for key, value in values.items():
-                    config.update(section, key, value)
+
+        try:
+            config.update_many(data)
+        except CadenceError as e:
+            return {'error': 'invalid_cadence', 'message': str(e)}, 400
+
         # Re-compute UI colors if colors section was updated
         if 'colors' in data:
             update_ui_colors(config)
@@ -63,7 +66,6 @@ def create_api(config: Config, get_network_status: "Callable[[], dict]") -> Micr
     @api.post('/reboot')
     async def reboot(request: Request) -> dict:
         """Trigger a device restart after a brief delay."""
-        from scoreboard.logger import DEBUG
         if config.log_level >= DEBUG:
             print("[MAIN] reboot scheduled: delay=1s")
         asyncio.create_task(_delayed_reboot())
@@ -72,9 +74,7 @@ def create_api(config: Config, get_network_status: "Callable[[], dict]") -> Micr
     @api.post('/reset-network')
     async def reset_network(request: Request) -> dict:
         """Clear network credentials to trigger fresh setup on next boot."""
-        from scoreboard.logger import DEBUG
-        config.update('network', 'ssid', '')
-        config.update('network', 'password', '')
+        config.update_many({'network': {'ssid': '', 'password': ''}})
         if config.log_level >= DEBUG:
             print("[CONFIG] network credentials cleared: will enter setup on reboot")
         return {'message': 'Network configuration cleared. Reboot to enter setup mode.'}

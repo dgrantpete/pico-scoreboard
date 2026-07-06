@@ -116,9 +116,15 @@ class Config:
         """
         self._path: str = path
         self._data: dict = self._load()
+        self._log_level: int = self._compute_log_level()
 
     def _load(self) -> dict:
-        """Load config from file, merging with defaults."""
+        """Load config from file, merging with defaults.
+
+        Never raises: a corrupt or hand-edited config file must not be able
+        to brick boot (Config() is constructed at import time in main.py).
+        Invalid values fall back to defaults with a logged complaint.
+        """
         try:
             with open(self._path, 'r') as f:
                 data = json.load(f)
@@ -127,15 +133,26 @@ class Config:
         except (OSError, ValueError):
             merged = _deep_copy(_DEFAULTS)
 
-        _validate_cadence(
-            merged["display"]["poll_interval_seconds"],
-            merged["display"]["game_rotation_seconds"],
-        )
+        try:
+            _validate_cadence(
+                merged["display"]["poll_interval_seconds"],
+                merged["display"]["game_rotation_seconds"],
+            )
+        except CadenceError as e:
+            # Unconditional print: this is boot-critical and the log level
+            # itself comes from the (possibly bad) file being loaded.
+            print(f"[CONFIG] invalid cadence in {self._path}, using defaults: {e}")
+            merged["display"]["poll_interval_seconds"] = _DEFAULTS["display"]["poll_interval_seconds"]
+            merged["display"]["game_rotation_seconds"] = _DEFAULTS["display"]["game_rotation_seconds"]
         return merged
+
+    def _compute_log_level(self) -> int:
+        return _LOG_LEVEL_MAP.get(self._data["log"]["level"], DEBUG)
 
     def reload(self) -> None:
         """Reload configuration from file."""
         self._data = self._load()
+        self._log_level = self._compute_log_level()
         if self.log_level >= DEBUG:
             print(f"[CONFIG] reloaded: {self._path}")
 
@@ -166,9 +183,48 @@ class Config:
             _validate_cadence(int(poll), int(rotation))  # type: ignore[arg-type]
 
         self._data[section][key] = value
+        if section == "log":
+            self._log_level = self._compute_log_level()
         self.save()
         if self.log_level >= DEBUG:
             print(f"[CONFIG] updated: {section}.{key}={value}")
+
+    def update_many(self, data: dict) -> None:
+        """
+        Merge a {section: {key: value}} update into the config with ONE flash
+        write, validating cross-key invariants against the merged result.
+
+        Unknown sections and non-dict section values are ignored (same policy
+        as update()). Raises CadenceError before anything is applied if the
+        merged poll/rotation pair would be invalid.
+        """
+        # Validate the cadence pair as it will exist AFTER the merge, so a
+        # jointly-valid pair can't be rejected for arriving in the "wrong"
+        # key order (and a jointly-invalid one can't slip through).
+        display = data.get("display")
+        if isinstance(display, dict) and (
+            "poll_interval_seconds" in display or "game_rotation_seconds" in display
+        ):
+            current = self._data["display"]
+            poll = display.get("poll_interval_seconds", current["poll_interval_seconds"])
+            rotation = display.get("game_rotation_seconds", current["game_rotation_seconds"])
+            _validate_cadence(int(poll), int(rotation))  # type: ignore[arg-type]
+
+        changed = False
+        for section, values in data.items():
+            if section not in self._data or not isinstance(values, dict):
+                continue
+            for key, value in values.items():
+                self._data[section][key] = value
+                changed = True
+
+        if not changed:
+            return
+        if "log" in data:
+            self._log_level = self._compute_log_level()
+        self.save()
+        if self.log_level >= DEBUG:
+            print(f"[CONFIG] updated: {', '.join(data.keys())} (batched)")
 
     def get(self, section: str, key: str, default: object = None) -> object:
         """
@@ -280,8 +336,12 @@ class Config:
     # Log properties
     @property
     def log_level(self) -> int:
-        """Log level as integer: NONE=0, ERROR=1, DEBUG=2."""
-        return _LOG_LEVEL_MAP.get(self._data["log"]["level"], DEBUG)
+        """Log level as integer: NONE=0, ERROR=1, DEBUG=2.
+
+        Cached as a plain int (recomputed on load/update) because this is
+        checked before every log statement, including on hot paths.
+        """
+        return self._log_level
 
     # Color properties
     def get_color(self, name: str) -> dict:

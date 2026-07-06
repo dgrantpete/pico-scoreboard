@@ -13,7 +13,13 @@ LUX_MAX = 300.0     # Lux at/above which display is at maximum brightness
 BRI_MIN = 0.05      # Minimum display brightness (never fully black)
 BRI_MAX = 1.0       # Maximum display brightness
 EMA_ALPHA = 0.08    # Lux smoothing (lower = slower response, less flicker)
-RAMP_STEP = 0.01    # Max brightness change per update (~0.2/sec at 20 Hz)
+
+# The auto-brightness loop ticks at this period (main.py sleeps on it), and
+# RAMP_STEP is derived so the ramp speed is expressed in real units instead
+# of silently changing whenever the tick rate does.
+TICK_MS = 200                                # 5 Hz update rate
+RAMP_PER_SECOND = 0.2                        # Max brightness change per second
+RAMP_STEP = RAMP_PER_SECOND * TICK_MS / 1000  # Per-tick step (0.04 at 5 Hz)
 
 _LOG_RANGE = math.log(LUX_MAX / LUX_MIN)
 

@@ -15,8 +15,10 @@
 #   GPIO 3: Channel A
 #   GPIO 4: Channel B
 #
-# Button A: GPIO 10
-# Button B: GPIO 22
+# Button A: GPIO 10 (skip to next game)
+# Button B: GPIO 22 (toggle rotation lock)
+#
+# PIO allocation: PIO0 = HUB75 driver, PIO1 = buttons (SM0 = A, SM1 = B)
 
 """
 Pico Scoreboard Web Server.
@@ -41,14 +43,15 @@ import _thread
 from microdot import Microdot, Request, Response, send_file
 from scoreboard import Config, ScoreboardApiClient
 from scoreboard.mlb_poller import MlbPoller
-from scoreboard.state import set_startup_step, finish_startup, set_display_driver, get_display_state
+from scoreboard.state import set_startup_step, finish_startup, set_display_driver, get_write_state
 from scoreboard.dns import run_dns_server
 from scoreboard.api_routes import create_api
-from scoreboard.display import init_display, run_display_thread, Regions
+from scoreboard.display import init_display, run_display_thread, Regions, LogoPool
 from scoreboard.fonts import FontWriter
 from hub75 import Hub75Display, Hub75Driver
 from machine import I2C, Pin
 from veml7700 import VEML7700
+from button import Button
 from scoreboard import brightness
 from scoreboard.logger import DEBUG, ERROR
 
@@ -87,22 +90,27 @@ def _resize_setup_regions_for_qr(regions: Regions) -> None:
     Resize setup-screen text regions to fit beside the current QR code.
 
     Must be called on Core 0 after finish_startup('setup', ...) has generated
-    the QR. Reads QR dimensions from state (which was just committed by
-    finish_startup) and rebuilds the affected Regions so text won't overlap
-    the QR footprint.
+    the QR. Reads QR dimensions from the write buffer (which carries forward
+    the just-committed state) and rebuilds the affected Regions so text won't
+    overlap the QR footprint.
     """
-    state = get_display_state()
+    state = get_write_state()
     regions.update_for_qr(state.setup.qr_width, state.setup.qr_height)
 
 
 # Track setup mode state
 app.setup_mode = False
-app.setup_reason = None  # 'no_network_configured' | 'connection_failed' | None
+app.setup_reason = None  # 'no_network_configured' | 'connection_failed' | 'bad_auth' | None
 
 
 def get_memory_stats() -> dict:
-    """Get current memory usage statistics."""
-    gc.collect()  # Run GC first for accurate reading
+    """Get current memory usage statistics.
+
+    Deliberately does NOT gc.collect() first: observing memory must not
+    change runtime behavior. The reading therefore includes garbage
+    accumulated since the last automatic collection — expect a sawtooth
+    that climbs and drops; the drops are MicroPython's GC doing its job.
+    """
     memory_used = gc.mem_alloc()
     memory_free = gc.mem_free()
 
@@ -139,7 +147,7 @@ def get_network_status() -> dict:
             'connected': False,
             'setup_mode': setup_mode,
             'setup_reason': setup_reason,
-            'configured_ssid': config.ssid if setup_reason == 'connection_failed' else None,
+            'configured_ssid': config.ssid if setup_reason in ('connection_failed', 'bad_auth') else None,
             'ip': None,
             'hostname': None,
             'ap_ip': ap.ifconfig()[0],
@@ -183,12 +191,13 @@ def get_network_status() -> dict:
         }
 
 
-async def _sync_time_from_backend() -> int:
+async def _sync_time_from_backend() -> int | None:
     """
     Fetch current time from the backend API and set the Pico's RTC.
 
     Returns:
-        UTC offset in seconds for local time display (0 if unknown).
+        UTC offset in seconds for local time display, or None if the sync
+        failed. (A successful sync can legitimately return 0 — UTC itself.)
     """
     import aiohttp
 
@@ -196,28 +205,32 @@ async def _sync_time_from_backend() -> int:
         url = f"{config.api_url.rstrip('/')}/time"
         if config.log_level >= DEBUG:
             print(f"[TIME] sync started: url={url}")
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, ssl=True) as resp:
-                if resp.status != 200:
-                    if config.log_level >= ERROR:
-                        print(f"[TIME] sync failed: http={resp.status}")
-                    return 0
 
-                data = await resp.json()
-                unix_ts = data['timestamp']
-                utc_offset = data.get('utc_offset') or 0
+        async def _fetch() -> int | None:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, ssl=True) as resp:
+                    if resp.status != 200:
+                        if config.log_level >= ERROR:
+                            print(f"[TIME] sync failed: http={resp.status}")
+                        return None
 
-                tm = time.gmtime(unix_ts)
-                # gmtime returns: (year, month, mday, hour, minute, second, weekday, yearday)
-                # RTC.datetime expects: (year, month, day, weekday, hours, minutes, seconds, subseconds)
-                machine.RTC().datetime((tm[0], tm[1], tm[2], tm[6], tm[3], tm[4], tm[5], 0))
-                if config.log_level >= DEBUG:
-                    print(f"[TIME] rtc synced: {tm[0]:04d}-{tm[1]:02d}-{tm[2]:02d} {tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d} UTC offset={utc_offset}s")
-                return utc_offset
+                    data = await resp.json()
+                    unix_ts = data['timestamp']
+                    utc_offset = data.get('utc_offset') or 0
+
+                    tm = time.gmtime(unix_ts)
+                    # gmtime returns: (year, month, mday, hour, minute, second, weekday, yearday)
+                    # RTC.datetime expects: (year, month, day, weekday, hours, minutes, seconds, subseconds)
+                    machine.RTC().datetime((tm[0], tm[1], tm[2], tm[6], tm[3], tm[4], tm[5], 0))
+                    if config.log_level >= DEBUG:
+                        print(f"[TIME] rtc synced: {tm[0]:04d}-{tm[1]:02d}-{tm[2]:02d} {tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d} UTC offset={utc_offset}s")
+                    return utc_offset
+
+        return await asyncio.wait_for(_fetch(), 15)
     except Exception as e:
         if config.log_level >= ERROR:
             print(f"[TIME] sync failed: {e}")
-        return 0
+        return None
 
 
 # Create and mount API under /api prefix
@@ -378,7 +391,9 @@ def start_station_mode() -> network.WLAN | None:
     wlan = network.WLAN(network.STA_IF)
 
     max_retries = 3
-    per_attempt_timeout = 20  # Base timeout (extended for LINK_NOIP)
+    # Per-attempt timeout comes from config; NOIP extension grants extra time
+    # once association succeeded and only DHCP remains.
+    per_attempt_timeout = config.connect_timeout_seconds
     noip_extension = 15  # Extra time if we reach LINK_NOIP state
 
     for attempt in range(1, max_retries + 1):
@@ -485,17 +500,21 @@ def start_station_mode() -> network.WLAN | None:
     return None
 
 
-# TODO(tech-debt): this module-level bool is an ad-hoc cross-thread sync primitive —
-# Core 1 writes it inside start_display_thread's wrapper, Core 0's watchdog_task
-# reads it. It functions, but a mutable global as a sync flag is not good practice.
-# Replace with an explicit shared-state object (e.g. a small ThreadHealth class
-# passed into both start_display_thread and watchdog_task) so ownership shows up
-# in the signatures instead of being hidden at module scope. Don't leave this as-is
-# long-term.
-_display_thread_healthy: bool = False
+class ThreadHealth:
+    """
+    Cross-core health flag for the display thread.
+
+    Core 1 writes `healthy`, Core 0's watchdog reads it. Passing this object
+    into both sides makes the shared state explicit in the signatures instead
+    of hiding it at module scope.
+    """
+
+    def __init__(self) -> None:
+        self.healthy: bool = False
 
 
-def start_display_thread(display: Hub75Display, writer: FontWriter, regions: Regions, cfg: Config) -> None:
+def start_display_thread(display: Hub75Display, writer: FontWriter, regions: Regions,
+                         cfg: Config, health: ThreadHealth) -> None:
     """
     Spawn display loop on Core 1.
 
@@ -507,118 +526,179 @@ def start_display_thread(display: Hub75Display, writer: FontWriter, regions: Reg
         writer: FontWriter instance (pre-initialized)
         regions: Pre-allocated framebuffer regions for all text slots
         cfg: Config instance for UI colors
+        health: Shared health flag the watchdog monitors
     """
     def wrapper():
-        global _display_thread_healthy
         try:
-            _display_thread_healthy = True
-            if config.log_level >= DEBUG:
+            health.healthy = True
+            if cfg.log_level >= DEBUG:
                 print("[DISPLAY] thread started: core=1")
-            run_display_thread(display, writer, regions, config)
+            run_display_thread(display, writer, regions, cfg)
         except Exception as e:
-            if config.log_level >= ERROR:
+            if cfg.log_level >= ERROR:
                 print(f"[DISPLAY] thread crashed: {e}")
-            _display_thread_healthy = False
+            health.healthy = False
 
     _thread.start_new_thread(wrapper, ())
 
 
-async def watchdog_task() -> None:
+async def watchdog_task(health: ThreadHealth) -> None:
     """
     Monitor display thread health and reset device if it crashes.
 
     Checks the display thread health every 30 seconds. If the thread
     is unhealthy, triggers a device reset to recover.
     """
-    global _display_thread_healthy
     await asyncio.sleep(10)  # Initial delay to let things stabilize
 
     while True:
         await asyncio.sleep(30)
-        if not _display_thread_healthy:
+        if not health.healthy:
             if config.log_level >= ERROR:
                 print("[DISPLAY] watchdog triggered: unhealthy, resetting")
             await asyncio.sleep(1)
             machine.reset()
 
 
-def _try_init_veml(i2c: I2C) -> VEML7700 | None:
-    """Attempt to create VEML7700 sensor. Returns None on failure."""
-    try:
-        sensor = VEML7700(i2c=i2c, it=100, gain=1)
-        if config.log_level >= DEBUG:
-            print("[MAIN] sensor ok: veml7700")
-        return sensor
-    except Exception as e:
-        if config.log_level >= ERROR:
-            print(f"[MAIN] sensor init failed: veml7700 {e}")
-        return None
+class LightSensor:
+    """
+    Owns the VEML7700 and its runtime re-init retry state.
+
+    read_lux() returns None while the sensor is unavailable and transparently
+    retries initialization every RETRY_TICKS calls (3s at the auto-brightness
+    tick rate).
+    """
+
+    RETRY_TICKS = 15
+
+    def __init__(self, i2c: I2C, cfg: Config) -> None:
+        self._i2c = i2c
+        self._config = cfg
+        self._retry_ticks = 0
+        self._sensor: VEML7700 | None = self._try_init()
+
+    def _try_init(self) -> VEML7700 | None:
+        try:
+            sensor = VEML7700(i2c=self._i2c, it=100, gain=1)
+            if self._config.log_level >= DEBUG:
+                print("[MAIN] sensor ok: veml7700")
+            return sensor
+        except Exception as e:
+            if self._config.log_level >= ERROR:
+                print(f"[MAIN] sensor init failed: veml7700 {e}")
+            return None
+
+    def read_lux(self) -> float | None:
+        if self._sensor is None:
+            self._retry_ticks += 1
+            if self._retry_ticks >= self.RETRY_TICKS:
+                self._retry_ticks = 0
+                self._sensor = self._try_init()
+            return None
+
+        try:
+            return self._sensor.read_lux()
+        except Exception as e:
+            if self._config.log_level >= ERROR:
+                print(f"[DISPLAY] brightness sensor error: {e}")
+            return None
 
 
-# TODO(tech-debt): these are module-level globals because auto_brightness_loop
-# retries VEML7700 init at runtime by mutating _light_sensor. That mutation makes
-# them true shared runtime state rather than boot-time constants, but they'd be
-# cleaner as a small LightSensor class that owns its own retry state and i2c bus.
-# Refactor when touching auto_brightness_loop next; don't leave this as-is long-term.
-_i2c: I2C | None = None
-_light_sensor: VEML7700 | None = None
-
-
-async def auto_brightness_loop(driver, cfg: Config) -> None:
+async def auto_brightness_loop(driver, cfg: Config, sensor: LightSensor) -> None:
     """
     Periodically read ambient light and update display brightness.
 
     Sole owner of driver.set_brightness(). Reads config.brightness
     as the user preference on every tick.
     """
-    global _light_sensor
-
     smoothed_lux = 0.0
     ambient_bri = cfg.brightness / 100.0
     initialized = False
-    retry_ticks = 0
 
     if cfg.log_level >= DEBUG:
         print("[DISPLAY] auto-brightness started")
 
     while True:
-        # Retry sensor init every 3s (15 ticks) if not available
-        if _light_sensor is None:
-            retry_ticks += 1
-            if retry_ticks >= 15 and _i2c is not None:
-                retry_ticks = 0
-                _light_sensor = _try_init_veml(_i2c)
-        else:
-            # Read sensor
-            try:
-                lux = _light_sensor.read_lux()
-                if not initialized:
-                    smoothed_lux = lux
-                    initialized = True
-                else:
-                    smoothed_lux = brightness.smooth_lux(smoothed_lux, lux)
-            except Exception as e:
-                if cfg.log_level >= ERROR:
-                    print(f"[DISPLAY] brightness sensor error: {e}")
+        lux = sensor.read_lux()
+        if lux is not None:
+            if not initialized:
+                smoothed_lux = lux
+                initialized = True
+            else:
+                smoothed_lux = brightness.smooth_lux(smoothed_lux, lux)
 
-        # Compute brightness
-        target_ambient = brightness.lux_to_ambient(smoothed_lux)
+        # Without a reading yet (sensor absent/failed), assume a bright room
+        # rather than dimming to the floor.
+        if initialized:
+            target_ambient = brightness.lux_to_ambient(smoothed_lux)
+        else:
+            target_ambient = brightness.BRI_MAX
         ambient_bri = brightness.ramp(ambient_bri, target_ambient)
         final = brightness.apply_preference(ambient_bri, cfg.brightness)
 
-        # Set
         driver.set_brightness(final)
 
-        await asyncio.sleep_ms(200)
+        await asyncio.sleep_ms(brightness.TICK_MS)
 
 
-async def main(regions: Regions, driver: Hub75Driver) -> None:
+def init_buttons() -> tuple[Button | None, Button | None]:
+    """
+    Create the two physical buttons on PIO1 (PIO0 belongs to the HUB75 driver).
+
+    Both share PIO1's program memory (button.py reuses the loaded program per
+    block); SM0 = Button A (skip), SM1 = Button B (lock). Returns (None, None)
+    if init fails — buttons are an enhancement, never boot-blocking.
+    """
+    try:
+        pio1 = rp2.PIO(1)
+        btn_skip = Button(pin=Pin(10, Pin.IN, Pin.PULL_UP), pio=pio1, sm_offset=0)
+        btn_lock = Button(pin=Pin(22, Pin.IN, Pin.PULL_UP), pio=pio1, sm_offset=1)
+        if config.log_level >= DEBUG:
+            print("[INPUT] buttons initialized: A=skip(GPIO10) B=lock(GPIO22) pio=1")
+        return btn_skip, btn_lock
+    except Exception as e:
+        if config.log_level >= ERROR:
+            print(f"[INPUT] button init failed: {e}")
+        return None, None
+
+
+async def button_input_loop(poller: MlbPoller, btn_skip: Button, btn_lock: Button) -> None:
+    """
+    Poll both buttons and dispatch press edges to the poller.
+
+    Folds the drivers' event streams per button.py's contract: a rising edge
+    (previous state released, new state pressed) triggers the action; repeated
+    same-state events (swallowed sub-debounce blips) are ignored. The 50ms
+    poll period is well inside the 4-event FIFO's tolerance.
+    """
+    skip_state = btn_skip.initial
+    lock_state = btn_lock.initial
+
+    while True:
+        for ev in btn_skip.read():
+            if ev.pressed and not skip_state.pressed:
+                if config.log_level >= DEBUG:
+                    print("[INPUT] button A pressed: skip")
+                poller.skip()
+            skip_state = ev
+
+        for ev in btn_lock.read():
+            if ev.pressed and not lock_state.pressed:
+                if config.log_level >= DEBUG:
+                    print("[INPUT] button B pressed: toggle lock")
+                poller.toggle_lock()
+            lock_state = ev
+
+        await asyncio.sleep_ms(50)
+
+
+async def main(regions: Regions, driver: Hub75Driver, health: ThreadHealth, light_sensor: LightSensor) -> None:
     """Main entry point. Display thread is already running by the time we get here."""
     # Start watchdog to monitor display thread health
-    asyncio.create_task(watchdog_task())
+    asyncio.create_task(watchdog_task(health))
 
     # Start auto-brightness (runs in all modes)
-    asyncio.create_task(auto_brightness_loop(driver, config))
+    asyncio.create_task(auto_brightness_loop(driver, config, light_sensor))
 
     if not config.ssid:
         # No network configured - fresh setup mode
@@ -651,7 +731,7 @@ async def main(regions: Regions, driver: Hub75Driver) -> None:
                 print(f"[MAIN] mode change: startup -> setup (reason={app.setup_reason}, ap_ssid={config.device_name}, ap_ip={ap_ip})")
             # Explicit transition: startup → setup
             finish_startup('setup',
-                reason=app.setup_reason if app.setup_reason == "bad_auth" else "connection_failed",
+                reason=app.setup_reason,
                 ap_ssid=config.device_name,
                 ap_ip=ap_ip,
                 wifi_ssid=config.ssid
@@ -668,15 +748,21 @@ async def main(regions: Regions, driver: Hub75Driver) -> None:
 
             update_startup_display(5, "Starting", "Services")
             if config.log_level >= DEBUG:
-                print(f"[MAIN] mode change: startup -> idle (time_sync_ok={utc_offset != 0})")
+                print(f"[MAIN] mode change: startup -> idle (time_sync_ok={utc_offset is not None})")
             # Explicit transition: startup → idle
             finish_startup('idle')
 
             api_client = ScoreboardApiClient(config)
-            poller = MlbPoller(config, api_client)
+            logo_pool = LogoPool(api_client)
+            poller = MlbPoller(config, api_client, logo_pool)
             asyncio.create_task(poller.run())
             if config.log_level >= DEBUG:
                 print("[MAIN] mlb poller task started")
+
+            # Physical buttons drive the poller (skip / rotation lock)
+            btn_skip, btn_lock = init_buttons()
+            if btn_skip is not None and btn_lock is not None:
+                asyncio.create_task(button_input_loop(poller, btn_skip, btn_lock))
 
     if config.log_level >= DEBUG:
         print("[MAIN] web server starting: port=80")
@@ -702,17 +788,16 @@ if __name__ == '__main__':
     if config.log_level >= DEBUG:
         print("[MAIN] glyph caches initialized")
 
-    # Pre-compute UI colors into both state buffers so the first rendered
-    # frame has correct colors rather than white defaults.
+    # Pre-compute UI colors so the first rendered frame has correct colors
+    # rather than white defaults.
     from scoreboard.state import update_ui_colors
     update_ui_colors(config)
     if config.log_level >= DEBUG:
         print("[MAIN] ui colors initialized")
 
-    # Initialize light sensor for auto-brightness. See the tech-debt note on
-    # _i2c / _light_sensor above — these remain module-level for now.
+    # Light sensor for auto-brightness (owns its own runtime re-init retries).
     _i2c = I2C(0, sda=Pin(0), scl=Pin(1), freq=100000)
-    _light_sensor = _try_init_veml(_i2c)
+    light_sensor = LightSensor(_i2c, config)
 
     # Commit the first startup step to state. The display thread (spawned
     # next) will render it on its first tick.
@@ -720,6 +805,7 @@ if __name__ == '__main__':
 
     # Spawn the Core-1 render loop. From this point on, Core 0 only mutates
     # state; Core 1 owns the framebuffer.
-    start_display_thread(display, writer, regions, config)
+    display_health = ThreadHealth()
+    start_display_thread(display, writer, regions, config, display_health)
 
-    asyncio.run(main(regions, driver))
+    asyncio.run(main(regions, driver, display_health, light_sensor))

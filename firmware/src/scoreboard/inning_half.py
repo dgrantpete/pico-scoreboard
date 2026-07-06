@@ -1,8 +1,13 @@
 """Inning half — four-state DU matching ESPN's shortDetail prefix.
 
-This module follows the HUB75 DU pattern: each variant is a plain class
-in the module, and the union is expressed inline as
-``Top | Middle | Bottom | End`` at the use site.
+Each variant is a plain class with a single module-level instance. The
+variants carry no data, so deserialization reuses the singletons (no
+per-parse allocation) and consumers compare with identity:
+
+    if half is TOP: ...
+
+The union is expressed inline as ``Top | Middle | Bottom | End`` at the
+use site, matching the HUB75 library's DU convention.
 """
 
 
@@ -24,3 +29,10 @@ class Bottom:
 class End:
     """Between bottom of this inning and top of the next."""
     pass
+
+
+# Singleton instances — the only values that should ever circulate.
+TOP = Top()
+MIDDLE = Middle()
+BOTTOM = Bottom()
+END = End()

@@ -4,6 +4,10 @@ Display rendering and thread management for the Pico Scoreboard.
 Provides render functions for non-game display modes (startup, idle,
 no_games, setup, error), the logo caching system, animation primitives,
 and the Core 1 display thread.
+
+Render functions are pure readers: every string they draw was pre-built on
+Core 0 when the state changed (see scoreboard/state.py), so the render loop
+does no per-frame text formatting.
 """
 
 import math
@@ -12,8 +16,8 @@ import framebuf
 from machine import Pin
 from hub75 import Hub75Driver, Hub75Display, row_addressing
 from hub75.native import pack_hsv_to_rgb565
-from scoreboard.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, ALIGN_LEFT, ALIGN_CENTER
-from scoreboard.inning_half import Top, Bottom
+from scoreboard.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, measure_text, ALIGN_LEFT, ALIGN_CENTER
+from scoreboard.inning_half import TOP, BOTTOM
 from scoreboard.state import StateBuffer, UiColors
 from scoreboard.config import Config
 from scoreboard.api_client import ScoreboardApiClient
@@ -83,24 +87,23 @@ def pulse(now_ms: int, hz: float = 1.0) -> float:
     """
     return (math.sin(now_ms * hz * _TWO_PI / 1000.0) + 1.0) * 0.5
 
-# Bright magenta, used as the transparency sentinel for compiled sprites.
-# Matches _TRANSPARENT_RGB565 in tools/compile_layout.py. Sprites emit a
-# per-module `KEY` constant that's already in the right form for their
-# format (palette index for paletted sprites, this RGB565 value for RGB565
-# sprites, or -1 for sprites with no transparent pixels) — prefer passing
-# `sprite.KEY` to blit() rather than this constant directly.
-MAGENTA_RGB565 = 0xF81F
 
 # Display dimensions
 DISPLAY_WIDTH = 128
 DISPLAY_HEIGHT = 64
 
-# Play-by-play flash: how long the most-recent play text preempts the
-# pitcher/batter view after a new play is detected, plus scroll tunables
-# for that window specifically (kept separate from the default scroll feel).
-PLAY_TEXT_DISPLAY_MS = 3000
-PLAY_TEXT_SCROLL_PAUSE_MS = 300
+# Play-by-play flash: the most-recent play text preempts the pitcher/batter
+# view after a new play is detected. Its display window is computed per play
+# (see play_text_display_ms): exactly one scroll cycle — full start pause,
+# scroll to the end, full end pause — so long plays get the time they need
+# and short plays don't linger. Scroll tunables are kept separate from the
+# default scroll feel.
+PLAY_TEXT_SCROLL_PAUSE_MS = 1000
 PLAY_TEXT_SCROLL_PX_PER_SEC = 30
+
+# Button-feedback toast: how long a transient overlay (SKIPPING... / LOCKED)
+# stays on screen after set_toast().
+TOAST_DISPLAY_MS = 1500
 
 
 _ORDINALS = (
@@ -108,43 +111,26 @@ _ORDINALS = (
     "10th", "11th", "12th", "13th", "14th", "15th", "16th", "17th", "18th", "19th", "20th",
 )
 
+# Single source of truth for the play-flash font: play_text_display_ms must
+# measure with exactly the font render_game draws with, or the computed
+# window won't match the actual scroll.
+PLAY_TEXT_FONT = unscii_16
 
-# =============================================================================
-# Animation primitives
-# =============================================================================
 
-def calculate_scroll_offset(
-    text_width: int,
-    display_width: int,
-    elapsed_ms: int,
-    pause_ms: int = 2000,
-    pixels_per_second: int = 30
-) -> int:
+def play_text_display_ms(text: str) -> int:
     """
-    Pure function: Given dimensions and elapsed time, return pixel offset.
+    Compute how long a play flash should stay on screen: one full scroll
+    cycle of `calculate_scroll_offset` — start pause + scroll-to-end + end
+    pause. Text that fits without scrolling shows for just the two pauses.
 
-    The animation cycle is:
-        [pause_start] -> [scrolling] -> [pause_end] -> repeat
+    Called on Core 0 (the poller) when a new play arrives; the result is
+    stored in PlayState so Core 1 never measures text.
     """
-    max_scroll = text_width - display_width
-    if max_scroll <= 0:
-        return 0
-
-    scroll_duration_ms = (max_scroll * 1000) // pixels_per_second
-    total_cycle_ms = pause_ms + scroll_duration_ms + pause_ms
-
-    position = elapsed_ms % total_cycle_ms
-
-    if position < pause_ms:
-        # Phase 1: Paused at start
-        return 0
-    elif position < pause_ms + scroll_duration_ms:
-        # Phase 2: Scrolling
-        scroll_position = position - pause_ms
-        return (scroll_position * pixels_per_second) // 1000
-    else:
-        # Phase 3: Paused at end
-        return max_scroll
+    text_w = measure_text(text, PLAY_TEXT_FONT)
+    max_scroll = text_w - play_text_loc.WIDTH
+    scroll_ms = (max_scroll * 1000) // PLAY_TEXT_SCROLL_PX_PER_SEC if max_scroll > 0 else 0
+    # Mirrors calculate_scroll_offset's cycle: pause + scroll + pause.
+    return PLAY_TEXT_SCROLL_PAUSE_MS + scroll_ms + PLAY_TEXT_SCROLL_PAUSE_MS
 
 
 class Region(framebuf.FrameBuffer):
@@ -232,7 +218,7 @@ class Regions:
         # --- Setup screen ---
         # Initialized at full width (no QR). Rebuilt via update_for_qr() on
         # Core 0 whenever the QR code is (re)generated so text never overlaps
-        # the QR's footprint. Lines whose y-range sits entirely below the QR
+        # the QR footprint. Lines whose y-range sits entirely below the QR
         # stay full width.
         self.setup_title = Region(display, 2, 0, DISPLAY_WIDTH - 2, 16)
         self.setup_line_18 = Region(display, 2, 18, DISPLAY_WIDTH - 2, 8)
@@ -299,99 +285,123 @@ def _draw_count_dots(display: Hub75Display, slice_mod: object, filled_count: int
     # ring on unfilled dots also pulses) and filled dots' interiors match,
     # keeping the whole dot reading as one color.
     active = filled_color if filled_color is not None else default_outline
-    dot_sprite.palette.pixel(1, 0, active)
-    for i in range(n_dots):
-        dot_sprite.palette.pixel(2, 0, active if i < filled_count else default_fill)
-        display.blit(
-            dot_sprite.data,
-            slice_mod.X + i * (dot_sprite.WIDTH + 1),  # type: ignore[attr-defined]
-            slice_mod.Y,  # type: ignore[attr-defined]
-            MAGENTA_RGB565,
-            dot_sprite.palette
-        )
-    dot_sprite.palette.pixel(1, 0, default_outline)
-    dot_sprite.palette.pixel(2, 0, default_fill)
+    try:
+        dot_sprite.palette.pixel(1, 0, active)
+        for i in range(n_dots):
+            dot_sprite.palette.pixel(2, 0, active if i < filled_count else default_fill)
+            display.blit(
+                dot_sprite.data,
+                slice_mod.X + i * (dot_sprite.WIDTH + 1),  # type: ignore[attr-defined]
+                slice_mod.Y,  # type: ignore[attr-defined]
+                dot_sprite.KEY,
+                dot_sprite.palette  # type: ignore
+            )
+    finally:
+        # The palette is shared module state — always restore it, even if a
+        # blit throws, so later frames don't render with the pulsed color.
+        dot_sprite.palette.pixel(1, 0, default_outline)
+        dot_sprite.palette.pixel(2, 0, default_fill)
 
 
 # =============================================================================
 # Logo buffer pool
 # =============================================================================
 
-# Pre-allocated logo buffer pool
-_LOGO_POOL_SIZE = 8  # Max logos cached
-_LOGO_WIDTH = 24
-_LOGO_HEIGHT = 24
-_LOGO_BUFFER_SIZE = _LOGO_WIDTH * _LOGO_HEIGHT * 2  # 1152 bytes per logo
-
-_logo_buffers = [bytearray(_LOGO_BUFFER_SIZE) for _ in range(_LOGO_POOL_SIZE)]
-_logo_cache = {}  # cache_key -> (slot_index, FrameBuffer)
-_logo_lru = []    # LRU order: oldest first
-_free_slots = set(range(_LOGO_POOL_SIZE))
-
-print(f"[DISPLAY] logo pool initialized: {_LOGO_POOL_SIZE} buffers ({_LOGO_POOL_SIZE * _LOGO_BUFFER_SIZE // 1024} KB)")
-
-
-
-async def get_logo_framebuffer(api_client: ScoreboardApiClient, cache_key: str, path: str) -> framebuf.FrameBuffer | None:
+class LogoPool:
     """
-    Get logo framebuffer from cache or fetch from API.
+    Pre-allocated pool of logo framebuffers with LRU eviction.
 
-    Uses a pre-allocated buffer pool with LRU eviction to prevent
-    memory fragmentation from repeated allocations.
+    A fixed number of RGB565 buffers are allocated once at construction;
+    fetching a new logo copies the backend's raw bytes into a free slot (or
+    evicts the least-recently-used one). Repeated allocations would fragment
+    the MicroPython heap, hence the pool.
 
-    Args:
-        api_client: The scoreboard API client.
-        cache_key: Stable key for this logo in the LRU cache.
-        path: Backend URL path that returns the raw logo bytes.
+    Concurrency contract: get() must only be called from ONE sequential
+    caller (the poller task). The LRU bookkeeping is mutated across an
+    `await`, so concurrent callers could evict a slot that another call is
+    still filling. A cache re-check after the fetch guards the same-key
+    double-fetch case, but interleaved different-key callers are not
+    supported.
     """
-    key = cache_key.lower()
 
-    # Return cached if available
-    if key in _logo_cache:
-        _logo_lru.remove(key)
-        _logo_lru.append(key)
-        return _logo_cache[key][1]
-
-    # Need to fetch - get a buffer slot
-    if _free_slots:
-        slot_index = _free_slots.pop()
-    else:
-        evict_key = _logo_lru.pop(0)
-        slot_index = _logo_cache[evict_key][0]
-        del _logo_cache[evict_key]
+    def __init__(self, api_client: ScoreboardApiClient, size: int = 8,
+                 width: int = 24, height: int = 24) -> None:
+        self._api = api_client
+        self._width = width
+        self._height = height
+        self._size = size
+        buffer_bytes = width * height * 2  # RGB565
+        self._buffers = [bytearray(buffer_bytes) for _ in range(size)]
+        self._cache = {}      # cache_key -> (slot_index, FrameBuffer)
+        self._lru = []        # LRU order: oldest first
+        self._free_slots = set(range(size))
         if api_client._config.log_level >= DEBUG:
-            print(f"[LOGO] evicted: key={evict_key} slot={slot_index}/{_LOGO_POOL_SIZE}")
+            print(f"[DISPLAY] logo pool initialized: {size} buffers ({size * buffer_bytes // 1024} KB)")
 
-    try:
-        status, body = await api_client.get_team_logo_raw(
-            path=path,
-            width=_LOGO_WIDTH,
-            height=_LOGO_HEIGHT,
-            background_color="000000",
-            accept="image/x-rgb565"
-        )
+    async def get(self, cache_key: str, path: str) -> framebuf.FrameBuffer | None:
+        """
+        Get a logo framebuffer from the cache, fetching from the API on miss.
 
-        if status != 200:
-            if api_client._config.log_level >= ERROR:
-                print(f"[LOGO] fetch failed: key={key} status={status}")
-            _free_slots.add(slot_index)
+        Args:
+            cache_key: Stable key for this logo in the LRU cache.
+            path: Backend URL path that returns the raw logo bytes.
+        """
+        key = cache_key.lower()
+
+        cached = self._cache.get(key)
+        if cached is not None:
+            self._lru.remove(key)
+            self._lru.append(key)
+            return cached[1]
+
+        # Need to fetch - get a buffer slot
+        if self._free_slots:
+            slot_index = self._free_slots.pop()
+        else:
+            evict_key = self._lru.pop(0)
+            slot_index = self._cache[evict_key][0]
+            del self._cache[evict_key]
+            if self._api._config.log_level >= DEBUG:
+                print(f"[LOGO] evicted: key={evict_key} slot={slot_index}/{self._size}")
+
+        try:
+            status, body = await self._api.get_team_logo_raw(
+                path=path,
+                width=self._width,
+                height=self._height,
+                background_color="000000",
+                accept="image/x-rgb565"
+            )
+
+            # Re-check after the await: if a same-key fetch completed while
+            # we were suspended, return its result and free our slot instead
+            # of leaking it by overwriting the cache entry.
+            cached = self._cache.get(key)
+            if cached is not None:
+                self._free_slots.add(slot_index)
+                return cached[1]
+
+            if status != 200:
+                if self._api._config.log_level >= ERROR:
+                    print(f"[LOGO] fetch failed: key={key} status={status}")
+                self._free_slots.add(slot_index)
+                return None
+
+            buf = self._buffers[slot_index]
+            buf[:len(body)] = body
+            fb = framebuf.FrameBuffer(buf, self._width, self._height, framebuf.RGB565)
+
+            self._cache[key] = (slot_index, fb)
+            self._lru.append(key)
+            if self._api._config.log_level >= DEBUG:
+                print(f"[LOGO] cached: key={key} slot={slot_index}/{self._size}")
+            return fb
+
+        except Exception as e:
+            if self._api._config.log_level >= ERROR:
+                print(f"[LOGO] fetch error: key={key} error_type={type(e).__name__} {e}")
+            self._free_slots.add(slot_index)
             return None
-
-        buf = _logo_buffers[slot_index]
-        buf[:len(body)] = body
-        fb = framebuf.FrameBuffer(buf, _LOGO_WIDTH, _LOGO_HEIGHT, framebuf.RGB565)
-
-        _logo_cache[key] = (slot_index, fb)
-        _logo_lru.append(key)
-        if api_client._config.log_level >= DEBUG:
-            print(f"[LOGO] cached: key={key} slot={slot_index}/{_LOGO_POOL_SIZE}")
-        return fb
-
-    except Exception as e:
-        if api_client._config.log_level >= ERROR:
-            print(f"[LOGO] fetch error: key={key} error_type={type(e).__name__} {e}")
-        _free_slots.add(slot_index)
-        return None
 
 
 def init_display(config: Config) -> tuple[Hub75Driver, Hub75Display, FontWriter, Regions]:
@@ -447,29 +457,20 @@ def render_startup(display: Hub75Display, writer: FontWriter, regions: Regions, 
     display.fill(BLACK)
 
     startup = state.startup
-    step = startup.step
-    total = startup.total_steps
-    operation = startup.operation
-    detail = startup.detail
 
     writer.draw(regions.startup_title, "BOOTING", unscii_16, ALIGN_CENTER, 0, colors.accent)
 
-    # Progress bar (80px wide, centered) at Y=24
+    # Progress bar (80px wide, centered) at Y=24. Completing the final step
+    # fills the bar to 100%.
     bar_width = 80
     bar_x = (DISPLAY_WIDTH - bar_width) // 2
-    progress = int((step - 1) / total * 100) + (100 // total) // 2
+    progress = startup.step * 100 // startup.total_steps
     draw_progress_bar(display, bar_x, 24, bar_width, 8, progress, colors)
 
-    writer.draw(regions.startup_step, f"{step}/{total}", spleen_5x8, ALIGN_LEFT, 0, colors.secondary)
-
-    if len(operation) > 25:
-        operation = operation[:24] + '.'
-    writer.draw(regions.startup_operation, operation, spleen_5x8, ALIGN_CENTER, 0, colors.primary)
-
-    if detail:
-        if len(detail) > 25:
-            detail = detail[:24] + '.'
-        writer.draw(regions.startup_detail, detail, spleen_5x8, ALIGN_CENTER, 0, colors.secondary)
+    writer.draw(regions.startup_step, startup.step_text, spleen_5x8, ALIGN_LEFT, 0, colors.secondary)
+    writer.draw(regions.startup_operation, startup.operation, spleen_5x8, ALIGN_CENTER, 0, colors.primary)
+    if startup.detail:
+        writer.draw(regions.startup_detail, startup.detail, spleen_5x8, ALIGN_CENTER, 0, colors.secondary)
 
 
 def render_idle(display: Hub75Display, writer: FontWriter, regions: Regions, colors: UiColors) -> None:
@@ -479,51 +480,36 @@ def render_idle(display: Hub75Display, writer: FontWriter, regions: Regions, col
     writer.draw(regions.idle_subtitle, "SCOREBOARD", unscii_8, ALIGN_CENTER, 0, colors.accent)
 
 
-def render_no_games(display: Hub75Display, writer: FontWriter, regions: Regions, colors: UiColors) -> None:
+def render_no_games(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
     """Render no games scheduled screen."""
     display.fill(BLACK)
     writer.draw(regions.no_games_title, "NO GAMES", unscii_16, ALIGN_CENTER, 0, colors.primary)
     writer.draw(regions.no_games_subtitle, "scheduled", spleen_5x8, ALIGN_CENTER, 0, colors.secondary)
+    _render_toast(writer, regions, state, now_ms)
 
 
 def render_setup(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
     """
     Render setup mode screen with WiFi QR code and contextual information.
 
-    Text is drawn first into full-width regions, then the QR (if available)
-    is blitted on top. Long text that would have scrolled under the old
-    narrow text-area behavior will now only scroll if it exceeds full
-    display width.
+    Text lines were pre-built by set_setup_mode; this function only picks
+    colors (by reason) and draws. Text is drawn first into full-width
+    regions, then the QR (if available) is blitted on top.
     """
     display.fill(BLACK)
 
     setup = state.setup
-    reason = setup.reason or 'no_config'
-    ap_ssid = setup.ap_ssid or 'scoreboard'
-    ap_ip = setup.ap_ip or '192.168.4.1'
-    wifi_ssid = setup.wifi_ssid or ''
     elapsed_ms = time.ticks_diff(now_ms, state.animation_start_ms)
 
-    if reason == 'bad_auth':
-        writer.draw(regions.setup_title, "WRONG PASS", unscii_16, ALIGN_LEFT, 0, colors.clock_warning)
-        writer.draw(regions.setup_line_18, f'for "{wifi_ssid}"', spleen_5x8, ALIGN_LEFT, elapsed_ms, colors.primary)
-        writer.draw(regions.setup_line_28, f'Scan/join "{ap_ssid}"', spleen_5x8, ALIGN_LEFT, elapsed_ms, colors.secondary)
-        writer.draw(regions.setup_line_44, f"Then go to {ap_ip}", spleen_5x8, ALIGN_LEFT, 0, colors.secondary)
-        writer.draw(regions.setup_line_54, "to fix password", spleen_5x8, ALIGN_LEFT, 0, colors.accent)
+    is_failure = setup.reason == 'bad_auth' or setup.reason == 'connection_failed'
+    title_color = colors.clock_warning if is_failure else colors.accent
+    line_54_color = colors.accent
 
-    elif reason == 'connection_failed':
-        writer.draw(regions.setup_title, "WIFI FAIL", unscii_16, ALIGN_LEFT, 0, colors.clock_warning)
-        writer.draw(regions.setup_line_18, f'"{wifi_ssid}"', spleen_5x8, ALIGN_LEFT, elapsed_ms, colors.primary)
-        writer.draw(regions.setup_line_28, f'Scan/join "{ap_ssid}"', spleen_5x8, ALIGN_LEFT, elapsed_ms, colors.secondary)
-        writer.draw(regions.setup_line_44, f"Then go to {ap_ip}", spleen_5x8, ALIGN_LEFT, 0, colors.secondary)
-        writer.draw(regions.setup_line_54, "to reconfigure", spleen_5x8, ALIGN_LEFT, 0, colors.accent)
-
-    else:
-        writer.draw(regions.setup_title, "SETUP", unscii_16, ALIGN_LEFT, 0, colors.accent)
-        writer.draw(regions.setup_line_18, "Scan QR or join", spleen_5x8, ALIGN_LEFT, 0, colors.primary)
-        writer.draw(regions.setup_line_28, f'"{ap_ssid}" WiFi', spleen_5x8, ALIGN_LEFT, elapsed_ms, colors.secondary)
-        writer.draw(regions.setup_line_44, "Then go to", spleen_5x8, ALIGN_LEFT, 0, colors.secondary)
-        writer.draw(regions.setup_line_54, ap_ip, spleen_5x8, ALIGN_LEFT, 0, colors.accent)
+    writer.draw(regions.setup_title, setup.title, unscii_16, ALIGN_LEFT, 0, title_color)
+    writer.draw(regions.setup_line_18, setup.line_18, spleen_5x8, ALIGN_LEFT, elapsed_ms, colors.primary)
+    writer.draw(regions.setup_line_28, setup.line_28, spleen_5x8, ALIGN_LEFT, elapsed_ms, colors.secondary)
+    writer.draw(regions.setup_line_44, setup.line_44, spleen_5x8, ALIGN_LEFT, 0, colors.secondary)
+    writer.draw(regions.setup_line_54, setup.line_54, spleen_5x8, ALIGN_LEFT, 0, line_54_color)
 
     # QR on top so it stays readable even if text drew underneath it.
     qr_fb = setup.qr_fb
@@ -535,19 +521,31 @@ def render_setup(display: Hub75Display, writer: FontWriter, regions: Regions, st
 
 
 def render_error(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors) -> None:
-    """Render error screen with multi-line details."""
+    """Render error screen with multi-line details (pre-truncated by set_error)."""
     display.fill(BLACK)
 
     error = state.error
-    title = error.title
-    lines = error.lines
 
-    writer.draw(regions.error_title, title or 'ERROR', unscii_16, ALIGN_CENTER, 0, colors.clock_warning)
+    writer.draw(regions.error_title, error.title or 'ERROR', unscii_16, ALIGN_CENTER, 0, colors.clock_warning)
 
     line_regions = (regions.error_line_0, regions.error_line_1, regions.error_line_2, regions.error_line_3)
-    for i, line in enumerate(lines[:4]):
-        display_line = line[:25] if len(line) > 25 else line
-        writer.draw(line_regions[i], display_line, spleen_5x8, ALIGN_CENTER, 0, colors.primary)
+    for i in range(len(error.lines)):
+        writer.draw(line_regions[i], error.lines[i], spleen_5x8, ALIGN_CENTER, 0, colors.primary)
+
+
+def _toast_active(state: StateBuffer, now_ms: int) -> bool:
+    toast = state.toast
+    return (toast.updated_ms != 0 and bool(toast.text)
+            and time.ticks_diff(now_ms, toast.updated_ms) < TOAST_DISPLAY_MS)
+
+
+def _render_toast(writer: FontWriter, regions: Regions, state: StateBuffer, now_ms: int) -> bool:
+    """Draw the transient toast overlay if active. Returns True if drawn."""
+    if not _toast_active(state, now_ms):
+        return False
+    regions.play_text.fill(BLACK)
+    writer.draw(regions.play_text, state.toast.text, unscii_16, ALIGN_CENTER, 0, WHITE)
+    return True
 
 
 def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
@@ -556,18 +554,19 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
     live = state.game.live
     if live is None:
         render_idle(display, writer, regions, colors)
+        _render_toast(writer, regions, state, now_ms)
         return
 
     # --- Sprites ---
 
-    display.blit(field_sprite.data, field_sprite.X, field_sprite.Y, MAGENTA_RGB565, field_sprite.palette)  # type: ignore
+    display.blit(field_sprite.data, field_sprite.X, field_sprite.Y, field_sprite.KEY, field_sprite.palette)  # type: ignore
 
     if live.bases.first:
-        display.blit(base_marker_sprite.data, first_base_loc.X, first_base_loc.Y, MAGENTA_RGB565, base_marker_sprite.palette)  # type: ignore
+        display.blit(base_marker_sprite.data, first_base_loc.X, first_base_loc.Y, base_marker_sprite.KEY, base_marker_sprite.palette)  # type: ignore
     if live.bases.second:
-        display.blit(base_marker_sprite.data, second_base_loc.X, second_base_loc.Y, MAGENTA_RGB565, base_marker_sprite.palette)  # type: ignore
+        display.blit(base_marker_sprite.data, second_base_loc.X, second_base_loc.Y, base_marker_sprite.KEY, base_marker_sprite.palette)  # type: ignore
     if live.bases.third:
-        display.blit(base_marker_sprite.data, third_base_loc.X, third_base_loc.Y, MAGENTA_RGB565, base_marker_sprite.palette)  # type: ignore
+        display.blit(base_marker_sprite.data, third_base_loc.X, third_base_loc.Y, base_marker_sprite.KEY, base_marker_sprite.palette)  # type: ignore
 
     if state.away_logo is not None:
         display.blit(state.away_logo, away_logo_loc.X, away_logo_loc.Y)
@@ -575,10 +574,10 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
         display.blit(state.home_logo, home_logo_loc.X, home_logo_loc.Y)
 
     half = live.inning.half
-    if isinstance(half, Top):
-        display.blit(inning_top_sprite.data, inning_top_sprite.X, inning_top_sprite.Y, MAGENTA_RGB565, inning_top_sprite.palette)  # type: ignore
-    elif isinstance(half, Bottom):
-        display.blit(inning_bottom_sprite.data, inning_bottom_sprite.X, inning_bottom_sprite.Y, MAGENTA_RGB565, inning_bottom_sprite.palette)  # type: ignore
+    if half is TOP:
+        display.blit(inning_top_sprite.data, inning_top_sprite.X, inning_top_sprite.Y, inning_top_sprite.KEY, inning_top_sprite.palette)  # type: ignore
+    elif half is BOTTOM:
+        display.blit(inning_bottom_sprite.data, inning_bottom_sprite.X, inning_bottom_sprite.Y, inning_bottom_sprite.KEY, inning_bottom_sprite.palette)  # type: ignore
 
     # --- Count dots ---
 
@@ -609,23 +608,27 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
     writer.draw(regions.strike_label, "S", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
     writer.draw(regions.out_label, "O", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
 
-    if isinstance(half, Top):
+    if half is TOP:
         pitch_color = _team_color_to_rgb565(live.home.colors.primary)
         bat_color = _team_color_to_rgb565(live.away.colors.primary)
-    elif isinstance(half, Bottom):
+    elif half is BOTTOM:
         pitch_color = _team_color_to_rgb565(live.away.colors.primary)
         bat_color = _team_color_to_rgb565(live.home.colors.primary)
     else:
         pitch_color = DIM_GRAY
         bat_color = DIM_GRAY
 
+    # Bottom strip priority: toast (button feedback) > play flash > pitcher/batter.
+    if _render_toast(writer, regions, state, now_ms):
+        return
+
     play = state.game.play
     play_elapsed = time.ticks_diff(now_ms, play.updated_ms)
-    show_play = bool(play.text) and play.updated_ms != 0 and play_elapsed < PLAY_TEXT_DISPLAY_MS
+    show_play = bool(play.text) and play.updated_ms != 0 and play_elapsed < play.display_ms
 
     if show_play:
         writer.draw(
-            regions.play_text, play.text, spleen_5x8,
+            regions.play_text, play.text, PLAY_TEXT_FONT,
             ALIGN_LEFT, play_elapsed, WHITE,
             pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
             pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
@@ -655,7 +658,7 @@ def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, st
     elif mode == 'idle':
         render_idle(display, writer, regions, colors)
     elif mode == 'no_games':
-        render_no_games(display, writer, regions, colors)
+        render_no_games(display, writer, regions, state, colors, now_ms)
     elif mode == 'setup':
         render_setup(display, writer, regions, state, colors, now_ms)
     elif mode == 'error':
@@ -670,39 +673,58 @@ def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, st
 # Display thread (runs on Core 1)
 # =============================================================================
 
+# Modes with no time-driven animation: re-rendering is only needed when a new
+# commit lands (or a toast is fading out). 'game' and 'setup' animate every
+# frame (scrolling text, pulsing count dots) and always redraw.
+_STATIC_MODES = ('idle', 'no_games', 'error', 'startup')
+
+
 def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regions, config: Config | None = None) -> None:
     """
     Main entry point for Core 1 display thread.
 
-    Runs a constant 20 FPS loop reading state from the front buffer
-    and rendering to the display. The fixed frame rate ensures smooth
-    animations (scrolling text, clock updates).
+    Runs a constant 20 FPS loop latching state from the mailbox and
+    rendering to the display. Static screens are only re-rendered when a
+    new commit lands, so an idle scoreboard isn't redrawing 20x/second.
 
-    IMPORTANT: This function runs on Core 1 with ZERO memory allocations.
+    Core 1 avoids heap allocation on the steady-state path: all strings are
+    pre-built on Core 0, glyph blits reuse pre-allocated specs, and scores
+    use the cached-digit integer() path. (Small per-character memoryview
+    allocations from font glyph lookup remain — see BACKLOG.)
+
     All display hardware (PIO, DMA) is accessed exclusively from this thread.
-    UI colors are pre-computed on Core 0 and read from state.ui_colors.
     Regions are pre-allocated on Core 0 and read-only here.
     """
-    from scoreboard.state import get_display_state
+    from scoreboard.state import acquire_display_state
 
     if config is not None and config.log_level >= DEBUG:
         print("[DISPLAY] thread starting: core=1 rate=20fps")
+
+    last_rendered_seq = -1
+    last_frame_had_toast = False
 
     while True:
         try:
             now_ms = time.ticks_ms()
 
-            # Read from front buffer (lock-protected capture)
-            state = get_display_state()
+            # Latch the latest committed state for this frame.
+            state, seq = acquire_display_state()
 
-            # Render frame using pre-computed colors (no allocation!)
-            colors = state.ui_colors
-            render_frame(display, writer, regions, state, colors, now_ms)
-            display.show()
+            toast_active = _toast_active(state, now_ms)
+            skip = (seq == last_rendered_seq
+                    and state.mode in _STATIC_MODES
+                    and not toast_active
+                    and not last_frame_had_toast)
+
+            if not skip:
+                render_frame(display, writer, regions, state, state.ui_colors, now_ms)
+                display.show()
+                last_rendered_seq = seq
+                last_frame_had_toast = toast_active
 
         except Exception as e:
             if config is not None and config.log_level >= ERROR:
                 print(f"[DISPLAY] thread error: {e}")
 
-        # Constant 20 FPS for all animations
+        # Constant 20 FPS tick for all animations
         time.sleep_ms(50)

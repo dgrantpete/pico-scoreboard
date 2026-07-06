@@ -16,10 +16,53 @@ ALIGN_LEFT: int = 0
 ALIGN_CENTER: int = 1
 ALIGN_RIGHT: int = 2
 
-# Transparency sentinel. Matches the MAGENTA_RGB565 constant in display.py
-# and the _TRANSPARENT_RGB565 used by tools/compile_layout.py. Used as the
-# blit key when draw() is called with bgcolor=None.
+# Transparency sentinel. Matches the _TRANSPARENT_RGB565 used by
+# tools/compile_layout.py (this module is the single firmware definition).
+# Used as the blit key when draw() is called with bgcolor=None.
 MAGENTA_RGB565: int = 0xF81F
+
+
+def measure_text(string: str, font) -> int:
+    """Measure text width in pixels for a font module."""
+    width = 0
+    for char in string:
+        _, _, char_width = font.get_ch(char)
+        width += char_width
+    return width
+
+
+def calculate_scroll_offset(
+    text_width: int,
+    display_width: int,
+    elapsed_ms: int,
+    pause_ms: int = 2000,
+    pixels_per_second: int = 30
+) -> int:
+    """
+    Pure function: Given dimensions and elapsed time, return pixel offset.
+
+    The animation cycle is:
+        [pause_start] -> [scrolling] -> [pause_end] -> repeat
+    """
+    max_scroll = text_width - display_width
+    if max_scroll <= 0:
+        return 0
+
+    scroll_duration_ms = (max_scroll * 1000) // pixels_per_second
+    total_cycle_ms = pause_ms + scroll_duration_ms + pause_ms
+
+    position = elapsed_ms % total_cycle_ms
+
+    if position < pause_ms:
+        # Phase 1: Paused at start
+        return 0
+    elif position < pause_ms + scroll_duration_ms:
+        # Phase 2: Scrolling
+        scroll_position = position - pause_ms
+        return (scroll_position * pixels_per_second) // 1000
+    else:
+        # Phase 3: Paused at end
+        return max_scroll
 
 
 @micropython.viper
@@ -408,7 +451,6 @@ class FontWriter:
             else:
                 cursor_x = 0
         else:
-            from scoreboard.display import calculate_scroll_offset
             cursor_x = -calculate_scroll_offset(
                 text_w, width, elapsed_ms,
                 pause_ms=pause_ms, pixels_per_second=pixels_per_second,
@@ -429,37 +471,7 @@ class FontWriter:
             font = self._default_font
         if font is None:
             raise ValueError("No font specified and no default set")
-
-        width = 0
-        for char in string:
-            _, _, char_width = font.get_ch(char)
-            width += char_width
-        return width
-
-
-def draw_text(fb: framebuf.FrameBuffer, string: str, x: int, y: int,
-              font, color: int, bgcolor: int = 0) -> int:
-    """
-    Draw text without creating a FontWriter instance.
-
-    Less efficient for multiple calls since it recreates the palette each time.
-    Use FontWriter for better performance when rendering multiple strings.
-    """
-    palette_buf = bytearray(4)
-    palette = framebuf.FrameBuffer(palette_buf, 2, 1, framebuf.RGB565)
-    palette.pixel(0, 0, bgcolor)
-    palette.pixel(1, 0, color)
-
-    cursor_x = x
-    for char in string:
-        glyph_data, char_height, char_width = font.get_ch(char)
-        glyph_fb = framebuf.FrameBuffer(
-            bytearray(glyph_data), char_width, char_height, framebuf.MONO_HMSB
-        )
-        fb.blit(glyph_fb, cursor_x, y, -1, palette)
-        cursor_x += char_width
-
-    return cursor_x
+        return measure_text(string, font)
 
 
 # Import font modules for convenience

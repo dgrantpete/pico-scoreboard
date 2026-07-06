@@ -1,13 +1,26 @@
 """
 Global display state for the Pico Scoreboard.
 
-Shared between networking thread (Core 0) and display thread (Core 1).
-Uses double buffering with lock-protected swap for thread-safe state sharing:
-- Networking thread writes to back buffer
-- Display thread reads from front buffer
-- Lock-protected swap + carry-forward when update is complete
+Shared between the networking thread (Core 0) and display thread (Core 1)
+via a triple-buffered mailbox (one writer, one reader):
+
+- Core 0 mutates the write buffer, then commit() publishes it as `latest`.
+- Core 1 latches `latest` at the start of each frame and renders from that
+  buffer for the whole frame. The writer can never touch a buffer that is
+  published or being read, so frames are always internally consistent.
+- A lock protects only the index bookkeeping (microseconds); neither the
+  render nor the carry-forward copy ever holds it, so the cores never block
+  each other for more than an index swap.
+
+Every commit bumps a sequence number; the display thread uses it to skip
+re-rendering static screens that haven't changed.
+
+All strings the display thread draws are pre-built here on Core 0 at write
+time (see StartupState/SetupState/ErrorState). Render functions are pure
+readers — Core 1 does no per-frame string formatting.
 """
 
+import time
 import _thread
 import framebuf
 
@@ -17,54 +30,109 @@ from scoreboard.logger import DEBUG
 from scoreboard.mlb import LiveGame
 
 
+# Length cap for one line of spleen_5x8 text across the full display.
+_LINE_MAX_CHARS = 25
+
+
+def _truncate_line(text: str) -> str:
+    """Cap a line at the display width, marking truncation with a dot."""
+    if len(text) > _LINE_MAX_CHARS:
+        return text[:_LINE_MAX_CHARS - 1] + '.'
+    return text
+
+
 # =============================================================================
 # Typed state classes
 # =============================================================================
+# Each class is plain data plus a copy_from() used by the carry-forward copy
+# after a commit. Adding a field means adding it to __init__ AND copy_from of
+# the same class — the two live side by side so they can't drift apart.
+
 
 class StartupState:
-    """Boot progress state."""
+    """Boot progress state. Strings are pre-built by set_startup_step."""
 
     def __init__(self) -> None:
         self.step: int = 1
         self.total_steps: int = 5
-        self.operation: str = ''
-        self.detail: str = ''
+        self.step_text: str = ''    # e.g. "2/5" — pre-built, drawn verbatim
+        self.operation: str = ''    # pre-truncated
+        self.detail: str = ''       # pre-truncated
+
+    def copy_from(self, other: "StartupState") -> None:
+        self.step = other.step
+        self.total_steps = other.total_steps
+        self.step_text = other.step_text
+        self.operation = other.operation
+        self.detail = other.detail
 
 
 class SetupState:
-    """WiFi setup / AP mode state."""
+    """WiFi setup / AP mode state. Display lines are pre-built by set_setup_mode."""
 
     def __init__(self) -> None:
         self.reason: str | None = None       # 'no_config' | 'connection_failed' | 'bad_auth'
         self.ap_ssid: str = ''               # AP network name to connect to
         self.ap_ip: str = ''                 # IP address to open in browser
         self.wifi_ssid: str = ''             # Failed SSID (for error context)
+        self.title: str = ''                 # Pre-built screen title
+        self.line_18: str = ''               # Pre-built text lines by Y position
+        self.line_28: str = ''
+        self.line_44: str = ''
+        self.line_54: str = ''
         self.qr_fb: framebuf.FrameBuffer | None = None        # FrameBuffer (MONO_HLSB format)
         self.qr_width: int = 0              # QR code width in pixels
         self.qr_height: int = 0             # QR code height in pixels
         self.qr_palette: framebuf.FrameBuffer | None = None   # RGB565 palette for display blitting
 
+    def copy_from(self, other: "SetupState") -> None:
+        self.reason = other.reason
+        self.ap_ssid = other.ap_ssid
+        self.ap_ip = other.ap_ip
+        self.wifi_ssid = other.wifi_ssid
+        self.title = other.title
+        self.line_18 = other.line_18
+        self.line_28 = other.line_28
+        self.line_44 = other.line_44
+        self.line_54 = other.line_54
+        self.qr_fb = other.qr_fb
+        self.qr_width = other.qr_width
+        self.qr_height = other.qr_height
+        self.qr_palette = other.qr_palette
+
 
 class ErrorState:
-    """Error display state."""
+    """Error display state. Title and lines are pre-truncated by set_error."""
 
     def __init__(self) -> None:
-        self.title: str = ''          # Short title (e.g., "API ERROR")
-        self.lines: list[str] = []    # Up to 4 detail lines
+        self.title: str = ''          # Short title (e.g., "API ERROR"), <= 12 chars
+        self.lines: list[str] = []    # Up to 4 pre-truncated detail lines
+
+    def copy_from(self, other: "ErrorState") -> None:
+        self.title = other.title
+        self.lines = other.lines
 
 
 class PlayState:
     """Most-recent play display state. Plain data — no methods.
 
     `id` is used by the poller to detect when a new play has arrived;
-    `text` + `updated_ms` are read by the display thread to render the
-    scrolling play description for a short window after each change.
+    `text` + `updated_ms` + `display_ms` are read by the display thread to
+    render the scrolling play description for one full scroll cycle after
+    each change.
     """
 
     def __init__(self) -> None:
         self.id: str = ''          # ESPN play id — poller compares to detect changes
         self.text: str = ''        # Play description — rendered by display thread
         self.updated_ms: int = 0   # time.ticks_ms() when id last changed
+        self.display_ms: int = 0   # Window length: pause + scroll-to-end + pause
+
+    def copy_from(self, other: "PlayState") -> None:
+        self.id = other.id
+        self.text = other.text
+        self.updated_ms = other.updated_ms
+        self.display_ms = other.display_ms
 
 
 class MlbGameSnapshot:
@@ -75,6 +143,24 @@ class MlbGameSnapshot:
         self.live: LiveGame | None = None
         self.fetched_ms: int = 0
         self.play: PlayState = PlayState()
+
+    def copy_from(self, other: "MlbGameSnapshot") -> None:
+        self.game_id = other.game_id
+        self.live = other.live
+        self.fetched_ms = other.fetched_ms
+        self.play.copy_from(other.play)
+
+
+class ToastState:
+    """Transient text overlay (button feedback). Rendered for a short window."""
+
+    def __init__(self) -> None:
+        self.text: str = ''
+        self.updated_ms: int = 0   # time.ticks_ms() when the toast was set; 0 = never
+
+    def copy_from(self, other: "ToastState") -> None:
+        self.text = other.text
+        self.updated_ms = other.updated_ms
 
 
 class UiColors:
@@ -87,6 +173,13 @@ class UiColors:
         self.clock_normal: int = 0xFFFF
         self.clock_warning: int = 0xFFFF
 
+    def copy_from(self, other: "UiColors") -> None:
+        self.primary = other.primary
+        self.secondary = other.secondary
+        self.accent = other.accent
+        self.clock_normal = other.clock_normal
+        self.clock_warning = other.clock_warning
+
 
 class StateBuffer:
     """Complete display state snapshot. Pre-allocated, mutated in place."""
@@ -94,148 +187,121 @@ class StateBuffer:
     def __init__(self) -> None:
         self.mode: str = 'idle'
         self.last_update_ms: int = 0
-        self.dirty: bool = True
         self.animation_start_ms: int = 0   # Reset scrolling animations when state changes
         self.startup: StartupState = StartupState()
         self.setup: SetupState = SetupState()
         self.error: ErrorState = ErrorState()
         self.ui_colors: UiColors = UiColors()
         self.game: MlbGameSnapshot = MlbGameSnapshot()
+        self.toast: ToastState = ToastState()
         self.home_logo: framebuf.FrameBuffer | None = None
         self.away_logo: framebuf.FrameBuffer | None = None
 
+    def copy_from(self, other: "StateBuffer") -> None:
+        self.mode = other.mode
+        self.last_update_ms = other.last_update_ms
+        self.animation_start_ms = other.animation_start_ms
+        self.startup.copy_from(other.startup)
+        self.setup.copy_from(other.setup)
+        self.error.copy_from(other.error)
+        self.ui_colors.copy_from(other.ui_colors)
+        self.game.copy_from(other.game)
+        self.toast.copy_from(other.toast)
+        self.home_logo = other.home_logo
+        self.away_logo = other.away_logo
+
 
 # =============================================================================
-# Double buffering
+# Triple buffering
 # =============================================================================
 
-class DoubleBufferedState:
+# commit_seq wraps below MicroPython's small-int limit so incrementing never
+# promotes to a heap-allocated big int. Consumers compare with != only.
+_SEQ_MASK = 0x3FFFFFF
+
+
+class TripleBufferedState:
     """
-    Double buffering for thread-safe state sharing between Core 0 and Core 1.
+    Triple-buffered mailbox for one writer (Core 0) and one reader (Core 1).
 
-    The networking thread writes complete state updates to the back buffer,
-    then calls swap() to make them visible to the display thread.
-    A lock protects swap+sync and get_front to ensure the display thread
-    always captures a consistent buffer reference.
+    Three buffers are provably sufficient for a single reader/writer pair:
+    at any moment one buffer is `latest` (published), one may be `reading`
+    (latched by the display thread for the current frame), and the writer
+    gets whichever buffer is neither. The writer therefore never mutates a
+    buffer the reader can observe — no torn frames, no blocking.
+
+    The lock guards only the index bookkeeping. commit() performs the
+    carry-forward copy (latest -> new write buffer) outside the lock; that
+    copy reads a published buffer (concurrent reads are safe) and writes the
+    writer's new private buffer.
     """
 
     def __init__(self) -> None:
-        self._buffers: list[StateBuffer] = [StateBuffer(), StateBuffer()]
-        self._front_index: int = 0  # Display reads from this
+        self._buffers: list[StateBuffer] = [StateBuffer(), StateBuffer(), StateBuffer()]
+        self._latest: int = 0    # Most recently committed buffer
+        self._reading: int = 0   # Buffer latched by the display thread
+        self._writing: int = 1   # Writer's private buffer
+        self._commit_seq: int = 0
         self._lock = _thread.allocate_lock()
 
-    def get_front(self) -> StateBuffer:
-        """Get the front buffer for reading (display thread)."""
-        with self._lock:
-            return self._buffers[self._front_index]
+    def acquire_read(self) -> tuple[StateBuffer, int]:
+        """Core 1: latch the latest committed buffer for this frame.
 
-    def get_back(self) -> StateBuffer:
-        """Get the back buffer for writing (networking thread)."""
-        return self._buffers[1 - self._front_index]
-
-    def swap(self) -> None:
-        """
-        Swap front and back buffers, then carry forward state.
-
-        Called by networking thread after completing a state update.
-        The lock ensures the display thread never captures a buffer
-        reference during the swap+sync window.
+        Returns (buffer, commit_seq). The buffer stays safe to read until the
+        next acquire_read() call.
         """
         with self._lock:
-            self._front_index = 1 - self._front_index
-            self._sync_after_swap()
+            self._reading = self._latest
+            return self._buffers[self._reading], self._commit_seq
 
-    def _sync_after_swap(self) -> None:
-        """
-        Copy state from new front to new back buffer after swap.
+    def get_write(self) -> StateBuffer:
+        """Core 0: the writer's private buffer (carry-forward copy of latest)."""
+        return self._buffers[self._writing]
 
-        Ensures the writer always starts from the most recent committed
-        state, preventing the back buffer from containing stale data
-        from 2 cycles ago. No memory allocation — copies references
-        for objects, values for scalars, field-by-field for sub-objects.
-        """
-        front = self._buffers[self._front_index]
-        back = self._buffers[1 - self._front_index]
-
-        # Scalar and reference fields
-        back.mode = front.mode
-        back.last_update_ms = front.last_update_ms
-        back.dirty = front.dirty
-        back.animation_start_ms = front.animation_start_ms
-
-        # Sub-objects: field-by-field to preserve pre-allocated instances
-        back.startup.step = front.startup.step
-        back.startup.total_steps = front.startup.total_steps
-        back.startup.operation = front.startup.operation
-        back.startup.detail = front.startup.detail
-
-        back.setup.reason = front.setup.reason
-        back.setup.ap_ssid = front.setup.ap_ssid
-        back.setup.ap_ip = front.setup.ap_ip
-        back.setup.wifi_ssid = front.setup.wifi_ssid
-        back.setup.qr_fb = front.setup.qr_fb
-        back.setup.qr_width = front.setup.qr_width
-        back.setup.qr_height = front.setup.qr_height
-        back.setup.qr_palette = front.setup.qr_palette
-
-        back.error.title = front.error.title
-        back.error.lines = front.error.lines
-
-        back.game.game_id = front.game.game_id
-        back.game.live = front.game.live
-        back.game.fetched_ms = front.game.fetched_ms
-        back.game.play.id = front.game.play.id
-        back.game.play.text = front.game.play.text
-        back.game.play.updated_ms = front.game.play.updated_ms
-
-        back.home_logo = front.home_logo
-        back.away_logo = front.away_logo
-
-        back.ui_colors.primary = front.ui_colors.primary
-        back.ui_colors.secondary = front.ui_colors.secondary
-        back.ui_colors.accent = front.ui_colors.accent
-        back.ui_colors.clock_normal = front.ui_colors.clock_normal
-        back.ui_colors.clock_warning = front.ui_colors.clock_warning
+    def commit(self) -> None:
+        """Core 0: publish the write buffer and prepare the next one."""
+        with self._lock:
+            self._latest = self._writing
+            # The new write buffer is whichever one is neither published nor
+            # latched by the reader (they may be the same buffer).
+            if self._latest != 0 and self._reading != 0:
+                self._writing = 0
+            elif self._latest != 1 and self._reading != 1:
+                self._writing = 1
+            else:
+                self._writing = 2
+            self._commit_seq = (self._commit_seq + 1) & _SEQ_MASK
+        # Carry forward outside the lock: the new write buffer is private to
+        # this thread, and reading `latest` concurrently with Core 1 is safe.
+        self._buffers[self._writing].copy_from(self._buffers[self._latest])
 
 
 # Singleton instance
-_double_buffer: DoubleBufferedState = DoubleBufferedState()
+_state_mailbox: TripleBufferedState = TripleBufferedState()
 
-# Phase flag: True during synchronous startup, False after display thread takes over
+# Phase flag: True during synchronous startup, False after finish_startup().
 _startup_phase: bool = True
 
 
-def get_display_state() -> StateBuffer:
-    """Get front buffer for display thread to read."""
-    return _double_buffer.get_front()
+def acquire_display_state() -> tuple[StateBuffer, int]:
+    """Core 1: latch the latest committed state for one frame. Returns (state, seq)."""
+    return _state_mailbox.acquire_read()
 
 
 def get_write_state() -> StateBuffer:
-    """Get back buffer for networking thread to write."""
-    return _double_buffer.get_back()
+    """Core 0: get the write buffer. Mutate it, then call commit_state()."""
+    return _state_mailbox.get_write()
 
 
 def commit_state() -> None:
-    """Swap buffers — makes back buffer visible to display thread."""
-    _double_buffer.swap()
+    """Core 0: publish the write buffer to the display thread."""
+    _state_mailbox.commit()
 
 
 def set_mode(mode: str) -> None:
-    """
-    Set display mode (called during setup/error states).
-
-    Thread-safe: writes to back buffer and commits.
-    """
+    """Set display mode (thread-safe: writes the back buffer and commits)."""
     state = get_write_state()
     state.mode = mode
-    state.dirty = True
-    commit_state()
-
-
-def mark_dirty() -> None:
-    """Mark display state as needing a redraw (thread-safe)."""
-    state = get_write_state()
-    state.dirty = True
     commit_state()
 
 
@@ -243,29 +309,31 @@ def set_startup_step(step: int, total: int, operation: str, detail: str = '') ->
     """
     Update startup progress display.
 
-    No-op after finish_startup() is called. During startup phase,
-    writes to BOTH buffers since there's no race condition yet.
+    No-op after finish_startup() is called. Pre-builds the strings the
+    display thread draws so Core 1 never formats text.
     """
     if not _startup_phase:
         return
 
-    for buf in _double_buffer._buffers:
-        buf.mode = 'startup'
-        buf.startup.step = step
-        buf.startup.total_steps = total
-        buf.startup.operation = operation
-        buf.startup.detail = detail
-        buf.dirty = True
+    state = get_write_state()
+    state.mode = 'startup'
+    startup = state.startup
+    startup.step = step
+    startup.total_steps = total
+    startup.step_text = f"{step}/{total}"
+    startup.operation = _truncate_line(operation)
+    startup.detail = _truncate_line(detail)
+    commit_state()
 
 
-def clear_startup_state() -> None:
-    """Clear startup state after boot completes to free memory."""
-    for buf in _double_buffer._buffers:
-        startup = buf.startup
-        startup.step = 1
-        startup.total_steps = 5
-        startup.operation = ''
-        startup.detail = ''
+def _clear_startup_state(state: StateBuffer) -> None:
+    """Reset startup fields on the write buffer; carry-forward propagates it."""
+    startup = state.startup
+    startup.step = 1
+    startup.total_steps = 5
+    startup.step_text = ''
+    startup.operation = ''
+    startup.detail = ''
 
 
 def finish_startup(target_mode: str, **mode_kwargs) -> None:
@@ -282,7 +350,7 @@ def finish_startup(target_mode: str, **mode_kwargs) -> None:
     global _startup_phase
     _startup_phase = False
 
-    clear_startup_state()
+    _clear_startup_state(get_write_state())
 
     if target_mode == 'setup':
         set_setup_mode(**mode_kwargs)
@@ -339,8 +407,9 @@ def set_setup_mode(reason: str, ap_ssid: str = '', ap_ip: str = '', wifi_ssid: s
     """
     Set setup mode with detailed context for display.
 
-    Thread-safe: writes to back buffer and commits.
-    Generates WiFi QR code for all setup reasons (user always needs to join AP).
+    Thread-safe: writes to the back buffer and commits. Pre-builds the title
+    and text lines the display thread draws, and generates the WiFi QR code
+    (the user always needs to join the AP).
     """
     state = get_write_state()
     state.mode = 'setup'
@@ -349,6 +418,27 @@ def set_setup_mode(reason: str, ap_ssid: str = '', ap_ip: str = '', wifi_ssid: s
     setup.ap_ssid = ap_ssid
     setup.ap_ip = ap_ip
     setup.wifi_ssid = wifi_ssid
+
+    shown_ssid = ap_ssid or 'scoreboard'
+    shown_ip = ap_ip or '192.168.4.1'
+    if reason == 'bad_auth':
+        setup.title = "WRONG PASS"
+        setup.line_18 = f'for "{wifi_ssid}"'
+        setup.line_28 = f'Scan/join "{shown_ssid}"'
+        setup.line_44 = f"Then go to {shown_ip}"
+        setup.line_54 = "to fix password"
+    elif reason == 'connection_failed':
+        setup.title = "WIFI FAIL"
+        setup.line_18 = f'"{wifi_ssid}"'
+        setup.line_28 = f'Scan/join "{shown_ssid}"'
+        setup.line_44 = f"Then go to {shown_ip}"
+        setup.line_54 = "to reconfigure"
+    else:
+        setup.title = "SETUP"
+        setup.line_18 = "Scan QR or join"
+        setup.line_28 = f'"{shown_ssid}" WiFi'
+        setup.line_44 = "Then go to"
+        setup.line_54 = shown_ip
 
     if ap_ssid:
         try:
@@ -364,7 +454,6 @@ def set_setup_mode(reason: str, ap_ssid: str = '', ap_ip: str = '', wifi_ssid: s
             setup.qr_height = 0
             setup.qr_palette = None
 
-    state.dirty = True
     commit_state()
 
 
@@ -372,13 +461,26 @@ def set_error(title: str, lines: list[str] | None = None) -> None:
     """
     Set error mode with title and multi-line details.
 
-    Thread-safe: writes to back buffer and commits.
+    Thread-safe: writes to the back buffer and commits. Truncates the title
+    and lines here so the display thread draws them verbatim.
     """
     state = get_write_state()
     state.mode = 'error'
     state.error.title = title[:12] if title else 'ERROR'
-    state.error.lines = lines[:4] if lines else []
-    state.dirty = True
+    state.error.lines = [_truncate_line(line) for line in (lines or [])[:4]]
+    commit_state()
+
+
+def set_toast(text: str) -> None:
+    """
+    Show a transient text overlay (e.g. button feedback) for a short window.
+
+    Thread-safe: writes to the back buffer and commits. The display thread
+    renders the toast while it's within TOAST_DISPLAY_MS of updated_ms.
+    """
+    state = get_write_state()
+    state.toast.text = text
+    state.toast.updated_ms = time.ticks_ms()
     commit_state()
 
 
@@ -387,24 +489,20 @@ def set_error(title: str, lines: list[str] | None = None) -> None:
 # =============================================================================
 
 def update_ui_colors(config: Config) -> None:
-    """
-    Pre-compute UI colors on Core 0. Call at startup and when config changes.
-
-    Updates both buffers to ensure consistency regardless of which is active.
-    """
+    """Pre-compute UI colors on Core 0. Call at startup and when config changes."""
     from scoreboard.fonts import rgb565
 
     def to_rgb565(color_dict: dict) -> int:
         return rgb565(color_dict["r"], color_dict["g"], color_dict["b"])
 
-    for buf in _double_buffer._buffers:
-        colors = buf.ui_colors
-        colors.primary = to_rgb565(config.get_color('primary'))
-        colors.secondary = to_rgb565(config.get_color('secondary'))
-        colors.accent = to_rgb565(config.get_color('accent'))
-        colors.clock_normal = to_rgb565(config.get_color('clock_normal'))
-        colors.clock_warning = to_rgb565(config.get_color('clock_warning'))
-        buf.dirty = True
+    state = get_write_state()
+    colors = state.ui_colors
+    colors.primary = to_rgb565(config.get_color('primary'))
+    colors.secondary = to_rgb565(config.get_color('secondary'))
+    colors.accent = to_rgb565(config.get_color('accent'))
+    colors.clock_normal = to_rgb565(config.get_color('clock_normal'))
+    colors.clock_warning = to_rgb565(config.get_color('clock_warning'))
+    commit_state()
     if config.log_level >= DEBUG:
         print("[CONFIG] ui colors updated from config")
 
@@ -431,16 +529,6 @@ def update_display_frequency(config: Config) -> None:
     _display_driver.set_frequency(data_freq)
     if config.log_level >= DEBUG:
         print(f"[CONFIG] display frequency updated: {data_freq // 1000}kHz")
-
-
-def _recompute_refresh_rate(config: Config) -> None:
-    """Recompute base_cycles after changing brightness or blanking time."""
-    if _display_driver is None:
-        return
-    rate = _display_driver.set_target_refresh_rate(config.target_refresh_rate)
-    if config.log_level >= DEBUG:
-        print(f"[CONFIG] refresh rate recomputed due to blanking time change: {rate:.1f}Hz")
-
 
 
 def update_display_refresh_rate(config: Config) -> None:
@@ -475,6 +563,6 @@ def update_display_blanking_time(config: Config) -> None:
         return
 
     _display_driver.set_blanking_time(config.blanking_time_ns)
-    _recompute_refresh_rate(config)
+    rate = _display_driver.set_target_refresh_rate(config.target_refresh_rate)
     if config.log_level >= DEBUG:
-        print(f"[CONFIG] display blanking time updated: {config.blanking_time_ns}ns")
+        print(f"[CONFIG] display blanking time updated: {config.blanking_time_ns}ns (refresh recomputed: {rate:.1f}Hz)")

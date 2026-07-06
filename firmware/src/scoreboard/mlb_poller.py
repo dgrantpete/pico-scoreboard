@@ -5,6 +5,10 @@ Owns all polling state on the `MlbPoller` instance. No module-level or
 class-level mutable state — the instance is the single source of truth so
 that the firmware cannot accidentally end up with two pollers sharing a
 rotation index or ETag.
+
+Button input hooks (called from the Core 0 input task, same asyncio loop):
+- skip():        advance to the next game immediately, waking the poll loop.
+- toggle_lock(): freeze/unfreeze game rotation (polling continues).
 """
 
 import time
@@ -12,23 +16,44 @@ import uasyncio as asyncio
 
 from .api_client import ScoreboardApiClient
 from .config import Config
-from .display import get_logo_framebuffer
+from .display import LogoPool, play_text_display_ms
 from .logger import DEBUG, ERROR
-from .state import get_write_state, commit_state, set_error
+from .state import get_write_state, commit_state, set_error, set_toast
 
 
 class MlbPoller:
     MAX_FAILURES: int = 5
 
-    def __init__(self, config: Config, api_client: ScoreboardApiClient) -> None:
+    def __init__(self, config: Config, api_client: ScoreboardApiClient, logo_pool: LogoPool) -> None:
         self._config: Config = config
         self._api: ScoreboardApiClient = api_client
+        self._logos: LogoPool = logo_pool
         self._game_ids: list[str] = []
         self._etag: str | None = None
         self._current_index: int = 0
         self._last_rotation_ms: int | None = None
         self._consecutive_failures: int = 0
         self._animation_reset: bool = True
+        self._locked: bool = False
+        self._skip_requested: bool = False
+        self._wake: asyncio.Event = asyncio.Event()
+
+    @property
+    def locked(self) -> bool:
+        return self._locked
+
+    def skip(self) -> None:
+        """Advance to the next game now (button input). Safe to call anytime."""
+        set_toast("SKIPPING...")
+        self._skip_requested = True
+        self._wake.set()
+
+    def toggle_lock(self) -> None:
+        """Toggle rotation lock (button input). The current game keeps polling."""
+        self._locked = not self._locked
+        set_toast("LOCKED" if self._locked else "UNLOCKED")
+        if self._config.log_level >= DEBUG:
+            print(f"[MLB] rotation lock: {self._locked}")
 
     async def run(self) -> None:
         while True:
@@ -42,17 +67,31 @@ class MlbPoller:
                 if self._consecutive_failures >= self.MAX_FAILURES:
                     set_error("API ERROR", [str(e)[:20]])
 
-            await asyncio.sleep(self._config.poll_interval_seconds)
+            # Sleep until the next poll, but wake immediately on skip().
+            try:
+                await asyncio.wait_for(
+                    self._wake.wait(), self._config.poll_interval_seconds
+                )
+            except asyncio.TimeoutError:
+                pass
+            self._wake.clear()
 
     async def _tick(self) -> None:
         now = time.ticks_ms()
+        skip = self._skip_requested
+        self._skip_requested = False
+
+        rotation_due = (
+            self._last_rotation_ms is not None
+            and time.ticks_diff(now, self._last_rotation_ms) >= self._config.game_rotation_seconds * 1000
+        )
 
         if self._last_rotation_ms is None:
             await self._refresh_list(initial=True)
             self._current_index = 0
             self._last_rotation_ms = now
             self._animation_reset = True
-        elif time.ticks_diff(now, self._last_rotation_ms) >= self._config.game_rotation_seconds * 1000:
+        elif skip or (rotation_due and not self._locked):
             await self._rotate(now)
             self._animation_reset = True
         else:
@@ -61,7 +100,6 @@ class MlbPoller:
         if not self._game_ids:
             state = get_write_state()
             state.mode = 'no_games'
-            state.dirty = True
             commit_state()
             return
 
@@ -93,11 +131,11 @@ class MlbPoller:
             # skip this slot and let the next rotation pick up a fresh list.
             return
 
-        home_logo = await get_logo_framebuffer(
-            self._api, f"mlb-{live.home.abbreviation}", f"/mlb/{live.home.abbreviation}/logo"
+        home_logo = await self._logos.get(
+            f"mlb-{live.home.abbreviation}", f"/mlb/{live.home.abbreviation}/logo"
         )
-        away_logo = await get_logo_framebuffer(
-            self._api, f"mlb-{live.away.abbreviation}", f"/mlb/{live.away.abbreviation}/logo"
+        away_logo = await self._logos.get(
+            f"mlb-{live.away.abbreviation}", f"/mlb/{live.away.abbreviation}/logo"
         )
 
         state = get_write_state()
@@ -107,20 +145,22 @@ class MlbPoller:
         state.game.fetched_ms = time.ticks_ms()
 
         # Most-recent play flash: the display thread briefly surfaces the play
-        # text whenever the id changes. The back buffer's previous play.id is
-        # carried forward by DoubleBufferedState._sync_after_swap, so this
-        # comparison is against the last committed value — no poller-local
-        # state needed. Game rotation also legitimately trips this (new game,
-        # different ids) so viewers can catch up on the newest play.
+        # text whenever the id changes. The write buffer's previous play.id is
+        # carried forward after each commit, so this comparison is against the
+        # last committed value — no poller-local state needed. Game rotation
+        # also legitimately trips this (new game, different ids) so viewers
+        # can catch up on the newest play.
         new_play_id = live.last_play.id
         if new_play_id != state.game.play.id:
             state.game.play.id = new_play_id
             state.game.play.text = live.last_play.text
             state.game.play.updated_ms = time.ticks_ms()
+            # Window sized to the text: one full scroll cycle, measured here
+            # on Core 0 so the display thread never measures text.
+            state.game.play.display_ms = play_text_display_ms(live.last_play.text)
 
         state.home_logo = home_logo
         state.away_logo = away_logo
         if self._animation_reset:
             state.animation_start_ms = time.ticks_ms()
-        state.dirty = True
         commit_state()
