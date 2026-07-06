@@ -66,15 +66,15 @@
 </script>
 
 <svelte:head>
-	<title>NFL Scoreboard</title>
+	<title>Pico Scoreboard</title>
 </svelte:head>
 
 <div class="layout">
 	<header class="header">
 		<div class="header-inner">
 			<div class="logo">
-				<span class="logo-emoji">&#x1F3C8;</span>
-				<h1 class="logo-title">NFL Scoreboard</h1>
+				<span class="logo-emoji">&#x1F3DF;&#xFE0F;</span>
+				<h1 class="logo-title">Pico Scoreboard</h1>
 			</div>
 			<button
 				class="btn btn-ghost btn-sm icon-btn"

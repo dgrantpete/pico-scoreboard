@@ -83,6 +83,10 @@ export function createSettingsStore() {
 	// Whether we just saved network changes (triggers reboot prompt)
 	let showRebootPrompt = $state(false);
 
+	// Single status poller — the status card and the memory/flash meters all
+	// read `status`, so one interval serves every consumer.
+	let statusPollInterval: ReturnType<typeof setInterval> | null = null;
+
 	// Computed: whether any field has been touched
 	const isDirty = $derived(touchedFields.size > 0);
 
@@ -276,9 +280,28 @@ export function createSettingsStore() {
 		 */
 		async refreshStatus() {
 			try {
-				status = await picoApi.getStatus();
+				status = await picoApi.getStatus({ timeoutMs: 4000 });
 			} catch (e) {
 				console.error('Failed to refresh status:', e);
+			}
+		},
+
+		/**
+		 * Start polling /api/status on an interval (no-op if already polling)
+		 */
+		startStatusPolling(intervalMs = 5000) {
+			if (statusPollInterval) return;
+			this.refreshStatus();
+			statusPollInterval = setInterval(() => this.refreshStatus(), intervalMs);
+		},
+
+		/**
+		 * Stop the status polling interval
+		 */
+		stopStatusPolling() {
+			if (statusPollInterval) {
+				clearInterval(statusPollInterval);
+				statusPollInterval = null;
 			}
 		},
 

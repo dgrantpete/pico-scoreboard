@@ -90,6 +90,395 @@
 	100% { opacity: 1; }
 }
 
+/* =========================================================================
+   Shared component styles (used by both the settings and setup pages).
+   Page-specific layout stays in each page's scoped <style> block.
+   ========================================================================= */
+
+/* ---- Card ---- */
+.card {
+	background: var(--card);
+	color: var(--card-foreground);
+	border: 1px solid var(--border);
+	border-radius: 0.75rem;
+	box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
+}
+
+.card.border-destructive {
+	border-color: var(--destructive);
+}
+
+.card.border-warning {
+	border-color: oklch(0.769 0.188 70.08);
+}
+
+.card-header {
+	padding: 1.5rem;
+	padding-block-end: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0.375rem;
+}
+
+.card-title {
+	font-weight: 600;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.card-title.text-destructive {
+	color: var(--destructive);
+}
+
+.card-description {
+	color: var(--muted-foreground);
+	font-size: 0.875rem;
+}
+
+.card-content {
+	padding: 1.5rem;
+	display: flex;
+	flex-direction: column;
+	gap: 1rem;
+}
+
+.card-content.gap-lg {
+	gap: 1.5rem;
+}
+
+/* ---- Skeleton ---- */
+.skeleton {
+	background: var(--muted);
+	border-radius: 0.375rem;
+	animation: shimmer 2s infinite;
+}
+
+/* ---- Form elements ---- */
+.field-group {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+.field-group.nested {
+	padding-block-start: 0.5rem;
+}
+
+label {
+	font-size: 0.875rem;
+	font-weight: 500;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="url"],
+input[type="number"] {
+	height: 2.25rem;
+	width: 100%;
+	border-radius: 0.375rem;
+	border: 1px solid var(--input);
+	background: transparent;
+	padding-inline: 0.75rem;
+	font-size: 0.875rem;
+
+	&::placeholder {
+		color: var(--muted-foreground);
+	}
+
+	&:focus-visible {
+		outline: none;
+		border-color: var(--ring);
+		box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+	}
+}
+
+.input-with-toggle {
+	padding-inline-end: 2.5rem;
+}
+
+.input-wrapper {
+	position: relative;
+}
+
+.toggle-btn {
+	position: absolute;
+	inset-inline-end: 0;
+	inset-block-start: 0;
+	height: 100%;
+	padding-inline: 0.75rem;
+
+	&:hover {
+		background: transparent !important;
+	}
+}
+
+input[type="range"] {
+	appearance: none;
+	-webkit-appearance: none;
+	width: 100%;
+	height: 0.5rem;
+	border-radius: 9999px;
+	background: var(--secondary);
+	outline: none;
+
+	&::-webkit-slider-thumb {
+		-webkit-appearance: none;
+		height: 1.25rem;
+		width: 1.25rem;
+		border-radius: 50%;
+		background: var(--primary);
+		cursor: pointer;
+		border: 2px solid var(--background);
+		box-shadow: 0 1px 3px oklch(0 0 0 / 15%);
+	}
+}
+
+select {
+	height: 2.25rem;
+	width: 100%;
+	border-radius: 0.375rem;
+	border: 1px solid var(--input);
+	background: var(--card);
+	padding-inline: 0.75rem;
+	font-size: 0.875rem;
+
+	&:focus-visible {
+		outline: none;
+		border-color: var(--ring);
+		box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+	}
+}
+
+/* ---- Progress ---- */
+progress {
+	width: 100%;
+	height: 0.5rem;
+	border-radius: 9999px;
+	overflow: hidden;
+	appearance: none;
+}
+
+progress::-webkit-progress-bar {
+	background: var(--secondary);
+	border-radius: 9999px;
+}
+
+progress::-webkit-progress-value {
+	background: var(--primary);
+	border-radius: 9999px;
+	transition: width 0.3s ease;
+}
+
+/* ---- Separator ---- */
+.separator {
+	border: none;
+	border-top: 1px solid var(--border);
+}
+
+/* ---- Color picker ---- */
+.color-picker {
+	height: 2.25rem;
+	width: 3.5rem;
+	cursor: pointer;
+	border-radius: 0.375rem;
+	border: 1px solid var(--border);
+}
+
+/* ---- Dialog ---- */
+.dialog {
+	border: 1px solid var(--border);
+	border-radius: 0.75rem;
+	background: var(--card);
+	color: var(--card-foreground);
+	padding: 1.5rem;
+	max-width: 28rem;
+	width: calc(100% - 2rem);
+	box-shadow: 0 10px 25px oklch(0 0 0 / 25%);
+}
+
+.dialog::backdrop {
+	background: oklch(0 0 0 / 80%);
+}
+
+.dialog h2 {
+	font-size: 1.125rem;
+	font-weight: 600;
+	margin-block-end: 0.5rem;
+}
+
+.dialog p {
+	color: var(--muted-foreground);
+	font-size: 0.875rem;
+	margin-block-end: 1rem;
+}
+
+.dialog-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: 0.5rem;
+}
+
+/* ---- Alert ---- */
+.alert {
+	border-radius: 0.75rem;
+	padding: 1rem;
+	border: 1px solid var(--border);
+}
+
+.alert.destructive {
+	border-color: var(--destructive);
+	color: var(--destructive);
+}
+
+/* ---- Buttons ---- */
+.btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.5rem;
+	border-radius: 0.375rem;
+	font-size: 0.875rem;
+	font-weight: 500;
+	cursor: pointer;
+	border: none;
+	transition: background-color 0.15s;
+	outline: none;
+	height: 2.25rem;
+	padding-inline: 1rem;
+
+	&:disabled {
+		opacity: 0.5;
+		pointer-events: none;
+	}
+
+	&:focus-visible {
+		box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+	}
+
+	&.default {
+		background: var(--primary);
+		color: var(--primary-foreground);
+	}
+
+	&.outline {
+		background: var(--card);
+		border: 1px solid var(--border);
+
+		&:hover {
+			background: var(--accent);
+		}
+	}
+
+	&.ghost {
+		background: transparent;
+
+		&:hover {
+			background: var(--accent);
+			color: var(--accent-foreground);
+		}
+	}
+
+	&.destructive {
+		background: var(--destructive);
+		color: white;
+	}
+
+	&.sm {
+		height: 2rem;
+		padding-inline: 0.75rem;
+		font-size: 0.75rem;
+	}
+
+	&.lg {
+		height: 2.75rem;
+		padding-inline: 1.5rem;
+		font-size: 1rem;
+	}
+}
+
+.btn svg {
+	width: 1rem;
+	height: 1rem;
+	flex-shrink: 0;
+}
+
+/* ---- Layout / text utilities ---- */
+.row-between {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+
+.row-center {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.status-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 1rem;
+	font-size: 0.875rem;
+}
+
+.label-group {
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+}
+
+.text-muted {
+	color: var(--muted-foreground);
+}
+
+.text-sm {
+	font-size: 0.875rem;
+}
+
+.text-xs {
+	font-size: 0.75rem;
+}
+
+.text-sm-medium {
+	font-size: 0.875rem;
+	font-weight: 500;
+}
+
+.hint {
+	font-size: 0.75rem;
+	color: var(--muted-foreground);
+}
+
+.capitalize {
+	text-transform: capitalize;
+}
+
+.status-value {
+	margin-inline-start: 0.5rem;
+	font-weight: 500;
+}
+
+/* ---- Icon helpers (applied via class on Lucide components) ---- */
+.icon-green {
+	width: 1.25rem;
+	height: 1.25rem;
+	color: oklch(0.723 0.219 149.579);
+}
+
+.icon-amber {
+	width: 1.25rem;
+	height: 1.25rem;
+	color: oklch(0.769 0.188 70.08);
+}
+
+.icon-muted {
+	width: 1rem;
+	height: 1rem;
+	color: var(--muted-foreground);
+}
+
 @keyframes spin {
 	to { transform: rotate(360deg); }
 }

@@ -103,9 +103,9 @@
 		</div>
 	{:else if error && !config}
 		<!-- Error state when we couldn't load at all -->
-		<section class="card destructive-border">
+		<section class="card border-destructive">
 			<header class="card-header">
-				<h3 class="card-title destructive-text">Connection Error</h3>
+				<h3 class="card-title text-destructive">Connection Error</h3>
 				<p class="card-description">{error}</p>
 			</header>
 			<div class="card-content">
@@ -118,7 +118,18 @@
 	{:else}
 		<!-- Header with context-aware messaging -->
 		<div class="header-group">
-			{#if status?.setup_reason === "connection_failed"}
+			{#if status?.setup_reason === "bad_auth"}
+				<div class="header-row">
+					<div class="icon-circle amber">
+						<TriangleAlert />
+					</div>
+					<h2 class="page-title">Wrong Password</h2>
+				</div>
+				<p class="subtitle">
+					"<span class="font-medium">{status.configured_ssid}</span>" rejected the
+					password. Re-enter it below and reconnect.
+				</p>
+			{:else if status?.setup_reason === "connection_failed"}
 				<div class="header-row">
 					<div class="icon-circle amber">
 						<TriangleAlert />
@@ -174,9 +185,10 @@
 				</div>
 				<div class="field-group">
 					<label for="wifi-password">WiFi Password</label>
-					<div class="password-wrapper">
+					<div class="input-wrapper">
 						<input
 							id="wifi-password"
+							class="input-with-toggle"
 							type={showPassword ? "text" : "password"}
 							placeholder="Enter password"
 							bind:value={password}
@@ -186,9 +198,9 @@
 							onclick={() => (showPassword = !showPassword)}
 						>
 							{#if showPassword}
-								<EyeOff />
+								<EyeOff class="icon-muted" />
 							{:else}
-								<Eye />
+								<Eye class="icon-muted" />
 							{/if}
 						</button>
 					</div>
@@ -216,9 +228,10 @@
 				</div>
 				<div class="field-group">
 					<label for="api-key">API Key</label>
-					<div class="password-wrapper">
+					<div class="input-wrapper">
 						<input
 							id="api-key"
+							class="input-with-toggle"
 							type={showApiKey ? "text" : "password"}
 							placeholder="Enter API key"
 							bind:value={apiKey}
@@ -228,9 +241,9 @@
 							onclick={() => (showApiKey = !showApiKey)}
 						>
 							{#if showApiKey}
-								<EyeOff />
+								<EyeOff class="icon-muted" />
 							{:else}
-								<Eye />
+								<Eye class="icon-muted" />
 							{/if}
 						</button>
 					</div>
@@ -266,6 +279,7 @@
 <RebootOverlay />
 
 <style>
+	/* Page-specific layout only — shared component styles live in app.css */
 	.setup-page {
 		max-width: 42rem;
 		margin-inline: auto;
@@ -278,50 +292,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1.5rem;
-	}
-
-	/* Skeleton loading */
-	.skeleton {
-		background: var(--muted);
-		border-radius: 0.375rem;
-		animation: shimmer 2s infinite;
-	}
-
-	/* Card */
-	.card {
-		background: var(--card);
-		color: var(--card-foreground);
-		border: 1px solid var(--border);
-		border-radius: 0.75rem;
-		box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
-
-		&.destructive-border {
-			border-color: var(--destructive);
-		}
-	}
-
-	.card-header {
-		padding: 1.5rem;
-		padding-block-end: 0;
-	}
-
-	.card-title {
-		font-weight: 600;
-		font-size: 1rem;
-
-		&.destructive-text {
-			color: var(--destructive);
-		}
-	}
-
-	.card-description {
-		color: var(--muted-foreground);
-		font-size: 0.875rem;
-		margin-block-start: 0.25rem;
-	}
-
-	.card-content {
-		padding: 1.5rem;
 	}
 
 	/* Header */
@@ -400,131 +370,6 @@
 			& :global(svg) {
 				color: oklch(0.792 0.209 151.711);
 			}
-		}
-	}
-
-	/* Form fields */
-	.field-group {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-	}
-
-	label {
-		font-size: 0.875rem;
-		font-weight: 500;
-	}
-
-	input[type="text"],
-	input[type="password"],
-	input[type="url"] {
-		height: 2.25rem;
-		width: 100%;
-		border-radius: 0.375rem;
-		border: 1px solid var(--input);
-		background: transparent;
-		padding-inline: 0.75rem;
-		font-size: 0.875rem;
-
-		&::placeholder {
-			color: var(--muted-foreground);
-		}
-
-		&:focus-visible {
-			outline: none;
-			border-color: var(--ring);
-			box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
-		}
-	}
-
-	.password-wrapper {
-		position: relative;
-
-		& input {
-			padding-inline-end: 2.5rem;
-		}
-	}
-
-	/* Buttons */
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0.5rem;
-		border-radius: 0.375rem;
-		font-size: 0.875rem;
-		font-weight: 500;
-		cursor: pointer;
-		border: none;
-		transition: background-color 0.15s;
-		outline: none;
-		height: 2.25rem;
-		padding-inline: 1rem;
-
-		&:disabled {
-			opacity: 0.5;
-			pointer-events: none;
-		}
-
-		&:focus-visible {
-			box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
-		}
-
-		&.default {
-			background: var(--primary);
-			color: var(--primary-foreground);
-		}
-
-		&.ghost {
-			background: transparent;
-
-			&:hover {
-				background: var(--accent);
-				color: var(--accent-foreground);
-			}
-		}
-
-		&.sm {
-			height: 2rem;
-			padding-inline: 0.75rem;
-		}
-
-		&.lg {
-			height: 2.75rem;
-			padding-inline: 1.5rem;
-			font-size: 1rem;
-		}
-
-		& :global(svg) {
-			width: 1rem;
-			height: 1rem;
-		}
-	}
-
-	.toggle-btn {
-		position: absolute;
-		inset-inline-end: 0;
-		inset-block-start: 0;
-		height: 100%;
-
-		& :global(svg) {
-			color: var(--muted-foreground);
-		}
-
-		&:hover {
-			background: transparent;
-		}
-	}
-
-	/* Alert */
-	.alert {
-		border-radius: 0.75rem;
-		padding: 1rem;
-		border: 1px solid var(--border);
-
-		&.destructive {
-			border-color: var(--destructive);
-			color: var(--destructive);
 		}
 	}
 

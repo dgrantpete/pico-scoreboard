@@ -11,10 +11,8 @@
 	import HardDrive from "@lucide/svelte/icons/hard-drive";
 	import { settingsStore } from "$lib/stores/settings.svelte";
 	import { rebootStore } from "$lib/stores/reboot.svelte";
-	import { memoryTelemetryStore } from "$lib/stores/memory-telemetry.svelte";
 	import { picoApi } from "$lib/api";
 	import RebootOverlay from "$lib/components/RebootOverlay.svelte";
-	import MemoryChart from "$lib/components/MemoryChart.svelte";
 	import type { NetworkStatus, Config, Color, GammaConfig } from "$lib/api/types";
 
 	// Password visibility toggles
@@ -40,9 +38,6 @@
 			? sliderToFreq(freqSliderValue)
 			: (settingsStore.config?.display.data_frequency_khz ?? 20000)
 	);
-
-	// Status refresh interval
-	let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
 	// Memory telemetry helpers
 	function formatBytes(bytes: number): string {
@@ -146,25 +141,13 @@
 
 	onMount(() => {
 		settingsStore.load().then(() => {
-			// Seed memory telemetry with initial status and start polling
-			if (settingsStore.status) {
-				memoryTelemetryStore.seedFromStatus(settingsStore.status);
-			}
-			memoryTelemetryStore.startPolling();
+			// One shared poller feeds the status card and the memory meters
+			settingsStore.startStatusPolling();
 		});
-
-		// Start status refresh interval (15 seconds) for other status data
-		refreshInterval = setInterval(() => {
-			settingsStore.refreshStatus();
-		}, 15000);
 	});
 
 	onDestroy(() => {
-		if (refreshInterval) {
-			clearInterval(refreshInterval);
-			refreshInterval = null;
-		}
-		memoryTelemetryStore.stopPolling();
+		settingsStore.stopStatusPolling();
 	});
 
 	function handleBrightnessChange(value: number) {
@@ -231,6 +214,9 @@
 					{#if settingsStore.status?.mode === "station" && settingsStore.status?.connected}
 						<Wifi class="icon-green" />
 						Connected to WiFi
+					{:else if settingsStore.status?.setup_mode && settingsStore.status?.setup_reason === "bad_auth"}
+						<WifiOff class="icon-amber" />
+						Wrong WiFi Password
 					{:else if settingsStore.status?.setup_mode && settingsStore.status?.setup_reason === "connection_failed"}
 						<WifiOff class="icon-amber" />
 						Connection Failed
@@ -243,7 +229,9 @@
 					{/if}
 				</h3>
 				<p class="card-description">
-					{#if settingsStore.status?.setup_mode && settingsStore.status?.setup_reason === "connection_failed"}
+					{#if settingsStore.status?.setup_mode && settingsStore.status?.setup_reason === "bad_auth"}
+						The password for "{settingsStore.status.configured_ssid}" was rejected
+					{:else if settingsStore.status?.setup_mode && settingsStore.status?.setup_reason === "connection_failed"}
 						Could not connect to "{settingsStore.status.configured_ssid}"
 					{:else if settingsStore.status?.setup_mode}
 						WiFi setup is required to fetch scores
@@ -295,6 +283,10 @@
 
 		<!-- System Resources -->
 		{#if settingsStore.status}
+			{@const memPercent = calcPercent(
+				settingsStore.status.memory_used,
+				settingsStore.status.memory_free
+			)}
 			{@const flashPercent = calcPercent(
 				settingsStore.status.flash_used,
 				settingsStore.status.flash_free
@@ -302,33 +294,25 @@
 			<section class="card">
 				<header class="card-header">
 					<h3 class="card-title">System Resources</h3>
-					<p class="card-description">Memory and storage usage over time</p>
+					<p class="card-description">Memory and storage usage</p>
 				</header>
 				<div class="card-content gap-lg">
-					<!-- Memory Usage Chart -->
+					<!-- Memory Usage -->
 					<div class="field-group">
 						<div class="row-between">
 							<div class="row-center">
 								<Cpu class="icon-muted" />
 								<span class="text-sm-medium">Memory</span>
 							</div>
-							{#if memoryTelemetryStore.latestStatus}
-								{@const memPercent = calcPercent(
-									memoryTelemetryStore.latestStatus.memory_used,
-									memoryTelemetryStore.latestStatus.memory_free
-								)}
-								<span class="text-sm-medium" style="color: {getUsageColor(memPercent)}">
-									{memPercent}%
-								</span>
-							{/if}
+							<span class="text-sm-medium" style="color: {getUsageColor(memPercent)}">
+								{memPercent}%
+							</span>
 						</div>
-						<MemoryChart />
-						{#if memoryTelemetryStore.latestStatus}
-							<div class="row-between text-xs text-muted">
-								<span>{formatBytes(memoryTelemetryStore.latestStatus.memory_used)} used</span>
-								<span>{formatBytes(memoryTelemetryStore.latestStatus.memory_free)} free</span>
-							</div>
-						{/if}
+						<progress value={memPercent} max={100}></progress>
+						<div class="row-between text-xs text-muted">
+							<span>{formatBytes(settingsStore.status.memory_used)} used</span>
+							<span>{formatBytes(settingsStore.status.memory_free)} free</span>
+						</div>
 					</div>
 
 					<hr class="separator" />
@@ -442,7 +426,7 @@
 					}}
 					/>
 					<p class="hint">
-						Time to wait before falling back to setup mode
+						Per-attempt WiFi connection timeout before falling back to setup mode
 					</p>
 				</div>
 
@@ -514,21 +498,6 @@
 							{/if}
 						</button>
 					</div>
-				</div>
-
-				<hr class="separator" />
-
-				<div class="row-between">
-					<div class="label-group">
-						<label>Mock Mode</label>
-						<p class="text-sm text-muted">
-							Use procedurally generated test data instead of live ESPN data
-						</p>
-					</div>
-					<label class="switch">
-						<input type="checkbox" checked={settingsStore.config?.api.mock} onchange={() => settingsStore.updateApi("mock", !settingsStore.config?.api.mock)} />
-						<span class="switch-track"><span class="switch-thumb"></span></span>
-					</label>
 				</div>
 			</div>
 		</section>
@@ -943,7 +912,7 @@
 <RebootOverlay />
 
 <style>
-	/* Layout */
+	/* Page-specific layout only — shared component styles live in app.css */
 	.settings-page {
 		max-width: 42rem;
 		margin-inline: auto;
@@ -967,433 +936,6 @@
 		gap: 1.5rem;
 	}
 
-	/* Card */
-	.card {
-		background: var(--card);
-		color: var(--card-foreground);
-		border: 1px solid var(--border);
-		border-radius: 0.75rem;
-		box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
-	}
-
-	.card.border-destructive {
-		border-color: var(--destructive);
-	}
-
-	.card.border-warning {
-		border-color: oklch(0.769 0.188 70.08);
-	}
-
-	.card-header {
-		padding: 1.5rem;
-		padding-block-end: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.375rem;
-	}
-
-	.card-title {
-		font-weight: 600;
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-	}
-
-	.card-title.text-destructive {
-		color: var(--destructive);
-	}
-
-	.card-description {
-		color: var(--muted-foreground);
-		font-size: 0.875rem;
-	}
-
-	.card-content {
-		padding: 1.5rem;
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-	}
-
-	.card-content.gap-lg {
-		gap: 1.5rem;
-	}
-
-	/* Skeleton */
-	.skeleton {
-		background: var(--muted);
-		border-radius: 0.375rem;
-		animation: shimmer 2s infinite;
-	}
-
-	/* Form elements */
-	.field-group {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-	}
-
-	.field-group.nested {
-		padding-block-start: 0.5rem;
-	}
-
-	label {
-		font-size: 0.875rem;
-		font-weight: 500;
-	}
-
-	input[type="text"],
-	input[type="password"],
-	input[type="url"],
-	input[type="number"] {
-		height: 2.25rem;
-		width: 100%;
-		border-radius: 0.375rem;
-		border: 1px solid var(--input);
-		background: transparent;
-		padding-inline: 0.75rem;
-		font-size: 0.875rem;
-
-		&::placeholder {
-			color: var(--muted-foreground);
-		}
-
-		&:focus-visible {
-			outline: none;
-			border-color: var(--ring);
-			box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
-		}
-	}
-
-	.input-with-toggle {
-		padding-inline-end: 2.5rem;
-	}
-
-	.input-wrapper {
-		position: relative;
-	}
-
-	.toggle-btn {
-		position: absolute;
-		right: 0;
-		top: 0;
-		height: 100%;
-		padding-inline: 0.75rem;
-
-		&:hover {
-			background: transparent !important;
-		}
-	}
-
-	input[type="range"] {
-		appearance: none;
-		-webkit-appearance: none;
-		width: 100%;
-		height: 0.5rem;
-		border-radius: 9999px;
-		background: var(--secondary);
-		outline: none;
-
-		&::-webkit-slider-thumb {
-			-webkit-appearance: none;
-			height: 1.25rem;
-			width: 1.25rem;
-			border-radius: 50%;
-			background: var(--primary);
-			cursor: pointer;
-			border: 2px solid var(--background);
-			box-shadow: 0 1px 3px oklch(0 0 0 / 15%);
-		}
-	}
-
-	select {
-		height: 2.25rem;
-		width: 100%;
-		border-radius: 0.375rem;
-		border: 1px solid var(--input);
-		background: var(--card);
-		padding-inline: 0.75rem;
-		font-size: 0.875rem;
-
-		&:focus-visible {
-			outline: none;
-			border-color: var(--ring);
-			box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
-		}
-	}
-
-	/* Switch */
-	.switch {
-		position: relative;
-		display: inline-flex;
-		cursor: pointer;
-	}
-
-	.switch input {
-		position: absolute;
-		opacity: 0;
-		width: 0;
-		height: 0;
-	}
-
-	.switch-track {
-		width: 2.75rem;
-		height: 1.5rem;
-		border-radius: 9999px;
-		background: var(--input);
-		transition: background 0.2s;
-		display: flex;
-		align-items: center;
-		padding: 0.125rem;
-	}
-
-	.switch input:checked + .switch-track {
-		background: var(--primary);
-	}
-
-	.switch-thumb {
-		width: 1.25rem;
-		height: 1.25rem;
-		border-radius: 50%;
-		background: var(--background);
-		transition: transform 0.2s;
-		box-shadow: 0 1px 2px oklch(0 0 0 / 15%);
-	}
-
-	.switch input:checked + .switch-track .switch-thumb {
-		transform: translateX(1.25rem);
-	}
-
-	/* Progress */
-	progress {
-		width: 100%;
-		height: 0.5rem;
-		border-radius: 9999px;
-		overflow: hidden;
-		appearance: none;
-	}
-
-	progress::-webkit-progress-bar {
-		background: var(--secondary);
-		border-radius: 9999px;
-	}
-
-	progress::-webkit-progress-value {
-		background: var(--primary);
-		border-radius: 9999px;
-	}
-
-	/* Separator */
-	.separator {
-		border: none;
-		border-top: 1px solid var(--border);
-	}
-
-	/* Color picker */
-	.color-picker {
-		height: 2.25rem;
-		width: 3.5rem;
-		cursor: pointer;
-		border-radius: 0.375rem;
-		border: 1px solid var(--border);
-	}
-
-	/* Dialog */
-	.dialog {
-		border: 1px solid var(--border);
-		border-radius: 0.75rem;
-		background: var(--card);
-		color: var(--card-foreground);
-		padding: 1.5rem;
-		max-width: 28rem;
-		width: calc(100% - 2rem);
-		box-shadow: 0 10px 25px oklch(0 0 0 / 25%);
-	}
-
-	.dialog::backdrop {
-		background: oklch(0 0 0 / 80%);
-	}
-
-	.dialog h2 {
-		font-size: 1.125rem;
-		font-weight: 600;
-		margin-block-end: 0.5rem;
-	}
-
-	.dialog p {
-		color: var(--muted-foreground);
-		font-size: 0.875rem;
-		margin-block-end: 1rem;
-	}
-
-	.dialog-footer {
-		display: flex;
-		justify-content: flex-end;
-		gap: 0.5rem;
-	}
-
-	/* Alert */
-	.alert {
-		border-radius: 0.75rem;
-		padding: 1rem;
-	}
-
-	.alert.destructive {
-		border: 1px solid var(--destructive);
-		color: var(--destructive);
-	}
-
-	/* Buttons */
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0.5rem;
-		border-radius: 0.375rem;
-		font-size: 0.875rem;
-		font-weight: 500;
-		cursor: pointer;
-		border: none;
-		transition: background-color 0.15s;
-		outline: none;
-		height: 2.25rem;
-		padding-inline: 1rem;
-
-		&:disabled {
-			opacity: 0.5;
-			pointer-events: none;
-		}
-
-		&:focus-visible {
-			box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
-		}
-
-		&.default {
-			background: var(--primary);
-			color: var(--primary-foreground);
-		}
-
-		&.outline {
-			background: var(--card);
-			border: 1px solid var(--border);
-
-			&:hover {
-				background: var(--accent);
-			}
-		}
-
-		&.ghost {
-			background: transparent;
-
-			&:hover {
-				background: var(--accent);
-			}
-		}
-
-		&.destructive {
-			background: var(--destructive);
-			color: white;
-		}
-
-		&.sm {
-			height: 2rem;
-			padding-inline: 0.75rem;
-			font-size: 0.75rem;
-		}
-	}
-
-	.btn :global(svg) {
-		width: 1rem;
-		height: 1rem;
-	}
-
-	/* Utility helpers */
-	.row-between {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-	}
-
-	.row-center {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-	}
-
-	.status-grid {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 1rem;
-		font-size: 0.875rem;
-	}
-
-	.label-group {
-		display: flex;
-		flex-direction: column;
-		gap: 0.125rem;
-	}
-
-	.text-muted {
-		color: var(--muted-foreground);
-	}
-
-	.text-sm {
-		font-size: 0.875rem;
-	}
-
-	.text-sm.text-muted {
-		font-size: 0.875rem;
-		color: var(--muted-foreground);
-	}
-
-	.text-xs {
-		font-size: 0.75rem;
-	}
-
-	.text-xs.text-muted {
-		font-size: 0.75rem;
-		color: var(--muted-foreground);
-	}
-
-	.text-sm-medium {
-		font-size: 0.875rem;
-		font-weight: 500;
-	}
-
-	.hint {
-		font-size: 0.75rem;
-		color: var(--muted-foreground);
-	}
-
-	.capitalize {
-		text-transform: capitalize;
-	}
-
-	.status-value {
-		margin-inline-start: 0.5rem;
-		font-weight: 500;
-	}
-
-	/* Icon helpers (applied via class on Lucide components) */
-	:global(.icon-green) {
-		width: 1.25rem;
-		height: 1.25rem;
-		color: oklch(0.723 0.219 149.579);
-	}
-
-	:global(.icon-amber) {
-		width: 1.25rem;
-		height: 1.25rem;
-		color: oklch(0.769 0.188 70.08);
-	}
-
-	:global(.icon-muted) {
-		width: 1rem;
-		height: 1rem;
-		color: var(--muted-foreground);
-	}
-
-	/* Action bar */
 	.action-bar {
 		display: flex;
 		justify-content: space-between;

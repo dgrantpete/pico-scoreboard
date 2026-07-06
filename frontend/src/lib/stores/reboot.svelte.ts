@@ -62,9 +62,10 @@ function getTargetUrl(config: Config): string {
 }
 
 /**
- * Get the AP mode URL (used when device enters setup mode)
+ * Get the AP mode URL (used when device enters setup mode).
+ * Must match the Pico W's AP interface address (see firmware main.py / dns.py).
  */
-const AP_URL = 'http://10.4.1.1';
+const AP_URL = 'http://192.168.4.1';
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));

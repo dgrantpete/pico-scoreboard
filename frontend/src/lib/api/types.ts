@@ -12,7 +12,6 @@ export type NetworkConfigUpdate = Partial<NetworkConfig>;
 export interface ApiConfig {
 	url: string;
 	key: string;
-	mock: boolean;
 }
 
 export type ApiConfigUpdate = Partial<ApiConfig>;
@@ -77,7 +76,7 @@ export interface NetworkStatus {
 	mode: 'ap' | 'station' | 'unknown';
 	connected: boolean;
 	setup_mode: boolean;
-	setup_reason: 'no_network_configured' | 'connection_failed' | null;
+	setup_reason: 'no_network_configured' | 'connection_failed' | 'bad_auth' | null;
 	configured_ssid?: string | null;
 	ip?: string | null;
 	hostname?: string | null;
