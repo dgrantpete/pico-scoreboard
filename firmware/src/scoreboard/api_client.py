@@ -3,8 +3,8 @@ Async HTTP client for the Pico Scoreboard backend API.
 
 No manual gc.collect() calls: MicroPython auto-collects (and retries) when an
 allocation fails, so genuine OOMs surface honestly instead of being masked by
-scheduled pauses. Memory robustness comes from the pre-allocated response
-buffer below, not from collection timing.
+scheduled pauses. Memory robustness comes from the client's pre-allocated
+response buffer, not from collection timing.
 """
 
 import json
@@ -16,10 +16,12 @@ import scoreboard.logger as logger
 from .logger import DEBUG
 from .mlb import LiveGame, parse_game_ids, STRUCT_CONTENT_TYPE
 
-# Pre-allocated response buffer to avoid heap fragmentation
-_MAX_RESPONSE_SIZE = 16_384
-_response_buf = bytearray(_MAX_RESPONSE_SIZE)
-_response_mv = memoryview(_response_buf)
+# Size of the client's pre-allocated response buffer. The largest body the
+# backend ever sends is a logo: LogoPool's 24x24 RGB565 = 1,152 bytes (game
+# structs are ~200 B, game lists and error JSON smaller still), so 4 KB is
+# ~3.5x headroom. If logo dimensions ever grow past ~45x45, readinto will
+# fail loudly with "Response too large" — bump this constant then.
+_MAX_RESPONSE_SIZE = 4096
 
 # Applied to every request via asyncio.wait_for. Without this a wedged TCP
 # connection (backend hang, silent WiFi drop) would stall the poller forever
@@ -77,9 +79,31 @@ class ScoreboardApiClient:
     def __init__(self, config: Config) -> None:
         self._config: Config = config
         self._session: aiohttp.ClientSession = aiohttp.ClientSession()
+        # Response bodies land here and are returned as aliasing memoryviews:
+        # valid only until the next request. One buffer supports exactly one
+        # in-flight request — see _with_timeout's guard.
+        self._response_buf: bytearray = bytearray(_MAX_RESPONSE_SIZE)
+        self._response_mv: memoryview = memoryview(self._response_buf)
+        self._request_in_flight: bool = False
 
     async def _with_timeout(self, coro):
-        """Run a request coroutine under _REQUEST_TIMEOUT."""
+        """Run a request coroutine under _REQUEST_TIMEOUT.
+
+        Fails loudly on concurrent use: the shared response buffer supports
+        one in-flight request at a time (one sequential caller — today the
+        MLB poller). A second concurrent caller would silently corrupt the
+        first caller's response mid-parse; an immediate RuntimeError is
+        infinitely more debuggable than that. Consuming the returned
+        memoryview after this returns is safe without the guard as long as
+        the caller does not await before parsing (asyncio is single-threaded).
+        """
+        if self._request_in_flight:
+            raise RuntimeError(
+                "concurrent ScoreboardApiClient use: the shared response "
+                "buffer supports one in-flight request; give each concurrent "
+                "caller its own client instance"
+            )
+        self._request_in_flight = True
         try:
             return await asyncio.wait_for(coro, _REQUEST_TIMEOUT)
         except asyncio.TimeoutError:
@@ -87,6 +111,8 @@ class ScoreboardApiClient:
             # the next request opens a fresh one.
             await self._session.close()
             raise
+        finally:
+            self._request_in_flight = False
 
     async def get_team_logo_raw(self, path: str, width: int | None = None, height: int | None = None,
                                 background_color: str | None = None, accept: str | None = None) -> tuple[int, memoryview]:
@@ -102,7 +128,7 @@ class ScoreboardApiClient:
 
         Returns:
             Tuple of (status_code, body_memoryview). The memoryview aliases a
-            shared module-level buffer — copy it out before the next request.
+            client's shared buffer — copy it out before the next request.
 
         Raises:
             OSError: On network errors (WiFi disconnected, DNS failure, etc.)
@@ -128,7 +154,7 @@ class ScoreboardApiClient:
     async def _get_logo_inner(self, url: str, path: str, headers: dict) -> tuple[int, memoryview]:
         _t = time.ticks_ms()
         async with self._session.get(url, headers=headers, ssl=True) as resp:
-            result = (resp.status, await resp.readinto(_response_mv))
+            result = (resp.status, await resp.readinto(self._response_mv))
             _log_api("LOGO", path, resp.status, _t)
             return result
 
@@ -140,7 +166,7 @@ class ScoreboardApiClient:
         """
         _t = time.ticks_ms()
         async with self._session.get(url, headers=headers, ssl=True) as resp:
-            filled = await resp.readinto(_response_mv)
+            filled = await resp.readinto(self._response_mv)
             _log_api(tag, path, resp.status, _t)
             if resp.status >= 400:
                 _raise_api_error(resp.status, filled)
@@ -175,7 +201,7 @@ class ScoreboardApiClient:
                 _log_api("MLB-GAMES", "/mlb/games", resp.status, _t)
                 return (304, [], etag)
 
-            filled = await resp.readinto(_response_mv)
+            filled = await resp.readinto(self._response_mv)
             _log_api("MLB-GAMES", "/mlb/games", resp.status, _t)
 
             if resp.status >= 400:

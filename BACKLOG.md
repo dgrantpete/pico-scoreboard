@@ -77,13 +77,6 @@
     LUT for the log map). Small win; do alongside/after item 8. Pairs
     naturally with the re-tune in items 10/11.
 
-20. **Shrink `_MAX_RESPONSE_SIZE` 16 KB → 4 KB** (`api_client.py`) — the
-    largest body it ever holds is a 24×24 RGB565 logo (1,152 B); game
-    structs are ~100-200 B and error JSON is small. Frees 12 KB of live set
-    (funds item 8's ~18 KB of glyph tables). Keep a comment deriving the
-    number from the logo size so it doesn't silently rot if logo dimensions
-    grow.
-
 21. **aiohttp: stop building the decoded header dict per response** — only
     `etag` and `content-length` are ever read; `_request` decodes/splits
     every header line into a dict (~50 small allocs per poll). Let
