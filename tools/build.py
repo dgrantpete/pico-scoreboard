@@ -49,10 +49,6 @@ SKIP_FILES = [
     '**/*.pyc',           # Compiled Python cache
 ]
 
-# Files to skip in release builds (glob patterns)
-DEV_ONLY_FILES = []  # None currently, but available for future use
-
-
 def _load_build_config() -> dict:
     """Load default argument values from tools/build.config.json if present."""
     config_path = Path(__file__).parent / 'build.config.json'
@@ -109,11 +105,6 @@ def process_firmware_files(output_dir: Path, configuration: str, arch: str):
             continue
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Skip dev-only files in release
-        if configuration == 'release' and any(file.full_match(p) for p in DEV_ONLY_FILES):
-            print(f"  Skipping {relative_path} (dev-only)")
-            continue
 
         # Copy non-.py files and copy-only patterns
         if file.suffix != '.py' or any(file.full_match(p) for p in COPY_ONLY_FILES):
