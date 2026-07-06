@@ -43,7 +43,7 @@ import _thread
 from microdot import Microdot, Request, Response, send_file
 from scoreboard import Config, ScoreboardApiClient
 from scoreboard.mlb_poller import MlbPoller
-from scoreboard.state import set_startup_step, finish_startup, set_display_driver, get_write_state
+from scoreboard.state import set_startup_step, finish_startup, set_display_driver, get_write_state, ThreadHealth
 from scoreboard.dns import run_dns_server
 from scoreboard.api_routes import create_api
 from scoreboard.display import init_display, run_display_thread, Regions, LogoPool
@@ -53,7 +53,7 @@ from machine import I2C, Pin
 from veml7700 import VEML7700
 from button import Button
 from scoreboard import brightness
-from scoreboard.logger import DEBUG, ERROR
+import scoreboard.logger as logger
 
 # Reduce buffer size for memory-constrained environment
 Response.send_file_buffer_size = 2048
@@ -203,15 +203,13 @@ async def _sync_time_from_backend() -> int | None:
 
     try:
         url = f"{config.api_url.rstrip('/')}/time"
-        if config.log_level >= DEBUG:
-            print(f"[TIME] sync started: url={url}")
+        logger.debug(f"[TIME] sync started: url={url}")
 
         async def _fetch() -> int | None:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, ssl=True) as resp:
                     if resp.status != 200:
-                        if config.log_level >= ERROR:
-                            print(f"[TIME] sync failed: http={resp.status}")
+                        logger.error(f"[TIME] sync failed: http={resp.status}")
                         return None
 
                     data = await resp.json()
@@ -222,14 +220,12 @@ async def _sync_time_from_backend() -> int | None:
                     # gmtime returns: (year, month, mday, hour, minute, second, weekday, yearday)
                     # RTC.datetime expects: (year, month, day, weekday, hours, minutes, seconds, subseconds)
                     machine.RTC().datetime((tm[0], tm[1], tm[2], tm[6], tm[3], tm[4], tm[5], 0))
-                    if config.log_level >= DEBUG:
-                        print(f"[TIME] rtc synced: {tm[0]:04d}-{tm[1]:02d}-{tm[2]:02d} {tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d} UTC offset={utc_offset}s")
+                    logger.debug(f"[TIME] rtc synced: {tm[0]:04d}-{tm[1]:02d}-{tm[2]:02d} {tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d} UTC offset={utc_offset}s")
                     return utc_offset
 
         return await asyncio.wait_for(_fetch(), 15)
     except Exception as e:
-        if config.log_level >= ERROR:
-            print(f"[TIME] sync failed: {e}")
+        logger.error(f"[TIME] sync failed: {e}")
         return None
 
 
@@ -319,9 +315,8 @@ def start_ap_mode() -> network.WLAN:
         machine.idle()  # Low-power wait instead of hot loop
 
     app.ap = ap  # Store on app object for routes to access
-    if config.log_level >= DEBUG:
-        print(f"[WIFI] ap mode started: ssid={config.device_name}")
-        print(f"[WIFI] ap ip: {ap.ifconfig()[0]}")
+    logger.debug(f"[WIFI] ap mode started: ssid={config.device_name}")
+    logger.debug(f"[WIFI] ap ip: {ap.ifconfig()[0]}")
     return ap
 
 
@@ -341,8 +336,7 @@ def get_wlan_status_string(status: int) -> str:
 
 def reset_wlan(wlan: network.WLAN) -> None:
     """Full reset of WLAN interface to clear stale state."""
-    if config.log_level >= DEBUG:
-        print("[WIFI] reset attempt: deinit -> reinit, pm=0xa11140")
+    logger.debug("[WIFI] reset attempt: deinit -> reinit, pm=0xa11140")
     try:
         wlan.disconnect()
     except:
@@ -380,8 +374,7 @@ def start_station_mode() -> network.WLAN | None:
         The STA WLAN interface if connected, None if timed out
     """
     if not config.ssid:
-        if config.log_level >= ERROR:
-            print("[WIFI] connection failed: no ssid configured")
+        logger.error("[WIFI] connection failed: no ssid configured")
         return None
 
     # Set country code for proper channel/power configuration
@@ -397,15 +390,13 @@ def start_station_mode() -> network.WLAN | None:
     noip_extension = 15  # Extra time if we reach LINK_NOIP state
 
     for attempt in range(1, max_retries + 1):
-        if config.log_level >= DEBUG:
-            print(f"[WIFI] connection attempt: {attempt}/{max_retries}")
+        logger.debug(f"[WIFI] connection attempt: {attempt}/{max_retries}")
 
         # Full reset before each attempt
         reset_wlan(wlan)
 
         # Scan for available networks
-        if config.log_level >= DEBUG:
-            print("[WIFI] scan started")
+        logger.debug("[WIFI] scan started")
         update_startup_display(2, "WiFi scan", "Scanning...")
         target_found = False
         try:
@@ -415,15 +406,12 @@ def start_station_mode() -> network.WLAN | None:
                 ssid = net[0].decode('utf-8', 'replace')
                 if ssid == config.ssid:
                     target_found = True
-            if config.log_level >= DEBUG:
-                print(f"[WIFI] scan complete: found={len(networks)}, target_visible={target_found}")
+            logger.debug(f"[WIFI] scan complete: found={len(networks)}, target_visible={target_found}")
         except Exception as e:
-            if config.log_level >= ERROR:
-                print(f"[WIFI] scan failed: {e}")
+            logger.error(f"[WIFI] scan failed: {e}")
             update_startup_display(2, "WiFi scan", "Scan failed")
 
-        if config.log_level >= DEBUG:
-            print(f"[WIFI] connecting to ssid={config.ssid}")
+        logger.debug(f"[WIFI] connecting to ssid={config.ssid}")
         # Show SSID in detail line (up to 20 chars), attempt counter in operation
         ssid_display = config.ssid[:20] if len(config.ssid) > 20 else config.ssid
         update_startup_display(3, f"Connecting ({attempt}/{max_retries})", ssid_display)
@@ -451,8 +439,7 @@ def start_station_mode() -> network.WLAN | None:
 
             # Handle BADAUTH - break to try next attempt
             if status == -3:  # LINK_BADAUTH
-                if config.log_level >= ERROR:
-                    print("[WIFI] auth failed: bad_auth detected, clearing password")
+                logger.error("[WIFI] auth failed: bad_auth detected, clearing password")
                 app.setup_reason = "bad_auth"
                 time.sleep(1)
                 break
@@ -460,8 +447,7 @@ def start_station_mode() -> network.WLAN | None:
             # Handle early LINK_FAIL - retry connect within same attempt
             if status == -1 and elapsed < 5 and retry_connect_count < 2:
                 retry_connect_count += 1
-                if config.log_level >= DEBUG:
-                    print(f"[WIFI] early fail retry: attempt={retry_connect_count}/2")
+                logger.debug(f"[WIFI] early fail retry: attempt={retry_connect_count}/2")
                 wlan.connect(config.ssid, config.password)
                 time.sleep(1)
                 continue
@@ -480,41 +466,25 @@ def start_station_mode() -> network.WLAN | None:
         if wlan.isconnected():
             ip = wlan.ifconfig()[0]
             if ip and ip != '0.0.0.0':
-                if config.log_level >= DEBUG:
-                    status_str = ' -> '.join(status_history) if status_history else 'DIRECT'
-                    print(f"[WIFI] status: {status_str}")
-                    print(f"[WIFI] connected: ip={ip}")
-                    print(f"[WIFI] hostname: {config.device_name}.local")
+                status_str = ' -> '.join(status_history) if status_history else 'DIRECT'
+                logger.debug(f"[WIFI] status: {status_str}")
+                logger.debug(f"[WIFI] connected: ip={ip}")
+                logger.debug(f"[WIFI] hostname: {config.device_name}.local")
                 update_startup_display(4, "Connected", ip)
                 app.wlan = wlan
                 return wlan
             else:
-                if config.log_level >= DEBUG:
-                    print("[WIFI] connected but no valid ip, retrying")
+                logger.debug("[WIFI] connected but no valid ip, retrying")
 
     # All retries exhausted
-    if config.log_level >= ERROR:
-        print(f"[WIFI] all attempts failed: {max_retries} retries exhausted")
+    logger.error(f"[WIFI] all attempts failed: {max_retries} retries exhausted")
     update_startup_display(4, "WiFi", "FAILED")
     wlan.active(False)
     return None
 
 
-class ThreadHealth:
-    """
-    Cross-core health flag for the display thread.
-
-    Core 1 writes `healthy`, Core 0's watchdog reads it. Passing this object
-    into both sides makes the shared state explicit in the signatures instead
-    of hiding it at module scope.
-    """
-
-    def __init__(self) -> None:
-        self.healthy: bool = False
-
-
 def start_display_thread(display: Hub75Display, writer: FontWriter, regions: Regions,
-                         cfg: Config, health: ThreadHealth) -> None:
+                         health: ThreadHealth) -> None:
     """
     Spawn display loop on Core 1.
 
@@ -525,39 +495,70 @@ def start_display_thread(display: Hub75Display, writer: FontWriter, regions: Reg
         display: Hub75Display instance (pre-initialized)
         writer: FontWriter instance (pre-initialized)
         regions: Pre-allocated framebuffer regions for all text slots
-        cfg: Config instance for UI colors
-        health: Shared health flag the watchdog monitors
+        health: Shared health signals the watchdog feeder monitors
     """
     def wrapper():
         try:
             health.healthy = True
-            if cfg.log_level >= DEBUG:
-                print("[DISPLAY] thread started: core=1")
-            run_display_thread(display, writer, regions, cfg)
+            logger.debug("[DISPLAY] thread started: core=1")
+            run_display_thread(display, writer, regions, health)
         except Exception as e:
-            if cfg.log_level >= ERROR:
-                print(f"[DISPLAY] thread crashed: {e}")
+            logger.error(f"[DISPLAY] thread crashed: {type(e).__name__}: {e}")
             health.healthy = False
 
     _thread.start_new_thread(wrapper, ())
 
 
-async def watchdog_task(health: ThreadHealth) -> None:
+async def watchdog_feeder(cfg: Config, health: ThreadHealth) -> None:
     """
-    Monitor display thread health and reset device if it crashes.
+    Arm and feed the hardware watchdog while both cores are healthy.
 
-    Checks the display thread health every 30 seconds. If the thread
-    is unhealthy, triggers a device reset to recover.
+    Unlike a software watchdog task, the hardware WDT survives the death of
+    its feeder: if Core 0's asyncio loop dies or wedges (the overnight
+    failure mode), feeds simply stop and the chip resets itself. The feeder
+    also stops feeding *deliberately* — after flushing the log ring to
+    flash — when Core 1 has crashed (`healthy` False) or hung
+    (`frame_seq` stalled).
+
+    Only started when config `watchdog.enabled` is true: an armed WDT can't
+    be disarmed and will reboot the device shortly after mpremote interrupts
+    the script, so it stays opt-in for dev workflows.
     """
-    await asyncio.sleep(10)  # Initial delay to let things stabilize
+    from machine import WDT
+
+    timeout_ms = cfg.watchdog_timeout_ms
+    wdt = WDT(timeout=timeout_ms)
+    logger.debug(f"[WD] hardware watchdog armed: timeout={timeout_ms}ms")
+
+    feed_interval = timeout_ms // 4
+    last_frame_seq = -1
 
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep_ms(feed_interval)
+
         if not health.healthy:
-            if config.log_level >= ERROR:
-                print("[DISPLAY] watchdog triggered: unhealthy, resetting")
-            await asyncio.sleep(1)
-            machine.reset()
+            reason = "display thread crashed"
+        elif health.frame_seq == last_frame_seq:
+            reason = "display thread hung (frame_seq stalled)"
+        else:
+            last_frame_seq = health.frame_seq
+            wdt.feed()
+            continue
+
+        logger.error(f"[WD] starving watchdog: {reason}; hardware reset in <={timeout_ms}ms")
+        logger.flush_to_flash()
+        return  # stop feeding; the WDT resets the device
+
+
+async def log_flush_task() -> None:
+    """Periodically give the logger a chance to persist the ring to flash.
+
+    The policy (error-triggered with rate limit, hourly heartbeat) lives in
+    logger.maybe_flush(); this task just ticks it from Core 0.
+    """
+    while True:
+        await asyncio.sleep(30)
+        logger.maybe_flush()
 
 
 class LightSensor:
@@ -575,17 +576,16 @@ class LightSensor:
         self._i2c = i2c
         self._config = cfg
         self._retry_ticks = 0
+        self._read_failing = False
         self._sensor: VEML7700 | None = self._try_init()
 
     def _try_init(self) -> VEML7700 | None:
         try:
             sensor = VEML7700(i2c=self._i2c, it=100, gain=1)
-            if self._config.log_level >= DEBUG:
-                print("[MAIN] sensor ok: veml7700")
+            logger.debug("[MAIN] sensor ok: veml7700")
             return sensor
         except Exception as e:
-            if self._config.log_level >= ERROR:
-                print(f"[MAIN] sensor init failed: veml7700 {e}")
+            logger.error(f"[MAIN] sensor init failed: veml7700 {e}")
             return None
 
     def read_lux(self) -> float | None:
@@ -597,10 +597,18 @@ class LightSensor:
             return None
 
         try:
-            return self._sensor.read_lux()
+            lux = self._sensor.read_lux()
+            if self._read_failing:
+                self._read_failing = False
+                logger.error("[BRIGHT] sensor recovered")
+            return lux
         except Exception as e:
-            if self._config.log_level >= ERROR:
-                print(f"[DISPLAY] brightness sensor error: {e}")
+            # Log the failing->recovered transitions, not every 200ms tick —
+            # a broken sensor would otherwise flood the log ring and evict
+            # the history that matters.
+            if not self._read_failing:
+                self._read_failing = True
+                logger.error(f"[BRIGHT] sensor read failing: {e}")
             return None
 
 
@@ -615,8 +623,7 @@ async def auto_brightness_loop(driver, cfg: Config, sensor: LightSensor) -> None
     ambient_bri = cfg.brightness / 100.0
     initialized = False
 
-    if cfg.log_level >= DEBUG:
-        print("[DISPLAY] auto-brightness started")
+    logger.debug("[DISPLAY] auto-brightness started")
 
     while True:
         lux = sensor.read_lux()
@@ -653,12 +660,10 @@ def init_buttons() -> tuple[Button | None, Button | None]:
         pio1 = rp2.PIO(1)
         btn_skip = Button(pin=Pin(10, Pin.IN, Pin.PULL_UP), pio=pio1, sm_offset=0)
         btn_lock = Button(pin=Pin(22, Pin.IN, Pin.PULL_UP), pio=pio1, sm_offset=1)
-        if config.log_level >= DEBUG:
-            print("[INPUT] buttons initialized: A=skip(GPIO10) B=lock(GPIO22) pio=1")
+        logger.debug("[INPUT] buttons initialized: A=skip(GPIO10) B=lock(GPIO22) pio=1")
         return btn_skip, btn_lock
     except Exception as e:
-        if config.log_level >= ERROR:
-            print(f"[INPUT] button init failed: {e}")
+        logger.error(f"[INPUT] button init failed: {e}")
         return None, None
 
 
@@ -677,15 +682,13 @@ async def button_input_loop(poller: MlbPoller, btn_skip: Button, btn_lock: Butto
     while True:
         for ev in btn_skip.read():
             if ev.pressed and not skip_state.pressed:
-                if config.log_level >= DEBUG:
-                    print("[INPUT] button A pressed: skip")
+                logger.debug("[INPUT] button A pressed: skip")
                 poller.skip()
             skip_state = ev
 
         for ev in btn_lock.read():
             if ev.pressed and not lock_state.pressed:
-                if config.log_level >= DEBUG:
-                    print("[INPUT] button B pressed: toggle lock")
+                logger.debug("[INPUT] button B pressed: toggle lock")
                 poller.toggle_lock()
             lock_state = ev
 
@@ -694,8 +697,8 @@ async def button_input_loop(poller: MlbPoller, btn_skip: Button, btn_lock: Butto
 
 async def main(regions: Regions, driver: Hub75Driver, health: ThreadHealth, light_sensor: LightSensor) -> None:
     """Main entry point. Display thread is already running by the time we get here."""
-    # Start watchdog to monitor display thread health
-    asyncio.create_task(watchdog_task(health))
+    # Give the logger a Core 0 heartbeat for its flash-flush policy
+    asyncio.create_task(log_flush_task())
 
     # Start auto-brightness (runs in all modes)
     asyncio.create_task(auto_brightness_loop(driver, config, light_sensor))
@@ -706,8 +709,7 @@ async def main(regions: Regions, driver: Hub75Driver, health: ThreadHealth, ligh
         app.setup_reason = "no_network_configured"
         ap = start_ap_mode()
         ap_ip = ap.ifconfig()[0]
-        if config.log_level >= DEBUG:
-            print(f"[MAIN] mode change: startup -> setup (reason=no_network_configured, ap_ssid={config.device_name}, ap_ip={ap_ip})")
+        logger.debug(f"[MAIN] mode change: startup -> setup (reason=no_network_configured, ap_ssid={config.device_name}, ap_ip={ap_ip})")
         # Explicit transition: startup → setup
         finish_startup('setup',
             reason="no_config",
@@ -715,7 +717,7 @@ async def main(regions: Regions, driver: Hub75Driver, health: ThreadHealth, ligh
             ap_ip=ap_ip
         )
         _resize_setup_regions_for_qr(regions)
-        asyncio.create_task(run_dns_server(config, ap_ip))
+        asyncio.create_task(run_dns_server(ap_ip))
     else:
         # Try to connect to configured network
         wlan = start_station_mode()
@@ -727,8 +729,7 @@ async def main(regions: Regions, driver: Hub75Driver, health: ThreadHealth, ligh
                 app.setup_reason = "connection_failed"
             ap = start_ap_mode()
             ap_ip = ap.ifconfig()[0]
-            if config.log_level >= DEBUG:
-                print(f"[MAIN] mode change: startup -> setup (reason={app.setup_reason}, ap_ssid={config.device_name}, ap_ip={ap_ip})")
+            logger.debug(f"[MAIN] mode change: startup -> setup (reason={app.setup_reason}, ap_ssid={config.device_name}, ap_ip={ap_ip})")
             # Explicit transition: startup → setup
             finish_startup('setup',
                 reason=app.setup_reason,
@@ -737,7 +738,7 @@ async def main(regions: Regions, driver: Hub75Driver, health: ThreadHealth, ligh
                 wifi_ssid=config.ssid
             )
             _resize_setup_regions_for_qr(regions)
-            asyncio.create_task(run_dns_server(config, ap_ip))
+            asyncio.create_task(run_dns_server(ap_ip))
         else:
             # Normal operation - sync time then start services
             app.setup_mode = False
@@ -747,8 +748,7 @@ async def main(regions: Regions, driver: Hub75Driver, health: ThreadHealth, ligh
             utc_offset = await _sync_time_from_backend()
 
             update_startup_display(5, "Starting", "Services")
-            if config.log_level >= DEBUG:
-                print(f"[MAIN] mode change: startup -> idle (time_sync_ok={utc_offset is not None})")
+            logger.debug(f"[MAIN] mode change: startup -> idle (time_sync_ok={utc_offset is not None})")
             # Explicit transition: startup → idle
             finish_startup('idle')
 
@@ -756,44 +756,71 @@ async def main(regions: Regions, driver: Hub75Driver, health: ThreadHealth, ligh
             logo_pool = LogoPool(api_client)
             poller = MlbPoller(config, api_client, logo_pool)
             asyncio.create_task(poller.run())
-            if config.log_level >= DEBUG:
-                print("[MAIN] mlb poller task started")
+            logger.debug("[MAIN] mlb poller task started")
 
             # Physical buttons drive the poller (skip / rotation lock)
             btn_skip, btn_lock = init_buttons()
             if btn_skip is not None and btn_lock is not None:
                 asyncio.create_task(button_input_loop(poller, btn_skip, btn_lock))
 
-    if config.log_level >= DEBUG:
-        print("[MAIN] web server starting: port=80")
-    await app.start_server(port=80)
+    # Arm the hardware watchdog once the (blocking, slow) network phase is
+    # behind us — from here on, everything is cooperative tasks the feeder
+    # can vouch for. The boot/WiFi phase stays unprotected by design.
+    if config.watchdog_enabled:
+        asyncio.create_task(watchdog_feeder(config, health))
+    else:
+        logger.debug("[WD] hardware watchdog disabled (config watchdog.enabled=false)")
+
+    # The web server must never take Core 0 down with it: retry on exit or
+    # exception. A genuinely wedged loop is the watchdog's job, not ours.
+    while True:
+        logger.debug("[MAIN] web server starting: port=80")
+        try:
+            await app.start_server(port=80)
+            logger.error("[MAIN] web server exited; restarting in 5s")
+        except Exception as e:
+            logger.error(f"[MAIN] web server crashed: {type(e).__name__}: {e}; restarting in 5s")
+        await asyncio.sleep(5)
+
+
+def _reset_cause_name() -> str:
+    """Human-readable machine.reset_cause(). Note: on RP2 chips machine.reset()
+    itself resets via the watchdog, so soft resets also report as WDT — the
+    flushed log's final lines disambiguate."""
+    cause = machine.reset_cause()
+    if cause == machine.PWRON_RESET:
+        return "power_on"
+    if cause == machine.WDT_RESET:
+        return "watchdog_or_soft_reset"
+    return f"unknown({cause})"
 
 
 if __name__ == '__main__':
+    # Preserve the previous session's flushed log before anything else can
+    # write, and stamp this boot with its reset cause for post-mortems.
+    logger.rotate_boot_log()
+    logger.debug(f"[MAIN] boot: reset_cause={_reset_cause_name()}")
+
     # Initialize display hardware and rendering primitives. All Core-0-only
     # setup (glyph caches, UI colors, state) happens here before the display
     # thread is spawned — once the thread is running, Core 0 must not touch
     # the framebuffer directly.
-    if config.log_level >= DEBUG:
-        print("[MAIN] display init started")
+    logger.debug("[MAIN] display init started")
     driver, display, writer, regions = init_display(config)
     set_display_driver(driver)
-    if config.log_level >= DEBUG:
-        print("[MAIN] display initialized")
+    logger.debug("[MAIN] display initialized")
 
     # Pre-cache digit glyphs for zero-allocation score/clock rendering on Core 1.
     from scoreboard.fonts import unscii_16
     writer.init_clock(unscii_16)   # Clock digits + colon
     writer.init_digits(unscii_16)  # Score digits
-    if config.log_level >= DEBUG:
-        print("[MAIN] glyph caches initialized")
+    logger.debug("[MAIN] glyph caches initialized")
 
     # Pre-compute UI colors so the first rendered frame has correct colors
     # rather than white defaults.
     from scoreboard.state import update_ui_colors
     update_ui_colors(config)
-    if config.log_level >= DEBUG:
-        print("[MAIN] ui colors initialized")
+    logger.debug("[MAIN] ui colors initialized")
 
     # Light sensor for auto-brightness (owns its own runtime re-init retries).
     _i2c = I2C(0, sda=Pin(0), scl=Pin(1), freq=100000)
@@ -806,6 +833,17 @@ if __name__ == '__main__':
     # Spawn the Core-1 render loop. From this point on, Core 0 only mutates
     # state; Core 1 owns the framebuffer.
     display_health = ThreadHealth()
-    start_display_thread(display, writer, regions, config, display_health)
+    start_display_thread(display, writer, regions, display_health)
 
-    asyncio.run(main(regions, driver, display_health, light_sensor))
+    # Last-resort supervisor: if Core 0's loop ever dies (the overnight
+    # failure), record the evidence and restart instead of leaving a
+    # half-alive device. The sleep keeps mpremote interruptible and
+    # throttles flash writes if a crash loop develops.
+    try:
+        asyncio.run(main(regions, driver, display_health, light_sensor))
+        logger.error("[MAIN] core 0 event loop exited unexpectedly")
+    except Exception as e:
+        logger.error(f"[MAIN] core 0 crashed: {type(e).__name__}: {e}")
+    logger.flush_to_flash()
+    time.sleep(10)
+    machine.reset()

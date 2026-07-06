@@ -76,6 +76,10 @@
 				<span class="logo-emoji">&#x1F3DF;&#xFE0F;</span>
 				<h1 class="logo-title">Pico Scoreboard</h1>
 			</div>
+			<nav class="nav">
+				<a class="btn btn-ghost btn-sm" href="#/">Settings</a>
+				<a class="btn btn-ghost btn-sm" href="#/logs">Logs</a>
+			</nav>
 			<button
 				class="btn btn-ghost btn-sm icon-btn"
 				onclick={cycleTheme}
@@ -121,6 +125,14 @@
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
+	}
+
+	.nav {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
+		margin-inline-start: auto;
+		margin-inline-end: 0.5rem;
 	}
 
 	.logo-emoji {

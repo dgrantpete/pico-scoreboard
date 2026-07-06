@@ -807,7 +807,7 @@
 		<section class="card">
 			<header class="card-header">
 				<h3 class="card-title">Advanced</h3>
-				<p class="card-description">Server and caching configuration</p>
+				<p class="card-description">Server, caching, and recovery configuration</p>
 			</header>
 			<div class="card-content">
 				<div class="field-group">
@@ -831,6 +831,54 @@
 						HTTP cache duration for static content (0 = no caching)
 					</p>
 				</div>
+
+				<hr class="separator" />
+
+				<div class="row-between">
+					<div class="label-group">
+						<label>Hardware Watchdog</label>
+						<p class="text-sm text-muted">
+							Auto-reboot if the firmware wedges. Leave off while developing
+							over USB — an armed watchdog reboots shortly after the script
+							is interrupted.
+						</p>
+					</div>
+					<label class="switch">
+						<input
+							type="checkbox"
+							checked={settingsStore.config.watchdog.enabled}
+							onchange={() =>
+								settingsStore.updateWatchdog("enabled", !settingsStore.config?.watchdog.enabled)}
+						/>
+						<span class="switch-track"><span class="switch-thumb"></span></span>
+					</label>
+				</div>
+
+				{#if settingsStore.config.watchdog.enabled}
+					<div class="field-group">
+						<label for="watchdog-timeout">Watchdog Timeout (ms)</label>
+						<input
+							id="watchdog-timeout"
+							type="number"
+							min="2000"
+							max="8300"
+							step="100"
+							value={settingsStore.config.watchdog.timeout_ms}
+						onchange={(e) => {
+							const input = e.target as HTMLInputElement;
+							const value = parseInt(input.value);
+							if (!isNaN(value) && value >= 2000 && value <= 8300) {
+								settingsStore.updateWatchdog("timeout_ms", value);
+							} else {
+								input.value = String(settingsStore.config?.watchdog.timeout_ms ?? "");
+							}
+						}}
+						/>
+						<p class="hint">
+							Reboot after this long without a healthy heartbeat (hardware max ~8300)
+						</p>
+					</div>
+				{/if}
 			</div>
 		</section>
 

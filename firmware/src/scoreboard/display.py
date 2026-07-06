@@ -18,10 +18,11 @@ from hub75 import Hub75Driver, Hub75Display, row_addressing
 from hub75.native import pack_hsv_to_rgb565
 from scoreboard.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, measure_text, ALIGN_LEFT, ALIGN_CENTER
 from scoreboard.inning_half import TOP, BOTTOM
-from scoreboard.state import StateBuffer, UiColors
+from scoreboard.state import StateBuffer, ThreadHealth, UiColors
 from scoreboard.config import Config
 from scoreboard.api_client import ScoreboardApiClient
-from scoreboard.logger import DEBUG, ERROR
+import scoreboard.logger as logger
+from scoreboard.logger import ERROR
 from scoreboard.layout import field as field_sprite
 from scoreboard.layout import base_marker as base_marker_sprite
 from scoreboard.layout import dot as dot_sprite
@@ -335,8 +336,7 @@ class LogoPool:
         self._cache = {}      # cache_key -> (slot_index, FrameBuffer)
         self._lru = []        # LRU order: oldest first
         self._free_slots = set(range(size))
-        if api_client._config.log_level >= DEBUG:
-            print(f"[DISPLAY] logo pool initialized: {size} buffers ({size * buffer_bytes // 1024} KB)")
+        logger.debug(f"[DISPLAY] logo pool initialized: {size} buffers ({size * buffer_bytes // 1024} KB)")
 
     async def get(self, cache_key: str, path: str) -> framebuf.FrameBuffer | None:
         """
@@ -361,8 +361,7 @@ class LogoPool:
             evict_key = self._lru.pop(0)
             slot_index = self._cache[evict_key][0]
             del self._cache[evict_key]
-            if self._api._config.log_level >= DEBUG:
-                print(f"[LOGO] evicted: key={evict_key} slot={slot_index}/{self._size}")
+            logger.debug(f"[LOGO] evicted: key={evict_key} slot={slot_index}/{self._size}")
 
         try:
             status, body = await self._api.get_team_logo_raw(
@@ -382,8 +381,7 @@ class LogoPool:
                 return cached[1]
 
             if status != 200:
-                if self._api._config.log_level >= ERROR:
-                    print(f"[LOGO] fetch failed: key={key} status={status}")
+                logger.error(f"[LOGO] fetch failed: key={key} status={status}")
                 self._free_slots.add(slot_index)
                 return None
 
@@ -393,13 +391,11 @@ class LogoPool:
 
             self._cache[key] = (slot_index, fb)
             self._lru.append(key)
-            if self._api._config.log_level >= DEBUG:
-                print(f"[LOGO] cached: key={key} slot={slot_index}/{self._size}")
+            logger.debug(f"[LOGO] cached: key={key} slot={slot_index}/{self._size}")
             return fb
 
         except Exception as e:
-            if self._api._config.log_level >= ERROR:
-                print(f"[LOGO] fetch error: key={key} error_type={type(e).__name__} {e}")
+            logger.error(f"[LOGO] fetch error: key={key} error_type={type(e).__name__} {e}")
             self._free_slots.add(slot_index)
             return None
 
@@ -679,13 +675,15 @@ def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, st
 _STATIC_MODES = ('idle', 'no_games', 'error', 'startup')
 
 
-def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regions, config: Config | None = None) -> None:
+def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regions, health: ThreadHealth) -> None:
     """
     Main entry point for Core 1 display thread.
 
     Runs a constant 20 FPS loop latching state from the mailbox and
     rendering to the display. Static screens are only re-rendered when a
     new commit lands, so an idle scoreboard isn't redrawing 20x/second.
+    `health.frame_seq` is bumped every tick (rendered or skipped) so the
+    Core 0 watchdog feeder can distinguish a hung thread from a quiet one.
 
     Core 1 avoids heap allocation on the steady-state path: all strings are
     pre-built on Core 0, glyph blits reuse pre-allocated specs, and scores
@@ -697,13 +695,15 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
     """
     from scoreboard.state import acquire_display_state
 
-    if config is not None and config.log_level >= DEBUG:
-        print("[DISPLAY] thread starting: core=1 rate=20fps")
+    logger.debug("[DISPLAY] thread starting: core=1 rate=20fps")
 
     last_rendered_seq = -1
     last_frame_had_toast = False
 
     while True:
+        # Heartbeat for the watchdog feeder: per tick, not per render.
+        health.frame_seq = (health.frame_seq + 1) & 0x3FFFFFF
+
         try:
             now_ms = time.ticks_ms()
 
@@ -723,8 +723,10 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
                 last_frame_had_toast = toast_active
 
         except Exception as e:
-            if config is not None and config.log_level >= ERROR:
-                print(f"[DISPLAY] thread error: {e}")
+            # Guarded: this path can repeat every frame while erroring, so
+            # don't build the message when ERROR logging is off.
+            if logger.level >= ERROR:
+                logger.error(f"[DISPLAY] thread error: {e}")
 
         # Constant 20 FPS tick for all animations
         time.sleep_ms(50)

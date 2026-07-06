@@ -250,6 +250,48 @@ select {
 	}
 }
 
+/* ---- Switch (toggle) ---- */
+.switch {
+	position: relative;
+	display: inline-flex;
+	cursor: pointer;
+}
+
+.switch input {
+	position: absolute;
+	opacity: 0;
+	width: 0;
+	height: 0;
+}
+
+.switch-track {
+	width: 2.75rem;
+	height: 1.5rem;
+	border-radius: 9999px;
+	background: var(--input);
+	transition: background 0.2s;
+	display: flex;
+	align-items: center;
+	padding: 0.125rem;
+}
+
+.switch input:checked + .switch-track {
+	background: var(--primary);
+}
+
+.switch-thumb {
+	width: 1.25rem;
+	height: 1.25rem;
+	border-radius: 50%;
+	background: var(--background);
+	transition: transform 0.2s;
+	box-shadow: 0 1px 2px oklch(0 0 0 / 15%);
+}
+
+.switch input:checked + .switch-track .switch-thumb {
+	transform: translateX(1.25rem);
+}
+
 /* ---- Progress ---- */
 progress {
 	width: 100%;

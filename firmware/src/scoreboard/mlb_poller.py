@@ -14,11 +14,25 @@ Button input hooks (called from the Core 0 input task, same asyncio loop):
 import time
 import uasyncio as asyncio
 
-from .api_client import ScoreboardApiClient
+from .api_client import ApiError, ScoreboardApiClient
 from .config import Config
 from .display import LogoPool, play_text_display_ms
-from .logger import DEBUG, ERROR
+from .mlb import DeserializeError
+import scoreboard.logger as logger
 from .state import get_write_state, commit_state, set_error, set_toast
+
+
+def _friendly_error(e: Exception) -> tuple[str, str]:
+    """Map an exception to (kind, detail) lines fit for the LED panel."""
+    if isinstance(e, asyncio.TimeoutError):
+        return ("Timeout", "backend not responding")
+    if isinstance(e, ApiError):
+        return (f"HTTP {e.status_code}", e.error)
+    if isinstance(e, DeserializeError):
+        return ("Bad response", f"{e.path} {e.message}")
+    if isinstance(e, OSError):
+        return ("Network error", str(e))
+    return (type(e).__name__, str(e))
 
 
 class MlbPoller:
@@ -33,6 +47,7 @@ class MlbPoller:
         self._current_index: int = 0
         self._last_rotation_ms: int | None = None
         self._consecutive_failures: int = 0
+        self._first_failure_ms: int = 0
         self._animation_reset: bool = True
         self._locked: bool = False
         self._skip_requested: bool = False
@@ -52,20 +67,34 @@ class MlbPoller:
         """Toggle rotation lock (button input). The current game keeps polling."""
         self._locked = not self._locked
         set_toast("LOCKED" if self._locked else "UNLOCKED")
-        if self._config.log_level >= DEBUG:
-            print(f"[MLB] rotation lock: {self._locked}")
+        logger.debug(f"[MLB] rotation lock: {self._locked}")
 
     async def run(self) -> None:
         while True:
             try:
                 await self._tick()
+                if self._consecutive_failures > 0:
+                    logger.error(
+                        f"[MLB] recovered after {self._consecutive_failures} failed polls"
+                    )
                 self._consecutive_failures = 0
             except Exception as e:
+                now = time.ticks_ms()
+                if self._consecutive_failures == 0:
+                    self._first_failure_ms = now
                 self._consecutive_failures += 1
-                if self._config.log_level >= ERROR:
-                    print(f"[MLB] poll failed ({self._consecutive_failures}/{self.MAX_FAILURES}): {e}")
+                logger.error(
+                    f"[MLB] poll failed ({self._consecutive_failures}/{self.MAX_FAILURES}): "
+                    f"{type(e).__name__}: {e}"
+                )
                 if self._consecutive_failures >= self.MAX_FAILURES:
-                    set_error("API ERROR", [str(e)[:20]])
+                    kind, detail = _friendly_error(e)
+                    failing_mins = time.ticks_diff(now, self._first_failure_ms) // 60_000
+                    lines = [kind, detail[:25]]
+                    if len(detail) > 25:
+                        lines.append(detail[25:50])
+                    lines.append(f"failing for {failing_mins}m")
+                    set_error("API ERROR", lines)
 
             # Sleep until the next poll, but wake immediately on skip().
             try:
@@ -114,8 +143,7 @@ class MlbPoller:
         self._etag = etag
         if self._current_index >= len(self._game_ids):
             self._current_index = 0
-        if self._config.log_level >= DEBUG:
-            print(f"[MLB] game list refreshed: count={len(self._game_ids)} etag={self._etag}")
+        logger.debug(f"[MLB] game list refreshed: count={len(self._game_ids)} etag={self._etag}")
 
     async def _rotate(self, now: int) -> None:
         await self._refresh_list(initial=False)

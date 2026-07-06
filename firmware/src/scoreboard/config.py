@@ -7,9 +7,18 @@ The config file is stored at the root of the Pico filesystem.
 
 import json
 from hub75 import gamma
+# Module-path import (not `from scoreboard import logger`): config is itself
+# imported during the scoreboard package's __init__, and binding the submodule
+# by full path is safe regardless of the package's partial-init state.
+import scoreboard.logger as logger
 from scoreboard.logger import NONE, ERROR, DEBUG
 
 _LOG_LEVEL_MAP = {"none": NONE, "error": ERROR, "debug": DEBUG}
+
+# RP2350 hardware watchdog limits (machine.WDT): max ~8.3s, and we keep a
+# sane floor so the feeder (timeout/4) never has to run more than ~2x/sec.
+_WDT_TIMEOUT_MIN_MS = 2000
+_WDT_TIMEOUT_MAX_MS = 8300
 
 # Default config path on Pico filesystem
 CONFIG_PATH = "/config.json"
@@ -47,6 +56,13 @@ _DEFAULTS = {
     },
     "server": {
         "cache_max_age_seconds": 600
+    },
+    # Hardware watchdog. Default OFF: once armed, machine.WDT cannot be
+    # disarmed, and it will reboot the device ~timeout_ms after mpremote
+    # interrupts the script — enable per-device once it's deployed/stable.
+    "watchdog": {
+        "enabled": False,
+        "timeout_ms": 8000
     }
 }
 
@@ -117,6 +133,7 @@ class Config:
         self._path: str = path
         self._data: dict = self._load()
         self._log_level: int = self._compute_log_level()
+        logger.set_level(self._log_level)
 
     def _load(self) -> dict:
         """Load config from file, merging with defaults.
@@ -139,9 +156,9 @@ class Config:
                 merged["display"]["game_rotation_seconds"],
             )
         except CadenceError as e:
-            # Unconditional print: this is boot-critical and the log level
-            # itself comes from the (possibly bad) file being loaded.
-            print(f"[CONFIG] invalid cadence in {self._path}, using defaults: {e}")
+            # logger.error is safe here: the module default level is DEBUG
+            # until this Config finishes loading and pushes the real level.
+            logger.error(f"[CONFIG] invalid cadence in {self._path}, using defaults: {e}")
             merged["display"]["poll_interval_seconds"] = _DEFAULTS["display"]["poll_interval_seconds"]
             merged["display"]["game_rotation_seconds"] = _DEFAULTS["display"]["game_rotation_seconds"]
         return merged
@@ -153,8 +170,8 @@ class Config:
         """Reload configuration from file."""
         self._data = self._load()
         self._log_level = self._compute_log_level()
-        if self.log_level >= DEBUG:
-            print(f"[CONFIG] reloaded: {self._path}")
+        logger.set_level(self._log_level)
+        logger.debug(f"[CONFIG] reloaded: {self._path}")
 
     def save(self) -> None:
         """Write current configuration to file."""
@@ -185,9 +202,9 @@ class Config:
         self._data[section][key] = value
         if section == "log":
             self._log_level = self._compute_log_level()
+            logger.set_level(self._log_level)
         self.save()
-        if self.log_level >= DEBUG:
-            print(f"[CONFIG] updated: {section}.{key}={value}")
+        logger.debug(f"[CONFIG] updated: {section}.{key}={value}")
 
     def update_many(self, data: dict) -> None:
         """
@@ -222,9 +239,9 @@ class Config:
             return
         if "log" in data:
             self._log_level = self._compute_log_level()
+            logger.set_level(self._log_level)
         self.save()
-        if self.log_level >= DEBUG:
-            print(f"[CONFIG] updated: {', '.join(data.keys())} (batched)")
+        logger.debug(f"[CONFIG] updated: {', '.join(data.keys())} (batched)")
 
     def get(self, section: str, key: str, default: object = None) -> object:
         """
@@ -332,6 +349,22 @@ class Config:
     def cache_max_age_seconds(self) -> int:
         """Cache-Control max-age for static content (0 = no caching)."""
         return self._data["server"]["cache_max_age_seconds"]
+
+    # Watchdog properties
+    @property
+    def watchdog_enabled(self) -> bool:
+        """Whether the hardware watchdog is armed at runtime."""
+        return bool(self._data["watchdog"]["enabled"])
+
+    @property
+    def watchdog_timeout_ms(self) -> int:
+        """Hardware watchdog timeout, clamped to the RP2350's valid range."""
+        raw = int(self._data["watchdog"]["timeout_ms"])
+        if raw < _WDT_TIMEOUT_MIN_MS:
+            return _WDT_TIMEOUT_MIN_MS
+        if raw > _WDT_TIMEOUT_MAX_MS:
+            return _WDT_TIMEOUT_MAX_MS
+        return raw
 
     # Log properties
     @property

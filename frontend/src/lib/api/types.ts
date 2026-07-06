@@ -42,6 +42,14 @@ export interface ServerConfig {
 
 export type ServerConfigUpdate = Partial<ServerConfig>;
 
+// Hardware watchdog configuration
+export interface WatchdogConfig {
+	enabled: boolean; // default false: an armed WDT reboots ~8s after mpremote interrupts the script
+	timeout_ms: number; // clamped on-device to 2000..8300 (RP2350 hardware max)
+}
+
+export type WatchdogConfigUpdate = Partial<WatchdogConfig>;
+
 // Colors configuration (RGB 0-255)
 export interface ColorsConfig {
 	primary: Color;
@@ -60,6 +68,7 @@ export interface Config {
 	display: DisplayConfig;
 	colors: ColorsConfig;
 	server: ServerConfig;
+	watchdog: WatchdogConfig;
 }
 
 // Partial configuration for PUT requests
@@ -69,6 +78,7 @@ export interface ConfigUpdate {
 	display?: DisplayConfigUpdate;
 	colors?: ColorsConfigUpdate;
 	server?: ServerConfigUpdate;
+	watchdog?: WatchdogConfigUpdate;
 }
 
 // Network status response
@@ -99,4 +109,8 @@ export interface Color {
 	g: number;
 	b: number;
 }
+
+// One device log entry: [seq, unix_ts, level, message].
+// level: 1 = ERROR, 2 = DEBUG (scoreboard/logger.py).
+export type LogEntry = [number, number, number, string];
 

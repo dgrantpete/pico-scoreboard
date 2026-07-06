@@ -42,6 +42,9 @@ function buildUpdateFromTouched(config: Config, touchedFields: Set<string>): Con
 		} else if (section === 'server') {
 			update.server = update.server || {};
 			(update.server as Record<string, unknown>)[field] = value;
+		} else if (section === 'watchdog') {
+			update.watchdog = update.watchdog || {};
+			(update.watchdog as Record<string, unknown>)[field] = value;
 		}
 	}
 
@@ -205,6 +208,16 @@ export function createSettingsStore() {
 			if (config) {
 				config.server[key] = value;
 				this.markTouched(`server.${key}`);
+			}
+		},
+
+		/**
+		 * Update a watchdog field and mark it as touched
+		 */
+		updateWatchdog<K extends keyof Config['watchdog']>(key: K, value: Config['watchdog'][K]) {
+			if (config) {
+				config.watchdog[key] = value;
+				this.markTouched(`watchdog.${key}`);
 			}
 		},
 

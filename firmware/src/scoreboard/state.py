@@ -26,8 +26,24 @@ import framebuf
 
 from hub75 import Hub75Driver, gamma as gamma_mod
 from scoreboard.config import Config
-from scoreboard.logger import DEBUG
+import scoreboard.logger as logger
 from scoreboard.mlb import LiveGame
+
+
+class ThreadHealth:
+    """
+    Cross-core health signals for the display thread.
+
+    Core 1 writes both fields; Core 0's watchdog feeder reads them:
+    - `healthy` flips False when the render loop crashes out.
+    - `frame_seq` increments once per render-loop tick (not per render, so
+      the static-screen skip can't false-positive). A stalled value with
+      `healthy` still True means the thread is *hung*, not crashed.
+    """
+
+    def __init__(self) -> None:
+        self.healthy: bool = False
+        self.frame_seq: int = 0
 
 
 # Length cap for one line of spleen_5x8 text across the full display.
@@ -448,7 +464,7 @@ def set_setup_mode(reason: str, ap_ssid: str = '', ap_ip: str = '', wifi_ssid: s
             setup.qr_height = qr_h
             setup.qr_palette = qr_palette
         except Exception as e:
-            print(f"[MAIN] qr generation failed: {e}")
+            logger.error(f"[MAIN] qr generation failed: {e}")
             setup.qr_fb = None
             setup.qr_width = 0
             setup.qr_height = 0
@@ -503,8 +519,7 @@ def update_ui_colors(config: Config) -> None:
     colors.clock_normal = to_rgb565(config.get_color('clock_normal'))
     colors.clock_warning = to_rgb565(config.get_color('clock_warning'))
     commit_state()
-    if config.log_level >= DEBUG:
-        print("[CONFIG] ui colors updated from config")
+    logger.debug("[CONFIG] ui colors updated from config")
 
 
 # =============================================================================
@@ -527,8 +542,7 @@ def update_display_frequency(config: Config) -> None:
 
     data_freq = config.data_frequency_hz
     _display_driver.set_frequency(data_freq)
-    if config.log_level >= DEBUG:
-        print(f"[CONFIG] display frequency updated: {data_freq // 1000}kHz")
+    logger.debug(f"[CONFIG] display frequency updated: {data_freq // 1000}kHz")
 
 
 def update_display_refresh_rate(config: Config) -> None:
@@ -537,8 +551,7 @@ def update_display_refresh_rate(config: Config) -> None:
         return
 
     rate = _display_driver.set_target_refresh_rate(config.target_refresh_rate)
-    if config.log_level >= DEBUG:
-        print(f"[CONFIG] display refresh rate updated: {rate:.1f}Hz")
+    logger.debug(f"[CONFIG] display refresh rate updated: {rate:.1f}Hz")
 
 
 def update_display_gamma(config: Config) -> None:
@@ -548,13 +561,12 @@ def update_display_gamma(config: Config) -> None:
 
     gamma_value = config.gamma
     _display_driver.set_gamma(gamma_value)
-    if config.log_level >= DEBUG:
-        if gamma_value is None:
-            print("[CONFIG] display gamma updated: none (linear)")
-        elif isinstance(gamma_value, gamma_mod.Power):
-            print(f"[CONFIG] display gamma updated: power={gamma_value.value}")
-        else:
-            print("[CONFIG] display gamma updated: srgb")
+    if gamma_value is None:
+        logger.debug("[CONFIG] display gamma updated: none (linear)")
+    elif isinstance(gamma_value, gamma_mod.Power):
+        logger.debug(f"[CONFIG] display gamma updated: power={gamma_value.value}")
+    else:
+        logger.debug("[CONFIG] display gamma updated: srgb")
 
 
 def update_display_blanking_time(config: Config) -> None:
@@ -564,5 +576,4 @@ def update_display_blanking_time(config: Config) -> None:
 
     _display_driver.set_blanking_time(config.blanking_time_ns)
     rate = _display_driver.set_target_refresh_rate(config.target_refresh_rate)
-    if config.log_level >= DEBUG:
-        print(f"[CONFIG] display blanking time updated: {config.blanking_time_ns}ns (refresh recomputed: {rate:.1f}Hz)")
+    logger.debug(f"[CONFIG] display blanking time updated: {config.blanking_time_ns}ns (refresh recomputed: {rate:.1f}Hz)")

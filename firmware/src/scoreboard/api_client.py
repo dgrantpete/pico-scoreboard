@@ -12,6 +12,7 @@ import time
 import aiohttp
 import uasyncio as asyncio
 from .config import Config
+import scoreboard.logger as logger
 from .logger import DEBUG
 from .mlb import LiveGame, parse_game_ids, STRUCT_CONTENT_TYPE
 
@@ -43,10 +44,11 @@ class ApiError(Exception):
         super().__init__(f"{status_code}: {error} - {message}")
 
 
-def _log_api(config, tag, path, status, start_ms):
-    if config.log_level >= DEBUG:
+def _log_api(tag, path, status, start_ms):
+    # Guarded: runs on every request; skip the f-string build below DEBUG.
+    if logger.level >= DEBUG:
         elapsed = time.ticks_diff(time.ticks_ms(), start_ms)
-        print(f"[{tag}] GET {path}: status={status} elapsed={elapsed}ms")
+        logger.debug(f"[{tag}] GET {path}: status={status} elapsed={elapsed}ms")
 
 
 def _raise_api_error(status: int, body) -> None:
@@ -127,7 +129,7 @@ class ScoreboardApiClient:
         _t = time.ticks_ms()
         async with self._session.get(url, headers=headers, ssl=True) as resp:
             result = (resp.status, await resp.readinto(_response_mv))
-            _log_api(self._config, "LOGO", path, resp.status, _t)
+            _log_api("LOGO", path, resp.status, _t)
             return result
 
     async def _get_struct_inner(self, url: str, path: str, tag: str, headers: dict):
@@ -139,7 +141,7 @@ class ScoreboardApiClient:
         _t = time.ticks_ms()
         async with self._session.get(url, headers=headers, ssl=True) as resp:
             filled = await resp.readinto(_response_mv)
-            _log_api(self._config, tag, path, resp.status, _t)
+            _log_api(tag, path, resp.status, _t)
             if resp.status >= 400:
                 _raise_api_error(resp.status, filled)
             return filled
@@ -170,11 +172,11 @@ class ScoreboardApiClient:
                         break
 
             if resp.status == 304:
-                _log_api(self._config, "MLB-GAMES", "/mlb/games", resp.status, _t)
+                _log_api("MLB-GAMES", "/mlb/games", resp.status, _t)
                 return (304, [], etag)
 
             filled = await resp.readinto(_response_mv)
-            _log_api(self._config, "MLB-GAMES", "/mlb/games", resp.status, _t)
+            _log_api("MLB-GAMES", "/mlb/games", resp.status, _t)
 
             if resp.status >= 400:
                 _raise_api_error(resp.status, filled)
