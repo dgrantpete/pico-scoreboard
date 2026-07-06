@@ -1,27 +1,51 @@
 """
-MLB live-game data model and JSON deserialization.
+MLB live-game data model and binary wire-format deserialization.
 
-Mirrors the backend's outbound types in `backend/src/mlb.rs`. The shapes are
-intentionally identical so the wire protocol is a direct structural match.
-Field names are snake_case (Rust serde default).
+The backend serves game state as a fixed-layout packed struct (negotiated
+via `Accept: application/x-scoreboard-struct`). The NORMATIVE spec lives in
+`backend/src/wire.rs`; this module must parse exactly that layout. Version
+mismatches fail loudly (a stray JSON body starts with '{' or '[' and fails
+the version check immediately).
 
-Model classes follow the HUB75 library's value-type convention: plain classes
-with underscore-prefixed private fields and `@property` getters. This matches
-`Pi-Pico-Hub75-Driver/src/lib/hub75/row_addressing.py` and
-`Pi-Pico-Hub75-Driver/src/lib/hub75/gamma.py`.
+Parsing allocates only the model objects and their strings — no intermediate
+dict tree, no json module. The fixed numeric section is decoded in a single
+C-level `struct.unpack_from`; the strings section is a bounds-checked
+length-prefixed walk over the response memoryview.
+
+Model classes are plain-attribute value types: instances are only ever built
+by `from_struct` and are treated as immutable after construction. The display
+thread reads these fields at 20 FPS, so attribute access stays on
+MicroPython's fast path — no property descriptors.
 """
 
-import json
+import struct
 
-from .inning_half import Top, Middle, Bottom, End
+from .inning_half import Top, Middle, Bottom, End, TOP, MIDDLE, BOTTOM, END
+
+# Must match backend/src/wire.rs.
+WIRE_VERSION = 1
+STRUCT_CONTENT_TYPE = "application/x-scoreboard-struct"
+
+# Fixed section: version, flags, inning_number, inning_half, balls, strikes,
+# outs, bases_bitfield, away_score, home_score, then away/home color pairs.
+_FIXED_FMT = "<BBBBBBBBHHIIII"
+_FIXED_SIZE = struct.calcsize(_FIXED_FMT)  # 28
+
+_FLAG_AT_BAT = 0x01
+_BASE_FIRST = 0x01
+_BASE_SECOND = 0x02
+_BASE_THIRD = 0x04
+
+# Wire code (index) -> inning-half singleton.
+_HALVES = (TOP, MIDDLE, BOTTOM, END)
 
 
 class DeserializeError(Exception):
     """
-    Raised when a JSON payload doesn't match the expected MLB shape.
+    Raised when a payload doesn't match the expected wire format.
 
     Attributes:
-        path: JSON path of the offending field (e.g. "$.home.score").
+        path: byte-offset context of the failure (e.g. "@28").
         message: Human-readable description of the mismatch.
     """
 
@@ -31,253 +55,86 @@ class DeserializeError(Exception):
         super().__init__(f"{path}: {message}")
 
 
-def _req_str(d: dict[str, object], key: str, parent_path: str) -> str:
-    if key not in d:
-        raise DeserializeError(parent_path + "." + key, "missing required field")
-    v = d[key]
-    if not isinstance(v, str):
+def _check_version(buf, end: int) -> None:
+    if end < 1:
+        raise DeserializeError("@0", "empty payload")
+    version = buf[0]
+    if version != WIRE_VERSION:
         raise DeserializeError(
-            parent_path + "." + key,
-            f"expected string, got {type(v).__name__}",
+            "@0", f"unsupported wire version {version} (expected {WIRE_VERSION})"
         )
-    return v
 
 
-def _req_int(d: dict[str, object], key: str, parent_path: str) -> int:
-    if key not in d:
-        raise DeserializeError(parent_path + "." + key, "missing required field")
-    v = d[key]
-    # Explicitly reject bool since `isinstance(True, int)` is True in Python.
-    if type(v) is bool:
+def _read_str(buf, offset: int, end: int, what: str) -> tuple[str, int]:
+    """Read one u8-length-prefixed UTF-8 string. Returns (text, next_offset)."""
+    if offset >= end:
+        raise DeserializeError(f"@{offset}", f"truncated before {what} length")
+    n = buf[offset]
+    offset += 1
+    if offset + n > end:
         raise DeserializeError(
-            parent_path + "." + key,
-            f"expected int, got {type(v).__name__}",
+            f"@{offset}", f"truncated inside {what}: need {n} bytes, have {end - offset}"
         )
-    if not isinstance(v, int):
-        raise DeserializeError(
-            parent_path + "." + key,
-            f"expected int, got {type(v).__name__}",
-        )
-    return v
-
-
-def _req_bool(d: dict[str, object], key: str, parent_path: str) -> bool:
-    if key not in d:
-        raise DeserializeError(parent_path + "." + key, "missing required field")
-    v = d[key]
-    if not isinstance(v, bool):
-        raise DeserializeError(
-            parent_path + "." + key,
-            f"expected bool, got {type(v).__name__}",
-        )
-    return v
-
-
-def _req_dict(
-    d: dict[str, object], key: str, parent_path: str
-) -> dict[str, object]:
-    if key not in d:
-        raise DeserializeError(parent_path + "." + key, "missing required field")
-    v = d[key]
-    if not isinstance(v, dict):
-        raise DeserializeError(
-            parent_path + "." + key,
-            f"expected object, got {type(v).__name__}",
-        )
-    return v  # type: ignore[return-value]
+    return str(buf[offset:offset + n], "utf-8"), offset + n
 
 
 class TeamColors:
     """Primary / alternate team colors as packed RGB integers."""
 
     def __init__(self, primary: int, alternate: int) -> None:
-        self._primary = primary
-        self._alternate = alternate
-
-    @property
-    def primary(self) -> int:
-        return self._primary
-
-    @property
-    def alternate(self) -> int:
-        return self._alternate
-
-    @classmethod
-    def from_dict(cls, d: dict[str, object], path: str) -> "TeamColors":
-        return cls(
-            primary=_req_int(d, "primary", path),
-            alternate=_req_int(d, "alternate", path),
-        )
+        self.primary = primary
+        self.alternate = alternate
 
 
 class TeamState:
     """One team's snapshot: abbreviation, current score, and colors."""
 
     def __init__(self, abbreviation: str, score: int, colors: TeamColors) -> None:
-        self._abbreviation = abbreviation
-        self._score = score
-        self._colors = colors
-
-    @property
-    def abbreviation(self) -> str:
-        return self._abbreviation
-
-    @property
-    def score(self) -> int:
-        return self._score
-
-    @property
-    def colors(self) -> TeamColors:
-        return self._colors
-
-    @classmethod
-    def from_dict(cls, d: dict[str, object], path: str) -> "TeamState":
-        return cls(
-            abbreviation=_req_str(d, "abbreviation", path),
-            score=_req_int(d, "score", path),
-            colors=TeamColors.from_dict(
-                _req_dict(d, "colors", path), path + ".colors"
-            ),
-        )
+        self.abbreviation = abbreviation
+        self.score = score
+        self.colors = colors
 
 
 class Count:
     """Ball/strike/out count for the current at-bat."""
 
     def __init__(self, balls: int, strikes: int, outs: int) -> None:
-        self._balls = balls
-        self._strikes = strikes
-        self._outs = outs
-
-    @property
-    def balls(self) -> int:
-        return self._balls
-
-    @property
-    def strikes(self) -> int:
-        return self._strikes
-
-    @property
-    def outs(self) -> int:
-        return self._outs
-
-    @classmethod
-    def from_dict(cls, d: dict[str, object], path: str) -> "Count":
-        return cls(
-            balls=_req_int(d, "balls", path),
-            strikes=_req_int(d, "strikes", path),
-            outs=_req_int(d, "outs", path),
-        )
+        self.balls = balls
+        self.strikes = strikes
+        self.outs = outs
 
 
 class Bases:
     """Occupancy of the three bases."""
 
     def __init__(self, first: bool, second: bool, third: bool) -> None:
-        self._first = first
-        self._second = second
-        self._third = third
-
-    @property
-    def first(self) -> bool:
-        return self._first
-
-    @property
-    def second(self) -> bool:
-        return self._second
-
-    @property
-    def third(self) -> bool:
-        return self._third
-
-    @classmethod
-    def from_dict(cls, d: dict[str, object], path: str) -> "Bases":
-        return cls(
-            first=_req_bool(d, "first", path),
-            second=_req_bool(d, "second", path),
-            third=_req_bool(d, "third", path),
-        )
+        self.first = first
+        self.second = second
+        self.third = third
 
 
 class AtBat:
     """Current pitcher / batter matchup."""
 
     def __init__(self, pitcher: str, batter: str) -> None:
-        self._pitcher = pitcher
-        self._batter = batter
-
-    @property
-    def pitcher(self) -> str:
-        return self._pitcher
-
-    @property
-    def batter(self) -> str:
-        return self._batter
-
-    @classmethod
-    def from_dict(cls, d: dict[str, object], path: str) -> "AtBat":
-        return cls(
-            pitcher=_req_str(d, "pitcher", path),
-            batter=_req_str(d, "batter", path),
-        )
+        self.pitcher = pitcher
+        self.batter = batter
 
 
 class LastPlay:
     """Most recent play's ESPN id and human-readable description."""
 
     def __init__(self, id: str, text: str) -> None:
-        self._id = id
-        self._text = text
-
-    @property
-    def id(self) -> str:
-        return self._id
-
-    @property
-    def text(self) -> str:
-        return self._text
-
-    @classmethod
-    def from_dict(cls, d: dict[str, object], path: str) -> "LastPlay":
-        return cls(
-            id=_req_str(d, "id", path),
-            text=_req_str(d, "text", path),
-        )
+        self.id = id
+        self.text = text
 
 
 class Inning:
     """Current inning number and half."""
 
-    _HALF_MAP: dict[str, type] = {
-        "top": Top,
-        "middle": Middle,
-        "bottom": Bottom,
-        "end": End,
-    }
-
     def __init__(self, number: int, half: Top | Middle | Bottom | End) -> None:
-        self._number = number
-        self._half = half
-
-    @property
-    def number(self) -> int:
-        return self._number
-
-    @property
-    def half(self) -> Top | Middle | Bottom | End:
-        return self._half
-
-    @classmethod
-    def from_dict(cls, d: dict[str, object], path: str) -> "Inning":
-        number = _req_int(d, "number", path)
-        half_str = _req_str(d, "half", path)
-        half_cls = cls._HALF_MAP.get(half_str)
-        if half_cls is None:
-            raise DeserializeError(
-                path + ".half",
-                f"expected one of {list(cls._HALF_MAP)}, got '{half_str}'",
-            )
-        return cls(number, half_cls())
+        self.number = number
+        self.half = half
 
 
 class LiveGame:
@@ -294,86 +151,82 @@ class LiveGame:
         at_bat: AtBat | None,
         last_play: LastPlay,
     ) -> None:
-        self._game_id = game_id
-        self._inning = inning
-        self._home = home
-        self._away = away
-        self._count = count
-        self._bases = bases
-        self._at_bat = at_bat
-        self._last_play = last_play
-
-    @property
-    def game_id(self) -> str:
-        return self._game_id
-
-    @property
-    def inning(self) -> Inning:
-        return self._inning
-
-    @property
-    def home(self) -> TeamState:
-        return self._home
-
-    @property
-    def away(self) -> TeamState:
-        return self._away
-
-    @property
-    def count(self) -> Count:
-        return self._count
-
-    @property
-    def bases(self) -> Bases:
-        return self._bases
-
-    @property
-    def at_bat(self) -> AtBat | None:
-        return self._at_bat
-
-    @property
-    def last_play(self) -> LastPlay:
-        return self._last_play
+        self.game_id = game_id
+        self.inning = inning
+        self.home = home
+        self.away = away
+        self.count = count
+        self.bases = bases
+        self.at_bat = at_bat
+        self.last_play = last_play
 
     @classmethod
-    def from_json(cls, body: bytes | str) -> "LiveGame":
-        try:
-            raw = json.loads(body)
-        except ValueError as e:
-            raise DeserializeError("$", f"invalid JSON: {e}")
-        if not isinstance(raw, dict):
+    def from_struct(cls, buf) -> "LiveGame":
+        """Parse a v1 LiveGame payload (see backend/src/wire.rs for the spec)."""
+        end = len(buf)
+        _check_version(buf, end)
+        if end < _FIXED_SIZE:
             raise DeserializeError(
-                "$", f"expected object, got {type(raw).__name__}"
+                "@0", f"truncated fixed section: {end} < {_FIXED_SIZE}"
             )
-        return cls.from_dict(raw)  # type: ignore[arg-type]
 
-    @classmethod
-    def from_dict(cls, d: dict[str, object]) -> "LiveGame":
-        path = "$"
-        at_bat_raw = d.get("at_bat")
-        at_bat: AtBat | None
-        if at_bat_raw is None:
-            at_bat = None
-        elif isinstance(at_bat_raw, dict):
-            at_bat = AtBat.from_dict(
-                at_bat_raw, path + ".at_bat"  # type: ignore[arg-type]
-            )
-        else:
-            raise DeserializeError(
-                path + ".at_bat",
-                f"expected object or null, got {type(at_bat_raw).__name__}",
-            )
+        (
+            _version, flags, inning_number, half_code,
+            balls, strikes, outs, bases_bits,
+            away_score, home_score,
+            away_primary, away_alternate, home_primary, home_alternate,
+        ) = struct.unpack_from(_FIXED_FMT, buf, 0)
+
+        if half_code >= len(_HALVES):
+            raise DeserializeError("@3", f"invalid inning half code: {half_code}")
+
+        o = _FIXED_SIZE
+        game_id, o = _read_str(buf, o, end, "game_id")
+        away_abbr, o = _read_str(buf, o, end, "away abbreviation")
+        home_abbr, o = _read_str(buf, o, end, "home abbreviation")
+
+        at_bat: AtBat | None = None
+        if flags & _FLAG_AT_BAT:
+            pitcher, o = _read_str(buf, o, end, "pitcher")
+            batter, o = _read_str(buf, o, end, "batter")
+            at_bat = AtBat(pitcher, batter)
+
+        play_id, o = _read_str(buf, o, end, "last play id")
+        play_text, o = _read_str(buf, o, end, "last play text")
+
+        if o != end:
+            raise DeserializeError(f"@{o}", f"{end - o} unexpected trailing bytes")
+
         return cls(
-            game_id=_req_str(d, "game_id", path),
-            inning=Inning.from_dict(
-                _req_dict(d, "inning", path), path + ".inning"
+            game_id=game_id,
+            inning=Inning(inning_number, _HALVES[half_code]),
+            home=TeamState(home_abbr, home_score, TeamColors(home_primary, home_alternate)),
+            away=TeamState(away_abbr, away_score, TeamColors(away_primary, away_alternate)),
+            count=Count(balls, strikes, outs),
+            bases=Bases(
+                bool(bases_bits & _BASE_FIRST),
+                bool(bases_bits & _BASE_SECOND),
+                bool(bases_bits & _BASE_THIRD),
             ),
-            home=TeamState.from_dict(_req_dict(d, "home", path), path + ".home"),
-            away=TeamState.from_dict(_req_dict(d, "away", path), path + ".away"),
-            count=Count.from_dict(_req_dict(d, "count", path), path + ".count"),
-            bases=Bases.from_dict(_req_dict(d, "bases", path), path + ".bases"),
             at_bat=at_bat,
-            last_play=LastPlay.from_dict(
-                _req_dict(d, "last_play", path), path + ".last_play"
-            ),
+            last_play=LastPlay(play_id, play_text),
         )
+
+
+def parse_game_ids(buf) -> list[str]:
+    """Parse a v1 game-id-list payload (see backend/src/wire.rs for the spec)."""
+    end = len(buf)
+    _check_version(buf, end)
+    if end < 2:
+        raise DeserializeError("@1", "truncated before id count")
+    count = buf[1]
+
+    ids: list[str] = []
+    o = 2
+    for _ in range(count):
+        game_id, o = _read_str(buf, o, end, "game id")
+        ids.append(game_id)
+
+    if o != end:
+        raise DeserializeError(f"@{o}", f"{end - o} unexpected trailing bytes")
+    return ids
