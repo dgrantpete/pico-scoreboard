@@ -5,6 +5,15 @@
 > of leaving TODOs in code. Remove items as they land; delete the file when it's
 > empty.
 
+> Ops note: device logs live in a RAM ring (`#/logs` in the webapp,
+> `GET /api/logs`) and flush to flash on errors. When the network is dead,
+> read them over USB: `mpremote cat :/logs/previous.log` (or `current.log`).
+>
+> Flashing: `python tools/build.py flash` reboots the device into safe mode
+> first (no Core 1 thread — mpremote hangs otherwise, micropython#13476).
+> Manual escape hatch when the device is wedged: hold Button A (GPIO 10)
+> while power-cycling — the app skips startup and the REPL is free.
+
 ## Firmware
 
 2. **OTA firmware updates** — update friends' devices without manual flashing.
@@ -14,12 +23,6 @@
    a bad update can't brick (previous version retained + boot-success marker).
    Needs design: signing, partial vs full updates, interaction with
    `tools/build.py` `.mpy` output.
-3. **Logging overhaul + log visibility** — audit all log messages for
-   clarity/consistency (many are cryptic; "API ERROR" on the panel with no
-   trail is the pain point). Likely shape: small pre-allocated RAM ring buffer
-   of recent log lines + `GET /api/logs` + a simple log view in the webapp;
-   richer error detail carried into `set_error` (status code, endpoint,
-   exception type). Decide per-subsystem levels vs the current global level.
 4. **Captive portal reliability** — DNS task hardening landed; observe. If
    still flaky: add OS-probe-specific responses (Android `/generate_204`,
    Apple `hotspot-detect.html`, Windows `connecttest.txt`) before considering
@@ -28,13 +31,6 @@
    pre-page-load).
 6. **Local time / `utc_offset` use** — fetched from `/time` and currently
    unused; needed when a clock display lands (NBA).
-7. **Watchdog hang detection** — the watchdog catches display-thread *crashes*
-   only, not hangs; consider a frame-counter heartbeat.
-8. **Per-char `get_ch` memoryview allocs** in text rendering — acceptable churn
-   today; revisit if GC stutter is ever observed now that per-frame string
-   building is gone.
-9. **Poller `set_error` message quality** — `str(e)[:20]` is cryptic on the
-   panel; map common failures to friendly text. (Overlaps with item 3.)
 10. **Auto-brightness tuning** — re-tune `LUX_MIN`/`LUX_MAX`/curve now that the
     light diffuser sits over the sensor and reduces readings.
 11. **Auto-brightness algorithm vs config brightness** — rethink the dual-lerp
@@ -51,14 +47,62 @@
     auto-collects on allocation failure, so total-exhaustion OOMs self-heal;
     the residual risk is a *fragmentation* failure of a large contiguous
     allocation (most likely the TLS buffers on connection re-establishment).
-    Note: the binary wire format (removed JSON dict-tree churn) and the
-    aiohttp 304 keep-alive fix (TLS reconnects no longer scheduled) have
-    both landed — re-baseline the memory sawtooth before judging. If
-    `MemoryError` shows up: first try `gc.threshold()` (proactive amortized
-    collection — one principled global dial), and only as a last resort a
-    single documented collect before the TLS handshake. Also consider
-    surfacing `micropython.mem_info(1)`-style fragmentation stats in the
-    future /api/logs work (item 3).
+    **Measured 2026-07-06**: heap 457 KB total, live set ~340 KB, free
+    bottoms out at **1.9 KB** just before each auto-collect (every ~1.4 s
+    during at-bats at ~80 KB/s churn) — the heap spends much of its life
+    near-full, which is exactly the exposure a TLS reconnect (~33 KB
+    contiguous) doesn't want. After item 8 lands and churn drops ~10×:
+    set `gc.threshold()` (collect after a fixed allocation amount, e.g.
+    ~48 KB) so free memory never grinds against zero — one principled
+    global dial, cheap once churn is low. Re-baseline afterward.
+    **Post-fix numbers (2026-07-06 afternoon, glyph tables landed)**:
+    intrinsic churn ~4 KB/s (was ~80), GC every ~28 s (was ~1.4 s) — a
+    threshold around 48-64 KB would collect every ~12-16 s and keep free
+    memory from ever grinding near zero. Pair with item 20's buffer shrink.
+
+18. **Web server request-read timeout** (diagnosed 2026-07-06: site
+    unreachable after days of uptime, LED still updating, failed from both
+    phone and PC, clean logs, recovered on power cycle) — vendored
+    `microdot.py` has no timeout anywhere on the request-read path
+    (`handle_request` → `Request.create` → `readline()` waits forever). A
+    client that opens a connection and never completes a request (phone
+    sleeping mid-request, browser speculative preconnect) parks that handler
+    task permanently and pins one of lwip's small TCP socket pool. Leaks
+    accumulate until inbound connections are silently dropped — no error, no
+    log line — while the poller stays healthy on its one kept-alive TLS
+    connection. Fix: wrap the request parse in `asyncio.wait_for` (~30 s) in
+    the vendored copy. Consider logging active-handler count to watch leak
+    rate. Aggravator, same symptom family: the device advertises an IPv6
+    AAAA over mDNS but the server binds IPv4-only — IPv6-first clients eat a
+    ~2 s stall per connection (confirmed: HTTP over IPv6 fails outright).
+    Next occurrence, before power-cycling: check panel still updating, try
+    `http://<ip>` vs `scoreboard.local`, pull `/api/logs`.
+
+19. **Brightness loop fixed-point math** — ~15-20 boxed floats per 200 ms
+    tick (EMA, log map, ramp, dual-lerp) ≈ 2-3 KB/s of churn. Convert the
+    pipeline to integer math (e.g. brightness in 0-1000, lux in milli-lux
+    LUT for the log map). Small win; do alongside/after item 8. Pairs
+    naturally with the re-tune in items 10/11.
+
+20. **Shrink `_MAX_RESPONSE_SIZE` 16 KB → 4 KB** (`api_client.py`) — the
+    largest body it ever holds is a 24×24 RGB565 logo (1,152 B); game
+    structs are ~100-200 B and error JSON is small. Frees 12 KB of live set
+    (funds item 8's ~18 KB of glyph tables). Keep a comment deriving the
+    number from the logo size so it doesn't silently rot if logo dimensions
+    grow.
+
+21. **aiohttp: stop building the decoded header dict per response** — only
+    `etag` and `content-length` are ever read; `_request` decodes/splits
+    every header line into a dict (~50 small allocs per poll). Let
+    `_get_header` scan the raw `_headers` bytes list instead. Minor
+    (~0.5 KB/s), do opportunistically.
+
+22. **Frozen modules (custom MicroPython build)** — the biggest live-set
+    lever: module bytecode (~100-150 KB of the ~340 KB live set) moves to
+    flash via a custom firmware image with the app frozen in. Big workflow
+    change (reflash = full firmware image; interacts with OTA item 2 —
+    frozen code can't be OTA-updated file-by-file). Only worth it if
+    headroom gets tight after items 8/17/20.
 
 ## Backend
 
