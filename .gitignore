@@ -51,6 +51,9 @@ backend/*.mmdb
 # Pico deployment directory (populated by tools/build.py)
 pico/
 
+# ESPN sample store + generated schemas/specs (tools/espn)
+/data/
+
 # =============================================================================
 # Firmware (MicroPython / Python)
 # =============================================================================

@@ -1,0 +1,8 @@
+genson
+jsonschema
+pillow
+pystray==0.19.5
+pyyaml
+referencing
+requests
+tzdata
