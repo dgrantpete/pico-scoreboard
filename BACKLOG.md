@@ -60,23 +60,16 @@
     threshold around 48-64 KB would collect every ~12-16 s and keep free
     memory from ever grinding near zero. Pair with item 20's buffer shrink.
 
-18. **Web server request-read timeout** (diagnosed 2026-07-06: site
-    unreachable after days of uptime, LED still updating, failed from both
-    phone and PC, clean logs, recovered on power cycle) — vendored
-    `microdot.py` has no timeout anywhere on the request-read path
-    (`handle_request` → `Request.create` → `readline()` waits forever). A
-    client that opens a connection and never completes a request (phone
-    sleeping mid-request, browser speculative preconnect) parks that handler
-    task permanently and pins one of lwip's small TCP socket pool. Leaks
-    accumulate until inbound connections are silently dropped — no error, no
-    log line — while the poller stays healthy on its one kept-alive TLS
-    connection. Fix: wrap the request parse in `asyncio.wait_for` (~30 s) in
-    the vendored copy. Consider logging active-handler count to watch leak
-    rate. Aggravator, same symptom family: the device advertises an IPv6
-    AAAA over mDNS but the server binds IPv4-only — IPv6-first clients eat a
-    ~2 s stall per connection (confirmed: HTTP over IPv6 fails outright).
-    Next occurrence, before power-cycling: check panel still updating, try
-    `http://<ip>` vs `scoreboard.local`, pull `/api/logs`.
+18. **IPv6 reachability** — the device advertises an IPv6 AAAA over mDNS
+    but the web server binds IPv4-only; IPv6-first clients eat a ~2 s stall
+    per connection (confirmed: HTTP over IPv6 fails outright). Either bind
+    dual-stack (if MicroPython's lwip supports an AF_INET6 listener) or
+    suppress the AAAA. Low priority now that the socket-leak half of the
+    "site unreachable" failure is fixed (microdot `connection_timeout`,
+    landed 2026-07-06 — verified live: 4 pinned sockets kill inbound
+    accepts, the 60 s reaper recovers without a reboot). Known limit worth
+    remembering: lwip accepts only ~4 concurrent inbound sockets, so a
+    burst of abandoned connections can still cause an up-to-60 s brownout.
 
 19. **Brightness loop fixed-point math** — ~15-20 boxed floats per 200 ms
     tick (EMA, log map, ramp, dual-lerp) ≈ 2-3 KB/s of churn. Convert the
