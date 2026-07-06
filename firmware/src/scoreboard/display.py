@@ -10,7 +10,6 @@ Core 0 when the state changed (see scoreboard/state.py), so the render loop
 does no per-frame text formatting.
 """
 
-import math
 import time
 import framebuf
 from machine import Pin
@@ -77,16 +76,16 @@ def _team_color_to_rgb565(packed: int) -> int:
     return rgb565(r, g, b)
 
 
-_TWO_PI = 2.0 * math.pi
+def pulse(now_ms: int, period_ms: int = 1000) -> int:
+    """Triangle-wave factor in [0, 256], cycling every `period_ms`.
 
-
-def pulse(now_ms: int, hz: float = 1.0) -> float:
-    """Sine-wave factor in [0.0, 1.0], cycling at `hz` cycles per second.
-
+    Integer math only — runs per frame on the display thread, and MicroPython
+    floats are heap-allocated (the old sin() version churned garbage).
     Callers map the factor into whatever range they need — e.g.
-    `V = 191 + int(pulse(now_ms) * 64)` for a subtle 75%→100% HSV brightness sweep.
+    `V = 191 + ((pulse(now_ms) * 64) >> 8)` for a subtle 75%→100% sweep.
     """
-    return (math.sin(now_ms * hz * _TWO_PI / 1000.0) + 1.0) * 0.5
+    phase = (now_ms % period_ms) * 512 // period_ms  # 0..511
+    return 512 - phase if phase > 256 else phase
 
 
 # Display dimensions
@@ -110,6 +109,7 @@ TOAST_DISPLAY_MS = 1500
 _ORDINALS = (
     "", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th",
     "10th", "11th", "12th", "13th", "14th", "15th", "16th", "17th", "18th", "19th", "20th",
+    "21st", "22nd", "23rd", "24th", "25th", "26th", "27th", "28th", "29th", "30th",
 )
 
 # Single source of truth for the play-flash font: play_text_display_ms must
@@ -582,7 +582,7 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
     outs_critical = live.count.outs == 2
 
     if balls_critical or strikes_critical or outs_critical:
-        v = 191 + int(pulse(now_ms) * 64)
+        v = 191 + ((pulse(now_ms) * 64) >> 8)
         pulsed = pack_hsv_to_rgb565(0, 0, v)
     else:
         pulsed = None

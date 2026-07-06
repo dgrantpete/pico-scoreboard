@@ -854,12 +854,6 @@ if __name__ == '__main__':
     set_display_driver(driver)
     logger.debug("[MAIN] display initialized")
 
-    # Pre-cache digit glyphs for zero-allocation score/clock rendering on Core 1.
-    from scoreboard.fonts import unscii_16
-    writer.init_clock(unscii_16)   # Clock digits + colon
-    writer.init_digits(unscii_16)  # Score digits
-    logger.debug("[MAIN] glyph caches initialized")
-
     # Pre-compute UI colors so the first rendered frame has correct colors
     # rather than white defaults.
     from scoreboard.state import update_ui_colors
