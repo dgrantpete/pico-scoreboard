@@ -39,14 +39,20 @@ compiler reserves palette index 0 for magenta (row-major first-seen scanning
 starts at index 1 for the remaining colors) and emits a `KEY` constant that
 is the correct value to pass as the `key` argument of `FrameBuffer.blit()`:
 
-  - Paletted sprite with transparency:  KEY = 0          (palette index 0)
-  - RGB565  sprite with transparency:   KEY = 0xF81F     (RGB565 of magenta)
+  - Any sprite with transparency:       KEY = 0xF81F     (RGB565 of magenta)
   - Any sprite with no transparent px:  KEY = -1         (no transparency)
+
+The key is 0xF81F for BOTH paletted and RGB565 sprites because MicroPython's
+`framebuf.blit()` applies the palette lookup BEFORE the key comparison (see
+extmod/modframebuf.c) — the key is matched against the palette-MAPPED color,
+never the raw palette index. Palette index 0 maps to magenta, so transparent
+pixels compare as 0xF81F regardless of the packed format.
 
 This lets the firmware use `sprite.KEY` uniformly without caring about
 which format the sprite was compiled into. Note: if your source art uses
-bright magenta as a real color, it will be treated as transparent at blit
-time. Pick a different color for real art, or adjust the sentinel here.
+bright magenta (or any color that quantizes to RGB565 0xF81F) as a real
+color, it will be treated as transparent at blit time. Pick a different
+color for real art, or adjust the sentinel here.
 
 Output filename collisions across sources (plain PNG, layer, or slice) are
 hard errors — the compiler prints the conflicting sources and exits without
@@ -78,7 +84,7 @@ _ABSOLUTE_SUFFIX = "__absolute"
 # Transparency sentinel: any alpha==0 pixel becomes this color before the
 # palette scan. Chosen as bright magenta because no realistic sprite art
 # should use it, and its RGB565 encoding (0xF81F) is distinct from common
-# colors. Keep in sync with MAGENTA_RGB565 in firmware display.py.
+# colors. Keep in sync with MAGENTA_RGB565 in firmware scoreboard/fonts/__init__.py.
 _TRANSPARENT_RGB = (255, 0, 255)
 _TRANSPARENT_RGB565 = 0xF81F
 
@@ -323,9 +329,10 @@ def convert_image(img: Image.Image) -> dict:
     if choice["paletted"]:
         data = choice["pack_fn"](indices, width, height)
         palette_data = palette_to_rgb565_bytes(palette)
-        # For paletted blits, key is compared against the source pixel's
-        # palette index. Magenta is at index 0 when reserved.
-        key = 0 if has_transparent else -1
+        # framebuf.blit() maps the source pixel through the palette BEFORE
+        # comparing against key, so the key is the mapped RGB565 color of the
+        # reserved index-0 magenta — NOT the index itself.
+        key = _TRANSPARENT_RGB565 if has_transparent else -1
         transparency_note = " (transparent reserved)" if has_transparent else ""
         mode_desc = (
             f"{choice['name']} auto, {num_colors} colors{transparency_note}, "
