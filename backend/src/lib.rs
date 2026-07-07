@@ -5,6 +5,7 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 
+pub mod app_update;
 pub mod auth;
 pub mod clock;
 pub mod config;
@@ -35,9 +36,12 @@ use espn::EspnClient;
         mlb::handler::get_live_game,
         soccer::handler::list_active_games,
         soccer::handler::get_live_game,
+        app_update::handler::get_app_manifest,
+        app_update::handler::get_app_image,
     ),
     components(schemas(
         clock::TimeResponse,
+        app_update::AppManifest,
         error::ErrorResponse,
         logo::LogoQuery,
         logo::OutputFormat,
@@ -63,6 +67,7 @@ use espn::EspnClient;
         (name = "team", description = "Team logo endpoint"),
         (name = "mlb", description = "MLB live game data (ESPN-backed)"),
         (name = "soccer", description = "Soccer live game data (ESPN-backed)"),
+        (name = "app", description = "Device app OTA image + manifest"),
     )
 )]
 struct ApiDoc;
@@ -92,6 +97,8 @@ pub struct AppState {
     pub espn_client: EspnClient,
     pub config: AppConfig,
     pub geoip_reader: Option<maxminddb::Reader<memmap2::Mmap>>,
+    /// Current device app image for OTA (None when not published)
+    pub app_image: Option<app_update::AppImage>,
 }
 
 /// Initialize tracing, load config, build the router, and serve until shutdown.
@@ -153,11 +160,15 @@ pub async fn run() {
         }
     };
 
+    // Load the device app image for OTA (optional — endpoints 404 if absent)
+    let app_image = app_update::AppImage::load(&config.app.image_path);
+
     // Create shared application state
     let app_state = Arc::new(AppState {
         espn_client,
         config,
         geoip_reader,
+        app_image,
     });
 
     // Build CORS layer
@@ -182,6 +193,8 @@ pub async fn run() {
             "/soccer/{league}/games/{game_id}",
             get(soccer::get_live_game),
         )
+        .route("/app/manifest", get(app_update::get_app_manifest))
+        .route("/app/image", get(app_update::get_app_image))
         .layer(cors)
         .with_state(app_state);
 

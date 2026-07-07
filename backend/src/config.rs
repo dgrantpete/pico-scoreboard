@@ -19,6 +19,30 @@ pub struct AppConfig {
     /// GeoIP configuration
     #[serde(default)]
     pub geoip: GeoipConfig,
+
+    /// Device app (OTA) configuration
+    #[serde(default)]
+    pub app: AppUpdateConfig,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AppUpdateConfig {
+    /// Path to the current device app ROMFS image (produced by
+    /// `tools/build.py publish-app`, baked into the deploy)
+    #[serde(default = "default_app_image_path")]
+    pub image_path: String,
+}
+
+impl Default for AppUpdateConfig {
+    fn default() -> Self {
+        Self {
+            image_path: default_app_image_path(),
+        }
+    }
+}
+
+fn default_app_image_path() -> String {
+    "app_dist/pico.romfs".to_string()
 }
 
 #[derive(Debug, Deserialize)]

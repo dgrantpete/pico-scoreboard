@@ -82,6 +82,11 @@ COPY --from=builder /app/target/release/backend /app/backend
 # Copy the configuration file (provides defaults; secrets come from env vars)
 COPY --from=builder /app/config /app/config
 
+# Device app ROMFS image for OTA (produced by `tools/build.py publish-app`).
+# Own layer, after the binary, so app-image-only publishes reuse the cached
+# cargo build. The endpoints 404 gracefully if the image is absent.
+COPY app_dist/ /app/app_dist/
+
 # Download MaxMind GeoLite2-City database for IP-to-timezone resolution.
 # This executes at build time — the .mmdb file is baked into the image.
 # The license key is mounted as a build secret and never appears in any layer.

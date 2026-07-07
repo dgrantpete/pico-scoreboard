@@ -40,6 +40,8 @@ pub enum AppError {
     },
     /// Team color hex string could not be parsed
     InvalidTeamColor { team: String, raw: String },
+    /// No device app image published on this deployment
+    AppImageUnavailable,
 }
 
 impl AppError {
@@ -142,6 +144,11 @@ impl IntoResponse for AppError {
                     "Upstream returned invalid team color for '{}': '{}'",
                     team, raw
                 ),
+            ),
+            AppError::AppImageUnavailable => (
+                StatusCode::NOT_FOUND,
+                "app_image_unavailable".to_string(),
+                "No device app image is published on this deployment".to_string(),
             ),
         };
 
