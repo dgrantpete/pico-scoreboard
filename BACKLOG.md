@@ -16,13 +16,20 @@
 
 ## Firmware
 
-2. **OTA firmware updates** — update friends' devices without manual flashing.
-   Likely shape: backend hosts versioned firmware bundles (manifest + files
-   with hashes); firmware checks on boot/daily, downloads changed files to a
-   staging dir, verifies hashes, atomically swaps, reboots. Keep a fallback so
-   a bad update can't brick (previous version retained + boot-success marker).
-   Needs design: signing, partial vs full updates, interaction with
-   `tools/build.py` `.mpy` output.
+2. **OTA app updates via ROMFS** (architecture locked by 2026-07-06
+   research; execute after item 27 lands) — backend hosts versioned ROMFS
+   images + manifest {version, size, sha256}; device checks on boot/daily;
+   download → stage on littlefs → verify sha256 → `vfs.rom_ioctl(2, 0)`
+   erase + `writeblocks` → `machine.reset()`. Invariants: the updater
+   lives on littlefs, NEVER in ROMFS (it must not erase the code it runs
+   from); `main.py` gains a recovery mode (failed `import scoreboard` →
+   WiFi + re-download loop) so power loss mid-write can't brick — a
+   corrupt ROMFS still boots littlefs. Covers app code AND the hub75
+   native .mpy; only interpreter bumps need USB. Full firmware-image OTA
+   stays deferred: RP2350's bootrom A/B (TBYB rollback) is ready, but
+   upstream MicroPython can't execute from a non-zero partition yet
+   (needs QMI address translation; forum-patch territory — track
+   micropython#17544 and the partitioned-pico2 forum work).
 4. **Captive portal reliability** — DNS task hardening landed; observe. If
    still flaky: add OS-probe-specific responses (Android `/generate_204`,
    Apple `hotspot-detect.html`, Windows `connecttest.txt`) before considering
@@ -83,22 +90,32 @@
     `_get_header` scan the raw `_headers` bytes list instead. Minor
     (~0.5 KB/s), do opportunistically.
 
-22. **Custom MicroPython build (frozen modules + lwip tuning)** — one
-    build, two big levers:
-    - *Frozen modules*: module bytecode (~100-150 KB of the ~340 KB live
-      set) moves to flash. Interacts with OTA item 2 — frozen code can't
-      be OTA-updated file-by-file.
-    - *`MEMP_NUM_TCP_PCB` / `MEMP_NUM_TCP_PCB_LISTEN` (lwip)*: the ~4
-      concurrent inbound TCP socket limit behind items 18/24 and the
-      `ERR_CONNECTION_TIMED_OUT` connect-phase drops (SYNs silently
-      ignored when the pool is full) is a compile-time lwip constant in
-      the rp2 port's `lwipopts.h`. Raising it (with matching pbuf/memory
-      pool bumps) costs RAM per socket but is the only real fix for
-      multi-client/browser-parallelism connect failures — and a
-      prerequisite for holding WebSocket connections open (item 25).
-    Big workflow change (reflash = full firmware image); the two levers
-    partially fund each other (frozen modules free the RAM the socket
-    bump spends).
+22. **Custom firmware: deferred levers** — the custom build itself landed
+    2026-07-06 (v1.28.0 submodule + `firmware/board/PICO2W_SCOREBOARD`:
+    ROMFS 256 KB, BT off ≈ +20 KB RAM, `MEMP_NUM_TCP_PCB=16`). Still on
+    the table for later:
+    - *mbedTLS `MBEDTLS_SSL_IN_CONTENT_LEN` 16 K → 8 K*: ~8 KB heap per
+      live TLS connection, but servers can't be forced to send smaller
+      records (fly.io doesn't negotiate MFL) — needs validation against
+      the real backend before shipping; keep 16 K fallback.
+    - *mbedTLS flash trims*: drop TLS 1.0/1.1, PSK, SECP*K1 curves
+      (flash-only win, low priority).
+    - *`mpy-cross -O2` for release builds*: strips asserts, keeps line
+      numbers (which our log tracebacks need — never -O3).
+    - *Firmware A/B OTA*: blocked upstream, see item 2.
+
+27. **Move app code into ROMFS** (Phase B of the custom-firmware plan) —
+    the partition exists after the item-22 build; migration:
+    `tools/build.py` gains a release flow that builds the app tree into a
+    ROMFS image (`mpremote romfs build`, `.mpy` only — `.py` in ROMFS has
+    ZERO RAM benefit; `-march=armv7emsp` for natives) and deploys it
+    (`mpremote romfs deploy`, works under the safe-mode flow), stripping
+    app code from littlefs (keep main.py, config.json, /logs). main.py
+    stays on littlefs (ROMFS isn't bootable, micropython#17544) and gains
+    the corrupt-ROMFS import guard. littlefs root shadows /rom in
+    sys.path, so the dev flash flow keeps working unchanged. Expected:
+    ~100+ KB heap reclaimed (measured upstream: 28.8 KB → 3.1 KB per
+    imported module); acceptance = re-run the 2026-07-06 memory profile.
 
 25. **Reduce webapp HTTP connection churn** — every poll is a fresh TCP
     connection (Microdot has no server-side keep-alive), so the status
@@ -109,10 +126,11 @@
     one response) — halves connections, trivial on both sides, do first;
     (b) *WebSocket push* for logs/status (vendor microdot's websocket.py;
     firmware task pushes deltas on change; frontend reconnect logic) —
-    biggest reduction, but each open WS pins one scarce socket
-    permanently, so it wants item 22's `MEMP_NUM_TCP_PCB` bump first,
-    and the 60 s `connection_timeout` reaper must exempt WS (ping/pong
-    keepalive instead).
+    biggest reduction, but each open WS pins one socket permanently —
+    viable once the custom firmware's `MEMP_NUM_TCP_PCB=16` is flashed
+    (landed in the board config 2026-07-06); the 60 s
+    `connection_timeout` reaper must exempt WS (ping/pong keepalive
+    instead).
 
 26. **Event-loop latency instrumentation** — to attribute the "device did
     not respond in time" stalls to specific work: a tiny Core 0 task
