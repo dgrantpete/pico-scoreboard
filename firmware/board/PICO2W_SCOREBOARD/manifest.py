@@ -10,3 +10,9 @@
 # over the air. The app ships as .mpy on littlefs today and moves to the
 # ROMFS partition (in-place execution, OTA-rewritable) next — see BACKLOG.
 include("$(PORT_DIR)/boards/manifest.py")
+
+# The one piece of bundle-networking the app DOES need: `ssl` is a frozen
+# Python wrapper around the built-in `tls` C module, and asyncio's
+# open_connection(ssl=...) imports it — without it every HTTPS poll fails
+# with "no module named 'ssl'".
+require("ssl")
