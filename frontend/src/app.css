@@ -47,6 +47,11 @@
 }
 
 :root {
+	/* Semantic status colors (shared by icons, meters, borders) */
+	--color-ok: oklch(0.723 0.219 149.579);
+	--color-warn: oklch(0.769 0.188 70.08);
+	--color-crit: oklch(0.637 0.237 25.331);
+
 	--background: oklch(1 0 0);
 	--foreground: oklch(0.129 0.042 264.695);
 	--card: oklch(1 0 0);
@@ -109,7 +114,7 @@
 }
 
 .card.border-warning {
-	border-color: oklch(0.769 0.188 70.08);
+	border-color: var(--color-warn);
 }
 
 .card-header {
@@ -165,9 +170,16 @@
 	padding-block-start: 0.5rem;
 }
 
-label {
+label,
+.label-text {
 	font-size: 0.875rem;
 	font-weight: 500;
+}
+
+/* .label-text is for label-styled text that doesn't describe a form control
+   (slider readout rows, action rows) — a <label> there is an a11y violation. */
+.label-text.text-xs {
+	font-size: 0.75rem;
 }
 
 input[type="text"],
@@ -337,6 +349,24 @@ progress::-webkit-progress-value {
 	max-width: 28rem;
 	width: calc(100% - 2rem);
 	box-shadow: 0 10px 25px oklch(0 0 0 / 25%);
+
+	@starting-style {
+		&[open] {
+			opacity: 0;
+			transform: scale(0.95);
+		}
+	}
+
+	&[open] {
+		opacity: 1;
+		transform: scale(1);
+	}
+
+	transition:
+		opacity 0.2s ease,
+		transform 0.2s ease,
+		overlay 0.2s ease allow-discrete,
+		display 0.2s ease allow-discrete;
 }
 
 .dialog::backdrop {
@@ -371,6 +401,54 @@ progress::-webkit-progress-value {
 .alert.destructive {
 	border-color: var(--destructive);
 	color: var(--destructive);
+}
+
+.alert.warning {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.5rem;
+	font-size: 0.875rem;
+	border-color: oklch(from var(--color-warn) l c h / 45%);
+	background: oklch(from var(--color-warn) l c h / 12%);
+}
+
+.alert .icon-alert {
+	width: 1.25rem;
+	height: 1.25rem;
+	flex-shrink: 0;
+	margin-block-start: 0.125rem;
+	color: var(--color-warn);
+}
+
+/* ---- Icon circle (status headers on setup page + reboot overlay) ---- */
+.icon-circle {
+	border-radius: 50%;
+	padding: 0.75rem;
+
+	& svg {
+		width: 1.5rem;
+		height: 1.5rem;
+	}
+
+	&.ok {
+		background: oklch(from var(--color-ok) l c h / 15%);
+		& svg { color: var(--color-ok); }
+	}
+
+	&.warn {
+		background: oklch(from var(--color-warn) l c h / 15%);
+		& svg { color: var(--color-warn); }
+	}
+
+	&.primary {
+		background: oklch(from var(--primary) l c h / 10%);
+		& svg { color: var(--primary); }
+	}
+
+	&.destructive {
+		background: oklch(from var(--destructive) l c h / 10%);
+		& svg { color: var(--destructive); }
+	}
 }
 
 /* ---- Buttons ---- */
@@ -446,6 +524,12 @@ progress::-webkit-progress-value {
 }
 
 /* ---- Layout / text utilities ---- */
+.stack {
+	display: flex;
+	flex-direction: column;
+	gap: 1.5rem;
+}
+
 .row-between {
 	display: flex;
 	align-items: center;
@@ -503,16 +587,16 @@ progress::-webkit-progress-value {
 }
 
 /* ---- Icon helpers (applied via class on Lucide components) ---- */
-.icon-green {
+.icon-ok {
 	width: 1.25rem;
 	height: 1.25rem;
-	color: oklch(0.723 0.219 149.579);
+	color: var(--color-ok);
 }
 
-.icon-amber {
+.icon-warn {
 	width: 1.25rem;
 	height: 1.25rem;
-	color: oklch(0.769 0.188 70.08);
+	color: var(--color-warn);
 }
 
 .icon-muted {
@@ -523,11 +607,4 @@ progress::-webkit-progress-value {
 
 @keyframes spin {
 	to { transform: rotate(360deg); }
-}
-
-@keyframes ping {
-	75%, 100% {
-		transform: scale(2);
-		opacity: 0;
-	}
 }

@@ -97,7 +97,20 @@
 
 ## Frontend
 
-15. **UI full audit** — alignment oddities, dead redirects, fragile UI↔API
-    interactions; decide what the config-only webapp should look like
-    long-term.
-16. **`+page.svelte` component split** — 1400 lines → per-card components.
+23. **Settings-page render jank** — during the 2026-07-06 audit, Chrome's
+    CDP screenshots of the settings page intermittently timed out
+    ("renderer frozen") and the page occasionally painted blank/partial.
+    No console errors. Persisted after the cleanup (buffered sliders,
+    visibility-gated polling), so likely CDP-screenshot-specific; profile
+    long tasks if a real user ever reports it.
+
+24. **Page serving stalls under concurrent load** — observed 2026-07-06
+    evening (4 live games rotating + browser tab + parallel curls): the
+    51 KB bundle usually serves in 1-3 s, but occasionally stalls
+    mid-transfer indefinitely (34 KB then nothing). Same lwip
+    constraint family as item 18 (~4 sockets, small pbuf/memory pools) —
+    concurrent inbound connections can starve an in-flight send. Bounded
+    now by microdot's 60 s connection reaper. If it annoys: instrument
+    with a serve-duration log line, consider raising
+    `Response.send_file_buffer_size` (2 KB → 8 KB, fewer awrite
+    round-trips), or serve with `Connection: close` semantics sooner.

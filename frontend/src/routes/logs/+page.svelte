@@ -40,7 +40,14 @@
 		return level === 1 ? "ERR" : level === 2 ? "DBG" : "???";
 	}
 
+	// Guards against stacking: if a poll is still in flight when the next
+	// tick fires (device rebooting, WiFi drop), skip the tick instead of
+	// piling a second request onto the device's tiny socket pool.
+	let fetchInFlight = false;
+
 	async function fetchNew() {
+		if (fetchInFlight) return;
+		fetchInFlight = true;
 		try {
 			const fresh = await picoApi.getLogs(lastSeq);
 			error = null;
@@ -53,6 +60,8 @@
 			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : "Failed to fetch logs";
+		} finally {
+			fetchInFlight = false;
 		}
 	}
 
@@ -91,7 +100,7 @@
 	onMount(() => {
 		fetchNew();
 		pollInterval = setInterval(() => {
-			if (!paused && view === "live") fetchNew();
+			if (!paused && view === "live" && !document.hidden) fetchNew();
 		}, POLL_MS);
 	});
 

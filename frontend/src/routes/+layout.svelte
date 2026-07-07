@@ -77,11 +77,11 @@
 				<h1 class="logo-title">Pico Scoreboard</h1>
 			</div>
 			<nav class="nav">
-				<a class="btn btn-ghost btn-sm" href="#/">Settings</a>
-				<a class="btn btn-ghost btn-sm" href="#/logs">Logs</a>
+				<a class="btn ghost sm" href="#/">Settings</a>
+				<a class="btn ghost sm" href="#/logs">Logs</a>
 			</nav>
 			<button
-				class="btn btn-ghost btn-sm icon-btn"
+				class="btn ghost sm icon-btn"
 				onclick={cycleTheme}
 				title="Theme: {themeLabel}"
 			>
@@ -112,7 +112,7 @@
 	}
 
 	.header-inner {
-		max-inline-size: 1200px;
+		max-inline-size: 75rem;
 		margin-inline: auto;
 		display: flex;
 		block-size: 3.5rem;
@@ -144,61 +144,16 @@
 		font-weight: 600;
 	}
 
-	/* ---- Button base ---- */
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0.375rem;
-		border: none;
-		border-radius: 0.375rem;
-		font-weight: 500;
-		cursor: pointer;
-		transition: background-color 150ms ease, color 150ms ease;
-		white-space: nowrap;
-		text-decoration: none;
-		line-height: 1;
-
-		&:focus-visible {
-			outline: 2px solid var(--ring);
-			outline-offset: 2px;
-		}
-	}
-
-	/* ---- Size: small ---- */
-	.btn-sm {
-		block-size: 2rem;
-		padding-inline: 0.75rem;
-		font-size: 0.875rem;
-	}
-
-	/* ---- Variant: ghost ---- */
-	.btn-ghost {
-		background-color: transparent;
-		color: var(--foreground);
-
-		&:hover {
-			background-color: var(--accent);
-			color: var(--accent-foreground);
-		}
-	}
-
-	/* ---- Icon-only buttons ---- */
+	/* Buttons come from the shared .btn system in app.css; only the
+	   icon-only sizing is layout-specific. */
 	.icon-btn {
 		padding-inline: 0;
 		inline-size: 2rem;
 	}
 
-	/* ---- Icon sizing (Lucide SVGs) ---- */
-	.btn :global(svg) {
-		inline-size: 1rem;
-		block-size: 1rem;
-		flex-shrink: 0;
-	}
-
 	/* ---- Main content ---- */
 	.main {
-		max-inline-size: 1200px;
+		max-inline-size: 75rem;
 		margin-inline: auto;
 		padding-inline: 1rem;
 		padding-block: 2rem;

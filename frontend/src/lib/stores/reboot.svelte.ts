@@ -33,23 +33,39 @@ const POLLING_CONFIG = {
 };
 
 /**
- * Determine which reboot scenario we're in based on current status and target config
+ * Determine which reboot scenario applies, by comparing the config the
+ * device WAS running (original) against the config it will boot with
+ * (updated). This is the single scenario resolver — both the settings page
+ * and the setup page go through it, so an SSID change is detected the same
+ * way everywhere (a previous setup-page-only resolver missed ssid/password
+ * changes and polled the old, unreachable address for the full timeout).
  */
-function determineScenario(status: NetworkStatus, config: Config): RebootScenario {
-	// If we're in setup mode and have a configured SSID, we're completing setup
-	if (status.setup_mode && config.network.ssid) {
+export function determineRebootScenario(
+	status: NetworkStatus,
+	original: Config,
+	updated: Config
+): RebootScenario {
+	// In setup (AP) mode with an SSID configured, the reboot completes setup:
+	// the device leaves the AP and the browser is stranded on it.
+	if (status.setup_mode && updated.network.ssid) {
 		return 'setup_complete';
 	}
 
-	// Current hostname without .local suffix
-	const currentHostname = status.hostname?.replace(/\.local$/, '');
+	// SSID change takes priority - user must switch networks
+	if (updated.network.ssid !== original.network.ssid) {
+		return 'ssid_changed';
+	}
 
-	// Hostname changing in station mode?
-	if (status.mode === 'station' && currentHostname !== config.network.device_name) {
+	// Password-only change - risky, might fail
+	if (updated.network.password !== original.network.password) {
+		return 'password_changed';
+	}
+
+	// Hostname-only change - redirect to new address
+	if (updated.network.device_name !== original.network.device_name) {
 		return 'hostname_changed';
 	}
 
-	// Otherwise, same connection method and same address
 	return 'same_connection';
 }
 
@@ -204,11 +220,20 @@ function createRebootStore() {
 
 		/**
 		 * Initiate reboot with context for handling reconnection.
-		 * Automatically determines the scenario based on current status and config.
+		 * The scenario is derived from what changed between the config the
+		 * device was running (original) and the config it will boot with.
 		 */
-		async initiateReboot(currentStatus: NetworkStatus, currentConfig: Config) {
-			const detectedScenario = determineScenario(currentStatus, currentConfig);
-			await this.initiateRebootWithScenario(currentStatus, currentConfig, detectedScenario);
+		async initiateReboot(
+			currentStatus: NetworkStatus,
+			originalConfig: Config,
+			updatedConfig: Config
+		) {
+			const detectedScenario = determineRebootScenario(
+				currentStatus,
+				originalConfig,
+				updatedConfig
+			);
+			await this.initiateRebootWithScenario(currentStatus, updatedConfig, detectedScenario);
 		},
 
 		/**

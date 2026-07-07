@@ -44,6 +44,11 @@
 	const targetHostname = $derived(
 		`${rebootStore.targetConfig?.network.device_name ?? 'scoreboard'}.local`
 	);
+
+	// mDNS fallback: some clients (stock Android, some Windows setups) can't
+	// resolve .local names. When the device stays on the same network its IP
+	// almost always survives the reboot (DHCP re-lease), so offer it.
+	const fallbackIp = $derived(rebootStore.preRebootStatus?.ip ?? null);
 </script>
 
 <dialog
@@ -78,8 +83,8 @@
 		<!-- Setup Complete - Switching from AP to Station mode -->
 		<header class="dialog-header">
 			<div class="icon-row">
-				<div class="icon-circle green">
-					<CheckCircle2 class="icon-md" style="color: oklch(0.459 0.176 153.211)" />
+				<div class="icon-circle ok">
+					<CheckCircle2 class="icon-md" style="color: var(--color-ok)" />
 				</div>
 			</div>
 			<h2 class="dialog-title">Setup Complete!</h2>
@@ -109,7 +114,7 @@
 							<span>http://{targetHostname}</span>
 							<button class="btn-icon" onclick={() => copyToClipboard(`http://${targetHostname}`)}>
 								{#if copiedUrl === `http://${targetHostname}`}
-									<Check class="icon-sm" style="color: oklch(0.459 0.176 153.211)" />
+									<Check class="icon-sm" style="color: var(--color-ok)" />
 								{:else}
 									<Copy class="icon-sm" />
 								{/if}
@@ -120,7 +125,7 @@
 			</div>
 
 			<div class="alert warning" role="alert">
-				<AlertTriangle class="icon-alert" style="color: oklch(0.554 0.163 58.144)" />
+				<AlertTriangle class="icon-alert" style="color: var(--color-warn)" />
 				<p>
 					If the device can't connect to WiFi, it will create a
 					<span class="bold">"{targetApSsid}"</span> network for setup.
@@ -157,13 +162,20 @@
 					<span>http://{targetHostname}</span>
 					<button class="btn-icon" onclick={() => copyToClipboard(`http://${targetHostname}`)}>
 						{#if copiedUrl === `http://${targetHostname}`}
-							<Check class="icon-sm" style="color: oklch(0.459 0.176 153.211)" />
+							<Check class="icon-sm" style="color: var(--color-ok)" />
 						{:else}
 							<Copy class="icon-sm" />
 						{/if}
 					</button>
 				</div>
 			</div>
+
+			{#if fallbackIp}
+				<p class="center-text muted-text">
+					If that address doesn't load, try http://{fallbackIp} — the device
+					usually keeps its IP on the same network.
+				</p>
+			{/if}
 		</div>
 
 		<footer class="dialog-footer">
@@ -175,8 +187,8 @@
 		<!-- Network Reset - Device entering AP mode -->
 		<header class="dialog-header">
 			<div class="icon-row">
-				<div class="icon-circle amber">
-					<AlertTriangle class="icon-md" style="color: oklch(0.554 0.163 58.144)" />
+				<div class="icon-circle warn">
+					<AlertTriangle class="icon-md" style="color: var(--color-warn)" />
 				</div>
 			</div>
 			<h2 class="dialog-title">Network Reset</h2>
@@ -206,7 +218,7 @@
 							<span>{rebootStore.targetApUrl}</span>
 							<button class="btn-icon" onclick={() => copyToClipboard(rebootStore.targetApUrl)}>
 								{#if copiedUrl === rebootStore.targetApUrl}
-									<Check class="icon-sm" style="color: oklch(0.459 0.176 153.211)" />
+									<Check class="icon-sm" style="color: var(--color-ok)" />
 								{:else}
 									<Copy class="icon-sm" />
 								{/if}
@@ -257,7 +269,7 @@
 							<span>http://{targetHostname}</span>
 							<button class="btn-icon" onclick={() => copyToClipboard(`http://${targetHostname}`)}>
 								{#if copiedUrl === `http://${targetHostname}`}
-									<Check class="icon-sm" style="color: oklch(0.459 0.176 153.211)" />
+									<Check class="icon-sm" style="color: var(--color-ok)" />
 								{:else}
 									<Copy class="icon-sm" />
 								{/if}
@@ -268,7 +280,7 @@
 			</div>
 
 			<div class="alert warning" role="alert">
-				<AlertTriangle class="icon-alert" style="color: oklch(0.554 0.163 58.144)" />
+				<AlertTriangle class="icon-alert" style="color: var(--color-warn)" />
 				<p>
 					If the connection fails, device will create a
 					<span class="bold">"{targetApSsid}"</span> network for setup.
@@ -300,13 +312,13 @@
 				<div>
 					<p class="outcome-label">If successful:</p>
 					<p class="outcome-sub">
-						Access your scoreboard at:
+						Access your scoreboard at{#if fallbackIp}&nbsp;(or http://{fallbackIp}){/if}:
 					</p>
 					<div class="code-block spread">
 						<span>http://{targetHostname}</span>
 						<button class="btn-icon" onclick={() => copyToClipboard(`http://${targetHostname}`)}>
 							{#if copiedUrl === `http://${targetHostname}`}
-								<Check class="icon-sm" style="color: oklch(0.459 0.176 153.211)" />
+								<Check class="icon-sm" style="color: var(--color-ok)" />
 							{:else}
 								<Copy class="icon-sm" />
 							{/if}
@@ -323,7 +335,7 @@
 						<span>{rebootStore.targetApUrl}</span>
 						<button class="btn-icon" onclick={() => copyToClipboard(rebootStore.targetApUrl)}>
 							{#if copiedUrl === rebootStore.targetApUrl}
-								<Check class="icon-sm" style="color: oklch(0.459 0.176 153.211)" />
+								<Check class="icon-sm" style="color: var(--color-ok)" />
 							{:else}
 								<Copy class="icon-sm" />
 							{/if}
@@ -350,8 +362,8 @@
 	{:else if rebootStore.state === 'connected'}
 		<!-- Device is back online -->
 		<div class="center-content">
-			<div class="icon-circle green">
-				<CheckCircle2 class="icon-lg" style="color: oklch(0.459 0.176 153.211)" />
+			<div class="icon-circle ok">
+				<CheckCircle2 class="icon-lg" style="color: var(--color-ok)" />
 			</div>
 			<p class="title">Device is back online!</p>
 			<p class="description">
@@ -364,8 +376,8 @@
 	{:else if rebootStore.state === 'timeout'}
 		<!-- Timeout - device didn't respond -->
 		<div class="center-content">
-			<div class="icon-circle amber">
-				<AlertTriangle class="icon-lg" style="color: oklch(0.554 0.163 58.144)" />
+			<div class="icon-circle warn">
+				<AlertTriangle class="icon-lg" style="color: var(--color-warn)" />
 			</div>
 			<p class="title">Device not responding</p>
 			<p class="description">
@@ -393,38 +405,8 @@
 </dialog>
 
 <style>
-	.dialog {
-		border: 1px solid var(--border);
-		border-radius: 0.75rem;
-		background: var(--card);
-		color: var(--card-foreground);
-		padding: 1.5rem;
-		max-width: 28rem;
-		width: calc(100% - 2rem);
-		box-shadow: 0 10px 25px oklch(0 0 0 / 25%);
-
-		&::backdrop {
-			background: oklch(0 0 0 / 80%);
-		}
-
-		@starting-style {
-			&[open] {
-				opacity: 0;
-				transform: scale(0.95);
-			}
-		}
-
-		&[open] {
-			opacity: 1;
-			transform: scale(1);
-		}
-
-		transition:
-			opacity 0.2s ease,
-			transform 0.2s ease,
-			overlay 0.2s ease allow-discrete,
-			display 0.2s ease allow-discrete;
-	}
+	/* .dialog, .icon-circle, .alert.warning, progress, and .btn all come from
+	   the shared styles in app.css. Only overlay-specific layout lives here. */
 
 	/* Layout helpers */
 	.center-content {
@@ -475,35 +457,6 @@
 	.icon-row {
 		display: flex;
 		justify-content: center;
-	}
-
-	.icon-circle {
-		border-radius: 50%;
-		padding: 0.75rem;
-
-		&.green {
-			background: oklch(0.962 0.052 153.211);
-		}
-
-		&.amber {
-			background: oklch(0.962 0.059 95.617);
-		}
-
-		&.primary {
-			background: oklch(from var(--primary) l c h / 10%);
-		}
-
-		&.destructive {
-			background: oklch(from var(--destructive) l c h / 10%);
-		}
-	}
-
-	:global(.dark) .icon-circle.green {
-		background: oklch(0.356 0.101 150.091);
-	}
-
-	:global(.dark) .icon-circle.amber {
-		background: oklch(0.356 0.09 56.09);
 	}
 
 	/* Icons (sized via global since lucide uses class) */
@@ -614,35 +567,6 @@
 		font-weight: 500;
 	}
 
-	/* Alert */
-	.alert {
-		display: flex;
-		align-items: flex-start;
-		gap: 0.5rem;
-		border-radius: 0.375rem;
-		padding: 0.75rem;
-		font-size: 0.875rem;
-
-		&.warning {
-			border: 1px solid oklch(0.852 0.099 95.617);
-			background: oklch(0.962 0.059 95.617);
-			color: oklch(0.356 0.09 56.09);
-		}
-	}
-
-	.alert :global(.icon-alert) {
-		width: 1.25rem;
-		height: 1.25rem;
-		flex-shrink: 0;
-		margin-top: 0.125rem;
-	}
-
-	:global(.dark) .alert.warning {
-		border-color: oklch(0.356 0.09 56.09);
-		background: oklch(0.279 0.077 56.09);
-		color: oklch(0.852 0.099 95.617);
-	}
-
 	/* Progress */
 	.progress-section {
 		width: 100%;
@@ -658,25 +582,6 @@
 		justify-content: space-between;
 		font-size: 0.875rem;
 		color: var(--muted-foreground);
-	}
-
-	progress {
-		width: 100%;
-		height: 0.5rem;
-		border-radius: 9999px;
-		overflow: hidden;
-		appearance: none;
-
-		&::-webkit-progress-bar {
-			background: var(--secondary);
-			border-radius: 9999px;
-		}
-
-		&::-webkit-progress-value {
-			background: var(--primary);
-			border-radius: 9999px;
-			transition: width 0.3s ease;
-		}
 	}
 
 	/* Outcome box (password changed state) */
@@ -703,39 +608,6 @@
 	.outcome-divider {
 		border-top: 1px solid var(--border);
 		padding-top: 1rem;
-	}
-
-	/* Buttons */
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		border-radius: 0.375rem;
-		font-size: 0.875rem;
-		font-weight: 500;
-		padding: 0.5rem 1rem;
-		cursor: pointer;
-		transition: opacity 0.15s ease;
-		border: none;
-
-		&:hover {
-			opacity: 0.9;
-		}
-
-		&.default {
-			background: var(--primary);
-			color: var(--primary-foreground);
-		}
-
-		&.outline {
-			background: transparent;
-			border: 1px solid var(--border);
-			color: var(--foreground);
-
-			&:hover {
-				background: var(--accent);
-			}
-		}
 	}
 
 	.btn-icon {

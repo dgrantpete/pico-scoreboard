@@ -61,6 +61,15 @@ export interface ColorsConfig {
 
 export type ColorsConfigUpdate = Partial<ColorsConfig>;
 
+// Device logging configuration
+export type LogLevel = 'none' | 'error' | 'debug';
+
+export interface LogConfig {
+	level: LogLevel;
+}
+
+export type LogConfigUpdate = Partial<LogConfig>;
+
 // Full configuration
 export interface Config {
 	network: NetworkConfig;
@@ -69,6 +78,7 @@ export interface Config {
 	colors: ColorsConfig;
 	server: ServerConfig;
 	watchdog: WatchdogConfig;
+	log: LogConfig;
 }
 
 // Partial configuration for PUT requests
@@ -79,6 +89,7 @@ export interface ConfigUpdate {
 	colors?: ColorsConfigUpdate;
 	server?: ServerConfigUpdate;
 	watchdog?: WatchdogConfigUpdate;
+	log?: LogConfigUpdate;
 }
 
 // Network status response
