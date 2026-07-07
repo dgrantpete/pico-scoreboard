@@ -51,6 +51,28 @@
 
 			<div class="row-between">
 				<div class="label-group">
+					<span class="label-text">Automatic Updates</span>
+					<p class="text-sm text-muted">
+						Check daily for scoreboard app updates and install them
+						automatically. The device restarts briefly when an update is
+						applied.
+					</p>
+				</div>
+				<label class="switch">
+					<input
+						type="checkbox"
+						checked={config.ota.enabled}
+						onchange={() =>
+							settingsStore.updateOta("enabled", !settingsStore.config?.ota.enabled)}
+					/>
+					<span class="switch-track"><span class="switch-thumb"></span></span>
+				</label>
+			</div>
+
+			<hr class="separator" />
+
+			<div class="row-between">
+				<div class="label-group">
 					<span class="label-text">Hardware Watchdog</span>
 					<p class="text-sm text-muted">
 						Auto-reboot if the firmware wedges. Leave off while developing

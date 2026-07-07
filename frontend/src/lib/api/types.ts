@@ -70,6 +70,13 @@ export interface LogConfig {
 
 export type LogConfigUpdate = Partial<LogConfig>;
 
+// Over-the-air app update configuration
+export interface OtaConfig {
+	enabled: boolean;
+}
+
+export type OtaConfigUpdate = Partial<OtaConfig>;
+
 // Full configuration
 export interface Config {
 	network: NetworkConfig;
@@ -79,6 +86,7 @@ export interface Config {
 	server: ServerConfig;
 	watchdog: WatchdogConfig;
 	log: LogConfig;
+	ota: OtaConfig;
 }
 
 // Partial configuration for PUT requests
@@ -90,6 +98,7 @@ export interface ConfigUpdate {
 	server?: ServerConfigUpdate;
 	watchdog?: WatchdogConfigUpdate;
 	log?: LogConfigUpdate;
+	ota?: OtaConfigUpdate;
 }
 
 // Network status response
@@ -108,6 +117,8 @@ export interface NetworkStatus {
 	memory_free: number;
 	flash_used: number;
 	flash_free: number;
+	// sha256 of the running app's ROMFS image; null on dev (littlefs) deploys
+	app_version?: string | null;
 }
 
 // Reboot response

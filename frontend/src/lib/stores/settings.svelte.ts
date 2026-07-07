@@ -186,6 +186,16 @@ export function createSettingsStore() {
 		},
 
 		/**
+		 * Update an OTA field and mark it as touched
+		 */
+		updateOta<K extends keyof Config['ota']>(key: K, value: Config['ota'][K]) {
+			if (config) {
+				config.ota[key] = value;
+				this.markTouched(`ota.${key}`);
+			}
+		},
+
+		/**
 		 * Load config and status from API
 		 */
 		async load() {

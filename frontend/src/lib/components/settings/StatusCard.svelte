@@ -34,7 +34,8 @@
 			{:else if status?.setup_mode}
 				WiFi setup is required to fetch scores
 			{:else if status?.connected}
-				{status.ip} &bull; {status.hostname}
+				{status.ip} &bull; {status.hostname} &bull; app
+				<span class="app-version">{status.app_version?.slice(0, 8) ?? "dev"}</span>
 			{:else}
 				Current network connection status
 			{/if}
@@ -63,3 +64,9 @@
 		</div>
 	{/if}
 </section>
+
+<style>
+	.app-version {
+		font-family: ui-monospace, monospace;
+	}
+</style>
