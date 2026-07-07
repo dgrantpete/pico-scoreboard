@@ -84,20 +84,32 @@ import os
 import rp2
 import hashlib
 import _thread
-from microdot import Microdot, Request, Response, send_file
-from scoreboard import Config, ScoreboardApiClient
-from scoreboard.mlb_poller import MlbPoller
-from scoreboard.state import set_startup_step, finish_startup, set_display_driver, get_write_state, ThreadHealth
-from scoreboard.dns import run_dns_server
-from scoreboard.api_routes import create_api
-from scoreboard.display import init_display, run_display_thread, Regions, LogoPool
-from scoreboard.fonts import FontWriter
-from hub75 import Hub75Display, Hub75Driver
-from machine import I2C, Pin
-from veml7700 import VEML7700
-from button import Button
-from scoreboard import brightness
-import scoreboard.logger as logger
+
+# --- App imports: the app may live in ROMFS (release deploys) ----------------
+# A corrupt or missing ROMFS (e.g. power loss mid-OTA-write) must never brick
+# the device: fail loudly and drop to a clean REPL so the image can be
+# re-deployed. Dev deploys on littlefs shadow ROMFS and are unaffected.
+try:
+    from microdot import Microdot, Request, Response, send_file
+    from scoreboard import Config, ScoreboardApiClient
+    from scoreboard.mlb_poller import MlbPoller
+    from scoreboard.state import set_startup_step, finish_startup, set_display_driver, get_write_state, ThreadHealth
+    from scoreboard.dns import run_dns_server
+    from scoreboard.api_routes import create_api
+    from scoreboard.display import init_display, run_display_thread, Regions, LogoPool
+    from scoreboard.fonts import FontWriter
+    from hub75 import Hub75Display, Hub75Driver
+    from machine import I2C, Pin
+    from veml7700 import VEML7700
+    from button import Button
+    from scoreboard import brightness
+    import scoreboard.logger as logger
+except ImportError as e:
+    import sys
+    print(f"[BOOT] app import failed: {e}")
+    print("[BOOT] ROMFS may be corrupt/missing; re-deploy with "
+          "'python tools/build.py flash [--release]'. REPL is free.")
+    sys.exit()
 
 # Reduce buffer size for memory-constrained environment
 Response.send_file_buffer_size = 2048
@@ -106,11 +118,28 @@ app: Microdot = Microdot()
 config: Config = Config()
 
 
-# Compute ETag for index.html.gz once at startup
+def _find_index() -> str | None:
+    """Locate the web bundle: littlefs root first (dev deploys shadow ROMFS),
+    then the ROMFS copy (release deploys)."""
+    for path in ('/index.html.gz', '/rom/index.html.gz'):
+        try:
+            os.stat(path)
+            return path
+        except OSError:
+            pass
+    return None
+
+
+INDEX_PATH: str | None = _find_index()
+
+
+# Compute ETag for the web bundle once at startup
 def _compute_index_etag() -> str | None:
+    if INDEX_PATH is None:
+        return None
     try:
         h = hashlib.sha1()
-        with open('/index.html.gz', 'rb') as f:
+        with open(INDEX_PATH, 'rb') as f:
             while True:
                 chunk: bytes = f.read(512)
                 if not chunk:
@@ -311,7 +340,10 @@ async def index(request: Request) -> Response | tuple:
     if INDEX_ETAG and request.headers.get('If-None-Match') == INDEX_ETAG:
         return '', 304, {'ETag': INDEX_ETAG}
 
-    response = send_file('/index.html.gz', content_type='text/html', compressed='gzip')
+    if INDEX_PATH is None:
+        return 'Web bundle missing - redeploy the app', 500
+
+    response = send_file(INDEX_PATH, content_type='text/html', compressed='gzip')
 
     # Add caching headers
     if INDEX_ETAG:

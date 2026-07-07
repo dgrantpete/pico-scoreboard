@@ -212,7 +212,64 @@ def enter_update_mode(port: str = None) -> bool:
     return False
 
 
-def flash_device(source_dir: Path, port: str = None, repl: bool = False):
+# Release-mode split: these stay on littlefs (mutable / boot-critical —
+# main.py must live there because ROMFS isn't bootable, micropython#17544);
+# everything else in the build output ships inside the ROMFS image.
+_LITTLEFS_FILES = ('main.py', 'config.json')
+
+# App artifacts a release deploy removes from littlefs: littlefs precedes
+# /rom on sys.path (that's the dev-override mechanism), so stale littlefs
+# copies would silently shadow the ROMFS app.
+_LITTLEFS_PURGE = (':scoreboard', ':lib', ':hardware_diagnostic.mpy', ':index.html.gz')
+
+# Must match MICROPY_HW_ROMFS_BYTES in firmware/board/PICO2W_SCOREBOARD.
+_ROMFS_PARTITION_BYTES = 256 * 1024
+
+
+def build_romfs_image(source_dir: Path) -> Path:
+    """Build a ROMFS image from the app portion of the build output.
+
+    The staging tree mirrors the littlefs layout (scoreboard/, lib/, ...) so
+    imports resolve identically from /rom. Files are already .mpy-compiled
+    by the build, hence --no-mpy.
+    """
+    stage_dir = root_directory / 'romfs_stage'
+    image_path = root_directory / 'pico.romfs'
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
+    stage_dir.mkdir()
+
+    for entry in source_dir.iterdir():
+        if entry.name in _LITTLEFS_FILES:
+            continue
+        if entry.is_dir():
+            shutil.copytree(entry, stage_dir / entry.name)
+        else:
+            shutil.copy2(entry, stage_dir / entry.name)
+
+    result = subprocess.run(
+        ['mpremote', 'romfs', '--no-mpy', '--output', str(image_path),
+         'build', str(stage_dir)],
+        capture_output=True, text=True,
+    )
+    shutil.rmtree(stage_dir)
+    if result.returncode != 0:
+        raise SystemExit(f"romfs image build failed:\n{result.stdout}\n{result.stderr}")
+
+    size = image_path.stat().st_size
+    print(f"ROMFS image: {image_path.name} ({size} bytes, "
+          f"{size * 100 // _ROMFS_PARTITION_BYTES}% of the {_ROMFS_PARTITION_BYTES // 1024} KB partition)")
+    if size > _ROMFS_PARTITION_BYTES:
+        raise SystemExit(
+            f"ROMFS image ({size} B) exceeds the partition "
+            f"({_ROMFS_PARTITION_BYTES} B). Grow MICROPY_HW_ROMFS_BYTES in "
+            "firmware/board/PICO2W_SCOREBOARD/mpconfigboard.h (multiple of 4096), "
+            "rebuild + reflash the firmware, and update _ROMFS_PARTITION_BYTES here."
+        )
+    return image_path
+
+
+def flash_device(source_dir: Path, port: str = None, repl: bool = False, release: bool = False):
     """Flash files to Pico using mpremote.
 
     Flashing into a *running* scoreboard is unreliable by design: with the
@@ -220,8 +277,16 @@ def flash_device(source_dir: Path, port: str = None, repl: bool = False):
     and soft resets can wedge USB (micropython#8494). So: reboot into safe
     mode first, copy with the app stopped, then hard-reset into the new
     firmware.
+
+    Dev mode (default): everything goes to littlefs — fast iteration, and
+    littlefs shadows any ROMFS app. Release mode: the app ships as a ROMFS
+    image (bytecode executes in place, ~100 KB less heap) with only
+    main.py/config.json on littlefs.
     """
-    print(f"Flashing {source_dir.relative_to(root_directory)}/ to device...")
+    mode = 'release (ROMFS)' if release else 'dev (littlefs)'
+    print(f"Flashing {source_dir.relative_to(root_directory)}/ to device [{mode}]...")
+
+    image_path = build_romfs_image(source_dir) if release else None
 
     if not enter_update_mode(port):
         print("")
@@ -231,12 +296,34 @@ def flash_device(source_dir: Path, port: str = None, repl: bool = False):
         print("  3. The app skips startup and the REPL is free")
         input("Press Enter once the device has rebooted in safe mode... ")
 
-    copy = _mpremote(['cp', '-r', f'{source_dir.as_posix()}/.', ':'], port, timeout=600)
-    if copy is None or copy.returncode != 0:
-        raise SystemExit(
-            "mpremote copy failed or hung. Use the Button A fallback above, "
-            "then re-run: python tools/build.py flash --no-build"
-        )
+    if release:
+        print("Deploying ROMFS image...")
+        deploy = _mpremote(['romfs', 'deploy', str(image_path)], port, timeout=600)
+        if deploy is None or deploy.returncode != 0:
+            raise SystemExit(
+                "romfs deploy failed or hung. Use the Button A fallback above, "
+                "then re-run: python tools/build.py flash --no-build --release"
+            )
+
+        # Remove littlefs copies so the ROMFS app actually runs (missing
+        # paths are fine — already-release devices won't have them).
+        print("Removing app files from littlefs (littlefs shadows /rom)...")
+        for target in _LITTLEFS_PURGE:
+            _mpremote(['rm', '-r', target], port, timeout=120, quiet=True)
+
+        for name in _LITTLEFS_FILES:
+            src = source_dir / name
+            if src.exists():
+                copy = _mpremote(['cp', str(src), f':{name}'], port, timeout=60)
+                if copy is None or copy.returncode != 0:
+                    raise SystemExit(f"copying {name} to littlefs failed")
+    else:
+        copy = _mpremote(['cp', '-r', f'{source_dir.as_posix()}/.', ':'], port, timeout=600)
+        if copy is None or copy.returncode != 0:
+            raise SystemExit(
+                "mpremote copy failed or hung. Use the Button A fallback above, "
+                "then re-run: python tools/build.py flash --no-build"
+            )
 
     # Hard reset into the (new) firmware; the /update flag was consumed at
     # the safe-mode boot, so this boot starts the app normally.
@@ -367,6 +454,13 @@ def main():
         '--port',
         help='Serial port for flashing (auto-detect if not specified)'
     )
+    flash_parser.add_argument(
+        '--release',
+        action='store_true',
+        help='Deploy the app as a ROMFS image (in-place execution, ~100 KB '
+             'less heap) instead of littlefs files. Requires the custom '
+             'firmware with a ROMFS partition.'
+    )
     add_common_args(flash_parser)
 
     # run subcommand
@@ -409,7 +503,7 @@ def main():
             print(f"Error: {output_dir} does not exist. Run build first or remove --no-build.")
             return 1
 
-        flash_device(output_dir, args.port, repl=False)
+        flash_device(output_dir, args.port, repl=False, release=args.release)
         return 0
 
     # run command

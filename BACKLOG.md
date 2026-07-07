@@ -104,18 +104,14 @@
       numbers (which our log tracebacks need — never -O3).
     - *Firmware A/B OTA*: blocked upstream, see item 2.
 
-27. **Move app code into ROMFS** (Phase B of the custom-firmware plan) —
-    the partition exists after the item-22 build; migration:
-    `tools/build.py` gains a release flow that builds the app tree into a
-    ROMFS image (`mpremote romfs build`, `.mpy` only — `.py` in ROMFS has
-    ZERO RAM benefit; `-march=armv7emsp` for natives) and deploys it
-    (`mpremote romfs deploy`, works under the safe-mode flow), stripping
-    app code from littlefs (keep main.py, config.json, /logs). main.py
-    stays on littlefs (ROMFS isn't bootable, micropython#17544) and gains
-    the corrupt-ROMFS import guard. littlefs root shadows /rom in
-    sys.path, so the dev flash flow keeps working unchanged. Expected:
-    ~100+ KB heap reclaimed (measured upstream: 28.8 KB → 3.1 KB per
-    imported module); acceptance = re-run the 2026-07-06 memory profile.
+27. **Grow the ROMFS partition before NBA lands** — Phase B shipped
+    2026-07-06 (`build.py flash --release`; live-set −70 KB measured) but
+    the app image already fills **90%** of the 256 KB partition
+    (index.html.gz + fonts + bytecode). NBA/soccer additions will
+    overflow it. Bump `MICROPY_HW_ROMFS_BYTES` to 512 KB (board header +
+    `_ROMFS_PARTITION_BYTES` in tools/build.py), rebuild firmware, and
+    reflash — which no longer needs hands: `machine.bootloader()` +
+    UF2 copy works remotely over USB.
 
 25. **Reduce webapp HTTP connection churn** — every poll is a fresh TCP
     connection (Microdot has no server-side keep-alive), so the status

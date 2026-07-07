@@ -51,6 +51,10 @@ backend/*.mmdb
 # Pico deployment directory (populated by tools/build.py)
 pico/
 
+# ROMFS image + staging (produced by tools/build.py flash --release)
+/pico.romfs
+/romfs_stage/
+
 # ESPN sample store + generated schemas/specs (tools/espn)
 /data/
 
