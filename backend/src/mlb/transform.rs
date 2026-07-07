@@ -1,11 +1,11 @@
 use crate::error::AppError;
-use crate::shared::team::parse_hex_rgb;
+use crate::espn::types::HomeAway;
+use crate::shared::team::{TeamColors, parse_hex_rgb};
 
 use super::types::{
-    AtBat, Bases, Count, EspnCompetitor, EspnSituation, HomeAway, Inning, InningHalf, LastPlay,
-    LiveGame, TeamState,
+    AtBat, Bases, Count, EspnCompetitor, EspnSituation, Inning, InningHalf, LastPlay, LiveGame,
+    TeamState,
 };
-use crate::shared::team::TeamColors;
 
 /// Parse the inning half from ESPN's `shortDetail` prefix.
 ///

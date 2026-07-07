@@ -3,5 +3,7 @@
 //! transport, caching, and the uniform deserialize-with-logging choke point.
 
 mod client;
+pub mod league;
+pub(crate) mod types;
 
 pub use client::EspnClient;

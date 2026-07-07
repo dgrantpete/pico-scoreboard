@@ -11,18 +11,22 @@ use crate::error::AppError;
 /// Maximum number of native-resolution logos to cache in memory.
 const LOGO_CACHE_CAPACITY: usize = 64;
 
-/// How long a cached JSON response stays fresh. ESPN's scoreboard feed is the
-/// same URL for every game and every device, so a poll cycle across a fleet
+/// How long a cached JSON response stays fresh. Each league's scoreboard is
+/// one URL for every game and every device, so a poll cycle across a fleet
 /// of Picos collapses into (at most) one upstream fetch per TTL window.
 const JSON_CACHE_TTL: Duration = Duration::from_secs(5);
+
+/// Distinct JSON URLs cached at once: one per pollable league, with headroom.
+/// LRU rather than a plain map so date-parameterized URLs can't grow unbounded.
+const JSON_CACHE_CAPACITY: usize = 8;
 
 /// HTTP client for ESPN with in-memory logo and JSON caches.
 #[derive(Debug, Clone)]
 pub struct EspnClient {
     client: Client,
     logo_cache: Arc<Mutex<LruCache<String, Bytes>>>,
-    /// Single-slot TTL cache of the last JSON response: (fetched_at, url, body).
-    json_cache: Arc<Mutex<Option<(Instant, String, Bytes)>>>,
+    /// Per-URL TTL cache of recent JSON responses.
+    json_cache: Arc<Mutex<LruCache<String, (Instant, Bytes)>>>,
 }
 
 impl EspnClient {
@@ -39,7 +43,9 @@ impl EspnClient {
             logo_cache: Arc::new(Mutex::new(LruCache::new(
                 NonZeroUsize::new(LOGO_CACHE_CAPACITY).unwrap(),
             ))),
-            json_cache: Arc::new(Mutex::new(None)),
+            json_cache: Arc::new(Mutex::new(LruCache::new(
+                NonZeroUsize::new(JSON_CACHE_CAPACITY).unwrap(),
+            ))),
         }
     }
 
@@ -86,17 +92,16 @@ impl EspnClient {
 
     /// Like `fetch_json`, but serves from a short-TTL cache keyed by URL.
     ///
-    /// Use for endpoints that many clients poll for identical data (the MLB
-    /// scoreboard). Each cache hit still deserializes — cheap next to the
-    /// upstream round-trip it saves.
+    /// Use for endpoints that many clients poll for identical data (a
+    /// league's scoreboard). Each cache hit still deserializes — cheap next
+    /// to the upstream round-trip it saves.
     pub async fn fetch_json_cached<T: serde::de::DeserializeOwned>(
         &self,
         url: &str,
     ) -> Result<T, AppError> {
         {
-            let cache = self.json_cache.lock().unwrap();
-            if let Some((fetched_at, cached_url, bytes)) = cache.as_ref()
-                && cached_url == url
+            let mut cache = self.json_cache.lock().unwrap();
+            if let Some((fetched_at, bytes)) = cache.get(url)
                 && fetched_at.elapsed() < JSON_CACHE_TTL
             {
                 return Self::deserialize_logged(url, bytes);
@@ -105,7 +110,10 @@ impl EspnClient {
 
         let bytes = self.fetch_json_bytes(url).await?;
         let value = Self::deserialize_logged(url, &bytes)?;
-        *self.json_cache.lock().unwrap() = Some((Instant::now(), url.to_string(), bytes));
+        self.json_cache
+            .lock()
+            .unwrap()
+            .put(url.to_string(), (Instant::now(), bytes));
         Ok(value)
     }
 

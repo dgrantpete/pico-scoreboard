@@ -10,14 +10,16 @@ use axum::{
 use crate::AppState;
 use crate::auth::ApiKey;
 use crate::error::{AppError, ErrorResponse};
+use crate::espn::league::{self, Mlb};
+use crate::espn::types::{RawScoreboard, find_event, parse_events};
 use crate::shared::etag::compute_games_etag;
 use crate::wire;
 
 use super::transform::live_competition_to_game;
-use super::types::{EspnCompetition, EspnScoreboard, LiveGame};
+use super::types::{EspnCompetition, EspnEvent, LiveGame};
 
 fn scoreboard_url(state: &AppState) -> String {
-    format!("{}/baseball/mlb/scoreboard", state.config.espn.base_url)
+    league::scoreboard_url(&state.config.espn, &Mlb)
 }
 
 /// True when the client asked for the packed binary format (see `wire.rs`).
@@ -90,10 +92,11 @@ pub async fn list_active_games(
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let url = scoreboard_url(&state);
-    let scoreboard: EspnScoreboard = state.espn_client.fetch_json_cached(&url).await?;
+    let raw: RawScoreboard = state.espn_client.fetch_json_cached(&url).await?;
+    // Serve whatever parsed: a transient ETag flap to a smaller set beats a 502.
+    let (events, _failed) = parse_events::<EspnEvent>(raw, &url);
 
-    let ids: Vec<String> = scoreboard
-        .events
+    let ids: Vec<String> = events
         .into_iter()
         .filter_map(|event| {
             let first = event.competitions.into_iter().next()?;
@@ -129,13 +132,9 @@ pub async fn get_live_game(
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let url = scoreboard_url(&state);
-    let scoreboard: EspnScoreboard = state.espn_client.fetch_json_cached(&url).await?;
-
-    let event = scoreboard
-        .events
-        .into_iter()
-        .find(|e| e.id == game_id)
-        .ok_or_else(|| AppError::GameNotFound(game_id.clone()))?;
+    let raw: RawScoreboard = state.espn_client.fetch_json_cached(&url).await?;
+    let (events, failed) = parse_events::<EspnEvent>(raw, &url);
+    let event = find_event(events, failed, &game_id, &url, |e| &e.id)?;
 
     let first = event
         .competitions

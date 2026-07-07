@@ -33,6 +33,11 @@ pub enum AppError {
     },
     /// Game ID not found or not currently live
     GameNotFound(String),
+    /// Unknown league path segment for a sport's routes
+    InvalidLeague {
+        league: String,
+        valid: &'static str,
+    },
     /// Team color hex string could not be parsed
     InvalidTeamColor { team: String, raw: String },
 }
@@ -122,6 +127,13 @@ impl IntoResponse for AppError {
                 StatusCode::NOT_FOUND,
                 "game_not_found".to_string(),
                 format!("Game '{}' not found or not live", id),
+            ),
+            // 404, not 400: an unknown league is a path segment with no
+            // resource behind it, same as an unknown team abbreviation.
+            AppError::InvalidLeague { league, valid } => (
+                StatusCode::NOT_FOUND,
+                "invalid_league".to_string(),
+                format!("Unknown league '{}'. Valid leagues: {}", league, valid),
             ),
             AppError::InvalidTeamColor { team, raw } => (
                 StatusCode::BAD_GATEWAY,

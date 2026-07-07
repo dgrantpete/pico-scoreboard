@@ -1,15 +1,12 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::espn::types::{CompetitionState, EspnTeam, HomeAway};
 use crate::shared::team::TeamColors;
 
-// ---------- ESPN inbound types ----------
+// (shared inbound leaves re-used here: CompetitionState, EspnTeam, HomeAway)
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct EspnScoreboard {
-    pub(crate) events: Vec<EspnEvent>,
-}
+// ---------- ESPN inbound types ----------
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,35 +77,12 @@ pub(crate) struct EspnStatusType {
     pub(crate) short_detail: String,
 }
 
-#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum CompetitionState {
-    Pre,
-    In,
-    Post,
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EspnCompetitor {
     pub(crate) home_away: HomeAway,
     pub(crate) score: String,
     pub(crate) team: EspnTeam,
-}
-
-#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum HomeAway {
-    Home,
-    Away,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct EspnTeam {
-    pub(crate) abbreviation: String,
-    pub(crate) color: String,
-    pub(crate) alternate_color: String,
 }
 
 #[derive(Deserialize)]
