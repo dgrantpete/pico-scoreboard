@@ -39,10 +39,15 @@ CREATE INDEX IF NOT EXISTS idx_responses_hash ON responses(body_hash);
 
 
 class Store:
-    """Owns the single SQLite connection; constructed once per process and injected."""
+    """Owns the single SQLite connection; constructed once per process (or per
+    request in the read-only viewer) and injected."""
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, *, readonly: bool = False):
         self.path = Path(path)
+        if readonly:
+            self._conn = sqlite3.connect(f"file:{self.path.as_posix()}?mode=ro", uri=True)
+            self._conn.execute("PRAGMA busy_timeout = 30000")
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.path)
         self._conn.execute("PRAGMA journal_mode = WAL")
@@ -160,6 +165,24 @@ class Store:
             GROUP BY sport, league ORDER BY sport, league
             """
         ).fetchall()
+
+    def latest_bodies_per_league(self) -> list[tuple[str, str, float, int | None, bytes]]:
+        """Newest 200-status body per (sport, league):
+        (sport, league, epoch, max_age, raw decompressed body)."""
+        rows = self._conn.execute(
+            """
+            SELECT t.sport, t.league, t.epoch, t.max_age, b.body
+            FROM (
+                SELECT sport, league, epoch, max_age, body_hash,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY sport, league ORDER BY epoch DESC
+                       ) AS rn
+                FROM responses WHERE http_status = 200
+            ) t JOIN bodies b ON b.hash = t.body_hash
+            WHERE t.rn = 1
+            """
+        ).fetchall()
+        return [(s, lg, e, m, zlib.decompress(blob)) for s, lg, e, m, blob in rows]
 
     def body_totals(self) -> tuple[int, int, int]:
         """(unique bodies, raw bytes, stored/compressed bytes)."""
