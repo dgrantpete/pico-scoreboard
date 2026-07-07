@@ -28,6 +28,9 @@ pub(crate) enum HomeAway {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EspnTeam {
+    /// ESPN's numeric team id as a string; 100%-present in every sampled
+    /// sport. Soccer matches scoring details to a side through it.
+    pub(crate) id: String,
     pub(crate) abbreviation: String,
     pub(crate) color: String,
     pub(crate) alternate_color: String,

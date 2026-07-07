@@ -36,12 +36,52 @@ impl EspnLeague for Nba {
     }
 }
 
+const SOCCER_LEAGUES: &str = "fifa.world, usa.1, eng.1, mex.1";
+
+#[derive(Clone, Copy)]
+pub enum SoccerLeague {
+    FifaWorld,
+    Usa1,
+    Eng1,
+    Mex1,
+}
+
+impl SoccerLeague {
+    pub fn from_path(league: &str) -> Result<Self, AppError> {
+        match league {
+            "fifa.world" => Ok(Self::FifaWorld),
+            "usa.1" => Ok(Self::Usa1),
+            "eng.1" => Ok(Self::Eng1),
+            "mex.1" => Ok(Self::Mex1),
+            _ => Err(AppError::InvalidLeague {
+                league: league.to_string(),
+                valid: SOCCER_LEAGUES,
+            }),
+        }
+    }
+}
+
+impl EspnLeague for SoccerLeague {
+    fn espn_sport(&self) -> &'static str {
+        "soccer"
+    }
+    fn espn_league(&self) -> &'static str {
+        match self {
+            Self::FifaWorld => "fifa.world",
+            Self::Usa1 => "usa.1",
+            Self::Eng1 => "eng.1",
+            Self::Mex1 => "mex.1",
+        }
+    }
+}
+
 /// Leagues addressable via `/{sport}/{league}/...` path segments.
-const VALID_LEAGUES: &str = "baseball/mlb, basketball/nba";
+const VALID_LEAGUES: &str = "baseball/mlb, basketball/nba, soccer/{fifa.world, usa.1, eng.1, mex.1}";
 
 pub enum AnyLeague {
     Mlb,
     Nba,
+    Soccer(SoccerLeague),
 }
 
 impl AnyLeague {
@@ -49,6 +89,12 @@ impl AnyLeague {
         match (sport, league) {
             ("baseball", "mlb") => Ok(Self::Mlb),
             ("basketball", "nba") => Ok(Self::Nba),
+            ("soccer", lg) => Ok(Self::Soccer(SoccerLeague::from_path(lg).map_err(
+                |_| AppError::InvalidLeague {
+                    league: format!("{sport}/{league}"),
+                    valid: VALID_LEAGUES,
+                },
+            )?)),
             _ => Err(AppError::InvalidLeague {
                 league: format!("{sport}/{league}"),
                 valid: VALID_LEAGUES,
@@ -62,12 +108,14 @@ impl EspnLeague for AnyLeague {
         match self {
             Self::Mlb => Mlb.espn_sport(),
             Self::Nba => Nba.espn_sport(),
+            Self::Soccer(league) => league.espn_sport(),
         }
     }
     fn espn_league(&self) -> &'static str {
         match self {
             Self::Mlb => Mlb.espn_league(),
             Self::Nba => Nba.espn_league(),
+            Self::Soccer(league) => league.espn_league(),
         }
     }
 }

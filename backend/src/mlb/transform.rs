@@ -1,6 +1,5 @@
 use crate::error::AppError;
-use crate::espn::types::HomeAway;
-use crate::shared::team::{TeamColors, parse_hex_rgb};
+use crate::shared::team::{TeamColors, order_home_away, parse_hex_rgb};
 
 use super::types::{
     AtBat, Bases, Count, EspnCompetitor, EspnSituation, Inning, InningHalf, LastPlay, LiveGame,
@@ -77,41 +76,21 @@ fn competitor_to_team_state(c: &EspnCompetitor) -> Result<TeamState, AppError> {
     })
 }
 
-/// Split two competitors into (home, away) by their `homeAway` markers.
+/// Split two competitors into (home, away) `TeamState`s.
 fn split_home_away(
     event_id: &str,
     competitors: [EspnCompetitor; 2],
 ) -> Result<(TeamState, TeamState), AppError> {
-    let [a, b] = competitors;
-    match (a.home_away, b.home_away) {
-        (HomeAway::Home, HomeAway::Away) => {
-            Ok((competitor_to_team_state(&a)?, competitor_to_team_state(&b)?))
-        }
-        (HomeAway::Away, HomeAway::Home) => {
-            Ok((competitor_to_team_state(&b)?, competitor_to_team_state(&a)?))
-        }
-        _ => {
-            let json_path = format!(
-                "events[?].competitions[0].competitors (event_id={})",
-                event_id
-            );
-            tracing::error!(
-                json_path = %json_path,
-                event_id = %event_id,
-                first_team = %a.team.abbreviation,
-                second_team = %b.team.abbreviation,
-                "ESPN competitors did not split into exactly one home and one away"
-            );
-            Err(AppError::EspnDeserialize {
-                url: String::new(),
-                json_path,
-                message: format!(
-                    "expected one home and one away competitor, got {}/{}",
-                    a.team.abbreviation, b.team.abbreviation
-                ),
-            })
-        }
-    }
+    let (home, away) = order_home_away(
+        event_id,
+        competitors,
+        |c| c.home_away,
+        |c| c.team.abbreviation.as_str(),
+    )?;
+    Ok((
+        competitor_to_team_state(&home)?,
+        competitor_to_team_state(&away)?,
+    ))
 }
 
 /// Transform a pre-game competition into a `PregameGame`.
@@ -216,7 +195,7 @@ mod tests {
     fn competitor(abbrev: &str, home_away: &str) -> EspnCompetitor {
         serde_json::from_str(&format!(
             r#"{{"homeAway":"{home_away}","score":"0",
-                "team":{{"abbreviation":"{abbrev}","color":"0C2340","alternateColor":"BD3039"}}}}"#
+                "team":{{"id":"1","abbreviation":"{abbrev}","color":"0C2340","alternateColor":"BD3039"}}}}"#
         ))
         .expect("test competitor json parses")
     }
@@ -227,8 +206,8 @@ mod tests {
 
         let competition: EspnCompetition = serde_json::from_str(
             r#"{"competitors":[
-                {"homeAway":"away","score":"0","team":{"abbreviation":"NYY","color":"003087","alternateColor":"E4002C"}},
-                {"homeAway":"home","score":"0","team":{"abbreviation":"BOS","color":"0C2340","alternateColor":"BD3039"}}
+                {"homeAway":"away","score":"0","team":{"id":"10","abbreviation":"NYY","color":"003087","alternateColor":"E4002C"}},
+                {"homeAway":"home","score":"0","team":{"id":"2","abbreviation":"BOS","color":"0C2340","alternateColor":"BD3039"}}
             ],"status":{"type":{"state":"pre","shortDetail":"7/7 - 7:10 PM EDT"},"period":0}}"#,
         )
         .expect("pre competition parses through the DU");

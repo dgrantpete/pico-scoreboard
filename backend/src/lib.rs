@@ -13,6 +13,7 @@ pub mod espn;
 pub mod logo;
 pub mod mlb;
 pub mod shared;
+pub mod soccer;
 pub mod team;
 pub mod wire;
 
@@ -32,6 +33,8 @@ use espn::EspnClient;
         team::get_team_logo,
         mlb::handler::list_active_games,
         mlb::handler::get_live_game,
+        soccer::handler::list_active_games,
+        soccer::handler::get_live_game,
     ),
     components(schemas(
         clock::TimeResponse,
@@ -48,12 +51,18 @@ use espn::EspnClient;
         mlb::LastPlay,
         mlb::Inning,
         mlb::InningHalf,
+        soccer::SoccerGame,
+        soccer::SoccerTeam,
+        soccer::SoccerTeamState,
+        soccer::LastEvent,
+        soccer::Side,
     )),
     modifiers(&SecurityAddon),
     tags(
         (name = "clock", description = "Time and timezone endpoint"),
         (name = "team", description = "Team logo endpoint"),
         (name = "mlb", description = "MLB live game data (ESPN-backed)"),
+        (name = "soccer", description = "Soccer live game data (ESPN-backed)"),
     )
 )]
 struct ApiDoc;
@@ -168,6 +177,11 @@ pub async fn run() {
         )
         .route("/baseball/mlb/games", get(mlb::list_active_games))
         .route("/baseball/mlb/games/{game_id}", get(mlb::get_live_game))
+        .route("/soccer/{league}/games", get(soccer::list_active_games))
+        .route(
+            "/soccer/{league}/games/{game_id}",
+            get(soccer::get_live_game),
+        )
         .layer(cors)
         .with_state(app_state);
 
