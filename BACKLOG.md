@@ -83,12 +83,46 @@
     `_get_header` scan the raw `_headers` bytes list instead. Minor
     (~0.5 KB/s), do opportunistically.
 
-22. **Frozen modules (custom MicroPython build)** — the biggest live-set
-    lever: module bytecode (~100-150 KB of the ~340 KB live set) moves to
-    flash via a custom firmware image with the app frozen in. Big workflow
-    change (reflash = full firmware image; interacts with OTA item 2 —
-    frozen code can't be OTA-updated file-by-file). Only worth it if
-    headroom gets tight after items 8/17/20.
+22. **Custom MicroPython build (frozen modules + lwip tuning)** — one
+    build, two big levers:
+    - *Frozen modules*: module bytecode (~100-150 KB of the ~340 KB live
+      set) moves to flash. Interacts with OTA item 2 — frozen code can't
+      be OTA-updated file-by-file.
+    - *`MEMP_NUM_TCP_PCB` / `MEMP_NUM_TCP_PCB_LISTEN` (lwip)*: the ~4
+      concurrent inbound TCP socket limit behind items 18/24 and the
+      `ERR_CONNECTION_TIMED_OUT` connect-phase drops (SYNs silently
+      ignored when the pool is full) is a compile-time lwip constant in
+      the rp2 port's `lwipopts.h`. Raising it (with matching pbuf/memory
+      pool bumps) costs RAM per socket but is the only real fix for
+      multi-client/browser-parallelism connect failures — and a
+      prerequisite for holding WebSocket connections open (item 25).
+    Big workflow change (reflash = full firmware image); the two levers
+    partially fund each other (frozen modules free the RAM the socket
+    bump spends).
+
+25. **Reduce webapp HTTP connection churn** — every poll is a fresh TCP
+    connection (Microdot has no server-side keep-alive), so the status
+    (5 s) + logs (3 s) polls churn ~0.5 conn/s through a ~4-socket pool,
+    and the browser's parallel fetches cause connect-phase drops.
+    Escalation ladder: (a) *combined poll endpoint*
+    (`GET /api/dashboard?since=` returning status + new log entries in
+    one response) — halves connections, trivial on both sides, do first;
+    (b) *WebSocket push* for logs/status (vendor microdot's websocket.py;
+    firmware task pushes deltas on change; frontend reconnect logic) —
+    biggest reduction, but each open WS pins one scarce socket
+    permanently, so it wants item 22's `MEMP_NUM_TCP_PCB` bump first,
+    and the 60 s `connection_timeout` reaper must exempt WS (ping/pong
+    keepalive instead).
+
+26. **Event-loop latency instrumentation** — to attribute the "device did
+    not respond in time" stalls to specific work: a tiny Core 0 task
+    sleeps 50 ms and logs when actual wakeup overshoots by >100 ms
+    (`ticks_diff`), plus max stall per minute. Correlate spikes with the
+    existing request logs (TLS reconnects, flash flushes, config saves).
+    ~10 lines; answers "what blocks the loop" with data instead of
+    guesses. Note: TLS crypto itself is atomic C — the fix for it is
+    fewer requests (item 25's combined backend endpoint also halves the
+    poller's TLS round-trips per cycle), not finer yielding.
 
 ## Backend
 

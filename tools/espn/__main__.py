@@ -16,9 +16,11 @@ import yaml
 
 from .collect import Collector
 from .db import Store
+from .discover import DEFAULT_INSTANCES, discover, print_report
 from .leagues import GAME_DAY_TZ, League, resolve
 from .migrate import migrate
 from .schema import build_schema
+from .ui import DEFAULT_PORT, serve
 from .spec import build_spec, combine_specs, prefix_for
 from .validate import run_validation
 
@@ -70,6 +72,41 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         return 0 if migrate(store, legacy_dir, dry_run=args.dry_run) else 1
     finally:
         store.close()
+
+
+def cmd_discover(args: argparse.Namespace) -> int:
+    leagues = [_resolve(arg) for arg in args.league]
+    store = Store(args.db)
+    try:
+        report = discover(
+            store,
+            leagues,
+            instances=args.instances,
+            tag_presence=args.tag_presence,
+            max_cardinality=args.max_cardinality,
+            min_class_pct=args.min_class_pct,
+            source_like=args.source_like,
+            beam_width=args.beam,
+            max_depth=args.depth,
+            min_split_gain=args.min_split_gain,
+        )
+    finally:
+        store.close()
+    print_report(report, top=args.top)
+    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+    name = "discover_" + "_".join(_slug_key(lg.slug) for lg in leagues)
+    if args.instances != DEFAULT_INSTANCES:
+        name += "_" + re.sub(r"\W+", "_", args.instances).strip("_")
+    out = GENERATED_DIR / f"{name}.json"
+    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print(f"\nwrote {out}")
+    return 0
+
+
+def cmd_ui(args: argparse.Namespace) -> int:
+    return serve(
+        Path(args.db), GENERATED_DIR, args.port, open_browser=not args.no_browser
+    )
 
 
 def cmd_tray(args: argparse.Namespace) -> int:
@@ -253,6 +290,73 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--dry-run", action="store_true", help="read and verify without writing")
     p.set_defaults(func=cmd_migrate)
+
+    p = sub.add_parser(
+        "discover",
+        parents=[common],
+        help="automatically rank discriminated-union tag candidates by information gain",
+    )
+    p.add_argument(
+        "--league",
+        action="append",
+        required=True,
+        help="registry key or raw sport/slug; repeat to pool leagues into one corpus"
+        " (a synthetic _league tag then competes as a discriminant, comparing"
+        " sport-first vs state-first hierarchies)",
+    )
+    p.add_argument(
+        "--instances",
+        default=DEFAULT_INSTANCES,
+        help="path selecting the objects to analyze, e.g. 'events[]' or"
+        " 'events[].competitions[0].competitors[]' — re-root at an array element"
+        f" to find per-element unions (default: {DEFAULT_INSTANCES})",
+    )
+    p.add_argument(
+        "--tag-presence",
+        type=float,
+        default=0.99,
+        help="min fraction of instances a candidate tag must appear in (default 0.99;"
+        " tolerates glitch payloads like empty events)",
+    )
+    p.add_argument(
+        "--max-cardinality",
+        type=int,
+        default=6,
+        help="max distinct values for a candidate tag (default 6)",
+    )
+    p.add_argument(
+        "--min-class-pct",
+        type=float,
+        default=1.0,
+        help="classes below this %% of instances get no variant (default 1.0)",
+    )
+    p.add_argument(
+        "--source-like", default="%", help="restrict to responses whose source matches (SQL LIKE)"
+    )
+    p.add_argument("--top", type=int, default=10, help="how many ranked candidates to print")
+    p.add_argument(
+        "--beam",
+        type=int,
+        default=3,
+        help="explore this many distinct-partition candidates per level (default 3)",
+    )
+    p.add_argument(
+        "--depth", type=int, default=2, help="max split-hierarchy depth (default 2)"
+    )
+    p.add_argument(
+        "--min-split-gain",
+        type=float,
+        default=1.0,
+        help="a nested split must gain at least this many bits to be kept (default 1.0)",
+    )
+    p.set_defaults(func=cmd_discover)
+
+    p = sub.add_parser(
+        "ui", parents=[common], help="serve the local read-only pipeline viewer"
+    )
+    p.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"listen port (default {DEFAULT_PORT})")
+    p.add_argument("--no-browser", action="store_true", help="don't open the browser on start")
+    p.set_defaults(func=cmd_ui)
 
     p = sub.add_parser(
         "tray", parents=[common], help="run the system-tray collector (console mode for testing)"

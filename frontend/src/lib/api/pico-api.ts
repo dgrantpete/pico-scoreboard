@@ -19,7 +19,24 @@ async function handleResponse<T>(response: Response): Promise<T> {
 	if (!response.ok) {
 		throw new ApiError(await errorMessage(response), response.status);
 	}
-	return response.json();
+	return readBody(() => response.json());
+}
+
+/**
+ * Read a response body, translating an abort mid-read into the same
+ * readable error as a connect-phase timeout. The request timeout can fire
+ * AFTER fetch() resolves — headers arrived but the device is streaming the
+ * body slowly — and that abort surfaces from .json()/.text(), not fetch().
+ */
+async function readBody<T>(read: () => Promise<T>): Promise<T> {
+	try {
+		return await read();
+	} catch (e) {
+		if (e instanceof DOMException && (e.name === 'AbortError' || e.name === 'TimeoutError')) {
+			throw new ApiError('Device did not respond in time', 0);
+		}
+		throw e;
+	}
 }
 
 /**
@@ -142,7 +159,7 @@ export const picoApi = {
 		if (!response.ok) {
 			throw new ApiError(await errorMessage(response), response.status);
 		}
-		const text = await response.text();
+		const text = await readBody(() => response.text());
 		return text
 			.split('\n')
 			.filter((line) => line.length > 0)
@@ -159,6 +176,6 @@ export const picoApi = {
 		if (!response.ok) {
 			throw new ApiError(await errorMessage(response), response.status);
 		}
-		return response.text();
+		return readBody(() => response.text());
 	}
 };
