@@ -71,6 +71,10 @@ def _safe_mode_requested() -> bool:
 
 if _safe_mode_requested():
     import sys
+    # Positive sentinel for tools/build.py: mpremote `exec` shares this
+    # namespace, so the flash flow can PROVE safe mode took (a timing
+    # heuristic once false-positived and erased ROMFS under the running app).
+    _SAFE_MODE = True
     print("[BOOT] application NOT started — REPL is free for mpremote/flashing")
     sys.exit()
 # ----------------------------------------------------------------------------
@@ -124,6 +128,17 @@ except ImportError as e:
 
 # Reduce buffer size for memory-constrained environment
 Response.send_file_buffer_size = 2048
+
+# Collect after ~48 KB of allocation instead of waiting for the heap to
+# fill: post-ROMFS churn is ~4 KB/s, so this trades a cheap collection every
+# ~12s for never letting free memory grind near zero — headroom the ~33 KB
+# contiguous TLS buffers want on reconnect. (Calibrated 2026-07-06; see
+# BACKLOG history for the measurements.)
+gc.threshold(48 * 1024)
+
+# The app's OTA identity (sha256 of the ROMFS image), None on dev/littlefs
+# deploys. Read once: it can only change via a reboot.
+APP_VERSION: str | None = ota.current_version()
 
 app: Microdot = Microdot()
 config: Config = Config()
@@ -239,7 +254,8 @@ def get_network_status() -> dict:
             'memory_used': memory['memory_used'],
             'memory_free': memory['memory_free'],
             'flash_used': memory['flash_used'],
-            'flash_free': memory['flash_free']
+            'flash_free': memory['flash_free'],
+            'app_version': APP_VERSION
         }
     elif wlan and wlan.isconnected():
         return {
@@ -255,7 +271,8 @@ def get_network_status() -> dict:
             'memory_used': memory['memory_used'],
             'memory_free': memory['memory_free'],
             'flash_used': memory['flash_used'],
-            'flash_free': memory['flash_free']
+            'flash_free': memory['flash_free'],
+            'app_version': APP_VERSION
         }
     else:
         return {
@@ -271,7 +288,8 @@ def get_network_status() -> dict:
             'memory_used': memory['memory_used'],
             'memory_free': memory['memory_free'],
             'flash_used': memory['flash_used'],
-            'flash_free': memory['flash_free']
+            'flash_free': memory['flash_free'],
+            'app_version': APP_VERSION
         }
 
 
@@ -924,8 +942,7 @@ if __name__ == '__main__':
     # write, and stamp this boot with its reset cause for post-mortems.
     logger.rotate_boot_log()
     logger.debug(f"[MAIN] boot: reset_cause={_reset_cause_name()}")
-    _v = ota.current_version()
-    logger.debug(f"[MAIN] app version: {_v[:12] if _v else 'dev (littlefs)'}")
+    logger.debug(f"[MAIN] app version: {APP_VERSION[:12] if APP_VERSION else 'dev (littlefs)'}")
 
     # Initialize display hardware and rendering primitives. All Core-0-only
     # setup (glyph caches, UI colors, state) happens here before the display

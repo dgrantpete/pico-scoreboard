@@ -6,15 +6,20 @@
 #define MICROPY_HW_BOARD_NAME                   "Pico Scoreboard (Pico 2 W)"
 
 // Flash layout (4 MB total):
-//   [ firmware ~1.0 MB | ROMFS 256 KB | littlefs 2.5 MB ]
+//   [ firmware ~1.0 MB | ROMFS 512 KB | littlefs 2.5 MB ]
 // littlefs size matches stock RPI_PICO2_W (PICO_FLASH_SIZE_BYTES - 1.5 MB)
 // so existing devices keep their filesystem intact across the firmware
 // swap. The ROMFS partition is carved from the top of the remaining code
 // region (rp2_flash.c: MICROPY_HW_ROMFS_BASE = storage base - ROMFS bytes)
-// and will hold the app's .mpy files, executed in place — see BACKLOG
-// (app-to-ROMFS migration) for the deploy flow.
+// and holds the app's .mpy files, executed in place.
+//
+// NOTE: changing ROMFS_BYTES moves the partition BASE, orphaning existing
+// contents — after a firmware reflash the device self-heals via
+// ota.recover() (re-downloads the app from the backend), or redeploy with
+// `build.py flash --release`. tools/build.py parses this value for its
+// image-size check; keep the define on one line.
 #define MICROPY_HW_FLASH_STORAGE_BYTES          (PICO_FLASH_SIZE_BYTES - 1536 * 1024)
-#define MICROPY_HW_ROMFS_BYTES                  (256 * 1024)
+#define MICROPY_HW_ROMFS_BYTES                  (512 * 1024)
 
 // Enable networking.
 #define MICROPY_PY_NETWORK 1

@@ -195,20 +195,43 @@ _UPDATE_MODE_SNIPPET = "f=open('/update','w'); f.close(); import machine; machin
 def enter_update_mode(port: str = None) -> bool:
     """Reboot the running firmware into safe mode and confirm it took.
 
-    Confirmation uses a filesystem op (`fs ls`) because fs commands are
-    exactly what hangs while a Core 1 thread is running — a fast response
-    proves the app did not start.
+    The request exec MUST be verified: a busy device can reject the raw-REPL
+    handshake, and proceeding on a silent failure once erased ROMFS under
+    the running app (Core 1 crashed with `NotImplementedError: opcode`).
+
+    Confirmation is positive proof, not timing: main.py's safe-mode branch
+    sets a `_SAFE_MODE` global, and mpremote `exec` shares that namespace.
+    Older deployed main.py lacks the sentinel — for those, fall back to the
+    fs-probe heuristic (fs commands hang while a Core 1 thread is running),
+    which is sound once the request exec is known to have succeeded.
     """
     print("Requesting reboot into safe (update) mode...")
     # --no-follow: machine.reset() kills the connection mid-exec; don't wait.
-    _mpremote(['exec', '--no-follow', _UPDATE_MODE_SNIPPET], port, timeout=15, quiet=True)
+    for _ in range(3):
+        req = _mpremote(['exec', '--no-follow', _UPDATE_MODE_SNIPPET],
+                        port, timeout=15, quiet=True)
+        if req is not None and req.returncode == 0:
+            break
+        print("  safe-mode request rejected (device busy); retrying...")
+        time.sleep(2)
+    else:
+        return False
 
     # Hard reset -> USB re-enumerates; give the OS a moment, then probe.
     time.sleep(4)
     for _ in range(3):
-        probe = _mpremote(['fs', 'ls', ':'], port, timeout=8, quiet=True)
+        probe = _mpremote(['exec', "print('SAFE' if globals().get('_SAFE_MODE') else 'UNSAFE')"],
+                          port, timeout=8, quiet=True)
         if probe is not None and probe.returncode == 0:
-            print("Device is in safe mode.")
+            verdict = probe.stdout.decode(errors='replace').strip()
+            if verdict.endswith('SAFE') and not verdict.endswith('UNSAFE'):
+                print("Device is in safe mode.")
+            elif _mpremote(['fs', 'ls', ':'], port, timeout=8, quiet=True) is None:
+                # No sentinel and fs hangs: the app is running. Don't flash.
+                return False
+            else:
+                print("Device responds without the safe-mode sentinel "
+                      "(older main.py); fs probe is clean — proceeding.")
             # Let the serial port fully release before the next mpremote
             # invocation opens it (Windows COM reopen race).
             time.sleep(1.5)
@@ -228,8 +251,19 @@ _LITTLEFS_FILES = ('main.py', 'ota.py', 'config.json')
 # copies would silently shadow the ROMFS app.
 _LITTLEFS_PURGE = (':scoreboard', ':lib', ':hardware_diagnostic.mpy', ':index.html.gz')
 
-# Must match MICROPY_HW_ROMFS_BYTES in firmware/board/PICO2W_SCOREBOARD.
-_ROMFS_PARTITION_BYTES = 256 * 1024
+def _romfs_partition_bytes() -> int:
+    """Read MICROPY_HW_ROMFS_BYTES from the board header — single source of
+    truth, so the image-size check can't silently drift from the firmware's
+    actual partition. Expects the define on one line, e.g. `(512 * 1024)`."""
+    header = root_directory / 'firmware' / 'board' / 'PICO2W_SCOREBOARD' / 'mpconfigboard.h'
+    for line in header.read_text().splitlines():
+        if 'MICROPY_HW_ROMFS_BYTES' in line and line.strip().startswith('#define'):
+            expr = line.split('MICROPY_HW_ROMFS_BYTES', 1)[1].strip()
+            # Evaluate the arithmetic C expression, e.g. "(512 * 1024)"
+            if not all(c in '0123456789*+() \t' for c in expr):
+                break
+            return eval(expr)  # noqa: S307 - digits and arithmetic only
+    raise SystemExit(f"Could not parse MICROPY_HW_ROMFS_BYTES from {header}")
 
 
 def build_romfs_image(source_dir: Path) -> tuple[Path, str]:
@@ -264,17 +298,18 @@ def build_romfs_image(source_dir: Path) -> tuple[Path, str]:
     if result.returncode != 0:
         raise SystemExit(f"romfs image build failed:\n{result.stdout}\n{result.stderr}")
 
+    partition_bytes = _romfs_partition_bytes()
     size = image_path.stat().st_size
     sha = hashlib.sha256(image_path.read_bytes()).hexdigest()
     print(f"ROMFS image: {image_path.name} ({size} bytes, "
-          f"{size * 100 // _ROMFS_PARTITION_BYTES}% of the {_ROMFS_PARTITION_BYTES // 1024} KB partition, "
+          f"{size * 100 // partition_bytes}% of the {partition_bytes // 1024} KB partition, "
           f"sha256 {sha[:12]}...)")
-    if size > _ROMFS_PARTITION_BYTES:
+    if size > partition_bytes:
         raise SystemExit(
             f"ROMFS image ({size} B) exceeds the partition "
-            f"({_ROMFS_PARTITION_BYTES} B). Grow MICROPY_HW_ROMFS_BYTES in "
-            "firmware/board/PICO2W_SCOREBOARD/mpconfigboard.h (multiple of 4096), "
-            "rebuild + reflash the firmware, and update _ROMFS_PARTITION_BYTES here."
+            f"({partition_bytes} B). Grow MICROPY_HW_ROMFS_BYTES in "
+            "firmware/board/PICO2W_SCOREBOARD/mpconfigboard.h (multiple of 4096) "
+            "and rebuild + reflash the firmware."
         )
     return image_path, sha
 
