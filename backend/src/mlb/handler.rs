@@ -31,7 +31,7 @@ fn wants_struct(headers: &HeaderMap) -> bool {
     })
 }
 
-/// Build a 200-or-304 response for `GET /mlb/games` given the live game IDs,
+/// Build a 200-or-304 response for `GET /baseball/mlb/games` given the live game IDs,
 /// the client's `If-None-Match` header, and the negotiated format.
 ///
 /// The ETag is computed over the game IDs and shared by both representations
@@ -73,10 +73,10 @@ fn build_games_response(
     }
 }
 
-/// GET /mlb/games — list ESPN event IDs whose first competition is currently live.
+/// GET /baseball/mlb/games — list ESPN event IDs whose first competition is currently live.
 #[utoipa::path(
     get,
-    path = "/mlb/games",
+    path = "/baseball/mlb/games",
     responses(
         (status = 200, description = "IDs of currently live MLB games. Binary encoding available via `Accept: application/x-scoreboard-struct` (see backend/src/wire.rs)", body = Vec<String>),
         (status = 304, description = "Game set unchanged since client's If-None-Match"),
@@ -111,10 +111,10 @@ pub async fn list_active_games(
     Ok(build_games_response(ids, if_none_match, wants_struct(&headers)))
 }
 
-/// GET /mlb/games/{game_id} — live state snapshot for one MLB game.
+/// GET /baseball/mlb/games/{game_id} — live state snapshot for one MLB game.
 #[utoipa::path(
     get,
-    path = "/mlb/games/{game_id}",
+    path = "/baseball/mlb/games/{game_id}",
     params(("game_id" = String, Path, description = "ESPN event ID")),
     responses(
         (status = 200, description = "Live game state. Binary encoding available via `Accept: application/x-scoreboard-struct` (see backend/src/wire.rs)", body = LiveGame),
@@ -165,7 +165,9 @@ pub async fn get_live_game(
                 Ok(([(header::VARY, "Accept")], Json(game)).into_response())
             }
         }
-        EspnCompetition::PreGame | EspnCompetition::Final => {
+        // Live-only contract: pregame data is modeled (`PregameGame`) but not
+        // served yet — 404 remains the "nothing to display" signal.
+        EspnCompetition::PreGame { .. } | EspnCompetition::Final => {
             Err(AppError::GameNotFound(game_id))
         }
     }

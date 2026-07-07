@@ -1,111 +1,88 @@
+//! Generic team-logo endpoint: `/{sport}/{league}/teams/{abbrev}/logo`.
+//!
+//! Logos are payload-resolved: the team's `logo` URL is taken from the
+//! league's own scoreboard feed rather than constructed from CDN path
+//! conventions — those conventions differ per sport (MLB uses
+//! `mlb/500/scoreboard/…`, World Cup teams are country flags under
+//! `countries/500/…`, clubs use numeric ids) and ESPN's payload is the
+//! ground truth for all of them. The trade-off: a team appears here only
+//! while it's on the current scoreboard, which is always true for the
+//! firmware's use (it only asks about teams in games it is displaying).
+
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::{HeaderMap, Response, StatusCode, header},
+    http::{HeaderMap, Response, StatusCode},
 };
 use serde::Deserialize;
 use std::sync::Arc;
-use utoipa::{IntoParams, ToSchema};
 
 use crate::AppState;
 use crate::auth::ApiKey;
 use crate::error::{AppError, ErrorResponse};
-use crate::logo::{
-    blend_with_background, decode_png, encode_png, encode_ppm_p6, encode_rgb565_raw,
-    encode_rgb888_raw, parse_hex_color, resize_image,
-};
+use crate::espn::league::{self, AnyLeague};
+use crate::espn::types::{RawScoreboard, parse_events};
+use crate::logo::{LogoQuery, build_logo_response};
 
-/// League identifier used as a path parameter.
-#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum League {
-    Nba,
-    Mlb,
+/// Minimal projection of a scoreboard event for logo resolution — valid for
+/// every sport because it touches none of the sport-specific fields.
+#[derive(Deserialize)]
+struct LogoEvent {
+    #[serde(default)]
+    competitions: Vec<LogoCompetition>,
 }
 
-impl League {
-    /// ESPN CDN logo path segment.
-    fn logo_path(&self) -> &'static str {
-        match self {
-            League::Nba => "nba",
-            League::Mlb => "mlb",
-        }
-    }
+#[derive(Deserialize)]
+struct LogoCompetition {
+    #[serde(default)]
+    competitors: Vec<LogoCompetitor>,
 }
 
-/// Query parameters for the logo endpoint.
-#[derive(Debug, Deserialize, IntoParams, ToSchema)]
-pub struct LogoQuery {
-    /// Width in pixels (default: 128)
-    #[serde(default = "default_size")]
-    pub width: u32,
-
-    /// Height in pixels (default: 128)
-    #[serde(default = "default_size")]
-    pub height: u32,
-
-    /// Background color as hex RGB888 without # (e.g., "FFFFFF").
-    /// If provided, transparent pixels are blended with this color.
-    pub background_color: Option<String>,
+#[derive(Deserialize)]
+struct LogoCompetitor {
+    team: LogoTeam,
 }
 
-fn default_size() -> u32 {
-    128
+#[derive(Deserialize)]
+struct LogoTeam {
+    abbreviation: String,
+    logo: Option<String>,
 }
 
-/// Largest resize dimension the endpoint will perform. The panel is 128px
-/// wide, so 512 leaves generous headroom for browser use while keeping an
-/// unauthenticated-sized request from asking for a multi-hundred-MB resize.
-const MAX_DIMENSION: u32 = 512;
-
-/// Supported output formats, selected via the Accept header.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ToSchema)]
-pub enum OutputFormat {
-    Png,
-    Ppm,
-    Rgb888,
-    Rgb565,
-}
-
-impl OutputFormat {
-    fn content_type(&self) -> &'static str {
-        match self {
-            OutputFormat::Png => "image/png",
-            OutputFormat::Ppm => "image/x-portable-pixmap",
-            OutputFormat::Rgb888 => "image/x-rgb888",
-            OutputFormat::Rgb565 => "image/x-rgb565",
-        }
-    }
-}
-
-/// Determine output format from Accept header. Defaults to PNG.
-fn parse_accept_header(headers: &HeaderMap) -> OutputFormat {
-    for accept in headers.get_all(header::ACCEPT) {
-        if let Ok(accept_str) = accept.to_str() {
-            if accept_str.contains("image/x-rgb565") {
-                return OutputFormat::Rgb565;
-            }
-            if accept_str.contains("image/x-rgb888") {
-                return OutputFormat::Rgb888;
-            }
-            if accept_str.contains("image/x-portable-pixmap") {
-                return OutputFormat::Ppm;
-            }
-        }
-    }
-    OutputFormat::Png
-}
-
-/// GET /{league}/{abbrev}/logo
+/// Find a team's payload-provided logo URL on the scoreboard.
 ///
-/// Fetches a team logo from the ESPN CDN and returns it in the format
-/// negotiated via the Accept header (PNG, PPM, raw RGB888, or raw RGB565).
+/// Only URLs under the configured ESPN CDN host are honored — anything else
+/// (never observed) is treated as the logo being absent, so this can never
+/// proxy a foreign host.
+fn resolve_team_logo(events: Vec<LogoEvent>, abbrev: &str, cdn_base: &str) -> Option<String> {
+    let cdn_prefix = format!("{}/", cdn_base.trim_end_matches('/'));
+    events
+        .into_iter()
+        .flat_map(|e| e.competitions)
+        .flat_map(|c| c.competitors)
+        .filter(|c| c.team.abbreviation.eq_ignore_ascii_case(abbrev))
+        .filter_map(|c| c.team.logo)
+        .find(|url| {
+            let ok = url.starts_with(&cdn_prefix);
+            if !ok {
+                tracing::warn!(url = %url, "payload logo URL outside ESPN CDN — ignoring");
+            }
+            ok
+        })
+}
+
+/// GET /{sport}/{league}/teams/{abbrev}/logo
+///
+/// Resolves the team's logo from the league's scoreboard payload and returns
+/// it in the format negotiated via the Accept header (PNG, PPM, raw RGB888,
+/// or raw RGB565).
 #[utoipa::path(
     get,
-    path = "/{league}/{abbrev}/logo",
+    path = "/{sport}/{league}/teams/{abbrev}/logo",
     params(
-        ("league" = League, Path, description = "League (nba or mlb)"),
-        ("abbrev" = String, Path, description = "Team abbreviation (e.g., 'bos', 'lal')"),
+        ("sport" = String, Path, description = "ESPN sport slug (e.g. 'baseball')"),
+        ("league" = String, Path, description = "ESPN league slug (e.g. 'mlb')"),
+        ("abbrev" = String, Path, description = "Team abbreviation (e.g. 'BOS')"),
         LogoQuery
     ),
     responses(
@@ -117,7 +94,7 @@ fn parse_accept_header(headers: &HeaderMap) -> OutputFormat {
         )),
         (status = 400, description = "Invalid parameters", body = ErrorResponse),
         (status = 401, description = "Missing or invalid API key", body = ErrorResponse),
-        (status = 404, description = "Team not found", body = ErrorResponse),
+        (status = 404, description = "Unknown league, or team not on the current scoreboard", body = ErrorResponse),
         (status = 502, description = "Error fetching from ESPN", body = ErrorResponse),
     ),
     security(("api_key" = [])),
@@ -126,36 +103,20 @@ fn parse_accept_header(headers: &HeaderMap) -> OutputFormat {
 pub async fn get_team_logo(
     State(state): State<Arc<AppState>>,
     _auth: ApiKey,
-    Path((league, abbrev)): Path<(League, String)>,
+    Path((sport, league, abbrev)): Path<(String, String, String)>,
     Query(params): Query<LogoQuery>,
     headers: HeaderMap,
 ) -> Result<Response<Body>, AppError> {
-    if !(1..=MAX_DIMENSION).contains(&params.width) || !(1..=MAX_DIMENSION).contains(&params.height)
-    {
-        return Err(AppError::InvalidDimensions {
-            width: params.width,
-            height: params.height,
-        });
-    }
+    let league = AnyLeague::from_path(&sport, &league)?;
 
-    let output_format = parse_accept_header(&headers);
+    let scoreboard_url = league::scoreboard_url(&state.config.espn, &league);
+    let raw: RawScoreboard = state.espn_client.fetch_json_cached(&scoreboard_url).await?;
+    let (events, _failed) = parse_events::<LogoEvent>(raw, &scoreboard_url);
 
-    let background = if let Some(ref hex) = params.background_color {
-        Some(parse_hex_color(hex)?)
-    } else {
-        None
-    };
+    let logo_url = resolve_team_logo(events, &abbrev, &state.config.espn.logo_url)
+        .ok_or_else(|| AppError::TeamNotFound(abbrev.clone()))?;
 
-    let supports_transparency = output_format == OutputFormat::Png;
-
-    let url = format!(
-        "{}/i/teamlogos/{}/500/{}.png",
-        state.config.espn.logo_url,
-        league.logo_path(),
-        abbrev.to_lowercase(),
-    );
-
-    let logo_bytes = state.espn_client.fetch_logo(&url).await.map_err(|e| {
+    let logo_bytes = state.espn_client.fetch_logo(&logo_url).await.map_err(|e| {
         if let AppError::ImageFetch(ref req_err) = e
             && req_err.status() == Some(StatusCode::NOT_FOUND)
         {
@@ -164,47 +125,52 @@ pub async fn get_team_logo(
         e
     })?;
 
-    let img = decode_png(&logo_bytes)?;
-    let resized = resize_image(&img, params.width, params.height);
+    build_logo_response(&logo_bytes, &params, &headers)
+}
 
-    let processed = if let Some(bg) = background {
-        blend_with_background(&resized, bg)
-    } else if !supports_transparency {
-        blend_with_background(&resized, (0, 0, 0))
-    } else {
-        resized
-    };
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let (output_bytes, content_type) = match output_format {
-        OutputFormat::Png => (encode_png(&processed)?, OutputFormat::Png.content_type()),
-        OutputFormat::Ppm => (encode_ppm_p6(&processed), OutputFormat::Ppm.content_type()),
-        OutputFormat::Rgb888 => (
-            encode_rgb888_raw(&processed),
-            OutputFormat::Rgb888.content_type(),
-        ),
-        OutputFormat::Rgb565 => (
-            encode_rgb565_raw(&processed),
-            OutputFormat::Rgb565.content_type(),
-        ),
-    };
-
-    let mut response = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type)
-        .header(header::CACHE_CONTROL, "public, max-age=86400")
-        .header(header::VARY, "Accept");
-
-    if matches!(output_format, OutputFormat::Png | OutputFormat::Ppm) {
-        let ext = match output_format {
-            OutputFormat::Png => "png",
-            OutputFormat::Ppm => "ppm",
-            _ => unreachable!(),
-        };
-        response = response.header(
-            header::CONTENT_DISPOSITION,
-            format!("inline; filename=\"logo.{ext}\""),
-        );
+    fn events(json: &str) -> Vec<LogoEvent> {
+        serde_json::from_str(json).expect("test events json parses")
     }
 
-    Ok(response.body(Body::from(output_bytes)).unwrap())
+    const CDN: &str = "https://a.espncdn.com";
+
+    #[test]
+    fn resolves_logo_case_insensitively() {
+        let evs = events(
+            r#"[{"competitions":[{"competitors":[
+                {"team":{"abbreviation":"POR","logo":"https://a.espncdn.com/i/teamlogos/countries/500/por.png"}},
+                {"team":{"abbreviation":"ESP","logo":"https://a.espncdn.com/i/teamlogos/countries/500/esp.png"}}
+            ]}]}]"#,
+        );
+        let url = resolve_team_logo(evs, "por", CDN).unwrap();
+        assert_eq!(url, "https://a.espncdn.com/i/teamlogos/countries/500/por.png");
+    }
+
+    #[test]
+    fn team_absent_from_scoreboard_resolves_to_none() {
+        let evs = events(r#"[{"competitions":[{"competitors":[]}]}]"#);
+        assert!(resolve_team_logo(evs, "BOS", CDN).is_none());
+    }
+
+    #[test]
+    fn foreign_host_logo_is_ignored() {
+        let evs = events(
+            r#"[{"competitions":[{"competitors":[
+                {"team":{"abbreviation":"BOS","logo":"https://evil.example.com/i/teamlogos/mlb/500/bos.png"}}
+            ]}]}]"#,
+        );
+        assert!(resolve_team_logo(evs, "BOS", CDN).is_none());
+    }
+
+    #[test]
+    fn missing_logo_field_resolves_to_none() {
+        let evs = events(
+            r#"[{"competitions":[{"competitors":[{"team":{"abbreviation":"BOS"}}]}]}]"#,
+        );
+        assert!(resolve_team_logo(evs, "BOS", CDN).is_none());
+    }
 }

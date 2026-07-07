@@ -4,10 +4,12 @@
 //! binary layout contract.
 
 pub mod handler;
-mod transform;
+pub mod transform;
 mod types;
 
 pub use handler::{get_live_game, list_active_games};
-pub use types::{AtBat, Bases, Count, Inning, InningHalf, LastPlay, LiveGame, TeamState};
+pub use types::{
+    AtBat, Bases, Count, Inning, InningHalf, LastPlay, LiveGame, PregameGame, TeamState,
+};
 
 pub use crate::shared::team::TeamColors;

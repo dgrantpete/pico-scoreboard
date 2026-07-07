@@ -36,10 +36,10 @@ use espn::EspnClient;
     components(schemas(
         clock::TimeResponse,
         error::ErrorResponse,
-        team::League,
-        team::LogoQuery,
-        team::OutputFormat,
+        logo::LogoQuery,
+        logo::OutputFormat,
         mlb::LiveGame,
+        mlb::PregameGame,
         mlb::TeamState,
         mlb::TeamColors,
         mlb::Count,
@@ -162,9 +162,12 @@ pub async fn run() {
         .merge(Scalar::with_url("/", ApiDoc::openapi()))
         .route("/health", get(health))
         .route("/time", get(clock::time))
-        .route("/{league}/{abbrev}/logo", get(team::get_team_logo))
-        .route("/mlb/games", get(mlb::list_active_games))
-        .route("/mlb/games/{game_id}", get(mlb::get_live_game))
+        .route(
+            "/{sport}/{league}/teams/{abbrev}/logo",
+            get(team::get_team_logo),
+        )
+        .route("/baseball/mlb/games", get(mlb::list_active_games))
+        .route("/baseball/mlb/games/{game_id}", get(mlb::get_live_game))
         .layer(cors)
         .with_state(app_state);
 
