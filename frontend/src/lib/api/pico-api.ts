@@ -41,12 +41,29 @@ async function errorMessage(response: Response): Promise<string> {
 }
 
 /**
- * Combine the default (or overridden) timeout with an optional external
- * abort signal. The request aborts when either fires.
+ * fetch with a timeout and an optional external abort signal.
+ *
+ * When OUR timeout fires, the raw DOMException reads "The user aborted a
+ * request" — cryptic and wrong-sounding in a UI — so it's translated to a
+ * readable ApiError. An external abort (e.g. the reboot store cancelling
+ * its reconnect poll) propagates unchanged so callers can recognize it.
  */
-function requestSignal(timeoutMs: number, externalSignal?: AbortSignal): AbortSignal {
+async function apiFetch(
+	input: string,
+	init: RequestInit,
+	timeoutMs: number,
+	externalSignal?: AbortSignal
+): Promise<Response> {
 	const timeout = AbortSignal.timeout(timeoutMs);
-	return externalSignal ? AbortSignal.any([timeout, externalSignal]) : timeout;
+	const signal = externalSignal ? AbortSignal.any([timeout, externalSignal]) : timeout;
+	try {
+		return await fetch(input, { ...init, signal });
+	} catch (e) {
+		if (timeout.aborted && !externalSignal?.aborted) {
+			throw new ApiError('Device did not respond in time', 0);
+		}
+		throw e;
+	}
 }
 
 export const picoApi = {
@@ -54,9 +71,7 @@ export const picoApi = {
 	 * GET /api/config - Fetch full device configuration
 	 */
 	async getConfig(signal?: AbortSignal): Promise<Config> {
-		const response = await fetch('/api/config', {
-			signal: requestSignal(DEFAULT_TIMEOUT_MS, signal)
-		});
+		const response = await apiFetch('/api/config', {}, DEFAULT_TIMEOUT_MS, signal);
 		return handleResponse<Config>(response);
 	},
 
@@ -65,12 +80,16 @@ export const picoApi = {
 	 * Only fields present in the update are changed; omitted fields remain unchanged.
 	 */
 	async updateConfig(update: ConfigUpdate, signal?: AbortSignal): Promise<Config> {
-		const response = await fetch('/api/config', {
-			method: 'PUT',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(update),
-			signal: requestSignal(DEFAULT_TIMEOUT_MS, signal)
-		});
+		const response = await apiFetch(
+			'/api/config',
+			{
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(update)
+			},
+			DEFAULT_TIMEOUT_MS,
+			signal
+		);
 		return handleResponse<Config>(response);
 	},
 
@@ -80,9 +99,12 @@ export const picoApi = {
 	 * @param signal - Optional AbortSignal for cancellation
 	 */
 	async getStatus(options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<NetworkStatus> {
-		const response = await fetch('/api/status', {
-			signal: requestSignal(options?.timeoutMs ?? DEFAULT_TIMEOUT_MS, options?.signal)
-		});
+		const response = await apiFetch(
+			'/api/status',
+			{},
+			options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+			options?.signal
+		);
 		return handleResponse<NetworkStatus>(response);
 	},
 
@@ -91,10 +113,7 @@ export const picoApi = {
 	 * Device will reboot after a 1-second delay.
 	 */
 	async reboot(signal?: AbortSignal): Promise<RebootResponse> {
-		const response = await fetch('/api/reboot', {
-			method: 'POST',
-			signal: requestSignal(DEFAULT_TIMEOUT_MS, signal)
-		});
+		const response = await apiFetch('/api/reboot', { method: 'POST' }, DEFAULT_TIMEOUT_MS, signal);
 		return handleResponse<RebootResponse>(response);
 	},
 
@@ -103,10 +122,12 @@ export const picoApi = {
 	 * Clears SSID and password to trigger fresh setup mode on next boot.
 	 */
 	async resetNetwork(signal?: AbortSignal): Promise<{ message: string }> {
-		const response = await fetch('/api/reset-network', {
-			method: 'POST',
-			signal: requestSignal(DEFAULT_TIMEOUT_MS, signal)
-		});
+		const response = await apiFetch(
+			'/api/reset-network',
+			{ method: 'POST' },
+			DEFAULT_TIMEOUT_MS,
+			signal
+		);
 		return handleResponse<{ message: string }>(response);
 	},
 
@@ -117,9 +138,7 @@ export const picoApi = {
 	 * from a 3s poll loop, so a hung request must fail before the next tick.
 	 */
 	async getLogs(since = 0, signal?: AbortSignal): Promise<LogEntry[]> {
-		const response = await fetch(`/api/logs?since=${since}`, {
-			signal: requestSignal(5000, signal)
-		});
+		const response = await apiFetch(`/api/logs?since=${since}`, {}, 5000, signal);
 		if (!response.ok) {
 			throw new ApiError(await errorMessage(response), response.status);
 		}
@@ -135,9 +154,7 @@ export const picoApi = {
 	 * Returns null when no previous-boot log exists on flash.
 	 */
 	async getPreviousLog(signal?: AbortSignal): Promise<string | null> {
-		const response = await fetch('/api/logs/previous', {
-			signal: requestSignal(DEFAULT_TIMEOUT_MS, signal)
-		});
+		const response = await apiFetch('/api/logs/previous', {}, DEFAULT_TIMEOUT_MS, signal);
 		if (response.status === 404) return null;
 		if (!response.ok) {
 			throw new ApiError(await errorMessage(response), response.status);

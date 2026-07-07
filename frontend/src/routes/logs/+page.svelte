@@ -5,6 +5,7 @@
 	import Copy from "@lucide/svelte/icons/copy";
 	import Check from "@lucide/svelte/icons/check";
 	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+	import Loader2 from "@lucide/svelte/icons/loader-2";
 	import { picoApi } from "$lib/api";
 	import type { LogEntry } from "$lib/api/types";
 
@@ -21,8 +22,13 @@
 	let paused = $state(false);
 	let view = $state<"live" | "previous">("live");
 	let previousLog = $state<string | null | undefined>(undefined); // undefined = not fetched
+	let loadingPrevious = $state(false);
 	let error = $state<string | null>(null);
 	let copied = $state(false);
+
+	// True until the first live fetch settles — drives the loading indicator
+	// (an empty card before the device answers looks broken, not loading).
+	let initialLoading = $state(true);
 
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 	let logEnd: HTMLDivElement | undefined = $state();
@@ -45,11 +51,16 @@
 	// piling a second request onto the device's tiny socket pool.
 	let fetchInFlight = false;
 
+	// A single slow poll self-heals on the next tick (the device gets busy
+	// during game rotations); only surface an error once it looks persistent.
+	let consecutiveFailures = 0;
+
 	async function fetchNew() {
 		if (fetchInFlight) return;
 		fetchInFlight = true;
 		try {
 			const fresh = await picoApi.getLogs(lastSeq);
+			consecutiveFailures = 0;
 			error = null;
 			if (fresh.length === 0) return;
 			lastSeq = fresh[fresh.length - 1][0];
@@ -59,18 +70,25 @@
 				setTimeout(() => logEnd?.scrollIntoView({ block: "end" }), 0);
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : "Failed to fetch logs";
+			consecutiveFailures++;
+			if (consecutiveFailures >= 2) {
+				error = e instanceof Error ? e.message : "Failed to fetch logs";
+			}
 		} finally {
+			initialLoading = false;
 			fetchInFlight = false;
 		}
 	}
 
 	async function fetchPrevious() {
+		loadingPrevious = true;
 		try {
 			previousLog = await picoApi.getPreviousLog();
 			error = null;
 		} catch (e) {
 			error = e instanceof Error ? e.message : "Failed to fetch previous log";
+		} finally {
+			loadingPrevious = false;
 		}
 	}
 
@@ -166,7 +184,12 @@
 
 	<section class="card log-card">
 		{#if view === "live"}
-			{#if entries.length === 0}
+			{#if initialLoading && entries.length === 0}
+				<div class="empty row-center">
+					<Loader2 class="spinner icon-muted" />
+					<span class="text-sm text-muted">Connecting to scoreboard…</span>
+				</div>
+			{:else if entries.length === 0}
 				<p class="empty text-sm text-muted">No log entries yet.</p>
 			{:else}
 				<div class="log-lines">
@@ -180,8 +203,11 @@
 					<div bind:this={logEnd}></div>
 				</div>
 			{/if}
-		{:else if previousLog === undefined}
-			<p class="empty text-sm text-muted">Loading previous boot log…</p>
+		{:else if loadingPrevious || previousLog === undefined}
+			<div class="empty row-center">
+				<Loader2 class="spinner icon-muted" />
+				<span class="text-sm text-muted">Loading previous boot log…</span>
+			</div>
 		{:else if previousLog === null}
 			<p class="empty text-sm text-muted">
 				No previous-boot log on flash. It appears after the first flush + reboot

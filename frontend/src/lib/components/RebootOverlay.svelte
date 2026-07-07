@@ -476,10 +476,6 @@
 		height: 3rem;
 	}
 
-	.dialog :global(.spinner) {
-		animation: spin 1s linear infinite;
-	}
-
 	/* Typography */
 	.title {
 		font-size: 1.125rem;

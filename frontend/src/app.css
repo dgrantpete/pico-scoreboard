@@ -125,6 +125,12 @@
 	gap: 0.375rem;
 }
 
+/* A card that is ONLY a header (e.g. the connected-WiFi status card) would
+   otherwise sit flush against the bottom edge — restore symmetric padding. */
+.card-header:last-child {
+	padding-block-end: 1.5rem;
+}
+
 .card-title {
 	font-weight: 600;
 	display: flex;
@@ -607,4 +613,8 @@ progress::-webkit-progress-value {
 
 @keyframes spin {
 	to { transform: rotate(360deg); }
+}
+
+.spinner {
+	animation: spin 1s linear infinite;
 }
