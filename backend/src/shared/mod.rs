@@ -1,0 +1,5 @@
+//! Cross-sport outbound primitives: only what more than one sport genuinely
+//! shares. Sport-specific models stay in their sport's module.
+
+pub mod etag;
+pub mod team;

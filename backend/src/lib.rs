@@ -12,6 +12,7 @@ pub mod error;
 pub mod espn;
 pub mod logo;
 pub mod mlb;
+pub mod shared;
 pub mod team;
 pub mod wire;
 
@@ -29,8 +30,8 @@ use espn::EspnClient;
     paths(
         clock::time,
         team::get_team_logo,
-        mlb::list_active_games,
-        mlb::get_live_game,
+        mlb::handler::list_active_games,
+        mlb::handler::get_live_game,
     ),
     components(schemas(
         clock::TimeResponse,
