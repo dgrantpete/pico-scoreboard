@@ -26,13 +26,10 @@ jobs:
             cmake gcc-arm-none-eabi libnewlib-arm-none-eabi \
             libstdc++-arm-none-eabi-newlib build-essential
 
-      - name: Cache rp2 port submodules (pico-sdk etc.)
-        uses: actions/cache@v4
-        with:
-          path: |
-            firmware/micropython/lib
-          key: mpy-lib-${{ hashFiles('.gitmodules') }}-${{ hashFiles('firmware/micropython/.gitmodules') }}
-
+      # Deliberately no cache of firmware/micropython/lib: restoring
+      # submodule contents without their git metadata (.git/modules) leaves
+      # git unable to open them ("could not get a repository handle"). The
+      # fresh fetch costs ~2 minutes; correctness wins.
       - name: Build firmware
         run: bash tools/build_firmware.sh
 
