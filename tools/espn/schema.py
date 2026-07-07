@@ -15,17 +15,17 @@ from .db import Store
 from .leagues import League
 
 
-def collect_paths(obj, prefix: str = "") -> set[str]:
+def _collect_paths(obj, prefix: str = "") -> set[str]:
     """Every dotted field path in obj, descending into all array elements."""
     paths = set()
     if isinstance(obj, dict):
         for k, v in obj.items():
             p = f"{prefix}.{k}" if prefix else k
             paths.add(p)
-            paths.update(collect_paths(v, p))
+            paths.update(_collect_paths(v, p))
     elif isinstance(obj, list) and obj:
         for item in obj:
-            paths.update(collect_paths(item, f"{prefix}[]"))
+            paths.update(_collect_paths(item, f"{prefix}[]"))
     return paths
 
 
@@ -52,7 +52,7 @@ def build_schema(store: Store, league: League) -> tuple[dict, dict]:
             comp = comps[0]
             state = comp.get("status", {}).get("type", {}).get("state", "unknown")
             state_totals[state] += 1
-            for path in collect_paths(comp):
+            for path in _collect_paths(comp):
                 state_field_counts[state][path] += 1
         count += 1
 

@@ -49,32 +49,6 @@ payload across all three game states.
    mirroring the backend's Rust `enum` over the same discriminant.
 4. **Validate** (`validate`) — every stored response must pass its league's
    spec; failures are reported per state with `oneOf` branch drill-down.
-5. **Discover** (`discover`) — finds discriminants *automatically* instead of
-   trusting step 2's hardcoded one: every low-cardinality scalar with
-   near-total coverage (`--tag-presence`, default 99% — glitch payloads fall
-   into a reported "missing" bucket rather than disqualifying a real tag) is
-   scored by aggregate information gain over field presence, ranked, and
-   reported with per-variant support and the fields each tag explains.
-   Candidates inducing the same instance partition are deduped as aliases
-   (`state`/`name`/`id`/`description` are one split, not four), then a beam
-   search (`--beam`, `--depth`) compares whole split *hierarchies* by MDL:
-   data savings (total weighted gain × instances) minus model cost (one
-   presence-bitmap over the field universe per extra variant — what a variant
-   literally costs to state in the spec). Marginal subtrees prune themselves,
-   and finer state machines win exactly when the corpus grows large enough to
-   justify their complexity — e.g. soccer's 6-state root vs the 3-state root
-   is a near-tie at one evening of data. Sanity signals: a tag with high gain but ~0 explained
-   fields is identity leakage (game id, venue) from a small corpus, not a real
-   union — such tags are barred from anchoring tree splits and drop out of
-   candidacy entirely once more data pushes them past `--max-cardinality`.
-   On MLB/NBA this rediscovers `status.type.state` with zero manual input.
-   Repeating `--league` pools leagues into one corpus with a synthetic
-   `_league` candidate, making the sport-first vs state-first hierarchy
-   comparison quantitative: on mlb+nba+world-cup, every winning tree roots on
-   game status with `_league` nested inside — sport is a refinement within
-   states, not the primary structure — endorsing a shared state-keyed
-   contract with per-sport extensions. (Pooled scores are instance-weighted,
-   so heavily-polled leagues dominate the objective.)
 
 Expected per-state pattern (from MLB): `pre` carries odds/tickets, `in`
 carries `situation` (count, runners, batter/pitcher), `post` carries
