@@ -55,6 +55,9 @@ pico/
 /pico.romfs
 /romfs_stage/
 
+# Published device app image for OTA (produced by tools/build.py publish-app)
+backend/app_dist/
+
 # ESPN sample store + generated schemas/specs (tools/espn)
 /data/
 

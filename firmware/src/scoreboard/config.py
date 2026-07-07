@@ -63,6 +63,11 @@ _DEFAULTS = {
     "watchdog": {
         "enabled": False,
         "timeout_ms": 8000
+    },
+    # Over-the-air app updates (see firmware/src/ota.py). Default ON: the
+    # whole point is that friends' devices update themselves.
+    "ota": {
+        "enabled": True
     }
 }
 
@@ -365,6 +370,12 @@ class Config:
         if raw > _WDT_TIMEOUT_MAX_MS:
             return _WDT_TIMEOUT_MAX_MS
         return raw
+
+    # OTA properties
+    @property
+    def ota_enabled(self) -> bool:
+        """Whether the daily OTA app-update check runs."""
+        return bool(self._data["ota"]["enabled"])
 
     # Log properties
     @property

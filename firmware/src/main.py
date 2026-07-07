@@ -84,11 +84,20 @@ import os
 import rp2
 import hashlib
 import _thread
+import ota
+
+# --- OTA apply-at-boot --------------------------------------------------------
+# Apply any staged app image BEFORE importing the app: at this point nothing
+# from ROMFS is running or imported and Core 1 hasn't started, so rewriting
+# the partition cannot erase code mid-execution. This is the ONLY place a
+# staged image is committed (see firmware/src/ota.py for the full lifecycle).
+ota.apply_staged()
 
 # --- App imports: the app may live in ROMFS (release deploys) ----------------
 # A corrupt or missing ROMFS (e.g. power loss mid-OTA-write) must never brick
-# the device: fail loudly and drop to a clean REPL so the image can be
-# re-deployed. Dev deploys on littlefs shadow ROMFS and are unaffected.
+# the device: attempt OTA self-recovery, else drop to a clean REPL so the
+# image can be re-deployed. Dev deploys on littlefs shadow ROMFS and are
+# unaffected.
 try:
     from microdot import Microdot, Request, Response, send_file
     from scoreboard import Config, ScoreboardApiClient
@@ -107,7 +116,9 @@ try:
 except ImportError as e:
     import sys
     print(f"[BOOT] app import failed: {e}")
-    print("[BOOT] ROMFS may be corrupt/missing; re-deploy with "
+    print("[BOOT] ROMFS may be corrupt/missing; attempting OTA self-recovery")
+    ota.recover()  # loops until healed + reset; returns only if unrecoverable
+    print("[BOOT] recovery not possible; re-deploy with "
           "'python tools/build.py flash [--release]'. REPL is free.")
     sys.exit()
 
@@ -585,6 +596,12 @@ def start_display_thread(display: Hub75Display, writer: FontWriter, regions: Reg
     _thread.start_new_thread(wrapper, ())
 
 
+# Set by watchdog_feeder when armed; ota_check_task feeds it during the
+# blocking OTA download (which would otherwise starve the feeder past the
+# 8s hardware limit and reset the device mid-download).
+_wdt = None
+
+
 async def watchdog_feeder(cfg: Config, health: ThreadHealth) -> None:
     """
     Arm and feed the hardware watchdog while both cores are healthy.
@@ -602,8 +619,10 @@ async def watchdog_feeder(cfg: Config, health: ThreadHealth) -> None:
     """
     from machine import WDT
 
+    global _wdt
     timeout_ms = cfg.watchdog_timeout_ms
     wdt = WDT(timeout=timeout_ms)
+    _wdt = wdt
     logger.debug(f"[WD] hardware watchdog armed: timeout={timeout_ms}ms")
 
     feed_interval = timeout_ms // 4
@@ -635,6 +654,32 @@ async def log_flush_task() -> None:
     while True:
         await asyncio.sleep(30)
         logger.maybe_flush()
+
+
+async def ota_check_task(cfg: Config) -> None:
+    """Daily OTA check: stage a new app image if the backend has one, then
+    reboot — the partition rewrite itself only ever happens at early boot
+    (see ota.py). The download is synchronous and blocks Core 0 for ~10s;
+    Core 1 keeps rendering, and the watchdog is hand-fed via the tick.
+    """
+    def wdt_tick():
+        if _wdt is not None:
+            _wdt.feed()
+
+    await asyncio.sleep(120)  # let boot traffic settle first
+    while True:
+        if cfg.ota_enabled:
+            try:
+                if ota.check_and_stage(cfg.api_url, cfg.api_key, tick=wdt_tick):
+                    logger.error("[OTA] update staged; rebooting to apply")
+                    logger.flush_to_flash()
+                    await asyncio.sleep(1)
+                    machine.reset()
+                else:
+                    logger.debug("[OTA] app is current")
+            except Exception as e:
+                logger.error(f"[OTA] check failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(24 * 3600)
 
 
 class LightSensor:
@@ -834,6 +879,9 @@ async def main(regions: Regions, driver: Hub75Driver, health: ThreadHealth, ligh
             asyncio.create_task(poller.run())
             logger.debug("[MAIN] mlb poller task started")
 
+            # OTA app-update checks need the network; station mode only
+            asyncio.create_task(ota_check_task(config))
+
             # Physical buttons drive the poller (skip / rotation lock)
             btn_skip, btn_lock = init_buttons()
             if btn_skip is not None and btn_lock is not None:
@@ -876,6 +924,8 @@ if __name__ == '__main__':
     # write, and stamp this boot with its reset cause for post-mortems.
     logger.rotate_boot_log()
     logger.debug(f"[MAIN] boot: reset_cause={_reset_cause_name()}")
+    _v = ota.current_version()
+    logger.debug(f"[MAIN] app version: {_v[:12] if _v else 'dev (littlefs)'}")
 
     # Initialize display hardware and rendering primitives. All Core-0-only
     # setup (glyph caches, UI colors, state) happens here before the display

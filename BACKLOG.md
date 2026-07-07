@@ -16,20 +16,21 @@
 
 ## Firmware
 
-2. **OTA app updates via ROMFS** (architecture locked by 2026-07-06
-   research; execute after item 27 lands) — backend hosts versioned ROMFS
-   images + manifest {version, size, sha256}; device checks on boot/daily;
-   download → stage on littlefs → verify sha256 → `vfs.rom_ioctl(2, 0)`
-   erase + `writeblocks` → `machine.reset()`. Invariants: the updater
-   lives on littlefs, NEVER in ROMFS (it must not erase the code it runs
-   from); `main.py` gains a recovery mode (failed `import scoreboard` →
-   WiFi + re-download loop) so power loss mid-write can't brick — a
-   corrupt ROMFS still boots littlefs. Covers app code AND the hub75
-   native .mpy; only interpreter bumps need USB. Full firmware-image OTA
-   stays deferred: RP2350's bootrom A/B (TBYB rollback) is ready, but
-   upstream MicroPython can't execute from a non-zero partition yet
-   (needs QMI address translation; forum-patch territory — track
-   micropython#17544 and the partitioned-pico2 forum work).
+2. **OTA follow-ups** — the core OTA shipped 2026-07-07 (end-to-end drill
+   passed: device self-updated bdb73e→9a09b2 with no USB). Remaining:
+   - *Failure drills not yet exercised on hardware*: corrupt
+     `/ota_staging` → apply must discard (sha re-verify) and boot the old
+     app; forced `ota.recover()` walk-through. The logic is reviewed but
+     deserves one controlled run in daylight.
+   - *littlefs files are outside OTA scope by design*: `main.py`,
+     `ota.py`, `config.json` only update via USB flash. Fine while rare;
+     if they start churning, consider having the ROMFS image carry
+     canonical copies that early-boot syncs to littlefs (with version
+     guard).
+   - *Fleet visibility*: surface `/app_version` in `/api/status` + the
+     settings UI ("update available" indicator).
+   - Full firmware-image OTA still blocked upstream (RP2350 A/B needs QMI
+     address-translation in MicroPython; track micropython#17544).
 4. **Captive portal reliability** — DNS task hardening landed; observe. If
    still flaky: add OS-probe-specific responses (Android `/generate_204`,
    Apple `hotspot-detect.html`, Windows `connecttest.txt`) before considering

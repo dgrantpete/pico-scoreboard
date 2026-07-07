@@ -17,6 +17,7 @@ Prerequisites:
     pip install mpy-cross    # For .mpy compilation
 """
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -36,6 +37,7 @@ frontend_build = frontend_directory / 'build'
 # Files to always copy without compilation (glob patterns)
 COPY_ONLY_FILES = [
     '**/main.py',      # Entry point - keep as .py for debugging
+    '**/ota.py',       # OTA/recovery - boot-critical, field-readable
     '**/config.json',  # Configuration file
     '**/index.html.gz',           # Binary assets (index.html.gz)
     '**/*.mpy',          # Already compiled (hub75, miqro deps)
@@ -207,15 +209,19 @@ def enter_update_mode(port: str = None) -> bool:
         probe = _mpremote(['fs', 'ls', ':'], port, timeout=8, quiet=True)
         if probe is not None and probe.returncode == 0:
             print("Device is in safe mode.")
+            # Let the serial port fully release before the next mpremote
+            # invocation opens it (Windows COM reopen race).
+            time.sleep(1.5)
             return True
         time.sleep(2)
     return False
 
 
 # Release-mode split: these stay on littlefs (mutable / boot-critical —
-# main.py must live there because ROMFS isn't bootable, micropython#17544);
-# everything else in the build output ships inside the ROMFS image.
-_LITTLEFS_FILES = ('main.py', 'config.json')
+# main.py must live there because ROMFS isn't bootable (micropython#17544),
+# and ota.py must survive — and never run from — the ROMFS partition it
+# rewrites); everything else in the build output ships inside the image.
+_LITTLEFS_FILES = ('main.py', 'ota.py', 'config.json')
 
 # App artifacts a release deploy removes from littlefs: littlefs precedes
 # /rom on sys.path (that's the dev-override mechanism), so stale littlefs
@@ -226,12 +232,14 @@ _LITTLEFS_PURGE = (':scoreboard', ':lib', ':hardware_diagnostic.mpy', ':index.ht
 _ROMFS_PARTITION_BYTES = 256 * 1024
 
 
-def build_romfs_image(source_dir: Path) -> Path:
+def build_romfs_image(source_dir: Path) -> tuple[Path, str]:
     """Build a ROMFS image from the app portion of the build output.
 
     The staging tree mirrors the littlefs layout (scoreboard/, lib/, ...) so
     imports resolve identically from /rom. Files are already .mpy-compiled
-    by the build, hence --no-mpy.
+    by the build, hence --no-mpy. Returns (image_path, sha256_hex) — the
+    sha is the app's OTA identity (stored on-device as /app_version and
+    served by the backend manifest).
     """
     stage_dir = root_directory / 'romfs_stage'
     image_path = root_directory / 'pico.romfs'
@@ -257,8 +265,10 @@ def build_romfs_image(source_dir: Path) -> Path:
         raise SystemExit(f"romfs image build failed:\n{result.stdout}\n{result.stderr}")
 
     size = image_path.stat().st_size
+    sha = hashlib.sha256(image_path.read_bytes()).hexdigest()
     print(f"ROMFS image: {image_path.name} ({size} bytes, "
-          f"{size * 100 // _ROMFS_PARTITION_BYTES}% of the {_ROMFS_PARTITION_BYTES // 1024} KB partition)")
+          f"{size * 100 // _ROMFS_PARTITION_BYTES}% of the {_ROMFS_PARTITION_BYTES // 1024} KB partition, "
+          f"sha256 {sha[:12]}...)")
     if size > _ROMFS_PARTITION_BYTES:
         raise SystemExit(
             f"ROMFS image ({size} B) exceeds the partition "
@@ -266,7 +276,7 @@ def build_romfs_image(source_dir: Path) -> Path:
             "firmware/board/PICO2W_SCOREBOARD/mpconfigboard.h (multiple of 4096), "
             "rebuild + reflash the firmware, and update _ROMFS_PARTITION_BYTES here."
         )
-    return image_path
+    return image_path, sha
 
 
 def flash_device(source_dir: Path, port: str = None, repl: bool = False, release: bool = False):
@@ -286,7 +296,7 @@ def flash_device(source_dir: Path, port: str = None, repl: bool = False, release
     mode = 'release (ROMFS)' if release else 'dev (littlefs)'
     print(f"Flashing {source_dir.relative_to(root_directory)}/ to device [{mode}]...")
 
-    image_path = build_romfs_image(source_dir) if release else None
+    image_path, image_sha = build_romfs_image(source_dir) if release else (None, None)
 
     if not enter_update_mode(port):
         print("")
@@ -317,6 +327,14 @@ def flash_device(source_dir: Path, port: str = None, repl: bool = False, release
                 copy = _mpremote(['cp', str(src), f':{name}'], port, timeout=60)
                 if copy is None or copy.returncode != 0:
                     raise SystemExit(f"copying {name} to littlefs failed")
+
+        # Record the app's OTA identity and clear any stale staging so the
+        # daily check compares against what was actually just deployed.
+        _mpremote(['exec',
+                   f"f=open('/app_version','w'); f.write('{image_sha}'); f.close()"],
+                  port, timeout=30, quiet=True)
+        _mpremote(['rm', ':ota_staging'], port, timeout=30, quiet=True)
+        _mpremote(['rm', ':ota_pending'], port, timeout=30, quiet=True)
     else:
         copy = _mpremote(['cp', '-r', f'{source_dir.as_posix()}/.', ':'], port, timeout=600)
         if copy is None or copy.returncode != 0:
@@ -405,8 +423,29 @@ def add_common_args(parser):
     )
 
 
+def publish_app(output_dir: Path, deploy: bool) -> bool:
+    """Publish the device app for OTA: build the ROMFS image into
+    backend/app_dist/ (baked into the next backend deploy and served at
+    /app/image + /app/manifest), optionally deploying right away.
+    """
+    image_path, sha = build_romfs_image(output_dir)
+    dist_dir = root_directory / 'backend' / 'app_dist'
+    dist_dir.mkdir(exist_ok=True)
+    shutil.copy2(image_path, dist_dir / 'pico.romfs')
+    print(f"Published to backend/app_dist/pico.romfs (sha256 {sha})")
+
+    if deploy:
+        return deploy_backend()
+    print("Run 'python tools/build.py deploy' (or re-run with --deploy) to ship it.")
+    return True
+
+
 def deploy_backend():
     """Deploy the Rust backend to Fly.io."""
+    # The Dockerfile COPYs app_dist/ (the OTA app image); guarantee the dir
+    # exists so a deploy without a published image still builds.
+    (root_directory / 'backend' / 'app_dist').mkdir(exist_ok=True)
+
     key_file = root_directory / 'backend' / '.maxmind-key'
     if not key_file.exists():
         print(f"Error: {key_file.relative_to(root_directory)} not found.")
@@ -442,6 +481,23 @@ def main():
 
     # deploy subcommand
     subparsers.add_parser('deploy', help='Deploy backend to Fly.io')
+
+    # publish-app subcommand (OTA)
+    publish_parser = subparsers.add_parser(
+        'publish-app',
+        help='Build the app ROMFS image into backend/app_dist for OTA'
+    )
+    publish_parser.add_argument(
+        '--deploy',
+        action='store_true',
+        help='Also deploy the backend (ships the update to the fleet)'
+    )
+    publish_parser.add_argument(
+        '--no-build',
+        action='store_true',
+        help='Skip build step, package existing output'
+    )
+    add_common_args(publish_parser)
 
     # flash subcommand
     flash_parser = subparsers.add_parser('flash', help='Build and flash to device')
@@ -484,6 +540,17 @@ def main():
     # deploy command (doesn't use output_dir or firmware args)
     if args.command == 'deploy':
         return 0 if deploy_backend() else 1
+
+    # publish-app command (OTA)
+    if args.command == 'publish-app':
+        output_dir = args.output if args.output.is_absolute() else root_directory / args.output
+        if not args.no_build:
+            if not do_build(output_dir, args.configuration, args.arch, args.no_assets):
+                return 1
+        elif not output_dir.exists():
+            print(f"Error: {output_dir} does not exist. Run build first or remove --no-build.")
+            return 1
+        return 0 if publish_app(output_dir, args.deploy) else 1
 
     # Resolve output directory (only needed for firmware commands)
     output_dir = args.output if args.output.is_absolute() else root_directory / args.output

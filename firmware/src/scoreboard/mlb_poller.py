@@ -160,10 +160,12 @@ class MlbPoller:
             return
 
         home_logo = await self._logos.get(
-            f"mlb-{live.home.abbreviation}", f"/mlb/{live.home.abbreviation}/logo"
+            f"mlb-{live.home.abbreviation}",
+            f"/baseball/mlb/teams/{live.home.abbreviation}/logo",
         )
         away_logo = await self._logos.get(
-            f"mlb-{live.away.abbreviation}", f"/mlb/{live.away.abbreviation}/logo"
+            f"mlb-{live.away.abbreviation}",
+            f"/baseball/mlb/teams/{live.away.abbreviation}/logo",
         )
 
         state = get_write_state()

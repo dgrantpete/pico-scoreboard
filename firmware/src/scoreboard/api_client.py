@@ -178,7 +178,7 @@ class ScoreboardApiClient:
         # The returned etag is the raw header value (quotes included) so the
         # caller can echo it verbatim as If-None-Match — backend does a strict
         # string match and will not recognize a stripped-quote form.
-        url = f"{self._config.api_url.rstrip('/')}/mlb/games"
+        url = f"{self._config.api_url.rstrip('/')}/baseball/mlb/games"
         headers = {"X-Api-Key": self._config.api_key, "Accept": STRUCT_CONTENT_TYPE}
         if if_none_match is not None:
             headers["If-None-Match"] = if_none_match
@@ -210,7 +210,7 @@ class ScoreboardApiClient:
             return (resp.status, parse_game_ids(filled), etag)
 
     async def get_game_state(self, game_id: str) -> LiveGame | None:
-        path = f"/mlb/games/{game_id}"
+        path = f"/baseball/mlb/games/{game_id}"
         url = f"{self._config.api_url.rstrip('/')}{path}"
         headers = {"X-Api-Key": self._config.api_key, "Accept": STRUCT_CONTENT_TYPE}
         try:
