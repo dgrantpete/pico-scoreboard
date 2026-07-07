@@ -16,21 +16,25 @@
 
 ## Firmware
 
-2. **OTA follow-ups** — the core OTA shipped 2026-07-07 (end-to-end drill
-   passed: device self-updated bdb73e→9a09b2 with no USB). Remaining:
-   - *Failure drills not yet exercised on hardware*: corrupt
-     `/ota_staging` → apply must discard (sha re-verify) and boot the old
-     app; forced `ota.recover()` walk-through. The logic is reviewed but
-     deserves one controlled run in daylight.
+2. **OTA follow-ups** — the core OTA shipped 2026-07-07. All drills have
+   now run on hardware (2026-07-07): end-to-end self-update, corrupt
+   `/ota_staging` discarded, and a real `ota.recover()` (the 512 KB
+   partition bump orphaned the old image; the device re-downloaded and
+   booted unattended). `/app_version` is in `/api/status` + settings UI.
+   Remaining:
    - *littlefs files are outside OTA scope by design*: `main.py`,
      `ota.py`, `config.json` only update via USB flash. Fine while rare;
      if they start churning, consider having the ROMFS image carry
      canonical copies that early-boot syncs to littlefs (with version
      guard).
-   - *Fleet visibility*: surface `/app_version` in `/api/status` + the
-     settings UI ("update available" indicator).
+   - *"Update available" indicator* in the settings UI (compare device
+     sha against the backend manifest from the browser).
    - Full firmware-image OTA still blocked upstream (RP2350 A/B needs QMI
      address-translation in MicroPython; track micropython#17544).
+   - *Safe-mode sentinel compat fallback*: `tools/build.py` still accepts
+     the fs-probe heuristic for devices whose deployed `main.py` predates
+     the `_SAFE_MODE` sentinel (2026-07-07); drop the fallback once every
+     device has been flashed at least once.
 4. **Captive portal reliability** — DNS task hardening landed; observe. If
    still flaky: add OS-probe-specific responses (Android `/generate_204`,
    Apple `hotspot-detect.html`, Windows `connecttest.txt`) before considering
@@ -49,24 +53,14 @@
     and document the pattern in `button.py` if anything surprising shows up.
 13. **Button UX refinement** — replace MK1 text toasts with proper indicators
     (loading animation on skip, persistent lock icon while rotation is locked).
-17. **Watch for fragmentation OOMs after manual-GC removal** — all manual
-    `gc.collect()` calls are gone (status endpoint + per-request in
-    api_client) so genuine memory pressure surfaces honestly. MicroPython
-    auto-collects on allocation failure, so total-exhaustion OOMs self-heal;
-    the residual risk is a *fragmentation* failure of a large contiguous
-    allocation (most likely the TLS buffers on connection re-establishment).
-    **Measured 2026-07-06**: heap 457 KB total, live set ~340 KB, free
-    bottoms out at **1.9 KB** just before each auto-collect (every ~1.4 s
-    during at-bats at ~80 KB/s churn) — the heap spends much of its life
-    near-full, which is exactly the exposure a TLS reconnect (~33 KB
-    contiguous) doesn't want. After item 8 lands and churn drops ~10×:
-    set `gc.threshold()` (collect after a fixed allocation amount, e.g.
-    ~48 KB) so free memory never grinds against zero — one principled
-    global dial, cheap once churn is low. Re-baseline afterward.
-    **Post-fix numbers (2026-07-06 afternoon, glyph tables landed)**:
-    intrinsic churn ~4 KB/s (was ~80), GC every ~28 s (was ~1.4 s) — a
-    threshold around 48-64 KB would collect every ~12-16 s and keep free
-    memory from ever grinding near zero. Pair with item 20's buffer shrink.
+17. **Re-baseline heap behavior after `gc.threshold(48*1024)`** — the
+    threshold landed 2026-07-07 (main.py; calibrated from the measured
+    ~4 KB/s churn → collect every ~12 s). Watch a game-day session: free
+    memory should never grind near zero anymore, and TLS reconnects
+    (~33 KB contiguous) should stop being fragmentation-exposed. If
+    collections are too frequent/rare, tune toward 64 KB. History: heap
+    457 KB, live set ~270-340 KB; pre-glyph-table churn was ~80 KB/s with
+    GC every ~1.4 s and free bottoming at 1.9 KB.
 
 18. **IPv6 reachability** — the device advertises an IPv6 AAAA over mDNS
     but the web server binds IPv4-only; IPv6-first clients eat a ~2 s stall
@@ -105,14 +99,13 @@
       numbers (which our log tracebacks need — never -O3).
     - *Firmware A/B OTA*: blocked upstream, see item 2.
 
-27. **Grow the ROMFS partition before NBA lands** — Phase B shipped
-    2026-07-06 (`build.py flash --release`; live-set −70 KB measured) but
-    the app image already fills **90%** of the 256 KB partition
-    (index.html.gz + fonts + bytecode). NBA/soccer additions will
-    overflow it. Bump `MICROPY_HW_ROMFS_BYTES` to 512 KB (board header +
-    `_ROMFS_PARTITION_BYTES` in tools/build.py), rebuild firmware, and
-    reflash — which no longer needs hands: `machine.bootloader()` +
-    UF2 copy works remotely over USB.
+28. **MLB poller: skip games whose detail endpoint 404s** — observed
+    2026-07-07: ESPN had no summary for one scheduled game (401816055);
+    the backend 404s and the poller retried it every poll interval for
+    its whole rotation slot before moving on. Harmless but wasteful, and
+    the display presumably shows nothing useful for that slot. Drop a
+    game from rotation after N consecutive 404s (it can re-enter on the
+    next list refresh).
 
 25. **Reduce webapp HTTP connection churn** — every poll is a fresh TCP
     connection (Microdot has no server-side keep-alive), so the status
