@@ -128,7 +128,10 @@ impl IntoResponse for AppError {
             AppError::GameNotFound(id) => (
                 StatusCode::NOT_FOUND,
                 "game_not_found".to_string(),
-                format!("Game '{}' not found or not live", id),
+                format!(
+                    "Game '{}' is not on today's scoreboard (or is in a non-displayable delay)",
+                    id
+                ),
             ),
             // 404, not 400: an unknown league is a path segment with no
             // resource behind it, same as an unknown team abbreviation.

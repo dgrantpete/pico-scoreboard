@@ -1,0 +1,1326 @@
+{
+  "id": "401816066",
+  "uid": "s:1~l:10~e:401816066",
+  "date": "2026-07-08T02:10Z",
+  "name": "Colorado Rockies at Los Angeles Dodgers",
+  "shortName": "COL @ LAD",
+  "season": {
+    "year": 2026,
+    "type": 2,
+    "slug": "regular-season"
+  },
+  "competitions": [
+    {
+      "id": "401816066",
+      "uid": "s:1~l:10~e:401816066~c:401816066",
+      "date": "2026-07-08T02:10Z",
+      "attendance": 0,
+      "type": {
+        "id": "1",
+        "abbreviation": "STD"
+      },
+      "timeValid": true,
+      "neutralSite": false,
+      "conferenceCompetition": false,
+      "playByPlayAvailable": false,
+      "recent": true,
+      "wasSuspended": false,
+      "venue": {
+        "id": "19",
+        "fullName": "Dodger Stadium",
+        "address": {
+          "city": "Los Angeles",
+          "state": "California"
+        },
+        "indoor": false
+      },
+      "competitors": [
+        {
+          "id": "19",
+          "uid": "s:1~l:10~t:19",
+          "type": "team",
+          "order": 0,
+          "homeAway": "home",
+          "team": {
+            "id": "19",
+            "uid": "s:1~l:10~t:19",
+            "location": "Los Angeles",
+            "name": "Dodgers",
+            "abbreviation": "LAD",
+            "displayName": "Los Angeles Dodgers",
+            "shortDisplayName": "Dodgers",
+            "color": "005a9c",
+            "alternateColor": "ffffff",
+            "isActive": true,
+            "links": [
+              {
+                "rel": [
+                  "clubhouse",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mlb/team/_/name/lad/los-angeles-dodgers",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mlb/team/roster/_/name/lad/los-angeles-dodgers",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:1~l:10~t:19&section=roster",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mlb/team/stats/_/name/lad/los-angeles-dodgers",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:1~l:10~t:19&section=stats",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mlb/team/schedule/_/name/lad",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:1~l:10~t:19&section=scores",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              }
+            ],
+            "logo": "https://a.espncdn.com/i/teamlogos/mlb/500/scoreboard/lad.png"
+          },
+          "score": "0",
+          "probables": [
+            {
+              "name": "probableStartingPitcher",
+              "displayName": "Probable Starting Pitcher",
+              "shortDisplayName": "Starter",
+              "abbreviation": "SP",
+              "playerId": 4417203,
+              "athlete": {
+                "id": "4417203",
+                "fullName": "Justin Wrobleski",
+                "displayName": "Justin Wrobleski",
+                "shortName": "J. Wrobleski",
+                "links": [
+                  {
+                    "rel": [
+                      "playercard",
+                      "desktop",
+                      "athlete"
+                    ],
+                    "href": "https://www.espn.com/mlb/player/_/id/4417203"
+                  }
+                ],
+                "headshot": "https://a.espncdn.com/i/headshots/mlb/players/full/4417203.png",
+                "jersey": "70",
+                "position": "SP",
+                "team": {
+                  "id": "19"
+                }
+              },
+              "statistics": [
+                {
+                  "name": "saves",
+                  "abbreviation": "SV",
+                  "displayValue": "0",
+                  "rankDisplayValue": "Tied-195th"
+                },
+                {
+                  "name": "losses",
+                  "abbreviation": "L",
+                  "displayValue": "2",
+                  "rankDisplayValue": "Tied-217th"
+                },
+                {
+                  "name": "wins",
+                  "abbreviation": "W",
+                  "displayValue": "10",
+                  "rankDisplayValue": "Tied-2nd"
+                },
+                {
+                  "name": "ERA",
+                  "abbreviation": "ERA",
+                  "displayValue": "2.80",
+                  "rankDisplayValue": "12th"
+                },
+                {
+                  "name": "errors",
+                  "abbreviation": "E",
+                  "displayValue": "1",
+                  "rankDisplayValue": "Tied-290th"
+                }
+              ],
+              "record": "(10-2, 2.80)"
+            }
+          ],
+          "statistics": [
+            {
+              "name": "hits",
+              "abbreviation": "H",
+              "displayValue": "821",
+              "rankDisplayValue": "2nd"
+            },
+            {
+              "name": "runs",
+              "abbreviation": "R",
+              "displayValue": "491",
+              "rankDisplayValue": "2nd"
+            },
+            {
+              "name": "avg",
+              "abbreviation": "AVG",
+              "displayValue": ".265",
+              "rankDisplayValue": "1st"
+            },
+            {
+              "name": "saves",
+              "abbreviation": "SV",
+              "displayValue": "24",
+              "rankDisplayValue": "Tied-13th"
+            },
+            {
+              "name": "losses",
+              "abbreviation": "L",
+              "displayValue": "32",
+              "rankDisplayValue": "1st"
+            },
+            {
+              "name": "wins",
+              "abbreviation": "W",
+              "displayValue": "60",
+              "rankDisplayValue": "1st"
+            },
+            {
+              "name": "ERA",
+              "abbreviation": "ERA",
+              "displayValue": "3.51",
+              "rankDisplayValue": "3rd"
+            },
+            {
+              "name": "errors",
+              "abbreviation": "E",
+              "displayValue": "26",
+              "rankDisplayValue": "1st"
+            }
+          ],
+          "hits": 0,
+          "errors": 0,
+          "records": [
+            {
+              "name": "overall",
+              "abbreviation": "Total",
+              "type": "total",
+              "summary": "60-32"
+            },
+            {
+              "name": "Home",
+              "abbreviation": "Home",
+              "type": "home",
+              "summary": "30-15"
+            },
+            {
+              "name": "Road",
+              "abbreviation": "AWAY",
+              "type": "road",
+              "summary": "30-17"
+            }
+          ],
+          "leaders": [
+            {
+              "name": "avg",
+              "displayName": "Batting Average",
+              "shortDisplayName": "BA",
+              "abbreviation": "AVG",
+              "leaders": [
+                {
+                  "displayValue": ".295",
+                  "value": 0.2952379882335663,
+                  "athlete": {
+                    "id": "39832",
+                    "fullName": "Shohei Ohtani",
+                    "displayName": "Shohei Ohtani",
+                    "shortName": "S. Ohtani",
+                    "links": [
+                      {
+                        "rel": [
+                          "playercard",
+                          "desktop",
+                          "athlete"
+                        ],
+                        "href": "https://www.espn.com/mlb/player/_/id/39832"
+                      }
+                    ],
+                    "headshot": "https://a.espncdn.com/i/headshots/mlb/players/full/39832.png",
+                    "jersey": "17",
+                    "position": {
+                      "abbreviation": "DH"
+                    },
+                    "team": {
+                      "id": "19"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "19"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "homeRuns",
+              "displayName": "Home Runs",
+              "shortDisplayName": "HR",
+              "abbreviation": "HR",
+              "leaders": [
+                {
+                  "displayValue": "19",
+                  "value": 19.0,
+                  "athlete": {
+                    "id": "39832",
+                    "fullName": "Shohei Ohtani",
+                    "displayName": "Shohei Ohtani",
+                    "shortName": "S. Ohtani",
+                    "links": [
+                      {
+                        "rel": [
+                          "playercard",
+                          "desktop",
+                          "athlete"
+                        ],
+                        "href": "https://www.espn.com/mlb/player/_/id/39832"
+                      }
+                    ],
+                    "headshot": "https://a.espncdn.com/i/headshots/mlb/players/full/39832.png",
+                    "jersey": "17",
+                    "position": {
+                      "abbreviation": "DH"
+                    },
+                    "team": {
+                      "id": "19"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "19"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "RBIs",
+              "displayName": "Runs Batted In",
+              "shortDisplayName": "RBI",
+              "abbreviation": "RBI",
+              "leaders": [
+                {
+                  "displayValue": "63",
+                  "value": 63.0,
+                  "athlete": {
+                    "id": "42468",
+                    "fullName": "Andy Pages",
+                    "displayName": "Andy Pages",
+                    "shortName": "A. Pages",
+                    "links": [
+                      {
+                        "rel": [
+                          "playercard",
+                          "desktop",
+                          "athlete"
+                        ],
+                        "href": "https://www.espn.com/mlb/player/_/id/42468"
+                      }
+                    ],
+                    "headshot": "https://a.espncdn.com/i/headshots/mlb/players/full/42468.png",
+                    "jersey": "44",
+                    "position": {
+                      "abbreviation": "CF"
+                    },
+                    "team": {
+                      "id": "19"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "19"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "MLBRating",
+              "displayName": "MLB Rating",
+              "shortDisplayName": "MLB",
+              "abbreviation": "MLB",
+              "leaders": [
+                {
+                  "displayValue": "377.8",
+                  "value": 377.75,
+                  "athlete": {
+                    "id": "39832",
+                    "fullName": "Shohei Ohtani",
+                    "displayName": "Shohei Ohtani",
+                    "shortName": "S. Ohtani",
+                    "links": [
+                      {
+                        "rel": [
+                          "playercard",
+                          "desktop",
+                          "athlete"
+                        ],
+                        "href": "https://www.espn.com/mlb/player/_/id/39832"
+                      }
+                    ],
+                    "headshot": "https://a.espncdn.com/i/headshots/mlb/players/full/39832.png",
+                    "jersey": "17",
+                    "position": {
+                      "abbreviation": "DH"
+                    },
+                    "team": {
+                      "id": "19"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "19"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "27",
+          "uid": "s:1~l:10~t:27",
+          "type": "team",
+          "order": 1,
+          "homeAway": "away",
+          "team": {
+            "id": "27",
+            "uid": "s:1~l:10~t:27",
+            "location": "Colorado",
+            "name": "Rockies",
+            "abbreviation": "COL",
+            "displayName": "Colorado Rockies",
+            "shortDisplayName": "Rockies",
+            "color": "33006f",
+            "alternateColor": "000000",
+            "isActive": true,
+            "links": [
+              {
+                "rel": [
+                  "clubhouse",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mlb/team/_/name/col/colorado-rockies",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mlb/team/roster/_/name/col/colorado-rockies",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:1~l:10~t:27&section=roster",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mlb/team/stats/_/name/col/colorado-rockies",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:1~l:10~t:27&section=stats",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mlb/team/schedule/_/name/col",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:1~l:10~t:27&section=scores",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              }
+            ],
+            "logo": "https://a.espncdn.com/i/teamlogos/mlb/500/scoreboard/col.png"
+          },
+          "score": "0",
+          "probables": [
+            {
+              "name": "probableStartingPitcher",
+              "displayName": "Probable Starting Pitcher",
+              "shortDisplayName": "Starter",
+              "abbreviation": "SP",
+              "playerId": 33252,
+              "athlete": {
+                "id": "33252",
+                "fullName": "Michael Lorenzen",
+                "displayName": "Michael Lorenzen",
+                "shortName": "M. Lorenzen",
+                "links": [
+                  {
+                    "rel": [
+                      "playercard",
+                      "desktop",
+                      "athlete"
+                    ],
+                    "href": "https://www.espn.com/mlb/player/_/id/33252"
+                  }
+                ],
+                "headshot": "https://a.espncdn.com/i/headshots/mlb/players/full/33252.png",
+                "jersey": "24",
+                "position": "SP",
+                "team": {
+                  "id": "27"
+                }
+              },
+              "statistics": [
+                {
+                  "name": "saves",
+                  "abbreviation": "SV",
+                  "displayValue": "0",
+                  "rankDisplayValue": "Tied-195th"
+                },
+                {
+                  "name": "losses",
+                  "abbreviation": "L",
+                  "displayValue": "9",
+                  "rankDisplayValue": "Tied-1st"
+                },
+                {
+                  "name": "wins",
+                  "abbreviation": "W",
+                  "displayValue": "3",
+                  "rankDisplayValue": "Tied-148th"
+                },
+                {
+                  "name": "ERA",
+                  "abbreviation": "ERA",
+                  "displayValue": "6.91"
+                },
+                {
+                  "name": "errors",
+                  "abbreviation": "E",
+                  "displayValue": "0",
+                  "rankDisplayValue": "Tied-519th"
+                }
+              ],
+              "record": "(3-9, 6.91)"
+            }
+          ],
+          "statistics": [
+            {
+              "name": "hits",
+              "abbreviation": "H",
+              "displayValue": "809",
+              "rankDisplayValue": "3rd"
+            },
+            {
+              "name": "runs",
+              "abbreviation": "R",
+              "displayValue": "450",
+              "rankDisplayValue": "6th"
+            },
+            {
+              "name": "avg",
+              "abbreviation": "AVG",
+              "displayValue": ".258",
+              "rankDisplayValue": "3rd"
+            },
+            {
+              "name": "saves",
+              "abbreviation": "SV",
+              "displayValue": "21",
+              "rankDisplayValue": "Tied-20th"
+            },
+            {
+              "name": "losses",
+              "abbreviation": "L",
+              "displayValue": "55",
+              "rankDisplayValue": "Tied-29th"
+            },
+            {
+              "name": "wins",
+              "abbreviation": "W",
+              "displayValue": "37",
+              "rankDisplayValue": "Tied-28th"
+            },
+            {
+              "name": "ERA",
+              "abbreviation": "ERA",
+              "displayValue": "5.53",
+              "rankDisplayValue": "30th"
+            },
+            {
+              "name": "errors",
+              "abbreviation": "E",
+              "displayValue": "55",
+              "rankDisplayValue": "Tied-23rd"
+            }
+          ],
+          "hits": 0,
+          "errors": 0,
+          "records": [
+            {
+              "name": "overall",
+              "abbreviation": "Total",
+              "type": "total",
+              "summary": "37-55"
+            },
+            {
+              "name": "Home",
+              "abbreviation": "Home",
+              "type": "home",
+              "summary": "22-25"
+            },
+            {
+              "name": "Road",
+              "abbreviation": "AWAY",
+              "type": "road",
+              "summary": "15-30"
+            }
+          ],
+          "leaders": [
+            {
+              "name": "avg",
+              "displayName": "Batting Average",
+              "shortDisplayName": "BA",
+              "abbreviation": "AVG",
+              "leaders": [
+                {
+                  "displayValue": ".310",
+                  "value": 0.30970141291618347,
+                  "athlete": {
+                    "id": "4346111",
+                    "fullName": "Troy Johnston",
+                    "displayName": "Troy Johnston",
+                    "shortName": "T. Johnston",
+                    "links": [
+                      {
+                        "rel": [
+                          "playercard",
+                          "desktop",
+                          "athlete"
+                        ],
+                        "href": "https://www.espn.com/mlb/player/_/id/4346111"
+                      }
+                    ],
+                    "headshot": "https://a.espncdn.com/i/headshots/mlb/players/full/4346111.png",
+                    "jersey": "20",
+                    "position": {
+                      "abbreviation": "RF"
+                    },
+                    "team": {
+                      "id": "27"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "27"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "homeRuns",
+              "displayName": "Home Runs",
+              "shortDisplayName": "HR",
+              "abbreviation": "HR",
+              "leaders": [
+                {
+                  "displayValue": "27",
+                  "value": 27.0,
+                  "athlete": {
+                    "id": "4416591",
+                    "fullName": "Hunter Goodman",
+                    "displayName": "Hunter Goodman",
+                    "shortName": "H. Goodman",
+                    "links": [
+                      {
+                        "rel": [
+                          "playercard",
+                          "desktop",
+                          "athlete"
+                        ],
+                        "href": "https://www.espn.com/mlb/player/_/id/4416591"
+                      }
+                    ],
+                    "headshot": "https://a.espncdn.com/i/headshots/mlb/players/full/4416591.png",
+                    "jersey": "15",
+                    "position": {
+                      "abbreviation": "C"
+                    },
+                    "team": {
+                      "id": "27"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "27"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "RBIs",
+              "displayName": "Runs Batted In",
+              "shortDisplayName": "RBI",
+              "abbreviation": "RBI",
+              "leaders": [
+                {
+                  "displayValue": "51",
+                  "value": 51.0,
+                  "athlete": {
+                    "id": "4416591",
+                    "fullName": "Hunter Goodman",
+                    "displayName": "Hunter Goodman",
+                    "shortName": "H. Goodman",
+                    "links": [
+                      {
+                        "rel": [
+                          "playercard",
+                          "desktop",
+                          "athlete"
+                        ],
+                        "href": "https://www.espn.com/mlb/player/_/id/4416591"
+                      }
+                    ],
+                    "headshot": "https://a.espncdn.com/i/headshots/mlb/players/full/4416591.png",
+                    "jersey": "15",
+                    "position": {
+                      "abbreviation": "C"
+                    },
+                    "team": {
+                      "id": "27"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "27"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "MLBRating",
+              "displayName": "MLB Rating",
+              "shortDisplayName": "MLB",
+              "abbreviation": "MLB",
+              "leaders": [
+                {
+                  "displayValue": "344.8",
+                  "value": 344.75,
+                  "athlete": {
+                    "id": "4416591",
+                    "fullName": "Hunter Goodman",
+                    "displayName": "Hunter Goodman",
+                    "shortName": "H. Goodman",
+                    "links": [
+                      {
+                        "rel": [
+                          "playercard",
+                          "desktop",
+                          "athlete"
+                        ],
+                        "href": "https://www.espn.com/mlb/player/_/id/4416591"
+                      }
+                    ],
+                    "headshot": "https://a.espncdn.com/i/headshots/mlb/players/full/4416591.png",
+                    "jersey": "15",
+                    "position": {
+                      "abbreviation": "C"
+                    },
+                    "team": {
+                      "id": "27"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "27"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "notes": [],
+      "status": {
+        "clock": 0.0,
+        "displayClock": "0:00",
+        "period": 1,
+        "type": {
+          "id": "1",
+          "name": "STATUS_SCHEDULED",
+          "state": "pre",
+          "completed": false,
+          "description": "Scheduled",
+          "detail": "Scheduled",
+          "shortDetail": "7/7 - 10:10 PM EDT"
+        }
+      },
+      "broadcasts": [
+        {
+          "market": "national",
+          "names": [
+            "MLB.TV"
+          ]
+        },
+        {
+          "market": "home",
+          "names": [
+            "Sportsnet LA"
+          ]
+        },
+        {
+          "market": "away",
+          "names": [
+            "Rockies.TV"
+          ]
+        }
+      ],
+      "format": {
+        "regulation": {
+          "periods": 9
+        }
+      },
+      "tickets": [
+        {
+          "summary": "Tickets as low as $30",
+          "numberAvailable": 3260,
+          "links": [
+            {
+              "href": "https://www.vividseats.com/los-angeles-dodgers-tickets-dodger-stadium-7-7-2026--sports-mlb-baseball/production/5965050?wsUser=717"
+            },
+            {
+              "href": "https://www.vividseats.com/dodger-stadium-tickets/venue/475?wsUser=717"
+            }
+          ]
+        }
+      ],
+      "startDate": "2026-07-08T02:10Z",
+      "broadcast": "MLB.TV",
+      "geoBroadcasts": [
+        {
+          "type": {
+            "id": "4",
+            "shortName": "Streaming"
+          },
+          "market": {
+            "id": "1",
+            "type": "National"
+          },
+          "media": {
+            "shortName": "MLB.TV",
+            "logo": "https://a.espncdn.com/guid/0db644c3-9f87-37e7-9884-858c2ed45218/logos/default.png",
+            "darkLogo": ""
+          },
+          "lang": "en",
+          "region": "us"
+        },
+        {
+          "type": {
+            "id": "1",
+            "shortName": "TV"
+          },
+          "market": {
+            "id": "2",
+            "type": "Home"
+          },
+          "media": {
+            "shortName": "Sportsnet LA"
+          },
+          "lang": "en",
+          "region": "us"
+        },
+        {
+          "type": {
+            "id": "4",
+            "shortName": "Streaming"
+          },
+          "market": {
+            "id": "3",
+            "type": "Away"
+          },
+          "media": {
+            "shortName": "Rockies.TV"
+          },
+          "lang": "en",
+          "region": "us"
+        }
+      ],
+      "odds": [
+        {
+          "provider": {
+            "id": "100",
+            "name": "DraftKings",
+            "priority": 1,
+            "logos": [
+              {
+                "href": "https://a.espncdn.com/i/betting/Draftkings_Light.svg",
+                "rel": [
+                  "light"
+                ]
+              },
+              {
+                "href": "https://a.espncdn.com/i/betting/Draftkings_Dark.svg",
+                "rel": [
+                  "dark"
+                ]
+              }
+            ],
+            "displayName": "DraftKings"
+          },
+          "details": "LAD -326",
+          "overUnder": 9.5,
+          "spread": -1.5,
+          "awayTeamOdds": {
+            "favorite": false,
+            "underdog": true,
+            "close": {
+              "pointSpread": {
+                "alternateDisplayValue": "-0",
+                "american": "-0"
+              }
+            },
+            "team": {
+              "id": "27",
+              "uid": "s:1~l:10~t:27",
+              "abbreviation": "COL",
+              "name": "Rockies",
+              "displayName": "Colorado Rockies",
+              "logo": "https://a.espncdn.com/i/teamlogos/mlb/500/scoreboard/col.png"
+            },
+            "favoriteAtOpen": false
+          },
+          "homeTeamOdds": {
+            "favorite": true,
+            "underdog": false,
+            "close": {
+              "pointSpread": {
+                "value": 0.0,
+                "alternateDisplayValue": "+0",
+                "decimal": 0.0,
+                "american": "+0"
+              }
+            },
+            "team": {
+              "id": "19",
+              "uid": "s:1~l:10~t:19",
+              "abbreviation": "LAD",
+              "name": "Dodgers",
+              "displayName": "Los Angeles Dodgers",
+              "logo": "https://a.espncdn.com/i/teamlogos/mlb/500/scoreboard/lad.png"
+            },
+            "favoriteAtOpen": true
+          },
+          "moneyline": {
+            "displayName": "Moneyline",
+            "shortDisplayName": "ML",
+            "home": {
+              "close": {
+                "odds": "-326",
+                "link": {
+                  "language": "en-US",
+                  "rel": [
+                    "home",
+                    "desktop",
+                    "bets"
+                  ],
+                  "href": "https://sportsbook.draftkings.com/gateway?s=__s__&wpcid=__wpcid__&wpsrc=413&wpcn=ESPN&wpscn=Widget&wpcrn=BetSlipDeepLink&wpscid=__wpscid__&wpcrid=xx&preurl=https%3A%2F%2Fsportsbook.draftkings.com%2Fevent%2F34361832%3Foutcomes%3D0ML85398702_1",
+                  "text": "Home Bet",
+                  "shortText": "Home Bet",
+                  "isExternal": true,
+                  "isPremium": false,
+                  "tracking": {
+                    "campaign": "betting-integrations",
+                    "tags": {
+                      "league": "mlb",
+                      "sport": "baseball",
+                      "gameId": 401816066,
+                      "betSide": "home",
+                      "betType": "straight"
+                    }
+                  }
+                }
+              },
+              "open": {
+                "odds": "-267"
+              }
+            },
+            "away": {
+              "close": {
+                "odds": "+257",
+                "link": {
+                  "language": "en-US",
+                  "rel": [
+                    "away",
+                    "desktop",
+                    "bets"
+                  ],
+                  "href": "https://sportsbook.draftkings.com/gateway?s=__s__&wpcid=__wpcid__&wpsrc=413&wpcn=ESPN&wpscn=Widget&wpcrn=BetSlipDeepLink&wpscid=__wpscid__&wpcrid=xx&preurl=https%3A%2F%2Fsportsbook.draftkings.com%2Fevent%2F34361832%3Foutcomes%3D0ML85398702_3",
+                  "text": "Away Bet",
+                  "shortText": "Away Bet",
+                  "isExternal": true,
+                  "isPremium": false,
+                  "tracking": {
+                    "campaign": "betting-integrations",
+                    "tags": {
+                      "league": "mlb",
+                      "sport": "baseball",
+                      "gameId": 401816066,
+                      "betSide": "away",
+                      "betType": "straight"
+                    }
+                  }
+                }
+              },
+              "open": {
+                "odds": "+214"
+              }
+            }
+          },
+          "pointSpread": {
+            "displayName": "Runline",
+            "shortDisplayName": "RL",
+            "home": {
+              "close": {
+                "line": "-1.5",
+                "odds": "-155",
+                "link": {
+                  "language": "en-US",
+                  "rel": [
+                    "homeSpread",
+                    "desktop",
+                    "bets"
+                  ],
+                  "href": "https://sportsbook.draftkings.com/gateway?s=__s__&wpcid=__wpcid__&wpsrc=413&wpcn=ESPN&wpscn=Widget&wpcrn=BetSlipDeepLink&wpscid=__wpscid__&wpcrid=xx&preurl=https%3A%2F%2Fsportsbook.draftkings.com%2Fevent%2F34361832%3Foutcomes%3D0HC85398702N150_1",
+                  "text": "Home Point Spread",
+                  "shortText": "Home Point Spread",
+                  "isExternal": true,
+                  "isPremium": false,
+                  "tracking": {
+                    "campaign": "betting-integrations",
+                    "tags": {
+                      "league": "mlb",
+                      "sport": "baseball",
+                      "gameId": 401816066,
+                      "betSide": "none",
+                      "betType": "straight",
+                      "betDetails": "Spread:LAD-1.5"
+                    }
+                  }
+                }
+              },
+              "open": {
+                "line": "-1.5",
+                "odds": "-118"
+              }
+            },
+            "away": {
+              "close": {
+                "line": "+1.5",
+                "odds": "+128",
+                "link": {
+                  "language": "en-US",
+                  "rel": [
+                    "awaySpread",
+                    "desktop",
+                    "bets"
+                  ],
+                  "href": "https://sportsbook.draftkings.com/gateway?s=__s__&wpcid=__wpcid__&wpsrc=413&wpcn=ESPN&wpscn=Widget&wpcrn=BetSlipDeepLink&wpscid=__wpscid__&wpcrid=xx&preurl=https%3A%2F%2Fsportsbook.draftkings.com%2Fevent%2F34361832%3Foutcomes%3D0HC85398702P150_3",
+                  "text": "Away Point Spread",
+                  "shortText": "Away Point Spread",
+                  "isExternal": true,
+                  "isPremium": false,
+                  "tracking": {
+                    "campaign": "betting-integrations",
+                    "tags": {
+                      "league": "mlb",
+                      "sport": "baseball",
+                      "gameId": 401816066,
+                      "betSide": "none",
+                      "betType": "straight",
+                      "betDetails": "Spread:COL+1.5"
+                    }
+                  }
+                }
+              },
+              "open": {
+                "line": "+1.5",
+                "odds": "-102"
+              }
+            }
+          },
+          "total": {
+            "displayName": "Total Runs",
+            "shortDisplayName": "Total",
+            "over": {
+              "close": {
+                "line": "o9.5",
+                "odds": "-105",
+                "link": {
+                  "language": "en-US",
+                  "rel": [
+                    "over",
+                    "desktop",
+                    "bets"
+                  ],
+                  "href": "https://sportsbook.draftkings.com/gateway?s=__s__&wpcid=__wpcid__&wpsrc=413&wpcn=ESPN&wpscn=Widget&wpcrn=BetSlipDeepLink&wpscid=__wpscid__&wpcrid=xx&preurl=https%3A%2F%2Fsportsbook.draftkings.com%2Fevent%2F34361832%3Foutcomes%3D0OU85398702O950_1",
+                  "text": "Over Odds",
+                  "shortText": "Over Odds",
+                  "isExternal": true,
+                  "isPremium": false,
+                  "tracking": {
+                    "campaign": "betting-integrations",
+                    "tags": {
+                      "league": "mlb",
+                      "sport": "baseball",
+                      "gameId": 401816066,
+                      "betSide": "over",
+                      "betType": "straight",
+                      "betDetails": "Over:9.5"
+                    }
+                  }
+                }
+              },
+              "open": {
+                "line": "o9",
+                "odds": "-120"
+              }
+            },
+            "under": {
+              "close": {
+                "line": "u9.5",
+                "odds": "-114",
+                "link": {
+                  "language": "en-US",
+                  "rel": [
+                    "under",
+                    "desktop",
+                    "bets"
+                  ],
+                  "href": "https://sportsbook.draftkings.com/gateway?s=__s__&wpcid=__wpcid__&wpsrc=413&wpcn=ESPN&wpscn=Widget&wpcrn=BetSlipDeepLink&wpscid=__wpscid__&wpcrid=xx&preurl=https%3A%2F%2Fsportsbook.draftkings.com%2Fevent%2F34361832%3Foutcomes%3D0OU85398702U950_3",
+                  "text": "Under Odds",
+                  "shortText": "Under Odds",
+                  "isExternal": true,
+                  "isPremium": false,
+                  "tracking": {
+                    "campaign": "betting-integrations",
+                    "tags": {
+                      "league": "mlb",
+                      "sport": "baseball",
+                      "gameId": 401816066,
+                      "betSide": "under",
+                      "betType": "straight",
+                      "betDetails": "Under:9.5"
+                    }
+                  }
+                }
+              },
+              "open": {
+                "line": "u9",
+                "odds": "+100"
+              }
+            }
+          },
+          "link": {
+            "language": "en-US",
+            "rel": [
+              "game",
+              "desktop",
+              "bets"
+            ],
+            "href": "https://sportsbook.draftkings.com/gateway?s=__s__&wpcid=__wpcid__&wpsrc=413&wpcn=ESPN&wpscn=Widget&wpcrn=BetSlipDeepLink&wpscid=__wpscid__&wpcrid=xx&preurl=https%3A%2F%2Fsportsbook.draftkings.com%2Fevent%2F34361832",
+            "text": "See More Odds",
+            "shortText": "Game",
+            "isExternal": true,
+            "isPremium": false,
+            "tracking": {
+              "campaign": "betting-integrations",
+              "tags": {
+                "league": "mlb",
+                "sport": "baseball",
+                "gameId": 401816066,
+                "betSide": "none",
+                "betType": "straight"
+              }
+            }
+          },
+          "header": {
+            "logo": {
+              "dark": "https://a.espncdn.com/i/espnbet/dark/espn-bet-square-off.svg",
+              "light": "https://a.espncdn.com/i/espnbet/espn-bet-square-off.svg",
+              "exclusivesLogoDark": "https://a.espncdn.com/i/espnbet/espn-bet-square-mint.svg",
+              "exclusivesLogoLight": "https://a.espncdn.com/i/espnbet/espn-bet-square-mint.svg"
+            },
+            "text": "Game Odds"
+          },
+          "footer": {
+            "disclaimer": "GAMBLING PROBLEM? CALL 1-800-GAMBLER or 1-800-MY-RESET, (800) 327-5050 or visit gamblinghelplinema.org (MA). Call 877-8-HOPENY/text HOPENY (467369) (NY). Call 888-789-7777/visit ccpg.org (CT), or visit www.mdgamblinghelp.org (MD), 1-800-981-0023 (PR). 21+ and present in most states. (18+ DC/KY/NH/PR/WY). Void in ONT. Eligibility restrictions apply. Terms: draftkings.com/sportsbook. On behalf of Boot Hill Casino (KS). Pass-thru of per wager tax may apply in IL."
+          }
+        }
+      ],
+      "headlines": [
+        {
+          "type": "Preview",
+          "description": "Colorado Rockies (37-55, fifth in the NL West) vs. Los Angeles Dodgers (60-32, first in the NL West)",
+          "shortLinkText": "Dodgers play the Rockies leading series 1-0"
+        }
+      ],
+      "highlights": []
+    }
+  ],
+  "links": [
+    {
+      "language": "en-US",
+      "rel": [
+        "summary",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/mlb/game/_/gameId/401816066/rockies-dodgers",
+      "text": "Gamecast",
+      "shortText": "Gamecast",
+      "isExternal": false,
+      "isPremium": false
+    },
+    {
+      "language": "en-US",
+      "rel": [
+        "preview",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/mlb/preview/_/gameId/401816066",
+      "text": "Preview",
+      "shortText": "Preview",
+      "isExternal": false,
+      "isPremium": false
+    }
+  ],
+  "weather": {
+    "displayValue": "Sunny",
+    "temperature": 77,
+    "highTemperature": 77,
+    "conditionId": "1",
+    "link": {
+      "language": "en-US",
+      "rel": [
+        "90090"
+      ],
+      "href": "http://www.accuweather.com/en/us/dodger-stadium-ca/90012/hourly-weather-forecast/30524_poi?day=1&hbhhour=19&lang=en-us",
+      "text": "Weather",
+      "shortText": "Weather",
+      "isExternal": true,
+      "isPremium": false
+    }
+  },
+  "status": {
+    "clock": 0.0,
+    "displayClock": "0:00",
+    "period": 1,
+    "type": {
+      "id": "1",
+      "name": "STATUS_SCHEDULED",
+      "state": "pre",
+      "completed": false,
+      "description": "Scheduled",
+      "detail": "Scheduled",
+      "shortDetail": "7/7 - 10:10 PM EDT"
+    }
+  }
+}

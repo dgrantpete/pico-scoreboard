@@ -32,8 +32,8 @@ use espn::EspnClient;
     paths(
         clock::time,
         team::get_team_logo,
-        mlb::handler::list_active_games,
-        mlb::handler::get_live_game,
+        mlb::handler::list_games,
+        mlb::handler::get_game,
         soccer::handler::list_active_games,
         soccer::handler::get_live_game,
         app_update::handler::get_app_manifest,
@@ -45,8 +45,16 @@ use espn::EspnClient;
         error::ErrorResponse,
         logo::LogoQuery,
         logo::OutputFormat,
+        mlb::MlbGame,
         mlb::LiveGame,
         mlb::PregameGame,
+        mlb::FinalGame,
+        mlb::PregameTeam,
+        mlb::FinalTeam,
+        mlb::Record,
+        mlb::Weather,
+        mlb::GameListEntry,
+        mlb::GameState,
         mlb::TeamState,
         mlb::TeamColors,
         mlb::Count,
@@ -186,8 +194,8 @@ pub async fn run() {
             "/{sport}/{league}/teams/{abbrev}/logo",
             get(team::get_team_logo),
         )
-        .route("/baseball/mlb/games", get(mlb::list_active_games))
-        .route("/baseball/mlb/games/{game_id}", get(mlb::get_live_game))
+        .route("/baseball/mlb/games", get(mlb::list_games))
+        .route("/baseball/mlb/games/{game_id}", get(mlb::get_game))
         .route("/soccer/{league}/games", get(soccer::list_active_games))
         .route(
             "/soccer/{league}/games/{game_id}",
@@ -206,4 +214,32 @@ pub async fn run() {
 
 async fn health() -> &'static str {
     "OK"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R1 gate: utoipa 5 must produce a valid schema for the internally-tagged
+    /// newtype-variant `MlbGame` enum. It does — as a `oneOf` whose arms
+    /// `allOf`-compose each inner struct with a `state` enum discriminator
+    /// (pregame/live/final). This asserts the doc serializes and the enum
+    /// discriminator survives, so no soccer-style inlining fallback is needed.
+    #[test]
+    fn openapi_serializes_with_mlb_state_discriminator() {
+        let doc = ApiDoc::openapi();
+        let json = serde_json::to_string(&doc).expect("OpenAPI doc serializes");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let mlb = &value["components"]["schemas"]["MlbGame"];
+        let arms = mlb["oneOf"]
+            .as_array()
+            .expect("MlbGame is a oneOf over its states");
+        assert_eq!(arms.len(), 3, "one arm per state");
+        // Collect the `state` enum literal from each arm's allOf composition.
+        let states: Vec<&str> = arms
+            .iter()
+            .filter_map(|arm| arm["allOf"][1]["properties"]["state"]["enum"][0].as_str())
+            .collect();
+        assert_eq!(states, ["pregame", "live", "final"]);
+    }
 }
