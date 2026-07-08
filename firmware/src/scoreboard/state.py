@@ -27,7 +27,36 @@ import framebuf
 from hub75 import Hub75Driver, gamma as gamma_mod
 from scoreboard.config import Config
 import scoreboard.logger as logger
+from scoreboard.fonts import rgb565, measure_text, spleen_5x8
+from scoreboard import screen_geometry
 from scoreboard.mlb import LiveGame
+
+
+# Minimum brightest-channel value for team colors. Teams whose primary is
+# darker than this (e.g. Yankees/Brewers navy, White Sox near-black) get
+# scaled up proportionally so the text stays legible on the black panel.
+# Preserves hue for chromatic colors; near-neutrals move toward bright gray.
+#
+# Lives here (not display.py) so Core 0 state setters can pre-brighten team
+# colors at commit time without importing display; display.render_game imports
+# _team_color_to_rgb565 from this module for its per-frame use.
+_TEAM_COLOR_MIN_CHANNEL = 128
+
+
+def _team_color_to_rgb565(packed: int) -> int:
+    r = (packed >> 16) & 0xFF
+    g = (packed >> 8) & 0xFF
+    b = packed & 0xFF
+    m = r if r >= g and r >= b else (g if g >= b else b)
+    if m < _TEAM_COLOR_MIN_CHANNEL:
+        if m == 0:
+            r = g = b = _TEAM_COLOR_MIN_CHANNEL
+        else:
+            scale = _TEAM_COLOR_MIN_CHANNEL / m
+            r = int(r * scale)
+            g = int(g * scale)
+            b = int(b * scale)
+    return rgb565(r, g, b)
 
 
 class ThreadHealth:
@@ -168,15 +197,113 @@ class MlbGameSnapshot:
 
 
 class ToastState:
-    """Transient text overlay (button feedback). Rendered for a short window."""
+    """Transient text overlay (button feedback). Rendered for a short window.
+
+    `sticky` toasts (a fired-but-in-flight SKIP) persist until the operation
+    that set them clears them, not on the usual short timer. `pulse_ms` stamps
+    the start of a one-shot "rejected press" dim cycle (0 = not pulsing).
+    """
 
     def __init__(self) -> None:
         self.text: str = ''
         self.updated_ms: int = 0   # time.ticks_ms() when the toast was set; 0 = never
+        self.sticky: bool = False  # persists past TOAST_DISPLAY_MS until cleared
+        self.pulse_ms: int = 0     # ticks_ms() of a rejected-press dim; 0 = none
 
     def copy_from(self, other: "ToastState") -> None:
         self.text = other.text
         self.updated_ms = other.updated_ms
+        self.sticky = other.sticky
+        self.pulse_ms = other.pulse_ms
+
+
+class PregameView:
+    """Pre-built pregame screen data. Every string and color is finished on
+    Core 0 by set_pregame; Core 1 only reads and draws.
+
+    Cycling info (variant A/C) is expressed as parallel lists walked by the
+    renderer with pure modular arithmetic (no per-frame allocation): `cycle_*`
+    covers venue/first-pitch/weather (variant A), `alt_*` covers
+    venue<->weather only (variant C, which shows the time statically). Lists
+    are replaced wholesale by Core 0 -- never mutated in place -- so the
+    reference hand-off is safe (ErrorState.lines precedent).
+    """
+
+    def __init__(self) -> None:
+        # Records (empty string == not advertised).
+        self.away_wins: str = ''
+        self.away_losses: str = ''
+        self.home_wins: str = ''
+        self.home_losses: str = ''
+        self.away_record: str = ''   # horizontal "41-28" form (variant B)
+        self.home_record: str = ''
+        # Raw info lines (empty == absent; time empty when utc offset unknown).
+        self.venue_text: str = ''
+        self.time_text: str = ''
+        self.weather_text: str = ''
+        # Probable pitchers (empty == not advertised).
+        self.away_pitcher: str = ''
+        self.home_pitcher: str = ''
+        # Pre-brightened team colors (RGB565).
+        self.away_color: int = 0xFFFF
+        self.home_color: int = 0xFFFF
+        # Cycle A: venue / first pitch / weather.
+        self.cycle_labels: list[str] = []
+        self.cycle_texts: list[str] = []
+        self.cycle_big: list[bool] = []   # True -> unscii_16 centered (no scroll)
+        self.cycle_ends: list[int] = []   # cumulative dwell (ms); [-1] = full cycle
+        # Cycle C: venue <-> weather only (time shown statically).
+        self.alt_texts: list[str] = []
+        self.alt_ends: list[int] = []
+
+    def copy_from(self, other: "PregameView") -> None:
+        self.away_wins = other.away_wins
+        self.away_losses = other.away_losses
+        self.home_wins = other.home_wins
+        self.home_losses = other.home_losses
+        self.away_record = other.away_record
+        self.home_record = other.home_record
+        self.venue_text = other.venue_text
+        self.time_text = other.time_text
+        self.weather_text = other.weather_text
+        self.away_pitcher = other.away_pitcher
+        self.home_pitcher = other.home_pitcher
+        self.away_color = other.away_color
+        self.home_color = other.home_color
+        self.cycle_labels = other.cycle_labels
+        self.cycle_texts = other.cycle_texts
+        self.cycle_big = other.cycle_big
+        self.cycle_ends = other.cycle_ends
+        self.alt_texts = other.alt_texts
+        self.alt_ends = other.alt_ends
+
+
+class FinalView:
+    """Pre-built final screen data. Line-score rows are equal-char-count
+    strings (3 chars per inning column) so the three rows measure identically
+    and scroll in lockstep with zero extra mechanism (see set_final)."""
+
+    def __init__(self) -> None:
+        self.away_score: int = 0
+        self.home_score: int = 0
+        self.final_text: str = 'FINAL'   # "FINAL" or "F/10" for extras
+        self.ls_header: str = ''          # inning numbers, 3 chars/col
+        self.ls_away: str = ''            # away runs, 3 chars/col
+        self.ls_home: str = ''            # home runs, 3 chars/col ("  X" for missing)
+        self.home_won: bool = False
+        self.away_color: int = 0xFFFF
+        self.home_color: int = 0xFFFF
+
+    def copy_from(self, other: "FinalView") -> None:
+        self.away_score = other.away_score
+        self.home_score = other.home_score
+        self.final_text = other.final_text
+        self.ls_header = other.ls_header
+        self.ls_away = other.ls_away
+        self.ls_home = other.ls_home
+        self.home_won = other.home_won
+        self.away_color = other.away_color
+        self.home_color = other.home_color
 
 
 class UiColors:
@@ -209,6 +336,8 @@ class StateBuffer:
         self.error: ErrorState = ErrorState()
         self.ui_colors: UiColors = UiColors()
         self.game: MlbGameSnapshot = MlbGameSnapshot()
+        self.pregame: PregameView = PregameView()
+        self.final: FinalView = FinalView()
         self.toast: ToastState = ToastState()
         self.home_logo: framebuf.FrameBuffer | None = None
         self.away_logo: framebuf.FrameBuffer | None = None
@@ -222,6 +351,8 @@ class StateBuffer:
         self.error.copy_from(other.error)
         self.ui_colors.copy_from(other.ui_colors)
         self.game.copy_from(other.game)
+        self.pregame.copy_from(other.pregame)
+        self.final.copy_from(other.final)
         self.toast.copy_from(other.toast)
         self.home_logo = other.home_logo
         self.away_logo = other.away_logo
@@ -487,16 +618,230 @@ def set_error(title: str, lines: list[str] | None = None) -> None:
     commit_state()
 
 
-def set_toast(text: str) -> None:
+def set_toast(text: str, sticky: bool = False) -> None:
     """
-    Show a transient text overlay (e.g. button feedback) for a short window.
+    Show a transient text overlay (e.g. button feedback).
 
-    Thread-safe: writes to the back buffer and commits. The display thread
-    renders the toast while it's within TOAST_DISPLAY_MS of updated_ms.
+    Thread-safe: writes to the back buffer and commits. A non-sticky toast
+    renders while it's within TOAST_DISPLAY_MS of updated_ms; a sticky one
+    (an in-flight SKIP) persists until clear_toast_if_sticky() clears it.
+    Setting a toast resets any in-progress rejected-press dim pulse.
     """
     state = get_write_state()
-    state.toast.text = text
-    state.toast.updated_ms = time.ticks_ms()
+    toast = state.toast
+    toast.text = text
+    toast.updated_ms = time.ticks_ms()
+    toast.sticky = sticky
+    toast.pulse_ms = 0
+    commit_state()
+
+
+def clear_toast_if_sticky() -> None:
+    """Clear a sticky toast (no-op otherwise).
+
+    Called from the SKIP tick's `finally` so a LOCKED/one-shot toast fired by
+    an unrelated press mid-skip is never clobbered -- only the sticky SKIPPING
+    toast this tick owns is torn down.
+    """
+    state = get_write_state()
+    toast = state.toast
+    if not toast.sticky:
+        return
+    toast.text = ''
+    toast.updated_ms = 0
+    toast.sticky = False
+    toast.pulse_ms = 0
+    commit_state()
+
+
+def pulse_toast() -> None:
+    """Stamp a one-shot rejected-press dim on the current toast.
+
+    A press that lands while a skip is already in flight is rejected (not
+    re-queued); the visible toast dims one cycle as feedback. Restamps on each
+    press so hammering the button dims per press.
+    """
+    state = get_write_state()
+    state.toast.pulse_ms = time.ticks_ms()
+    commit_state()
+
+
+# =============================================================================
+# Pregame / final screen setters (Core 0 string pre-build)
+# =============================================================================
+# These own the string building for the pre/post screens, mirroring the
+# existing set_startup_step / set_error precedent: every string and packed
+# color the display thread draws is finished here, so Core 1 never formats
+# text. The preview exercises the identical path the poller's commit helpers
+# will.
+
+
+def _pregame_phase_dwell(text_w: int, width: int) -> int:
+    """Milliseconds one info phase stays up: at least PREGAME_INFO_DWELL_MS,
+    and never less than one full scroll cycle of its text in `width` px."""
+    max_scroll = text_w - width
+    if max_scroll > 0:
+        scroll_ms = (max_scroll * 1000) // screen_geometry.PREGAME_SCROLL_PX_PER_SEC
+    else:
+        scroll_ms = 0
+    cycle = screen_geometry.PREGAME_SCROLL_PAUSE_MS + scroll_ms + screen_geometry.PREGAME_SCROLL_PAUSE_MS
+    floor = screen_geometry.PREGAME_INFO_DWELL_MS
+    return cycle if cycle > floor else floor
+
+
+def _build_pregame_cycle(entries: list, width: int) -> tuple:
+    """Build parallel (labels, texts, bigs, ends) lists for the info cycle.
+
+    `entries` is a list of (label, text, big); empty-text entries are skipped.
+    `ends` are cumulative dwell ms so the renderer can locate the active phase
+    with `elapsed % ends[-1]`. Big phases (unscii_16, centered) never scroll at
+    these widths, so their dwell floors at PREGAME_INFO_DWELL_MS.
+    """
+    labels: list[str] = []
+    texts: list[str] = []
+    bigs: list[bool] = []
+    ends: list[int] = []
+    running = 0
+    for label, text, big in entries:
+        if not text:
+            continue
+        labels.append(label)
+        texts.append(text)
+        bigs.append(big)
+        text_w = 0 if big else measure_text(text, spleen_5x8)
+        running += _pregame_phase_dwell(text_w, width)
+        ends.append(running)
+    return labels, texts, bigs, ends
+
+
+def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None) -> None:
+    """Publish a pregame screen from a parsed PregameGame.
+
+    Pre-builds record strings, local first-pitch time ("7:05 PM"; omitted
+    entirely when utc_offset_s is None -- a wrong-timezone time is worse than
+    none), weather ("72F PARTLY CLOUDY"), the cycling info phase lists, and
+    pre-brightened team colors. Logos are stored into the shared logo slots.
+    """
+    state = get_write_state()
+    state.mode = 'pregame'
+    state.animation_start_ms = time.ticks_ms()
+    state.away_logo = away_logo
+    state.home_logo = home_logo
+    pv = state.pregame
+
+    away = game.away
+    home = game.home
+
+    pv.away_wins = str(away.wins) if away.wins is not None else ''
+    pv.away_losses = str(away.losses) if away.losses is not None else ''
+    pv.home_wins = str(home.wins) if home.wins is not None else ''
+    pv.home_losses = str(home.losses) if home.losses is not None else ''
+    pv.away_record = ("%d-%d" % (away.wins, away.losses)) if away.wins is not None and away.losses is not None else ''
+    pv.home_record = ("%d-%d" % (home.wins, home.losses)) if home.wins is not None and home.losses is not None else ''
+
+    pv.venue_text = game.venue or ''
+
+    if utc_offset_s is not None:
+        tm = time.gmtime(game.start_epoch + utc_offset_s)
+        hour = tm[3]
+        minute = tm[4]
+        ampm = 'AM' if hour < 12 else 'PM'
+        h12 = hour % 12
+        if h12 == 0:
+            h12 = 12
+        pv.time_text = "%d:%02d %s" % (h12, minute, ampm)
+    else:
+        pv.time_text = ''
+
+    if game.weather_condition and game.weather_temp is not None:
+        pv.weather_text = "%dF %s" % (game.weather_temp, game.weather_condition.upper())
+    else:
+        pv.weather_text = ''
+
+    pv.away_pitcher = away.pitcher or ''
+    pv.home_pitcher = home.pitcher or ''
+
+    pv.away_color = _team_color_to_rgb565(away.colors.primary)
+    pv.home_color = _team_color_to_rgb565(home.colors.primary)
+
+    width = screen_geometry.pregame_value_width()
+    labels, texts, bigs, ends = _build_pregame_cycle(
+        [("VENUE", pv.venue_text, False),
+         ("1ST PITCH", pv.time_text, True),
+         ("WEATHER", pv.weather_text, False)],
+        width,
+    )
+    pv.cycle_labels = labels
+    pv.cycle_texts = texts
+    pv.cycle_big = bigs
+    pv.cycle_ends = ends
+
+    _, alt_texts, _, alt_ends = _build_pregame_cycle(
+        [("VENUE", pv.venue_text, False),
+         ("WEATHER", pv.weather_text, False)],
+        width,
+    )
+    pv.alt_texts = alt_texts
+    pv.alt_ends = alt_ends
+
+    commit_state()
+
+
+def _final_ls_cell(run: int) -> str:
+    """One line-score cell: 2-digit right-aligned run + trailing space (3 chars)."""
+    return "%2d " % run
+
+
+def set_final(game, home_logo, away_logo) -> None:
+    """Publish a final screen from a parsed FinalGame.
+
+    Line-score rows (header / away / home) are built as equal-char-count
+    strings -- 3 chars per inning column -- so the three rows measure
+    identically in the fixed-width font and scroll in lockstep. A team with
+    fewer entries than innings_played gets " X " for missing trailing columns
+    (walk-off convention). Team colors are pre-brightened.
+    """
+    state = get_write_state()
+    state.mode = 'final'
+    state.animation_start_ms = time.ticks_ms()
+    state.away_logo = away_logo
+    state.home_logo = home_logo
+    fv = state.final
+
+    away = game.away
+    home = game.home
+    innings = game.innings_played
+
+    fv.away_score = away.score
+    fv.home_score = home.score
+    fv.home_won = home.score > away.score
+    fv.away_color = _team_color_to_rgb565(away.colors.primary)
+    fv.home_color = _team_color_to_rgb565(home.colors.primary)
+    fv.final_text = ("F/%d" % innings) if innings > 9 else "FINAL"
+
+    header: list[str] = []
+    away_row: list[str] = []
+    home_row: list[str] = []
+    for i in range(innings):
+        header.append("%2d " % (i + 1))
+        away_row.append(_final_ls_cell(away.line[i]) if i < len(away.line) else " X ")
+        home_row.append(_final_ls_cell(home.line[i]) if i < len(home.line) else " X ")
+    fv.ls_header = "".join(header)
+    fv.ls_away = "".join(away_row)
+    fv.ls_home = "".join(home_row)
+
+    # Equal char counts guarantee lockstep scroll. They are equal by
+    # construction; if some anomaly (e.g. a 3-digit run) breaks that, log and
+    # pad to the widest rather than crash the display thread.
+    n = len(fv.ls_header)
+    if not (len(fv.ls_away) == n and len(fv.ls_home) == n):
+        logger.error("[FINAL] linescore width mismatch h=%d a=%d o=%d" % (
+            len(fv.ls_header), len(fv.ls_away), len(fv.ls_home)))
+        n = max(len(fv.ls_header), len(fv.ls_away), len(fv.ls_home))
+        fv.ls_header += " " * (n - len(fv.ls_header))
+        fv.ls_away += " " * (n - len(fv.ls_away))
+        fv.ls_home += " " * (n - len(fv.ls_home))
+
     commit_state()
 
 

@@ -15,9 +15,10 @@ import framebuf
 from machine import Pin
 from hub75 import Hub75Driver, Hub75Display, row_addressing
 from hub75.native import pack_hsv_to_rgb565
-from scoreboard.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, measure_text, ALIGN_LEFT, ALIGN_CENTER
+from scoreboard.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, measure_text, ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT
 from scoreboard.inning_half import TOP, BOTTOM
-from scoreboard.state import StateBuffer, ThreadHealth, UiColors
+from scoreboard.state import StateBuffer, ThreadHealth, UiColors, _team_color_to_rgb565
+from scoreboard import screen_geometry
 from scoreboard.config import Config
 from scoreboard.api_client import ScoreboardApiClient
 import scoreboard.logger as logger
@@ -52,28 +53,9 @@ BLACK = 0
 WHITE = rgb565(255, 255, 255)
 DIM_GRAY = rgb565(96, 96, 96)
 
-
-# Minimum brightest-channel value for team colors. Teams whose primary is
-# darker than this (e.g. Yankees/Brewers navy, White Sox near-black) get
-# scaled up proportionally so the text stays legible on the black panel.
-# Preserves hue for chromatic colors; near-neutrals move toward bright gray.
-_TEAM_COLOR_MIN_CHANNEL = 128
-
-
-def _team_color_to_rgb565(packed: int) -> int:
-    r = (packed >> 16) & 0xFF
-    g = (packed >> 8) & 0xFF
-    b = packed & 0xFF
-    m = r if r >= g and r >= b else (g if g >= b else b)
-    if m < _TEAM_COLOR_MIN_CHANNEL:
-        if m == 0:
-            r = g = b = _TEAM_COLOR_MIN_CHANNEL
-        else:
-            scale = _TEAM_COLOR_MIN_CHANNEL / m
-            r = int(r * scale)
-            g = int(g * scale)
-            b = int(b * scale)
-    return rgb565(r, g, b)
+# _team_color_to_rgb565 / _TEAM_COLOR_MIN_CHANNEL live in scoreboard.state so
+# Core 0 setters can pre-brighten team colors without importing display;
+# render_game imports the helper (above) for its per-frame use.
 
 
 def pulse(now_ms: int, period_ms: int = 1000) -> int:
@@ -101,9 +83,27 @@ DISPLAY_HEIGHT = 64
 PLAY_TEXT_SCROLL_PAUSE_MS = 1000
 PLAY_TEXT_SCROLL_PX_PER_SEC = 30
 
-# Button-feedback toast: how long a transient overlay (SKIPPING... / LOCKED)
+# Button-feedback toast: how long a transient overlay (SKIPPING / LOCKED)
 # stays on screen after set_toast().
 TOAST_DISPLAY_MS = 1500
+
+# Sticky toast (an in-flight SKIP) is torn down by the poller's tick `finally`;
+# this is only a belt against a logic bug stranding it on screen. Requests hard
+# cap at 15s, so 20s can only be reached by a bug.
+TOAST_STICKY_MAX_MS = 20_000
+
+# Rejected-press dim: a press during an in-flight skip dims the toast one
+# triangle cycle (TOAST_PULSE_MS) toward TOAST_PULSE_DIP darkness, then back.
+TOAST_PULSE_MS = 1000
+TOAST_PULSE_DIP = 128
+
+# Critical-count dot pulse (balls==3 / strikes==2 / outs==2). Brightness sweeps
+# V_BASE..V_BASE+V_RANGE and saturation 0..S_MAX in lockstep off the same pulse
+# so the dots warm from white toward a pale red at the peak. Module constants
+# so the preview can sweep them.
+CRITICAL_PULSE_V_BASE = 191
+CRITICAL_PULSE_V_RANGE = 64
+CRITICAL_PULSE_S_MAX = 80
 
 
 _ORDINALS = (
@@ -233,6 +233,23 @@ class Regions:
         self.error_line_1 = Region(display, 0, 34, DISPLAY_WIDTH, 8)
         self.error_line_2 = Region(display, 0, 44, DISPLAY_WIDTH, 8)
         self.error_line_3 = Region(display, 0, 54, DISPLAY_WIDTH, 8)
+
+        # --- Pregame / final screens ---
+        # Built from the active screen_geometry variant table (name -> Region).
+        # Scalar entries (DIVIDER_X, SEPARATOR_Y) are read straight from the
+        # table by the renderer; only (X, Y, W, H) rects become Regions.
+        self.pregame = self._build_geometry_regions(display, screen_geometry.pregame_geometry())
+        self.final = self._build_geometry_regions(display, screen_geometry.final_geometry())
+
+    @staticmethod
+    def _build_geometry_regions(display, table: dict) -> dict:
+        regions = {}
+        for name in table:
+            spec = table[name]
+            if isinstance(spec, tuple) and len(spec) == 4:
+                x, y, w, h = spec
+                regions[name] = Region(display, x, y, w, h)
+        return regions
 
     def update_for_qr(self, qr_width: int, qr_height: int) -> None:
         """
@@ -531,16 +548,30 @@ def render_error(display: Hub75Display, writer: FontWriter, regions: Regions, st
 
 def _toast_active(state: StateBuffer, now_ms: int) -> bool:
     toast = state.toast
-    return (toast.updated_ms != 0 and bool(toast.text)
-            and time.ticks_diff(now_ms, toast.updated_ms) < TOAST_DISPLAY_MS)
+    if toast.updated_ms == 0 or not toast.text:
+        return False
+    window = TOAST_STICKY_MAX_MS if toast.sticky else TOAST_DISPLAY_MS
+    return time.ticks_diff(now_ms, toast.updated_ms) < window
 
 
 def _render_toast(writer: FontWriter, regions: Regions, state: StateBuffer, now_ms: int) -> bool:
-    """Draw the transient toast overlay if active. Returns True if drawn."""
+    """Draw the transient toast overlay if active. Returns True if drawn.
+
+    A rejected-press dim (toast.pulse_ms set) darkens the text one triangle
+    cycle over TOAST_PULSE_MS toward TOAST_PULSE_DIP, then returns to white.
+    """
     if not _toast_active(state, now_ms):
         return False
+    toast = state.toast
+    color = WHITE
+    if toast.pulse_ms != 0:
+        elapsed = time.ticks_diff(now_ms, toast.pulse_ms)
+        if 0 <= elapsed < TOAST_PULSE_MS:
+            tri = pulse(elapsed, TOAST_PULSE_MS)  # 0..256..0 over the cycle
+            v = 255 - ((tri * TOAST_PULSE_DIP) >> 8)
+            color = rgb565(v, v, v)
     regions.play_text.fill(BLACK)
-    writer.draw(regions.play_text, state.toast.text, unscii_16, ALIGN_CENTER, 0, WHITE)
+    writer.draw(regions.play_text, toast.text, unscii_16, ALIGN_CENTER, 0, color)
     return True
 
 
@@ -582,8 +613,10 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
     outs_critical = live.count.outs == 2
 
     if balls_critical or strikes_critical or outs_critical:
-        v = 191 + ((pulse(now_ms) * 64) >> 8)
-        pulsed = pack_hsv_to_rgb565(0, 0, v)
+        p = pulse(now_ms)
+        v = CRITICAL_PULSE_V_BASE + ((p * CRITICAL_PULSE_V_RANGE) >> 8)
+        s = (p * CRITICAL_PULSE_S_MAX) >> 8
+        pulsed = pack_hsv_to_rgb565(0, s, v)
     else:
         pulsed = None
 
@@ -640,6 +673,191 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
         writer.draw(regions.batter_label, "BAT", unscii_8, ALIGN_LEFT, 0, bat_color)
 
 
+def _cycle_phase(ends: list, elapsed_ms: int) -> tuple:
+    """Locate the active phase in a cumulative-dwell list.
+
+    Returns (index, phase_start_ms, position_ms) where position is `elapsed`
+    wrapped into one full cycle and phase_start is the cumulative dwell before
+    the active phase. Allocation-free scan over the (<=3-entry) list; callers
+    pass `position - phase_start` to writer.draw as the per-phase scroll clock.
+    """
+    total = ends[-1]
+    pos = elapsed_ms % total
+    start = 0
+    for i in range(len(ends)):
+        if pos < ends[i]:
+            return i, start, pos
+        start = ends[i]
+    return len(ends) - 1, start, pos
+
+
+def render_pregame(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
+    """Render the pregame screen for the active screen_geometry variant.
+
+    Logos identify the teams (no abbreviations). Records sit beside the logos;
+    the right column carries venue / first-pitch / weather (cycling in A/C,
+    all-visible in B) over the probable pitchers in team colors.
+    """
+    display.fill(BLACK)
+
+    pv = state.pregame
+    geo = screen_geometry.pregame_geometry()
+    variant = screen_geometry.PREGAME_VARIANT
+    R = regions.pregame
+    elapsed = time.ticks_diff(now_ms, state.animation_start_ms)
+
+    # --- Logos ---
+    if state.away_logo is not None and "LOGO_AWAY" in geo:
+        display.blit(state.away_logo, geo["LOGO_AWAY"][0], geo["LOGO_AWAY"][1])
+    if state.home_logo is not None and "LOGO_HOME" in geo:
+        display.blit(state.home_logo, geo["LOGO_HOME"][0], geo["LOGO_HOME"][1])
+
+    # --- Dividers ---
+    if "DIVIDER_X" in geo:
+        display.vline(geo["DIVIDER_X"], 0, DISPLAY_HEIGHT, DIM_GRAY)
+    if "SEPARATOR_Y" in geo:
+        sep_x = geo["DIVIDER_X"] + 1 if "DIVIDER_X" in geo else 0
+        display.hline(sep_x, geo["SEPARATOR_Y"], DISPLAY_WIDTH - sep_x, DIM_GRAY)
+
+    # --- Records ---
+    if "REC_AWAY_WINS" in R:            # stacked wins-over-losses (A, C)
+        if pv.away_wins:
+            writer.draw(R["REC_AWAY_WINS"], pv.away_wins, spleen_5x8, ALIGN_CENTER, 0, WHITE)
+            writer.draw(R["REC_AWAY_LOSSES"], pv.away_losses, spleen_5x8, ALIGN_CENTER, 0, DIM_GRAY)
+        if pv.home_wins:
+            writer.draw(R["REC_HOME_WINS"], pv.home_wins, spleen_5x8, ALIGN_CENTER, 0, WHITE)
+            writer.draw(R["REC_HOME_LOSSES"], pv.home_losses, spleen_5x8, ALIGN_CENTER, 0, DIM_GRAY)
+    if "REC_AWAY" in R:                 # horizontal "41-28" (B)
+        if pv.away_record:
+            writer.draw(R["REC_AWAY"], pv.away_record, spleen_5x8, ALIGN_LEFT, 0, WHITE)
+        if pv.home_record:
+            writer.draw(R["REC_HOME"], pv.home_record, spleen_5x8, ALIGN_LEFT, 0, WHITE)
+
+    pause = screen_geometry.PREGAME_SCROLL_PAUSE_MS
+    pxs = screen_geometry.PREGAME_SCROLL_PX_PER_SEC
+
+    # --- Cycling / stacked info ---
+    if variant == "A":
+        ends = pv.cycle_ends
+        if ends:
+            i, pstart, pos = _cycle_phase(ends, elapsed)
+            writer.draw(R["INFO_LABEL"], pv.cycle_labels[i], spleen_5x8, ALIGN_LEFT, 0, DIM_GRAY)
+            if pv.cycle_big[i]:
+                writer.draw(R["INFO_VALUE"], pv.cycle_texts[i], unscii_16, ALIGN_CENTER, 0, WHITE)
+            else:
+                writer.draw(R["INFO_VALUE"], pv.cycle_texts[i], spleen_5x8, ALIGN_LEFT,
+                            pos - pstart, WHITE, pause_ms=pause, pixels_per_second=pxs)
+    elif variant == "B":
+        if pv.venue_text:
+            writer.draw(R["INFO_VENUE"], pv.venue_text, spleen_5x8, ALIGN_LEFT, elapsed, WHITE,
+                        pause_ms=pause, pixels_per_second=pxs)
+        if pv.time_text:
+            writer.draw(R["INFO_TIME"], pv.time_text, spleen_5x8, ALIGN_LEFT, 0, WHITE)
+        if pv.weather_text:
+            writer.draw(R["INFO_WEATHER"], pv.weather_text, spleen_5x8, ALIGN_LEFT, elapsed, WHITE,
+                        pause_ms=pause, pixels_per_second=pxs)
+    elif variant == "C":
+        if pv.time_text:
+            writer.draw(R["INFO_TIME"], pv.time_text, unscii_16, ALIGN_CENTER, 0, WHITE)
+        ends = pv.alt_ends
+        if ends:
+            i, pstart, pos = _cycle_phase(ends, elapsed)
+            writer.draw(R["INFO_CYCLE"], pv.alt_texts[i], spleen_5x8, ALIGN_LEFT,
+                        pos - pstart, WHITE, pause_ms=pause, pixels_per_second=pxs)
+
+    # --- Pitchers ---
+    if "PITCHER_AWAY" in R:             # static, per-team (A, C)
+        if pv.away_pitcher:
+            writer.draw(R["PITCHER_AWAY"], pv.away_pitcher, spleen_5x8, ALIGN_LEFT, elapsed, pv.away_color)
+        if pv.home_pitcher:
+            writer.draw(R["PITCHER_HOME"], pv.home_pitcher, spleen_5x8, ALIGN_LEFT, elapsed, pv.home_color)
+    if "PITCHER_LINE" in R:             # alternating away<->home (B)
+        if pv.away_pitcher and pv.home_pitcher:
+            if (elapsed // screen_geometry.PREGAME_INFO_DWELL_MS) % 2 == 0:
+                writer.draw(R["PITCHER_LINE"], pv.away_pitcher, spleen_5x8, ALIGN_CENTER, elapsed, pv.away_color)
+            else:
+                writer.draw(R["PITCHER_LINE"], pv.home_pitcher, spleen_5x8, ALIGN_CENTER, elapsed, pv.home_color)
+        elif pv.away_pitcher:
+            writer.draw(R["PITCHER_LINE"], pv.away_pitcher, spleen_5x8, ALIGN_CENTER, elapsed, pv.away_color)
+        elif pv.home_pitcher:
+            writer.draw(R["PITCHER_LINE"], pv.home_pitcher, spleen_5x8, ALIGN_CENTER, elapsed, pv.home_color)
+
+    _render_toast(writer, regions, state, now_ms)
+
+
+def render_final(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
+    """Render the final screen for the active screen_geometry variant.
+
+    Winner emphasis is by color: the winning team's score and R total render in
+    its (brightened) team color, the loser in DIM_GRAY — no abbreviations. The
+    three line-score rows share one elapsed clock and equal char widths, so
+    they scroll in lockstep; the R total column is pinned outside the scroll.
+    """
+    display.fill(BLACK)
+
+    fv = state.final
+    geo = screen_geometry.final_geometry()
+    R = regions.final
+    elapsed = time.ticks_diff(now_ms, state.animation_start_ms)
+
+    if fv.home_won:
+        away_col = DIM_GRAY
+        home_col = fv.home_color
+    else:
+        away_col = fv.away_color
+        home_col = DIM_GRAY
+
+    # --- Logos ---
+    if state.away_logo is not None and "LOGO_AWAY" in geo:
+        display.blit(state.away_logo, geo["LOGO_AWAY"][0], geo["LOGO_AWAY"][1])
+    if state.home_logo is not None and "LOGO_HOME" in geo:
+        display.blit(state.home_logo, geo["LOGO_HOME"][0], geo["LOGO_HOME"][1])
+
+    # --- Dividers ---
+    # The vline separates the line score from the pinned R column; start it at
+    # the top-band separator (when present) so it doesn't cut through a
+    # top-corner logo.
+    if "DIVIDER_X" in geo:
+        vy0 = geo["SEPARATOR_Y"] if "SEPARATOR_Y" in geo else 0
+        display.vline(geo["DIVIDER_X"], vy0, DISPLAY_HEIGHT - vy0, DIM_GRAY)
+    if "SEPARATOR_Y" in geo:
+        display.hline(0, geo["SEPARATOR_Y"], DISPLAY_WIDTH, DIM_GRAY)
+
+    # --- Big scores (A, B) ---
+    if "SCORE_AWAY" in geo:
+        sa = geo["SCORE_AWAY"]
+        writer.integer(fv.away_score, sa[0], sa[1], sa[2], ALIGN_CENTER, away_col, font=unscii_16)
+        sh = geo["SCORE_HOME"]
+        writer.integer(fv.home_score, sh[0], sh[1], sh[2], ALIGN_CENTER, home_col, font=unscii_16)
+
+    # --- FINAL / F/n label ---
+    if "FINAL_LABEL" in R:
+        writer.draw(R["FINAL_LABEL"], fv.final_text, unscii_8, ALIGN_CENTER, 0, colors.accent)
+
+    # --- Line-score rows (lockstep scroll) ---
+    pause = screen_geometry.FINAL_LS_PAUSE_MS
+    pxs = screen_geometry.FINAL_LS_PX_PER_SEC
+    if "LS_HEADER" in R:
+        writer.draw(R["LS_HEADER"], fv.ls_header, spleen_5x8, ALIGN_LEFT, elapsed, DIM_GRAY,
+                    pause_ms=pause, pixels_per_second=pxs)
+        writer.draw(R["LS_AWAY"], fv.ls_away, spleen_5x8, ALIGN_LEFT, elapsed, away_col,
+                    pause_ms=pause, pixels_per_second=pxs)
+        writer.draw(R["LS_HOME"], fv.ls_home, spleen_5x8, ALIGN_LEFT, elapsed, home_col,
+                    pause_ms=pause, pixels_per_second=pxs)
+
+    # --- Pinned R totals ---
+    if "R_HEADER" in R:
+        writer.draw(R["R_HEADER"], "R", spleen_5x8, ALIGN_CENTER, 0, DIM_GRAY)
+    if "R_AWAY" in geo:
+        ra = geo["R_AWAY"]
+        r_font = unscii_16 if ra[3] >= 16 else spleen_5x8
+        writer.integer(fv.away_score, ra[0], ra[1], ra[2], ALIGN_CENTER, away_col, font=r_font)
+        rh = geo["R_HOME"]
+        writer.integer(fv.home_score, rh[0], rh[1], rh[2], ALIGN_CENTER, home_col, font=r_font)
+
+    _render_toast(writer, regions, state, now_ms)
+
+
 def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
     """
     Render a frame based on current display state.
@@ -661,6 +879,10 @@ def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, st
         render_error(display, writer, regions, state, colors)
     elif mode == 'game':
         render_game(display, writer, regions, state, colors, now_ms)
+    elif mode == 'pregame':
+        render_pregame(display, writer, regions, state, colors, now_ms)
+    elif mode == 'final':
+        render_final(display, writer, regions, state, colors, now_ms)
     else:
         render_idle(display, writer, regions, colors)
 

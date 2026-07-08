@@ -71,5 +71,18 @@ def compatible_variants(scenario) -> "list[Variant]":
     return result
 
 
-# The single variant registered for now.
+# Default: no overrides, whatever screen_geometry ships as the active variant.
 register(Variant("default"))
+
+# Screen-geometry variants: flip the active PREGAME/FINAL table. The renderer
+# is the normal render_frame (it dispatches by mode); scenarios opt in via
+# compatible_variants so pregame variants only pair with pregame scenarios etc.
+_SG = "scoreboard.screen_geometry"
+for _letter in ("A", "B", "C"):
+    register(Variant(f"pregame-{_letter}", overrides={_SG: {"PREGAME_VARIANT": _letter}}))
+    register(Variant(f"final-{_letter}", overrides={_SG: {"FINAL_VARIANT": _letter}}))
+
+# Critical-count red-tint saturation sweep (paired with critical-red-tint only).
+for _s_max in (0, 48, 80, 128):
+    register(Variant(f"red-tint-{_s_max}",
+                     overrides={"scoreboard.display": {"CRITICAL_PULSE_S_MAX": _s_max}}))

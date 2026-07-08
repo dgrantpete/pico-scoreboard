@@ -26,7 +26,12 @@ _ELAPSED_MS = 500
 
 # sha256 of the raw RGB565 buffer. Update ONLY after confirming an intended
 # visual change in the gallery (the test prints the new hash on mismatch).
-_EXPECTED = "1b601ecc5e964207cfcd86f666013b0cd598465ad485d198c1bdf8bf58ba0a91"
+#
+# Updated for the C8 critical-dot red tint: at 500ms (pulse peak) the count
+# dots now pack pack_hsv_to_rgb565(0, s>0, v) instead of grayscale (s=0), so
+# the dot pixels legitimately changed bytes. Verified against the
+# critical-red-tint gallery frames.
+_EXPECTED = "b12be533b43b3dfebd081358350f486dce3ab48aff4546d7b9f5b79e7f84a0e1"
 
 
 class _ArtifactsMissing(Exception):
