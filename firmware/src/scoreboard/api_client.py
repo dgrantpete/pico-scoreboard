@@ -14,7 +14,14 @@ import uasyncio as asyncio
 from .config import Config
 import scoreboard.logger as logger
 from .logger import DEBUG
-from .mlb import LiveGame, parse_game_ids, STRUCT_CONTENT_TYPE
+from .mlb import (
+    LiveGame,
+    PregameGame,
+    FinalGame,
+    parse_game_list,
+    parse_game_detail,
+    STRUCT_CONTENT_TYPE,
+)
 
 # Size of the client's pre-allocated response buffer. The largest body the
 # backend ever sends is a logo: LogoPool's 24x24 RGB565 = 1,152 bytes (game
@@ -174,7 +181,7 @@ class ScoreboardApiClient:
 
     async def get_game_list(
         self, if_none_match: str | None
-    ) -> tuple[int, list[str], str | None]:
+    ) -> tuple[int, list[tuple[int, str]], str | None]:
         # The returned etag is the raw header value (quotes included) so the
         # caller can echo it verbatim as If-None-Match — backend does a strict
         # string match and will not recognize a stripped-quote form.
@@ -187,7 +194,7 @@ class ScoreboardApiClient:
 
     async def _get_game_list_inner(
         self, url: str, headers: dict
-    ) -> tuple[int, list[str], str | None]:
+    ) -> tuple[int, list[tuple[int, str]], str | None]:
         _t = time.ticks_ms()
         async with self._session.get(url, headers=headers, ssl=True) as resp:
             etag = None
@@ -198,18 +205,26 @@ class ScoreboardApiClient:
                         break
 
             if resp.status == 304:
-                _log_api("MLB-GAMES", "/mlb/games", resp.status, _t)
+                _log_api("MLB-GAMES", "/baseball/mlb/games", resp.status, _t)
                 return (304, [], etag)
 
             filled = await resp.readinto(self._response_mv)
-            _log_api("MLB-GAMES", "/mlb/games", resp.status, _t)
+            _log_api("MLB-GAMES", "/baseball/mlb/games", resp.status, _t)
 
             if resp.status >= 400:
                 _raise_api_error(resp.status, filled)
 
-            return (resp.status, parse_game_ids(filled), etag)
+            return (resp.status, parse_game_list(filled), etag)
 
-    async def get_game_state(self, game_id: str) -> LiveGame | None:
+    async def get_game_state(
+        self, game_id: str
+    ) -> LiveGame | PregameGame | FinalGame | None:
+        """Fetch one game's detail, dispatched by state to the right model.
+
+        Returns a LiveGame, PregameGame, or FinalGame, or None when the game
+        is gone from today's scoreboard (404) — e.g. it dropped off the slate
+        or entered a non-displayable delay between the list and this fetch.
+        """
         path = f"/baseball/mlb/games/{game_id}"
         url = f"{self._config.api_url.rstrip('/')}{path}"
         headers = {"X-Api-Key": self._config.api_key, "Accept": STRUCT_CONTENT_TYPE}
@@ -223,4 +238,4 @@ class ScoreboardApiClient:
             raise
         # No awaits between here and the parse: the shared buffer can't be
         # overwritten by another request before from_struct reads it.
-        return LiveGame.from_struct(filled)
+        return parse_game_detail(filled)
