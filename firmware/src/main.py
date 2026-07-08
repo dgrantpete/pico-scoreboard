@@ -893,7 +893,9 @@ async def main(regions: Regions, driver: Hub75Driver, health: ThreadHealth, ligh
 
             api_client = ScoreboardApiClient(config)
             logo_pool = LogoPool(api_client)
-            poller = MlbPoller(config, api_client, logo_pool)
+            # utc_offset is None when the time sync failed; the poller then
+            # omits local first-pitch times rather than show a wrong-tz one.
+            poller = MlbPoller(config, api_client, logo_pool, utc_offset)
             asyncio.create_task(poller.run())
             logger.debug("[MAIN] mlb poller task started")
 

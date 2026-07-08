@@ -6,9 +6,20 @@ class-level mutable state — the instance is the single source of truth so
 that the firmware cannot accidentally end up with two pollers sharing a
 rotation index or ETag.
 
+Rotation is live-first: while any listed game is live, only live games
+rotate; when zero games are live the slate falls back to finals (first, in
+backend order) then pregames. The whole slate being empty is the only thing
+that shows `no_games`.
+
 Button input hooks (called from the Core 0 input task, same asyncio loop):
 - skip():        advance to the next game immediately, waking the poll loop.
 - toggle_lock(): freeze/unfreeze game rotation (polling continues).
+
+Everything here — the poll loop, both button hooks, and the skip state
+machine — runs on Core 0's single asyncio loop. The skip flags are therefore
+plain booleans with no locking: a hook and `_tick` can never execute
+concurrently, only interleave at `await` points, and the state machine below
+is designed around exactly those interleavings.
 """
 
 import time
@@ -17,9 +28,26 @@ import uasyncio as asyncio
 from .api_client import ApiError, ScoreboardApiClient
 from .config import Config
 from .display import LogoPool, play_text_display_ms
-from .mlb import DeserializeError
+from .mlb import (
+    DeserializeError,
+    LiveGame,
+    PregameGame,
+    FinalGame,
+    GAME_STATE_PRE,
+    GAME_STATE_IN,
+    GAME_STATE_POST,
+)
 import scoreboard.logger as logger
-from .state import get_write_state, commit_state, set_error, set_toast
+from .state import (
+    get_write_state,
+    commit_state,
+    set_error,
+    set_toast,
+    set_pregame,
+    set_final,
+    clear_toast_if_sticky,
+    pulse_toast,
+)
 
 
 def _friendly_error(e: Exception) -> tuple[str, str]:
@@ -38,11 +66,21 @@ def _friendly_error(e: Exception) -> tuple[str, str]:
 class MlbPoller:
     MAX_FAILURES: int = 5
 
-    def __init__(self, config: Config, api_client: ScoreboardApiClient, logo_pool: LogoPool) -> None:
+    def __init__(
+        self,
+        config: Config,
+        api_client: ScoreboardApiClient,
+        logo_pool: LogoPool,
+        utc_offset_s: int | None = None,
+    ) -> None:
         self._config: Config = config
         self._api: ScoreboardApiClient = api_client
         self._logos: LogoPool = logo_pool
-        self._game_ids: list[str] = []
+        # Full slate from the backend, in chronological order: (state, id).
+        self._games: list[tuple[int, str]] = []
+        # Ids to actually rotate through, derived from _games by _build_rotation.
+        self._rotation: list[str] = []
+        self._utc_offset_s: int | None = utc_offset_s
         self._etag: str | None = None
         self._current_index: int = 0
         self._last_rotation_ms: int | None = None
@@ -51,6 +89,9 @@ class MlbPoller:
         self._animation_reset: bool = True
         self._locked: bool = False
         self._skip_requested: bool = False
+        # True only for the duration of the tick that consumed a skip request.
+        # skip() rejects presses while this (or a pending request) is set.
+        self._skip_in_flight: bool = False
         self._wake: asyncio.Event = asyncio.Event()
 
     @property
@@ -58,14 +99,26 @@ class MlbPoller:
         return self._locked
 
     def skip(self) -> None:
-        """Advance to the next game now (button input). Safe to call anytime."""
-        set_toast("SKIPPING...")
+        """Advance to the next game now (button input). Safe to call anytime.
+
+        A press that lands while a skip is already armed or in flight is
+        rejected — not queued — and instead dims the visible toast one cycle
+        as feedback. This is what keeps a burst of presses (including ones that
+        land during `_poll_current`'s awaits) from advancing the rotation more
+        than once.
+        """
+        if self._skip_requested or self._skip_in_flight:
+            pulse_toast()
+            return
+        set_toast("SKIPPING", sticky=True)
         self._skip_requested = True
         self._wake.set()
 
     def toggle_lock(self) -> None:
         """Toggle rotation lock (button input). The current game keeps polling."""
         self._locked = not self._locked
+        # Non-sticky by default: a LOCKED/UNLOCKED toast fired mid-skip must
+        # survive the skip tick's clear_toast_if_sticky() teardown.
         set_toast("LOCKED" if self._locked else "UNLOCKED")
         logger.debug(f"[MLB] rotation lock: {self._locked}")
 
@@ -109,65 +162,131 @@ class MlbPoller:
         now = time.ticks_ms()
         skip = self._skip_requested
         self._skip_requested = False
+        # A consumed skip owns the sticky "SKIPPING" toast for exactly this
+        # tick. The finally below tears it down on EVERY exit path — success,
+        # empty slate, 404, or a mid-flight exception — so the toast's lifetime
+        # is precisely the work it was announcing.
+        if skip:
+            self._skip_in_flight = True
+        try:
+            rotation_due = (
+                self._last_rotation_ms is not None
+                and time.ticks_diff(now, self._last_rotation_ms)
+                >= self._config.game_rotation_seconds * 1000
+            )
 
-        rotation_due = (
-            self._last_rotation_ms is not None
-            and time.ticks_diff(now, self._last_rotation_ms) >= self._config.game_rotation_seconds * 1000
-        )
+            if self._last_rotation_ms is None:
+                await self._refresh_list(initial=True)
+                self._current_index = 0
+                self._last_rotation_ms = now
+                self._animation_reset = True
+            elif skip or (rotation_due and not self._locked):
+                await self._rotate(now)
+                self._animation_reset = True
+            else:
+                self._animation_reset = False
 
-        if self._last_rotation_ms is None:
-            await self._refresh_list(initial=True)
-            self._current_index = 0
-            self._last_rotation_ms = now
-            self._animation_reset = True
-        elif skip or (rotation_due and not self._locked):
-            await self._rotate(now)
-            self._animation_reset = True
-        else:
-            self._animation_reset = False
+            if not self._rotation:
+                # Only a truly empty slate reaches here (a non-empty slate
+                # always yields at least one rotation entry).
+                state = get_write_state()
+                state.mode = 'no_games'
+                commit_state()
+                return
 
-        if not self._game_ids:
-            state = get_write_state()
-            state.mode = 'no_games'
-            commit_state()
-            return
-
-        await self._poll_current()
+            await self._poll_current()
+        finally:
+            if skip:
+                self._skip_in_flight = False
+                clear_toast_if_sticky()
 
     async def _refresh_list(self, initial: bool) -> None:
         if_none_match = None if initial else self._etag
-        status, ids, etag = await self._api.get_game_list(if_none_match)
+        status, games, etag = await self._api.get_game_list(if_none_match)
         if status == 304:
             return
-        self._game_ids = ids
+        self._games = games
         self._etag = etag
-        if self._current_index >= len(self._game_ids):
+        self._build_rotation()
+        logger.debug(
+            f"[MLB] game list refreshed: slate={len(self._games)} "
+            f"rotation={len(self._rotation)} etag={self._etag}"
+        )
+
+    def _build_rotation(self) -> None:
+        """Rebuild the rotation from the current slate, live-first.
+
+        Live games (if any) rotate alone; otherwise finals rotate first, then
+        pregames, both in backend order. To avoid a mid-view jump when an
+        unrelated game flips state, the currently-shown id keeps its position
+        in the new rotation if it's still present, else the index resets to 0.
+        """
+        current_id = (
+            self._rotation[self._current_index] if self._rotation else None
+        )
+
+        live = [gid for st, gid in self._games if st == GAME_STATE_IN]
+        if live:
+            rotation = live
+        else:
+            finals = [gid for st, gid in self._games if st == GAME_STATE_POST]
+            pregames = [gid for st, gid in self._games if st == GAME_STATE_PRE]
+            rotation = finals + pregames
+
+        self._rotation = rotation
+        if current_id is not None:
+            try:
+                self._current_index = rotation.index(current_id)
+            except ValueError:
+                self._current_index = 0
+        else:
             self._current_index = 0
-        logger.debug(f"[MLB] game list refreshed: count={len(self._game_ids)} etag={self._etag}")
 
     async def _rotate(self, now: int) -> None:
         await self._refresh_list(initial=False)
-        if self._game_ids:
-            self._current_index = (self._current_index + 1) % len(self._game_ids)
+        if self._rotation:
+            self._current_index = (self._current_index + 1) % len(self._rotation)
         self._last_rotation_ms = now
 
     async def _poll_current(self) -> None:
-        game_id = self._game_ids[self._current_index]
-        live = await self._api.get_game_state(game_id)
-        if live is None:
-            # 404 means the game ended between list refresh and state fetch;
-            # skip this slot and let the next rotation pick up a fresh list.
+        # Every tick re-fetches the current game — including static pre/post
+        # screens. That standing re-poll is what lets a pregame card notice its
+        # own pre->in flip mid-view (detail comes back as LiveGame -> the board
+        # goes live without waiting for the next rotation). The screens don't
+        # flicker on an unchanged re-commit: set_pregame/set_final only restamp
+        # the animation clock when the displayed (mode, game_id) identity
+        # changes, so a repeat commit preserves the scroll in progress.
+        game_id = self._rotation[self._current_index]
+        detail = await self._api.get_game_state(game_id)
+        if detail is None:
+            # 404 means the game left today's scoreboard between the list
+            # refresh and this fetch; skip this slot and let the next rotation
+            # pick up a fresh list.
             return
 
+        # Abbreviations are present on all three game states, so logos are
+        # fetched the same way regardless of type.
         home_logo = await self._logos.get(
-            f"mlb-{live.home.abbreviation}",
-            f"/baseball/mlb/teams/{live.home.abbreviation}/logo",
+            f"mlb-{detail.home.abbreviation}",
+            f"/baseball/mlb/teams/{detail.home.abbreviation}/logo",
         )
         away_logo = await self._logos.get(
-            f"mlb-{live.away.abbreviation}",
-            f"/baseball/mlb/teams/{live.away.abbreviation}/logo",
+            f"mlb-{detail.away.abbreviation}",
+            f"/baseball/mlb/teams/{detail.away.abbreviation}/logo",
         )
 
+        if isinstance(detail, LiveGame):
+            self._commit_live(game_id, detail, home_logo, away_logo)
+        elif isinstance(detail, PregameGame):
+            set_pregame(detail, home_logo, away_logo, self._utc_offset_s)
+        elif isinstance(detail, FinalGame):
+            set_final(detail, home_logo, away_logo)
+        else:
+            # parse_game_detail only ever returns the three types above; a new
+            # state would surface here rather than being silently dropped.
+            raise DeserializeError("@1", f"unhandled game detail {type(detail).__name__}")
+
+    def _commit_live(self, game_id: str, live: LiveGame, home_logo, away_logo) -> None:
         state = get_write_state()
         state.mode = 'game'
         state.game.game_id = game_id

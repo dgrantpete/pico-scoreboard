@@ -230,6 +230,9 @@ class PregameView:
     """
 
     def __init__(self) -> None:
+        # Identity of the game on screen: used to decide when to restart the
+        # cycling animation (only on a view change, not on every re-poll).
+        self.game_id: str = ''
         # Records (empty string == not advertised).
         self.away_wins: str = ''
         self.away_losses: str = ''
@@ -257,6 +260,7 @@ class PregameView:
         self.alt_ends: list[int] = []
 
     def copy_from(self, other: "PregameView") -> None:
+        self.game_id = other.game_id
         self.away_wins = other.away_wins
         self.away_losses = other.away_losses
         self.home_wins = other.home_wins
@@ -284,6 +288,9 @@ class FinalView:
     and scroll in lockstep with zero extra mechanism (see set_final)."""
 
     def __init__(self) -> None:
+        # Identity of the game on screen: gates the line-score scroll restart
+        # (only on a view change, not on every re-poll).
+        self.game_id: str = ''
         self.away_score: int = 0
         self.home_score: int = 0
         self.final_text: str = 'FINAL'   # "FINAL" or "F/10" for extras
@@ -295,6 +302,7 @@ class FinalView:
         self.home_color: int = 0xFFFF
 
     def copy_from(self, other: "FinalView") -> None:
+        self.game_id = other.game_id
         self.away_score = other.away_score
         self.home_score = other.home_score
         self.final_text = other.final_text
@@ -721,13 +729,23 @@ def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None) -> None:
     entirely when utc_offset_s is None -- a wrong-timezone time is worse than
     none), weather ("72F PARTLY CLOUDY"), the cycling info phase lists, and
     pre-brightened team colors. Logos are stored into the shared logo slots.
+
+    The animation clock is restarted only when the displayed view identity
+    (mode + game_id) changes -- a standing re-poll of the same pregame keeps
+    the info cycle where it is, mirroring the live screen (which stamps
+    animation_start_ms on rotation/skip, not on every poll). Everything else
+    (strings, colors, logos) is rebuilt every call so late data corrections
+    still flow through.
     """
     state = get_write_state()
+    view_changed = state.mode != 'pregame' or state.pregame.game_id != game.game_id
     state.mode = 'pregame'
-    state.animation_start_ms = time.ticks_ms()
+    if view_changed:
+        state.animation_start_ms = time.ticks_ms()
     state.away_logo = away_logo
     state.home_logo = home_logo
     pv = state.pregame
+    pv.game_id = game.game_id
 
     away = game.away
     home = game.home
@@ -800,13 +818,21 @@ def set_final(game, home_logo, away_logo) -> None:
     identically in the fixed-width font and scroll in lockstep. A team with
     fewer entries than innings_played gets " X " for missing trailing columns
     (walk-off convention). Team colors are pre-brightened.
+
+    The line-score scroll is restarted only when the displayed view identity
+    (mode + game_id) changes, so a standing re-poll of the same final keeps the
+    scroll in progress (same rule as set_pregame / the live screen). The rows
+    themselves are rebuilt every call so a late score correction still lands.
     """
     state = get_write_state()
+    view_changed = state.mode != 'final' or state.final.game_id != game.game_id
     state.mode = 'final'
-    state.animation_start_ms = time.ticks_ms()
+    if view_changed:
+        state.animation_start_ms = time.ticks_ms()
     state.away_logo = away_logo
     state.home_logo = home_logo
     fv = state.final
+    fv.game_id = game.game_id
 
     away = game.away
     home = game.home
