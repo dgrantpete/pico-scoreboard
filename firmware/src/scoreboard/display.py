@@ -584,6 +584,16 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
         _render_toast(writer, regions, state, now_ms)
         return
 
+    # --- Dividers (shared style with the pregame/final screens) ---
+    if screen_geometry.SHOW_DIVIDERS:
+        display.vline(screen_geometry.LIVE_DIVIDER_X, 0, DISPLAY_HEIGHT, DIM_GRAY)
+        display.hline(
+            screen_geometry.LIVE_DIVIDER_X + 1,
+            screen_geometry.LIVE_SEPARATOR_Y,
+            DISPLAY_WIDTH - screen_geometry.LIVE_DIVIDER_X - 1,
+            DIM_GRAY,
+        )
+
     # --- Sprites ---
 
     display.blit(field_sprite.data, field_sprite.X, field_sprite.Y, field_sprite.KEY, field_sprite.palette)  # type: ignore
@@ -713,11 +723,12 @@ def render_pregame(display: Hub75Display, writer: FontWriter, regions: Regions, 
         display.blit(state.home_logo, geo["LOGO_HOME"][0], geo["LOGO_HOME"][1])
 
     # --- Dividers ---
-    if "DIVIDER_X" in geo:
-        display.vline(geo["DIVIDER_X"], 0, DISPLAY_HEIGHT, DIM_GRAY)
-    if "SEPARATOR_Y" in geo:
-        sep_x = geo["DIVIDER_X"] + 1 if "DIVIDER_X" in geo else 0
-        display.hline(sep_x, geo["SEPARATOR_Y"], DISPLAY_WIDTH - sep_x, DIM_GRAY)
+    if screen_geometry.SHOW_DIVIDERS:
+        if "DIVIDER_X" in geo:
+            display.vline(geo["DIVIDER_X"], 0, DISPLAY_HEIGHT, DIM_GRAY)
+        if "SEPARATOR_Y" in geo:
+            sep_x = geo["DIVIDER_X"] + 1 if "DIVIDER_X" in geo else 0
+            display.hline(sep_x, geo["SEPARATOR_Y"], DISPLAY_WIDTH - sep_x, DIM_GRAY)
 
     # --- Records ---
     if "REC_AWAY_WINS" in R:            # stacked wins-over-losses (A, C)
@@ -817,11 +828,12 @@ def render_final(display: Hub75Display, writer: FontWriter, regions: Regions, st
     # The vline separates the line score from the pinned R column; start it at
     # the top-band separator (when present) so it doesn't cut through a
     # top-corner logo.
-    if "DIVIDER_X" in geo:
-        vy0 = geo["SEPARATOR_Y"] if "SEPARATOR_Y" in geo else 0
-        display.vline(geo["DIVIDER_X"], vy0, DISPLAY_HEIGHT - vy0, DIM_GRAY)
-    if "SEPARATOR_Y" in geo:
-        display.hline(0, geo["SEPARATOR_Y"], DISPLAY_WIDTH, DIM_GRAY)
+    if screen_geometry.SHOW_DIVIDERS:
+        if "DIVIDER_X" in geo:
+            vy0 = geo["SEPARATOR_Y"] if "SEPARATOR_Y" in geo else 0
+            display.vline(geo["DIVIDER_X"], vy0, DISPLAY_HEIGHT - vy0, DIM_GRAY)
+        if "SEPARATOR_Y" in geo:
+            display.hline(0, geo["SEPARATOR_Y"], DISPLAY_WIDTH, DIM_GRAY)
 
     # --- Big scores (A, B) ---
     if "SCORE_AWAY" in geo:

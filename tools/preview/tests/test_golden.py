@@ -31,7 +31,7 @@ _ELAPSED_MS = 500
 # dots now pack pack_hsv_to_rgb565(0, s>0, v) instead of grayscale (s=0), so
 # the dot pixels legitimately changed bytes. Verified against the
 # critical-red-tint gallery frames.
-_EXPECTED = "b12be533b43b3dfebd081358350f486dce3ab48aff4546d7b9f5b79e7f84a0e1"
+_EXPECTED = "aeeeaae47a43d448dbf37f3cda9a22ed38af97ed614b54717f5a476630d511e2"
 
 
 class _ArtifactsMissing(Exception):

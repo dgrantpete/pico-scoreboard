@@ -28,8 +28,21 @@ unscii_8 = 8px/char x 8px tall, unscii_16 = 8px/char x 16px tall. Logos are
 """
 
 # Active variant selectors (independent). Overridden per-column by the preview.
-PREGAME_VARIANT = "A"
-FINAL_VARIANT = "A"
+# User-picked (2026-07-07 gallery review): pregame "Big time", final
+# "Line-score forward".
+PREGAME_VARIANT = "C"
+FINAL_VARIANT = "C"
+
+# Draw the DIM_GRAY vline/hline dividers on every game-facing screen (live,
+# pregame, final). A style-wide switch: the screens must read consistently, so
+# this is all-or-nothing rather than per-variant.
+SHOW_DIVIDERS = True
+
+# Live-screen divider geometry, aligned with pregame variant C's column split
+# (identity column | data column, bottom strip below a rule) so rotation
+# between screens keeps one visual frame.
+LIVE_DIVIDER_X = 45
+LIVE_SEPARATOR_Y = 41
 
 # --- Tuning constants (preview-tunable; user picks final values) -------------
 
