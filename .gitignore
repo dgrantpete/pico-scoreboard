@@ -85,6 +85,10 @@ firmware/www/
 # MicroPython type stubs (copied from Hub75 driver project)
 firmware/typings/
 
+# Desktop preview pipeline output + logo cache (tools/preview)
+tools/preview/out/
+tools/preview/cache/
+
 target/
 
 # MicroPico extension files

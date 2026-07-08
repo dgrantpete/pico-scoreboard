@@ -1,0 +1,75 @@
+"""Design variants: a renderer + a set of firmware-constant overrides.
+
+A variant names the renderer to call (`"module:function"`, default
+`scoreboard.display:render_frame`) and an optional map of module constants to
+override for the duration of the render:
+
+    Variant("pulse-fast", overrides={
+        "scoreboard.display": {"PLAY_TEXT_SCROLL_PX_PER_SEC": 60},
+    })
+
+`apply()` is a context manager that setattr's each override onto the imported
+module and restores the previous value on exit -- so a tuning sweep can render
+the same scenario at several constant values without editing firmware.
+
+Only the "default" variant exists today; screen-geometry variants (pregame /
+final A/B/C) and tuning sweeps are registered here in a later phase.
+"""
+
+import importlib
+from contextlib import contextmanager
+
+DEFAULT_RENDERER = "scoreboard.display:render_frame"
+
+REGISTRY: "dict[str, Variant]" = {}
+
+
+class Variant:
+    def __init__(self, name, renderer=DEFAULT_RENDERER, overrides=None):
+        self.name = name
+        self.renderer = renderer
+        self.overrides = overrides or {}
+
+    def resolve_renderer(self):
+        module_path, _, func_name = self.renderer.partition(":")
+        module = importlib.import_module(module_path)
+        return getattr(module, func_name)
+
+    @contextmanager
+    def apply(self):
+        """Temporarily install this variant's constant overrides."""
+        saved = []  # (module, attr, had_it, old_value)
+        try:
+            for module_path, consts in self.overrides.items():
+                module = importlib.import_module(module_path)
+                for attr, value in consts.items():
+                    had_it = hasattr(module, attr)
+                    old = getattr(module, attr, None)
+                    saved.append((module, attr, had_it, old))
+                    setattr(module, attr, value)
+            yield
+        finally:
+            for module, attr, had_it, old in reversed(saved):
+                if had_it:
+                    setattr(module, attr, old)
+                else:
+                    delattr(module, attr)
+
+
+def register(variant: Variant) -> Variant:
+    REGISTRY[variant.name] = variant
+    return variant
+
+
+def compatible_variants(scenario) -> "list[Variant]":
+    """Variants a scenario opts into (all of them when it declares None)."""
+    allowed = scenario.compatible_variants
+    result = []
+    for variant in REGISTRY.values():
+        if allowed is None or variant.name in allowed:
+            result.append(variant)
+    return result
+
+
+# The single variant registered for now.
+register(Variant("default"))
