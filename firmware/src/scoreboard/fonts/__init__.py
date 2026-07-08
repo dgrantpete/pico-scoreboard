@@ -332,16 +332,21 @@ class FontWriter:
         color: int,
         bgcolor=None,
         pause_ms: int = 2000,
-        pixels_per_second: int = 30,
+        pixels_per_second: int = 20,
     ) -> None:
         """
         Draw text into a Region, auto-scrolling on overflow.
 
         Glyph blits are clipped to the region's bounds automatically — no
         manual fill_rect masking required. Scrolling activates when the
-        measured text is wider than the region. Defaults to 30 px/sec with
+        measured text is wider than the region. Defaults to 20 px/sec with
         2000 ms dwell at each end, matching the pitcher/batter feel; callers
         can override either via `pause_ms` / `pixels_per_second`.
+
+        Speeds must evenly divide the display's 20 FPS refresh: the offset is
+        time-derived, so a non-divisor speed yields a non-integer px/frame and
+        floor math skips pixel columns (30 px/s = 1.5 px/frame drops every
+        third column). Smooth values: 20, 10, 5, 4, 2, 1 (or 40 at 2 px/frame).
 
         Args:
             region: Region (or any framebuffer-like object exposing `.width`

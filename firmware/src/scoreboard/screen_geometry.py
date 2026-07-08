@@ -51,17 +51,27 @@ LIVE_SEPARATOR_Y = 41
 # never less than this so short lines don't flash by.
 PREGAME_INFO_DWELL_MS = 4000
 
+# Scroll speeds MUST evenly divide the display's 20 FPS refresh (see
+# run_display_thread's 50 ms tick): the scroll offset is derived from wall
+# time, so a speed of S px/s advances S/20 px per rendered frame. A
+# non-integer px/frame (e.g. 30 -> 1.5) is realized by floor math as
+# alternating 1 px and 2 px steps -- every third pixel column of the scroll
+# is simply never displayed, which reads as a rhythmic stutter on the panel.
+# Legal smooth values: 20 (1 px/frame), 10 (1 px every 2nd frame),
+# 5, 4, 2, 1; 40 (2 px/frame) is uniform but coarse.
+
 # Scroll feel for pregame info lines (venue / weather). Kept here (not in
 # display.py) so state.set_pregame can compute per-phase dwell without
 # importing display -- the renderer passes these same values to writer.draw,
 # so the pre-computed dwell and the live scroll stay in lockstep.
 PREGAME_SCROLL_PAUSE_MS = 1000
-PREGAME_SCROLL_PX_PER_SEC = 30
+PREGAME_SCROLL_PX_PER_SEC = 20
 
 # Final line-score horizontal scroll. Slow, long dwell: the score is the point,
-# the scroll is a reveal of later innings.
+# the scroll is a reveal of later innings. (12 showed every pixel but with
+# uneven 1-vs-2-frame dwell; 10 is perfectly uniform at 2 frames per pixel.)
 FINAL_LS_PAUSE_MS = 1800
-FINAL_LS_PX_PER_SEC = 12
+FINAL_LS_PX_PER_SEC = 10
 
 
 # =============================================================================

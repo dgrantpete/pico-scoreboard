@@ -81,7 +81,9 @@ DISPLAY_HEIGHT = 64
 # and short plays don't linger. Scroll tunables are kept separate from the
 # default scroll feel.
 PLAY_TEXT_SCROLL_PAUSE_MS = 1000
-PLAY_TEXT_SCROLL_PX_PER_SEC = 30
+# Must evenly divide the 20 FPS refresh (see screen_geometry's scroll-speed
+# note): 30 px/s advanced 1.5 px/frame, skipping every third pixel column.
+PLAY_TEXT_SCROLL_PX_PER_SEC = 20
 
 # Button-feedback toast: how long a transient overlay (SKIPPING / LOCKED)
 # stays on screen after set_toast().
