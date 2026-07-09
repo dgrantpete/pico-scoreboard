@@ -62,6 +62,18 @@
     457 KB, live set ~270-340 KB; pre-glyph-table churn was ~80 KB/s with
     GC every ~1.4 s and free bottoming at 1.9 KB.
 
+19. **Frame-anchored animation clock (deliberately deferred 2026-07-08)** —
+    scroll offsets stay wall-time-derived (user call: frame rate is a high
+    enough multiple of the movement). If frame pacing ever degrades again,
+    the robust alternative is advancing animations per rendered frame
+    (Core 1 latches a frame counter on animation_start_ms change) so a slow
+    frame reads as a momentary slowdown instead of a positional jump.
+    Context: the 2026-07-08 stutter was ~41 ms/frame per-glyph text
+    rendering (9 FPS) + GC pauses; fixed with pre-rendered text strips
+    (fonts.render_strip / draw_strip) + deadline pacing. The display
+    thread's 60 s DEBUG health line (frames/slow/worst) is the regression
+    canary.
+
 18. **IPv6 reachability** — the device advertises an IPv6 AAAA over mDNS
     but the web server binds IPv4-only; IPv6-first clients eat a ~2 s stall
     per connection (confirmed: HTTP over IPv6 fails outright). Either bind

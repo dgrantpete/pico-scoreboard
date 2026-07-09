@@ -27,7 +27,7 @@ import framebuf
 from hub75 import Hub75Driver, gamma as gamma_mod
 from scoreboard.config import Config
 import scoreboard.logger as logger
-from scoreboard.fonts import rgb565, measure_text, spleen_5x8
+from scoreboard.fonts import rgb565, measure_text, render_strip, spleen_5x8, unscii_16
 from scoreboard import screen_geometry
 from scoreboard.mlb import LiveGame
 
@@ -172,12 +172,16 @@ class PlayState:
         self.text: str = ''        # Play description — rendered by display thread
         self.updated_ms: int = 0   # time.ticks_ms() when id last changed
         self.display_ms: int = 0   # Window length: pause + scroll-to-end + pause
+        # Pre-rendered strip of `text` (see fonts.render_strip); None when the
+        # text exceeded the pool and Core 1 falls back to per-glyph drawing.
+        self.strip = None
 
     def copy_from(self, other: "PlayState") -> None:
         self.id = other.id
         self.text = other.text
         self.updated_ms = other.updated_ms
         self.display_ms = other.display_ms
+        self.strip = other.strip
 
 
 class MlbGameSnapshot:
@@ -258,6 +262,15 @@ class PregameView:
         # Cycle C: venue <-> weather only (time shown statically).
         self.alt_texts: list[str] = []
         self.alt_ends: list[int] = []
+        # Pre-rendered strips parallel to cycle_texts / alt_texts (None for
+        # big-font phases, which never scroll), plus named strips for the
+        # non-cycling variant-B slots and the two pitcher lines.
+        self.cycle_strips: list = []
+        self.alt_strips: list = []
+        self.venue_strip = None
+        self.weather_strip = None
+        self.away_pitcher_strip = None
+        self.home_pitcher_strip = None
 
     def copy_from(self, other: "PregameView") -> None:
         self.game_id = other.game_id
@@ -279,6 +292,12 @@ class PregameView:
         self.cycle_big = other.cycle_big
         self.cycle_ends = other.cycle_ends
         self.alt_texts = other.alt_texts
+        self.cycle_strips = other.cycle_strips
+        self.alt_strips = other.alt_strips
+        self.venue_strip = other.venue_strip
+        self.weather_strip = other.weather_strip
+        self.away_pitcher_strip = other.away_pitcher_strip
+        self.home_pitcher_strip = other.home_pitcher_strip
         self.alt_ends = other.alt_ends
 
 
@@ -297,6 +316,10 @@ class FinalView:
         self.ls_header: str = ''          # inning numbers, 3 chars/col
         self.ls_away: str = ''            # away runs, 3 chars/col
         self.ls_home: str = ''            # home runs, 3 chars/col ("  X" for missing)
+        # Pre-rendered strips of the three rows (None = fall back to glyphs).
+        self.ls_header_strip = None
+        self.ls_away_strip = None
+        self.ls_home_strip = None
         self.home_won: bool = False
         self.away_color: int = 0xFFFF
         self.home_color: int = 0xFFFF
@@ -309,6 +332,9 @@ class FinalView:
         self.ls_header = other.ls_header
         self.ls_away = other.ls_away
         self.ls_home = other.ls_home
+        self.ls_header_strip = other.ls_header_strip
+        self.ls_away_strip = other.ls_away_strip
+        self.ls_home_strip = other.ls_home_strip
         self.home_won = other.home_won
         self.away_color = other.away_color
         self.home_color = other.home_color
@@ -684,6 +710,50 @@ def pulse_toast() -> None:
 # will.
 
 
+class _StripPool:
+    """Ping-pong pair of 1-bit strip buffers for one logical text slot.
+
+    Strips are shared by reference across the triple-buffered StateBuffers,
+    and Core 1 may still be blitting the outgoing view's strip for a frame
+    after a commit — so each rebuild lands in the buffer the outgoing view is
+    NOT using. Two buffers suffice: rebuilds are seconds apart and Core 1
+    lags the latest commit by at most one frame.
+
+    `cap_px` must be a multiple of 8 (MONO_HLSB byte-padded rows).
+    """
+
+    def __init__(self, cap_px: int, height: int) -> None:
+        self.cap_px = cap_px
+        self.height = height
+        size = (cap_px // 8) * height
+        self._bufs = (bytearray(size), bytearray(size))
+        self._idx = 0
+
+    def render(self, text: str, font):
+        """Pre-render `text` into the inactive buffer; returns a blit tuple
+        or None when the text exceeds capacity (caller falls back to glyphs)."""
+        self._idx ^= 1
+        return render_strip(self._bufs[self._idx], self.cap_px, text, font)
+
+
+# One pool per scrolling text slot, pre-allocated at import (Core 0) so the
+# steady state never churns strip-sized objects (~6 KB total; heap
+# fragmentation matters more than size here — see BACKLOG on TLS allocs).
+_LS_HEADER_POOL = _StripPool(320, 8)     # 21 innings at 3 cols x 5 px
+_LS_AWAY_POOL = _StripPool(320, 8)
+_LS_HOME_POOL = _StripPool(320, 8)
+_VENUE_POOL = _StripPool(256, 8)         # 51 spleen chars
+_WEATHER_POOL = _StripPool(256, 8)
+_AWAY_PITCHER_POOL = _StripPool(128, 8)
+_HOME_PITCHER_POOL = _StripPool(128, 8)
+_PLAY_POOL = _StripPool(640, 16)         # 80 unscii_16 chars; longer -> glyphs
+
+
+def build_play_strip(text: str):
+    """Pre-render a play-flash strip (Core 0, on new-play commit)."""
+    return _PLAY_POOL.render(text, unscii_16)
+
+
 def _pregame_phase_dwell(text_w: int, width: int) -> int:
     """Milliseconds one info phase stays up: at least PREGAME_INFO_DWELL_MS,
     and never less than one full scroll cycle of its text in `width` px."""
@@ -698,28 +768,31 @@ def _pregame_phase_dwell(text_w: int, width: int) -> int:
 
 
 def _build_pregame_cycle(entries: list, width: int) -> tuple:
-    """Build parallel (labels, texts, bigs, ends) lists for the info cycle.
+    """Build parallel (labels, texts, bigs, ends, strips) lists for the cycle.
 
-    `entries` is a list of (label, text, big); empty-text entries are skipped.
-    `ends` are cumulative dwell ms so the renderer can locate the active phase
-    with `elapsed % ends[-1]`. Big phases (unscii_16, centered) never scroll at
-    these widths, so their dwell floors at PREGAME_INFO_DWELL_MS.
+    `entries` is a list of (label, text, big, strip); empty-text entries are
+    skipped. `ends` are cumulative dwell ms so the renderer can locate the
+    active phase with `elapsed % ends[-1]`. Big phases (unscii_16, centered)
+    never scroll at these widths, so their dwell floors at
+    PREGAME_INFO_DWELL_MS and their strip slot is None.
     """
     labels: list[str] = []
     texts: list[str] = []
     bigs: list[bool] = []
     ends: list[int] = []
+    strips: list = []
     running = 0
-    for label, text, big in entries:
+    for label, text, big, strip in entries:
         if not text:
             continue
         labels.append(label)
         texts.append(text)
         bigs.append(big)
+        strips.append(strip)
         text_w = 0 if big else measure_text(text, spleen_5x8)
         running += _pregame_phase_dwell(text_w, width)
         ends.append(running)
-    return labels, texts, bigs, ends
+    return labels, texts, bigs, ends, strips
 
 
 def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None) -> None:
@@ -782,25 +855,41 @@ def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None) -> None:
     pv.away_color = _team_color_to_rgb565(away.colors.primary)
     pv.home_color = _team_color_to_rgb565(home.colors.primary)
 
+    # Strips for the spleen text slots (big-font phases never scroll and keep
+    # the glyph path — None placeholder). Venue/weather tuples are shared by
+    # the A-cycle and C-alt lists (same pool render, referenced twice).
+    venue_strip = _VENUE_POOL.render(pv.venue_text, spleen_5x8) if pv.venue_text else None
+    weather_strip = _WEATHER_POOL.render(pv.weather_text, spleen_5x8) if pv.weather_text else None
+    pv.venue_strip = venue_strip
+    pv.weather_strip = weather_strip
+    pv.away_pitcher_strip = (
+        _AWAY_PITCHER_POOL.render(pv.away_pitcher, spleen_5x8) if pv.away_pitcher else None
+    )
+    pv.home_pitcher_strip = (
+        _HOME_PITCHER_POOL.render(pv.home_pitcher, spleen_5x8) if pv.home_pitcher else None
+    )
+
     width = screen_geometry.pregame_value_width()
-    labels, texts, bigs, ends = _build_pregame_cycle(
-        [("VENUE", pv.venue_text, False),
-         ("1ST PITCH", pv.time_text, True),
-         ("WEATHER", pv.weather_text, False)],
+    labels, texts, bigs, ends, strips = _build_pregame_cycle(
+        [("VENUE", pv.venue_text, False, venue_strip),
+         ("1ST PITCH", pv.time_text, True, None),
+         ("WEATHER", pv.weather_text, False, weather_strip)],
         width,
     )
     pv.cycle_labels = labels
     pv.cycle_texts = texts
     pv.cycle_big = bigs
     pv.cycle_ends = ends
+    pv.cycle_strips = strips
 
-    _, alt_texts, _, alt_ends = _build_pregame_cycle(
-        [("VENUE", pv.venue_text, False),
-         ("WEATHER", pv.weather_text, False)],
+    _, alt_texts, _, alt_ends, alt_strips = _build_pregame_cycle(
+        [("VENUE", pv.venue_text, False, venue_strip),
+         ("WEATHER", pv.weather_text, False, weather_strip)],
         width,
     )
     pv.alt_texts = alt_texts
     pv.alt_ends = alt_ends
+    pv.alt_strips = alt_strips
 
     commit_state()
 
@@ -867,6 +956,12 @@ def set_final(game, home_logo, away_logo) -> None:
         fv.ls_header += " " * (n - len(fv.ls_header))
         fv.ls_away += " " * (n - len(fv.ls_away))
         fv.ls_home += " " * (n - len(fv.ls_home))
+
+    # Pre-render the rows once; Core 1 blits a window per frame instead of
+    # glyph-looping ~90 chars (measured at ~41 ms/frame — the 9 FPS stutter).
+    fv.ls_header_strip = _LS_HEADER_POOL.render(fv.ls_header, spleen_5x8)
+    fv.ls_away_strip = _LS_AWAY_POOL.render(fv.ls_away, spleen_5x8)
+    fv.ls_home_strip = _LS_HOME_POOL.render(fv.ls_home, spleen_5x8)
 
     commit_state()
 

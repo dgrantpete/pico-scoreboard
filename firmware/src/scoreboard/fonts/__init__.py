@@ -89,6 +89,39 @@ def rgb565(r: int, g: int, b: int) -> int:
     return int(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3))
 
 
+def render_strip(pool: bytearray, cap_px: int, text: str, font) -> tuple:
+    """
+    Pre-render `text` into a 1-bit strip over a caller-owned pool buffer.
+
+    Core 0, commit time. Returns a blit-ready source tuple
+    `(memoryview, text_width, font_height, MONO_HLSB, cap_px)` — the pool's
+    capacity is the stride, so any prefix width works over the same buffer.
+    Core 1 then draws any scroll position with ONE palette blit
+    (`FontWriter.draw_strip`) instead of a per-glyph Python loop: the measured
+    cost of glyph-looping three ~30-char rows every frame was ~41 ms/frame
+    (9 FPS); a strip window blit is microseconds.
+
+    Returns None when the text is wider than the pool capacity — callers fall
+    back to the per-glyph `FontWriter.draw` path (rare, e.g. a very long play
+    text), trading smoothness for correctness on that item only.
+
+    The pool must be `cap_px // 8 * height` bytes (MONO_HLSB rows are
+    byte-padded; cap_px must be a multiple of 8).
+    """
+    height = font.HEIGHT
+    strip = framebuf.FrameBuffer(pool, cap_px, height, framebuf.MONO_HLSB)
+    text_w = measure_text(text, font)
+    if text_w > cap_px:
+        return None
+    strip.fill(0)
+    x = 0
+    for char in text:
+        g = _glyph(font, ord(char))
+        strip.blit(g, x, 0)
+        x += g[1]
+    return (memoryview(pool), text_w, height, framebuf.MONO_HLSB, cap_px)
+
+
 class FontWriter:
     """
     Renders text using generated glyph-table fonts.
@@ -398,6 +431,45 @@ class FontWriter:
             g = _glyph(font, ord(char))
             region.blit(g, cursor_x, 0, key, self._palette)
             cursor_x += g[1]
+
+    def draw_strip(
+        self,
+        region,
+        strip: tuple,
+        align: int,
+        elapsed_ms: int,
+        color: int,
+        pause_ms: int = 2000,
+        pixels_per_second: int = 20,
+    ) -> None:
+        """
+        Draw a pre-rendered text strip (see `render_strip`) into a Region.
+
+        The Core 1 fast path for scrolling text: identical placement math to
+        `draw` — alignment when the strip fits the region, the shared
+        `calculate_scroll_offset` cycle when it overflows — but the whole
+        strip lands in ONE transparent palette blit instead of a per-glyph
+        Python loop. Allocation-free.
+        """
+        self._palette.pixel(0, 0, MAGENTA_RGB565)
+        self._palette.pixel(1, 0, color)
+
+        strip_w = strip[1]
+        width = region.width
+        if strip_w <= width:
+            if align == ALIGN_CENTER:
+                x = (width - strip_w) // 2
+            elif align == ALIGN_RIGHT:
+                x = width - strip_w
+            else:
+                x = 0
+        else:
+            x = -calculate_scroll_offset(
+                strip_w, width, elapsed_ms,
+                pause_ms=pause_ms, pixels_per_second=pixels_per_second,
+            )
+
+        region.blit(strip, x, 0, MAGENTA_RGB565, self._palette)
 
     def measure(self, string: str, font=None) -> int:
         """Measure text width in pixels."""

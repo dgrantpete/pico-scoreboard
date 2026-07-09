@@ -128,6 +128,9 @@ def _publish_live(ctx: ScenarioContext, live, play_text=None, play_id=None):
         st.game.play.text = play_text
         st.game.play.updated_ms = ctx.clock.now
         st.game.play.display_ms = ctx.display.play_text_display_ms(play_text)
+        # Mirror the poller: pre-render the strip so previews exercise the
+        # same fast path the device renders with.
+        st.game.play.strip = ctx.state.build_play_strip(play_text)
     ctx.state.commit_state()
 
 

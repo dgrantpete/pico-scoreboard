@@ -22,7 +22,7 @@ from scoreboard import screen_geometry
 from scoreboard.config import Config
 from scoreboard.api_client import ScoreboardApiClient
 import scoreboard.logger as logger
-from scoreboard.logger import ERROR
+from scoreboard.logger import ERROR, DEBUG
 from scoreboard.layout import field as field_sprite
 from scoreboard.layout import base_marker as base_marker_sprite
 from scoreboard.layout import dot as dot_sprite
@@ -73,6 +73,10 @@ def pulse(now_ms: int, period_ms: int = 1000) -> int:
 # Display dimensions
 DISPLAY_WIDTH = 128
 DISPLAY_HEIGHT = 64
+
+# Core 1 frame budget: 20 FPS. Scroll speeds must evenly divide 1000/FRAME_MS
+# (see screen_geometry's scroll-speed note).
+FRAME_MS = 50
 
 # Play-by-play flash: the most-recent play text preempts the pitcher/batter
 # view after a new play is detected. Its display window is computed per play
@@ -668,12 +672,21 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
     show_play = bool(play.text) and play.updated_ms != 0 and play_elapsed < play.display_ms
 
     if show_play:
-        writer.draw(
-            regions.play_text, play.text, PLAY_TEXT_FONT,
-            ALIGN_LEFT, play_elapsed, WHITE,
-            pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
-            pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
-        )
+        if play.strip is not None:
+            writer.draw_strip(
+                regions.play_text, play.strip,
+                ALIGN_LEFT, play_elapsed, WHITE,
+                pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
+                pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
+            )
+        else:
+            # Text out-sized the strip pool (very long play): glyph fallback.
+            writer.draw(
+                regions.play_text, play.text, PLAY_TEXT_FONT,
+                ALIGN_LEFT, play_elapsed, WHITE,
+                pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
+                pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
+            )
     else:
         at_bat = live.at_bat
         if at_bat is not None:
@@ -701,6 +714,19 @@ def _cycle_phase(ends: list, elapsed_ms: int) -> tuple:
             return i, start, pos
         start = ends[i]
     return len(ends) - 1, start, pos
+
+
+def _text_or_strip(writer, region, text, strip, align, elapsed, color, pause, pxs):
+    """Draw scrolling-capable text: strip fast path (one blit), per-glyph
+    fallback when the text out-sized its pool. Identical placement math
+    either way. Module-level (not a closure) to keep render frames
+    allocation-free."""
+    if strip is not None:
+        writer.draw_strip(region, strip, align, elapsed, color,
+                          pause_ms=pause, pixels_per_second=pxs)
+    else:
+        writer.draw(region, text, spleen_5x8, align, elapsed, color,
+                    pause_ms=pause, pixels_per_second=pxs)
 
 
 def render_pregame(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
@@ -758,42 +784,48 @@ def render_pregame(display: Hub75Display, writer: FontWriter, regions: Regions, 
             if pv.cycle_big[i]:
                 writer.draw(R["INFO_VALUE"], pv.cycle_texts[i], unscii_16, ALIGN_CENTER, 0, WHITE)
             else:
-                writer.draw(R["INFO_VALUE"], pv.cycle_texts[i], spleen_5x8, ALIGN_LEFT,
-                            pos - pstart, WHITE, pause_ms=pause, pixels_per_second=pxs)
+                    _text_or_strip(writer, R["INFO_VALUE"], pv.cycle_texts[i], pv.cycle_strips[i],
+                               ALIGN_LEFT, pos - pstart, WHITE, pause, pxs)
     elif variant == "B":
         if pv.venue_text:
-            writer.draw(R["INFO_VENUE"], pv.venue_text, spleen_5x8, ALIGN_LEFT, elapsed, WHITE,
-                        pause_ms=pause, pixels_per_second=pxs)
+            _text_or_strip(writer, R["INFO_VENUE"], pv.venue_text, pv.venue_strip,
+                          ALIGN_LEFT, elapsed, WHITE, pause, pxs)
         if pv.time_text:
             writer.draw(R["INFO_TIME"], pv.time_text, spleen_5x8, ALIGN_LEFT, 0, WHITE)
         if pv.weather_text:
-            writer.draw(R["INFO_WEATHER"], pv.weather_text, spleen_5x8, ALIGN_LEFT, elapsed, WHITE,
-                        pause_ms=pause, pixels_per_second=pxs)
+            _text_or_strip(writer, R["INFO_WEATHER"], pv.weather_text, pv.weather_strip,
+                          ALIGN_LEFT, elapsed, WHITE, pause, pxs)
     elif variant == "C":
         if pv.time_text:
             writer.draw(R["INFO_TIME"], pv.time_text, unscii_16, ALIGN_CENTER, 0, WHITE)
         ends = pv.alt_ends
         if ends:
             i, pstart, pos = _cycle_phase(ends, elapsed)
-            writer.draw(R["INFO_CYCLE"], pv.alt_texts[i], spleen_5x8, ALIGN_LEFT,
-                        pos - pstart, WHITE, pause_ms=pause, pixels_per_second=pxs)
+            _text_or_strip(writer, R["INFO_CYCLE"], pv.alt_texts[i], pv.alt_strips[i],
+                          ALIGN_LEFT, pos - pstart, WHITE, pause, pxs)
 
     # --- Pitchers ---
     if "PITCHER_AWAY" in R:             # static, per-team (A, C)
         if pv.away_pitcher:
-            writer.draw(R["PITCHER_AWAY"], pv.away_pitcher, spleen_5x8, ALIGN_LEFT, elapsed, pv.away_color)
+            _text_or_strip(writer, R["PITCHER_AWAY"], pv.away_pitcher, pv.away_pitcher_strip,
+                          ALIGN_LEFT, elapsed, pv.away_color, pause, pxs)
         if pv.home_pitcher:
-            writer.draw(R["PITCHER_HOME"], pv.home_pitcher, spleen_5x8, ALIGN_LEFT, elapsed, pv.home_color)
+            _text_or_strip(writer, R["PITCHER_HOME"], pv.home_pitcher, pv.home_pitcher_strip,
+                          ALIGN_LEFT, elapsed, pv.home_color, pause, pxs)
     if "PITCHER_LINE" in R:             # alternating away<->home (B)
         if pv.away_pitcher and pv.home_pitcher:
             if (elapsed // screen_geometry.PREGAME_INFO_DWELL_MS) % 2 == 0:
-                writer.draw(R["PITCHER_LINE"], pv.away_pitcher, spleen_5x8, ALIGN_CENTER, elapsed, pv.away_color)
+                _text_or_strip(writer, R["PITCHER_LINE"], pv.away_pitcher, pv.away_pitcher_strip,
+                              ALIGN_CENTER, elapsed, pv.away_color, pause, pxs)
             else:
-                writer.draw(R["PITCHER_LINE"], pv.home_pitcher, spleen_5x8, ALIGN_CENTER, elapsed, pv.home_color)
+                _text_or_strip(writer, R["PITCHER_LINE"], pv.home_pitcher, pv.home_pitcher_strip,
+                              ALIGN_CENTER, elapsed, pv.home_color, pause, pxs)
         elif pv.away_pitcher:
-            writer.draw(R["PITCHER_LINE"], pv.away_pitcher, spleen_5x8, ALIGN_CENTER, elapsed, pv.away_color)
+            _text_or_strip(writer, R["PITCHER_LINE"], pv.away_pitcher, pv.away_pitcher_strip,
+                          ALIGN_CENTER, elapsed, pv.away_color, pause, pxs)
         elif pv.home_pitcher:
-            writer.draw(R["PITCHER_LINE"], pv.home_pitcher, spleen_5x8, ALIGN_CENTER, elapsed, pv.home_color)
+            _text_or_strip(writer, R["PITCHER_LINE"], pv.home_pitcher, pv.home_pitcher_strip,
+                          ALIGN_CENTER, elapsed, pv.home_color, pause, pxs)
 
     _render_toast(writer, regions, state, now_ms)
 
@@ -852,12 +884,20 @@ def render_final(display: Hub75Display, writer: FontWriter, regions: Regions, st
     pause = screen_geometry.FINAL_LS_PAUSE_MS
     pxs = screen_geometry.FINAL_LS_PX_PER_SEC
     if "LS_HEADER" in R:
-        writer.draw(R["LS_HEADER"], fv.ls_header, spleen_5x8, ALIGN_LEFT, elapsed, DIM_GRAY,
-                    pause_ms=pause, pixels_per_second=pxs)
-        writer.draw(R["LS_AWAY"], fv.ls_away, spleen_5x8, ALIGN_LEFT, elapsed, away_col,
-                    pause_ms=pause, pixels_per_second=pxs)
-        writer.draw(R["LS_HOME"], fv.ls_home, spleen_5x8, ALIGN_LEFT, elapsed, home_col,
-                    pause_ms=pause, pixels_per_second=pxs)
+        # Strip fast path: one blit per row (per-glyph looping these three
+        # rows measured ~41 ms/frame — the 9 FPS stutter). Fallback only if a
+        # row out-sized its pool (>21 innings).
+        for region, text, strip, col in (
+            (R["LS_HEADER"], fv.ls_header, fv.ls_header_strip, DIM_GRAY),
+            (R["LS_AWAY"], fv.ls_away, fv.ls_away_strip, away_col),
+            (R["LS_HOME"], fv.ls_home, fv.ls_home_strip, home_col),
+        ):
+            if strip is not None:
+                writer.draw_strip(region, strip, ALIGN_LEFT, elapsed, col,
+                                  pause_ms=pause, pixels_per_second=pxs)
+            else:
+                writer.draw(region, text, spleen_5x8, ALIGN_LEFT, elapsed, col,
+                            pause_ms=pause, pixels_per_second=pxs)
 
     # --- Pinned R totals ---
     if "R_HEADER" in R:
@@ -922,9 +962,16 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
     Core 0 watchdog feeder can distinguish a hung thread from a quiet one.
 
     Core 1 avoids heap allocation on the steady-state path: all strings are
-    pre-built on Core 0, glyph blits reuse pre-allocated specs, and scores
-    use the cached-digit integer() path. (Small per-character memoryview
-    allocations from font glyph lookup remain — see BACKLOG.)
+    pre-built on Core 0, glyph blits reuse pre-allocated specs, scrolling
+    text blits from pre-rendered strips, and scores use the cached-digit
+    integer() path.
+
+    Pacing is deadline-based: each iteration targets `now + FRAME_MS`, and
+    the sleep absorbs however long the frame took — so the cadence is a
+    constant 20 FPS instead of "20 FPS minus render time" (the old
+    sleep-after-render drifted the wall-time scroll math into uneven pixel
+    steps). An overrun frame re-anchors the deadline rather than bursting to
+    catch up: a display must never fast-forward.
 
     All display hardware (PIO, DMA) is accessed exclusively from this thread.
     Regions are pre-allocated on Core 0 and read-only here.
@@ -936,12 +983,34 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
     last_rendered_seq = -1
     last_frame_had_toast = False
 
+    # Frame-health telemetry, reported every 60 s at DEBUG level: total
+    # frames, frames whose period overran FRAME_MS by >40% (a stutter the
+    # eye can catch), and the worst period. This is how the 9 FPS scroll
+    # regression was found — cheap enough to keep.
+    _hb_prev_ms = time.ticks_ms()
+    _hb_frames = 0
+    _hb_slow = 0
+    _hb_worst = 0
+    _hb_last_report = _hb_prev_ms
+
+    deadline = time.ticks_ms()
+
     while True:
         # Heartbeat for the watchdog feeder: per tick, not per render.
         health.frame_seq = (health.frame_seq + 1) & 0x3FFFFFF
 
+        deadline = time.ticks_add(deadline, FRAME_MS)
+
         try:
             now_ms = time.ticks_ms()
+
+            _hb_period = time.ticks_diff(now_ms, _hb_prev_ms)
+            _hb_prev_ms = now_ms
+            _hb_frames += 1
+            if _hb_period > _hb_worst:
+                _hb_worst = _hb_period
+            if _hb_period > FRAME_MS + (FRAME_MS * 2) // 5:
+                _hb_slow += 1
 
             # Latch the latest committed state for this frame.
             state, seq = acquire_display_state()
@@ -958,11 +1027,26 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
                 last_rendered_seq = seq
                 last_frame_had_toast = toast_active
 
+            if time.ticks_diff(now_ms, _hb_last_report) >= 60_000:
+                if logger.level >= DEBUG:
+                    logger.debug(
+                        "[DISPLAY] health: frames=%d slow=%d worst=%dms"
+                        % (_hb_frames, _hb_slow, _hb_worst)
+                    )
+                _hb_frames = _hb_slow = _hb_worst = 0
+                _hb_last_report = now_ms
+
         except Exception as e:
             # Guarded: this path can repeat every frame while erroring, so
             # don't build the message when ERROR logging is off.
             if logger.level >= ERROR:
                 logger.error(f"[DISPLAY] thread error: {e}")
 
-        # Constant 20 FPS tick for all animations
-        time.sleep_ms(50)
+        # Deadline pacing: sleep whatever remains of this frame's budget.
+        remaining = time.ticks_diff(deadline, time.ticks_ms())
+        if remaining > 0:
+            time.sleep_ms(remaining)
+        else:
+            # Overran the budget (e.g. a GC pause): re-anchor instead of
+            # bursting frames to catch up.
+            deadline = time.ticks_ms()

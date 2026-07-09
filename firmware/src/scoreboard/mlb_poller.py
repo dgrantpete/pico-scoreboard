@@ -47,6 +47,7 @@ from .state import (
     set_final,
     clear_toast_if_sticky,
     pulse_toast,
+    build_play_strip,
 )
 
 
@@ -307,6 +308,9 @@ class MlbPoller:
             # Window sized to the text: one full scroll cycle, measured here
             # on Core 0 so the display thread never measures text.
             state.game.play.display_ms = play_text_display_ms(live.last_play.text)
+            # Pre-rendered strip (None if the text out-sizes the pool — the
+            # display then falls back to per-glyph drawing for this play).
+            state.game.play.strip = build_play_strip(live.last_play.text)
 
         state.home_logo = home_logo
         state.away_logo = away_logo

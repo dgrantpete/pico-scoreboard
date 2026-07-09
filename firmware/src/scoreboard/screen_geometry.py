@@ -40,9 +40,11 @@ SHOW_DIVIDERS = True
 
 # Live-screen divider geometry, aligned with pregame variant C's column split
 # (identity column | data column, bottom strip below a rule) so rotation
-# between screens keeps one visual frame.
+# between screens keeps one visual frame. The hline sits centered in the
+# 8-row gap between the field/count block (last content row 32) and the
+# PIT/BAT strip (top row 41) — at 41 it sat directly on the text's top row.
 LIVE_DIVIDER_X = 45
-LIVE_SEPARATOR_Y = 41
+LIVE_SEPARATOR_Y = 36
 
 # --- Tuning constants (preview-tunable; user picks final values) -------------
 
