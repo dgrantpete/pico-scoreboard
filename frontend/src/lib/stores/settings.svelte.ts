@@ -36,12 +36,17 @@ function buildUpdateFromTouched(config: Config, touchedFields: Set<string>): Con
 
 /**
  * Sections whose settings only take effect at boot. `network.*` (WiFi
- * reconnect) and `watchdog.*` (the hardware WDT is armed once at startup) —
+ * reconnect), `watchdog.*` (the hardware WDT is armed once at startup), and
+ * `sports.*` (the game poller builds its league sources once at startup) —
  * saving these must prompt for a reboot or the change silently does nothing.
  */
 function needsRebootToApply(touchedFields: Set<string>): boolean {
 	for (const path of touchedFields) {
-		if (path.startsWith('network.') || path.startsWith('watchdog.')) {
+		if (
+			path.startsWith('network.') ||
+			path.startsWith('watchdog.') ||
+			path.startsWith('sports.')
+		) {
 			return true;
 		}
 	}
@@ -192,6 +197,19 @@ export function createSettingsStore() {
 			if (config) {
 				config.ota[key] = value;
 				this.markTouched(`ota.${key}`);
+			}
+		},
+
+		/**
+		 * Update a sports sub-config and mark it as touched. The touched path
+		 * is two-level (`sports.mlb`, `sports.soccer`) on purpose: the update
+		 * batcher splits paths into exactly [section, field], so the whole
+		 * sub-object ships in the PUT body.
+		 */
+		updateSports<K extends keyof Config['sports']>(key: K, value: Config['sports'][K]) {
+			if (config) {
+				config.sports[key] = value;
+				this.markTouched(`sports.${key}`);
 			}
 		},
 

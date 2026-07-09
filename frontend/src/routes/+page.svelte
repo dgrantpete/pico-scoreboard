@@ -12,6 +12,7 @@
 	import NetworkCard from "$lib/components/settings/NetworkCard.svelte";
 	import BackendApiCard from "$lib/components/settings/BackendApiCard.svelte";
 	import GameCard from "$lib/components/settings/GameCard.svelte";
+	import SportsCard from "$lib/components/settings/SportsCard.svelte";
 	import DisplayCard from "$lib/components/settings/DisplayCard.svelte";
 	import ColorsCard from "$lib/components/settings/ColorsCard.svelte";
 	import AdvancedCard from "$lib/components/settings/AdvancedCard.svelte";
@@ -63,6 +64,7 @@
 		<NetworkCard />
 		<BackendApiCard />
 		<GameCard />
+		<SportsCard />
 		<DisplayCard />
 		<ColorsCard />
 		<AdvancedCard />
@@ -113,8 +115,8 @@
 <dialog bind:this={rebootDialog} class="dialog" onclose={() => settingsStore.dismissRebootPrompt()}>
 	<h2>Reboot Required</h2>
 	<p>
-		The saved changes (network or watchdog settings) only take effect after
-		a reboot. Would you like to reboot now?
+		The saved changes (network, watchdog, or sports settings) only take
+		effect after a reboot. Would you like to reboot now?
 	</p>
 	<footer class="dialog-footer">
 		<button class="btn outline" onclick={() => settingsStore.dismissRebootPrompt()}>Later</button>

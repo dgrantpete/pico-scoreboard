@@ -77,6 +77,15 @@ export interface OtaConfig {
 
 export type OtaConfigUpdate = Partial<OtaConfig>;
 
+// Sports / league selection. Soccer leagues are ESPN slugs (see firmware
+// scoreboard/soccer.py LEAGUE_NAMES); empty list = soccer off.
+export interface SportsConfig {
+	mlb: { enabled: boolean };
+	soccer: { leagues: string[] };
+}
+
+export type SportsConfigUpdate = Partial<SportsConfig>;
+
 // Full configuration
 export interface Config {
 	network: NetworkConfig;
@@ -87,6 +96,7 @@ export interface Config {
 	watchdog: WatchdogConfig;
 	log: LogConfig;
 	ota: OtaConfig;
+	sports: SportsConfig;
 }
 
 // Partial configuration for PUT requests
@@ -99,6 +109,7 @@ export interface ConfigUpdate {
 	watchdog?: WatchdogConfigUpdate;
 	log?: LogConfigUpdate;
 	ota?: OtaConfigUpdate;
+	sports?: SportsConfigUpdate;
 }
 
 // Network status response
