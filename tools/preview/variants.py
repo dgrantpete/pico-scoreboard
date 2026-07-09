@@ -81,6 +81,7 @@ _SG = "scoreboard.screen_geometry"
 for _letter in ("A", "B", "C"):
     register(Variant(f"pregame-{_letter}", overrides={_SG: {"PREGAME_VARIANT": _letter}}))
     register(Variant(f"final-{_letter}", overrides={_SG: {"FINAL_VARIANT": _letter}}))
+    register(Variant(f"soccer-{_letter}", overrides={_SG: {"SOCCER_LIVE_VARIANT": _letter}}))
 
 # Critical-count red-tint saturation sweep (paired with critical-red-tint only).
 for _s_max in (0, 48, 80, 128):

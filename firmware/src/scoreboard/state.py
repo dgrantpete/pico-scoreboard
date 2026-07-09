@@ -27,9 +27,10 @@ import framebuf
 from hub75 import Hub75Driver, gamma as gamma_mod
 from scoreboard.config import Config
 import scoreboard.logger as logger
-from scoreboard.fonts import rgb565, measure_text, render_strip, spleen_5x8, unscii_16
+from scoreboard.fonts import rgb565, measure_text, render_strip, spleen_5x8, unscii_8, unscii_16
 from scoreboard import screen_geometry
 from scoreboard.mlb import LiveGame
+from scoreboard.soccer import EVENT_GOAL, SIDE_AWAY, SIDE_HOME, base_minutes
 
 
 # Minimum brightest-channel value for team colors. Teams whose primary is
@@ -200,22 +201,36 @@ class MlbGameSnapshot:
         self.play.copy_from(other.play)
 
 
-class ToastState:
-    """Transient text overlay (button feedback). Rendered for a short window.
+# Toast kinds: text renders in the bottom strip; the icon kinds render as a
+# centered overlay (display._render_toast_overlay). Spinner is the in-flight
+# skip indicator; lock/unlock are rotation-lock feedback.
+TOAST_TEXT = 0
+TOAST_LOCK = 1
+TOAST_UNLOCK = 2
+TOAST_SPINNER = 3
 
-    `sticky` toasts (a fired-but-in-flight SKIP) persist until the operation
-    that set them clears them, not on the usual short timer. `pulse_ms` stamps
-    the start of a one-shot "rejected press" dim cycle (0 = not pulsing).
+
+class ToastState:
+    """Transient overlay (button feedback). Rendered for a short window.
+
+    `kind` selects the presentation: TOAST_TEXT draws `text` in the bottom
+    strip; the icon kinds draw a centered icon (text ignored). `sticky`
+    toasts (a fired-but-in-flight SKIP spinner) persist until the operation
+    that set them clears them, not on the usual short timer. `pulse_ms`
+    stamps the start of a one-shot "rejected press" dim cycle (0 = not
+    pulsing).
     """
 
     def __init__(self) -> None:
         self.text: str = ''
+        self.kind: int = TOAST_TEXT
         self.updated_ms: int = 0   # time.ticks_ms() when the toast was set; 0 = never
         self.sticky: bool = False  # persists past TOAST_DISPLAY_MS until cleared
         self.pulse_ms: int = 0     # ticks_ms() of a rejected-press dim; 0 = none
 
     def copy_from(self, other: "ToastState") -> None:
         self.text = other.text
+        self.kind = other.kind
         self.updated_ms = other.updated_ms
         self.sticky = other.sticky
         self.pulse_ms = other.pulse_ms
@@ -340,6 +355,87 @@ class FinalView:
         self.home_color = other.home_color
 
 
+class SoccerLiveView:
+    """Pre-built live soccer screen data plus the match-clock anchor.
+
+    The clock is NOT stored as a display string: Core 0 anchors it at commit
+    time (`clock_anchor_s` elapsed match seconds + `clock_anchor_ms`
+    ticks_ms) and Core 1 extrapolates the displayed minute per frame with
+    integer math (display._draw_soccer_clock). The clock therefore ticks
+    between polls with zero Core 0 involvement — an event-loop stall (TLS
+    reconnect, GC pause) can never freeze or jump it, and no per-second
+    commits churn the mailbox. `clock_running` is False at halftime; the
+    poller additionally clears it when the upstream value stops advancing
+    between polls (stale-clock guard), so a paused match doesn't run away.
+    """
+
+    def __init__(self) -> None:
+        self.game_id: str = ''
+        self.away_score: int = 0
+        self.home_score: int = 0
+        self.clock_anchor_s: int = 0    # elapsed match seconds at anchor time
+        self.clock_anchor_ms: int = 0   # time.ticks_ms() when anchored
+        self.clock_running: bool = False
+        self.base_min: int = 45         # stoppage threshold of current period
+        self.halftime: bool = False
+        self.phase_text: str = ''       # "1ST" / "2ND" / "ET" ('' at halftime)
+        self.phase_long: str = ''       # "1ST HALF" / "2ND HALF" / "EXTRA TIME"
+        # Last goal / red card, pre-built: "GOAL 90'+3'" over the scorer name.
+        self.event_top: str = ''
+        self.event_name: str = ''
+        self.event_color: int = 0xFFFF
+        self.event_name_strip = None
+
+    def copy_from(self, other: "SoccerLiveView") -> None:
+        self.game_id = other.game_id
+        self.away_score = other.away_score
+        self.home_score = other.home_score
+        self.clock_anchor_s = other.clock_anchor_s
+        self.clock_anchor_ms = other.clock_anchor_ms
+        self.clock_running = other.clock_running
+        self.base_min = other.base_min
+        self.halftime = other.halftime
+        self.phase_text = other.phase_text
+        self.phase_long = other.phase_long
+        self.event_top = other.event_top
+        self.event_name = other.event_name
+        self.event_color = other.event_color
+        self.event_name_strip = other.event_name_strip
+
+
+class SoccerFinalView:
+    """Pre-built full-time soccer screen data. Scorer lines are display
+    strings built on Core 0; a draw colors both teams (no dim loser)."""
+
+    def __init__(self) -> None:
+        self.game_id: str = ''
+        self.away_score: int = 0
+        self.home_score: int = 0
+        self.home_won: bool = False
+        self.draw: bool = False
+        self.away_color: int = 0xFFFF
+        self.home_color: int = 0xFFFF
+        self.ft_text: str = 'FULL TIME'
+        self.scorers_away: str = ''
+        self.scorers_home: str = ''
+        self.scorers_away_strip = None
+        self.scorers_home_strip = None
+
+    def copy_from(self, other: "SoccerFinalView") -> None:
+        self.game_id = other.game_id
+        self.away_score = other.away_score
+        self.home_score = other.home_score
+        self.home_won = other.home_won
+        self.draw = other.draw
+        self.away_color = other.away_color
+        self.home_color = other.home_color
+        self.ft_text = other.ft_text
+        self.scorers_away = other.scorers_away
+        self.scorers_home = other.scorers_home
+        self.scorers_away_strip = other.scorers_away_strip
+        self.scorers_home_strip = other.scorers_home_strip
+
+
 class UiColors:
     """Pre-computed UI colors (RGB565), set by Core 0."""
 
@@ -372,6 +468,8 @@ class StateBuffer:
         self.game: MlbGameSnapshot = MlbGameSnapshot()
         self.pregame: PregameView = PregameView()
         self.final: FinalView = FinalView()
+        self.soccer_live: SoccerLiveView = SoccerLiveView()
+        self.soccer_final: SoccerFinalView = SoccerFinalView()
         self.toast: ToastState = ToastState()
         self.home_logo: framebuf.FrameBuffer | None = None
         self.away_logo: framebuf.FrameBuffer | None = None
@@ -387,6 +485,8 @@ class StateBuffer:
         self.game.copy_from(other.game)
         self.pregame.copy_from(other.pregame)
         self.final.copy_from(other.final)
+        self.soccer_live.copy_from(other.soccer_live)
+        self.soccer_final.copy_from(other.soccer_final)
         self.toast.copy_from(other.toast)
         self.home_logo = other.home_logo
         self.away_logo = other.away_logo
@@ -652,18 +752,21 @@ def set_error(title: str, lines: list[str] | None = None) -> None:
     commit_state()
 
 
-def set_toast(text: str, sticky: bool = False) -> None:
+def set_toast(text: str = '', sticky: bool = False, kind: int = TOAST_TEXT) -> None:
     """
-    Show a transient text overlay (e.g. button feedback).
+    Show a transient overlay (button feedback): bottom-strip text
+    (TOAST_TEXT) or a centered icon (lock/unlock/spinner kinds).
 
     Thread-safe: writes to the back buffer and commits. A non-sticky toast
     renders while it's within TOAST_DISPLAY_MS of updated_ms; a sticky one
-    (an in-flight SKIP) persists until clear_toast_if_sticky() clears it.
-    Setting a toast resets any in-progress rejected-press dim pulse.
+    (an in-flight SKIP spinner) persists until clear_toast_if_sticky()
+    clears it. Setting a toast resets any in-progress rejected-press dim
+    pulse.
     """
     state = get_write_state()
     toast = state.toast
     toast.text = text
+    toast.kind = kind
     toast.updated_ms = time.ticks_ms()
     toast.sticky = sticky
     toast.pulse_ms = 0
@@ -682,6 +785,7 @@ def clear_toast_if_sticky() -> None:
     if not toast.sticky:
         return
     toast.text = ''
+    toast.kind = TOAST_TEXT
     toast.updated_ms = 0
     toast.sticky = False
     toast.pulse_ms = 0
@@ -747,6 +851,9 @@ _WEATHER_POOL = _StripPool(256, 8)
 _AWAY_PITCHER_POOL = _StripPool(128, 8)
 _HOME_PITCHER_POOL = _StripPool(128, 8)
 _PLAY_POOL = _StripPool(640, 16)         # 80 unscii_16 chars; longer -> glyphs
+_EVENT_NAME_POOL = _StripPool(128, 8)    # soccer scorer short name (16 unscii_8 chars)
+_SCORERS_AWAY_POOL = _StripPool(320, 8)  # soccer full-time scorer lists
+_SCORERS_HOME_POOL = _StripPool(320, 8)
 
 
 def build_play_strip(text: str):
@@ -962,6 +1069,120 @@ def set_final(game, home_logo, away_logo) -> None:
     fv.ls_header_strip = _LS_HEADER_POOL.render(fv.ls_header, spleen_5x8)
     fv.ls_away_strip = _LS_AWAY_POOL.render(fv.ls_away, spleen_5x8)
     fv.ls_home_strip = _LS_HOME_POOL.render(fv.ls_home, spleen_5x8)
+
+    commit_state()
+
+
+# =============================================================================
+# Soccer screen setters (Core 0 string pre-build + clock anchoring)
+# =============================================================================
+
+# Phase strings per period, index min(half, 3): short form (variants A/C,
+# where the MLB inning ordinal sat) and spelled-out form (variant B).
+_SOCCER_PHASES = (("", ""), ("1ST", "1ST HALF"), ("2ND", "2ND HALF"), ("ET", "EXTRA TIME"))
+
+
+def set_soccer_live(game, home_logo, away_logo, prev_clock_s: int | None = None) -> None:
+    """Publish a live soccer screen from a parsed soccer.LiveGame.
+
+    Anchors the match clock: stores the fetched elapsed seconds alongside
+    time.ticks_ms() so the display thread can extrapolate the running minute
+    between polls (see SoccerLiveView). `prev_clock_s` is the previous poll's
+    clock_seconds for the same game: when the upstream value stops advancing
+    while claiming to be in play (weather delay, stale feed), local ticking
+    stops and the display holds the exact upstream value.
+
+    Pre-builds the phase strings and the last-event lines ("GOAL 90'+3'" over
+    the scorer name, in the scoring team's pre-brightened color).
+    """
+    state = get_write_state()
+    view_changed = state.mode != 'soccer_live' or state.soccer_live.game_id != game.game_id
+    state.mode = 'soccer_live'
+    if view_changed:
+        state.animation_start_ms = time.ticks_ms()
+    state.away_logo = away_logo
+    state.home_logo = home_logo
+    sv = state.soccer_live
+    sv.game_id = game.game_id
+
+    sv.away_score = game.away.score
+    sv.home_score = game.home.score
+
+    sv.clock_anchor_s = game.clock_seconds
+    sv.clock_anchor_ms = time.ticks_ms()
+    stale = prev_clock_s is not None and prev_clock_s == game.clock_seconds
+    sv.clock_running = not game.halftime and not stale
+    sv.base_min = base_minutes(game.half)
+    sv.halftime = game.halftime
+
+    if game.halftime:
+        # The clock region renders "HT"; the phase slots stay empty so the
+        # state isn't announced twice.
+        sv.phase_text = ''
+        sv.phase_long = ''
+    else:
+        short, long_ = _SOCCER_PHASES[game.half if game.half < 3 else 3]
+        sv.phase_text = short
+        sv.phase_long = long_
+
+    ev = game.last_event
+    if ev is not None:
+        label = "GOAL" if ev.kind == EVENT_GOAL else "RED CARD"
+        sv.event_top = label + " " + ev.clock_text if ev.clock_text else label
+        sv.event_name = ev.name
+        if ev.side == SIDE_HOME:
+            sv.event_color = _team_color_to_rgb565(game.home.colors.primary)
+        elif ev.side == SIDE_AWAY:
+            sv.event_color = _team_color_to_rgb565(game.away.colors.primary)
+        else:
+            sv.event_color = 0xFFFF
+        sv.event_name_strip = (
+            _EVENT_NAME_POOL.render(sv.event_name, unscii_8) if sv.event_name else None
+        )
+    else:
+        sv.event_top = ''
+        sv.event_name = ''
+        sv.event_color = 0xFFFF
+        sv.event_name_strip = None
+
+    commit_state()
+
+
+def set_soccer_final(game, home_logo, away_logo) -> None:
+    """Publish a full-time soccer screen from a parsed soccer.FinalGame.
+
+    Winner emphasis mirrors set_final (winner in team color, loser DIM), but
+    soccer draws are real: a level score colors both teams. Scorer lines are
+    pre-rendered into strips for the Core 1 scroll fast path.
+    """
+    state = get_write_state()
+    view_changed = state.mode != 'soccer_final' or state.soccer_final.game_id != game.game_id
+    state.mode = 'soccer_final'
+    if view_changed:
+        state.animation_start_ms = time.ticks_ms()
+    state.away_logo = away_logo
+    state.home_logo = home_logo
+    fv = state.soccer_final
+    fv.game_id = game.game_id
+
+    away = game.away
+    home = game.home
+    fv.away_score = away.score
+    fv.home_score = home.score
+    fv.home_won = home.score > away.score
+    fv.draw = home.score == away.score
+    fv.away_color = _team_color_to_rgb565(away.colors.primary)
+    fv.home_color = _team_color_to_rgb565(home.colors.primary)
+    fv.ft_text = 'FULL TIME'
+
+    fv.scorers_away = away.scorers or ''
+    fv.scorers_home = home.scorers or ''
+    fv.scorers_away_strip = (
+        _SCORERS_AWAY_POOL.render(fv.scorers_away, spleen_5x8) if fv.scorers_away else None
+    )
+    fv.scorers_home_strip = (
+        _SCORERS_HOME_POOL.render(fv.scorers_home, spleen_5x8) if fv.scorers_home else None
+    )
 
     commit_state()
 

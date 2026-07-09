@@ -49,6 +49,7 @@ class ScenarioContext:
         self.clock: VirtualClock = env.clock
         self.logos = logos
         self.mlb = env.mlb
+        self.soccer = env.soccer
         self.state = env.state
         self.display = env.display
         self.fonts = env.fonts
@@ -216,7 +217,7 @@ def live_play_flash(ctx: ScenarioContext) -> None:
     live_play_flash.scenario.duration_ms = ctx.display.play_text_display_ms(text)
 
 
-@scenario("live-toast-skipping", duration_ms=1500, compatible_variants={"default"})
+@scenario("live-toast-skipping", duration_ms=2000, compatible_variants={"default"})
 def live_toast_skipping(ctx: ScenarioContext) -> None:
     live = _live_game(
         ctx.mlb, away="LAD", home="SF", inning_num=3, half=ctx.mlb.TOP,
@@ -226,8 +227,34 @@ def live_toast_skipping(ctx: ScenarioContext) -> None:
         play_text="Strike 1.",
     )
     _publish_live(ctx, live)
-    # The button-feedback toast overlays the play-text region.
-    ctx.state.set_toast("SKIPPING")
+    # In-flight skip: the centered spinner overlay (two revolutions).
+    ctx.state.set_toast(sticky=True, kind=ctx.state.TOAST_SPINNER)
+
+
+@scenario("live-toast-locked", compatible_variants={"default"})
+def live_toast_locked(ctx: ScenarioContext) -> None:
+    live = _live_game(
+        ctx.mlb, away="LAD", home="SF", inning_num=3, half=ctx.mlb.TOP,
+        balls=2, strikes=1, outs=1, bases=(True, False, False),
+        away_score=1, home_score=0,
+        at_bat=ctx.mlb.AtBat("L. Webb", "F. Freeman"),
+        play_text="Strike 1.",
+    )
+    _publish_live(ctx, live)
+    ctx.state.set_toast(kind=ctx.state.TOAST_LOCK)
+
+
+@scenario("live-toast-unlocked", compatible_variants={"default"})
+def live_toast_unlocked(ctx: ScenarioContext) -> None:
+    live = _live_game(
+        ctx.mlb, away="LAD", home="SF", inning_num=3, half=ctx.mlb.TOP,
+        balls=2, strikes=1, outs=1, bases=(True, False, False),
+        away_score=1, home_score=0,
+        at_bat=ctx.mlb.AtBat("L. Webb", "F. Freeman"),
+        play_text="Strike 1.",
+    )
+    _publish_live(ctx, live)
+    ctx.state.set_toast(kind=ctx.state.TOAST_UNLOCK)
 
 
 @scenario("live-no-atbat", compatible_variants={"default"})
@@ -383,6 +410,190 @@ def final_blowout(ctx: ScenarioContext) -> None:
 
 
 # =============================================================================
+# Soccer screens
+# =============================================================================
+# Live scenarios pair with the soccer-A/B/C geometry variants; pregame reuses
+# the MLB pregame pipeline (league name in the venue slot) under the active
+# PREGAME_VARIANT, and the full-time screen has a single design.
+
+_SOCCER_VARIANTS = {"soccer-A", "soccer-B", "soccer-C"}
+
+# National sides mirror the backend's captured fixtures (USA-BEL); club sides
+# exercise the draw/scorers cases.
+_SOCCER_TEAMS = {
+    "USA": (0x002868, 0xBF0A30),
+    "BEL": (0xE30613, 0xFDDA25),
+    "SEA": (0x5D9741, 0x005595),
+    "POR": (0x004812, 0xEAE827),
+}
+
+
+def _soccer_state(ctx, abbr, score):
+    p, a = _SOCCER_TEAMS[abbr]
+    return ctx.mlb.TeamState(abbr, score, ctx.mlb.TeamColors(p, a))
+
+
+# League path for real-crest fetches (--backend-url): national sides come
+# from the world cup slate, clubs from MLS.
+_SOCCER_LEAGUE_OF = {
+    "USA": "soccer/fifa.world", "BEL": "soccer/fifa.world",
+    "SEA": "soccer/usa.1", "POR": "soccer/usa.1",
+}
+
+
+def _soccer_logos(ctx, game):
+    ap, aa = _SOCCER_TEAMS[game.away.abbreviation]
+    hp, ha = _SOCCER_TEAMS[game.home.abbreviation]
+    away_logo = ctx.logos.get(game.away.abbreviation, ap, aa,
+                              _SOCCER_LEAGUE_OF[game.away.abbreviation])
+    home_logo = ctx.logos.get(game.home.abbreviation, hp, ha,
+                              _SOCCER_LEAGUE_OF[game.home.abbreviation])
+    return home_logo, away_logo
+
+
+def _publish_soccer_live(ctx, *, away, home, away_score, home_score,
+                         clock_seconds, half, halftime=False, event=None):
+    soccer = ctx.soccer
+    game = soccer.LiveGame(
+        game_id="401700100",
+        clock_seconds=clock_seconds,
+        half=half,
+        halftime=halftime,
+        home=_soccer_state(ctx, home, home_score),
+        away=_soccer_state(ctx, away, away_score),
+        last_event=event,
+    )
+    home_logo, away_logo = _soccer_logos(ctx, game)
+    ctx.state.set_soccer_live(game, home_logo, away_logo)
+
+
+@scenario("soccer-live-1h", duration_ms=5000, compatible_variants=_SOCCER_VARIANTS)
+def soccer_live_1h(ctx: ScenarioContext) -> None:
+    # 1st half, clock anchored at 22:58 so the GIF catches the 22' -> 23'
+    # minute flip from pure Core-1 extrapolation (no re-poll in the window).
+    event = ctx.soccer.LastEvent(ctx.soccer.EVENT_GOAL, "19'", "R. Lukaku", ctx.soccer.SIDE_AWAY)
+    _publish_soccer_live(
+        ctx, away="BEL", home="USA", away_score=2, home_score=1,
+        clock_seconds=22 * 60 + 58, half=1, event=event,
+    )
+
+
+@scenario("soccer-live-stoppage", duration_ms=3000, compatible_variants=_SOCCER_VARIANTS)
+def soccer_live_stoppage(ctx: ScenarioContext) -> None:
+    # First-half stoppage: the clock holds 45 and counts added minutes in the
+    # warning color ("45+2'").
+    event = ctx.soccer.LastEvent(ctx.soccer.EVENT_GOAL, "45'+1'", "C. Pulisic", ctx.soccer.SIDE_HOME)
+    _publish_soccer_live(
+        ctx, away="BEL", home="USA", away_score=2, home_score=2,
+        clock_seconds=47 * 60 + 10, half=1, event=event,
+    )
+
+
+@scenario("soccer-live-commentary", duration_ms=8000, compatible_variants=_SOCCER_VARIANTS)
+def soccer_live_commentary(ctx: ScenarioContext) -> None:
+    # A fresh commentary line flashes for one scroll cycle (same machinery
+    # as the MLB play flash), then the strip falls back to the persistent
+    # last-event display. Mirrors GamePoller._commit_soccer_live.
+    event = ctx.soccer.LastEvent(ctx.soccer.EVENT_GOAL, "52'", "R. Lukaku", ctx.soccer.SIDE_AWAY)
+    text = "Goal!  Belgium 2, USA 1. Romelu Lukaku right footed shot to the bottom left corner."
+    _publish_soccer_live(
+        ctx, away="BEL", home="USA", away_score=2, home_score=1,
+        clock_seconds=52 * 60 + 30, half=2, event=event,
+    )
+    st = ctx.state.get_write_state()
+    play = st.game.play
+    play.id = "comm-87"
+    play.text = text
+    play.updated_ms = ctx.clock.now
+    play.display_ms = ctx.display.play_text_display_ms(text)
+    play.strip = ctx.state.build_play_strip(text)
+    ctx.state.commit_state()
+    # One full flash cycle plus a beat of the persistent event afterwards.
+    soccer_live_commentary.scenario.duration_ms = (
+        ctx.display.play_text_display_ms(text) + 2000
+    )
+
+
+@scenario("soccer-halftime", compatible_variants=_SOCCER_VARIANTS)
+def soccer_halftime(ctx: ScenarioContext) -> None:
+    # The interval: clock region reads HT, phase slots stay empty.
+    event = ctx.soccer.LastEvent(ctx.soccer.EVENT_GOAL, "45'+1'", "C. Pulisic", ctx.soccer.SIDE_HOME)
+    _publish_soccer_live(
+        ctx, away="BEL", home="USA", away_score=2, home_score=2,
+        clock_seconds=46 * 60, half=1, halftime=True, event=event,
+    )
+
+
+@scenario("soccer-live-red-card", duration_ms=4000, compatible_variants=_SOCCER_VARIANTS)
+def soccer_live_red_card(ctx: ScenarioContext) -> None:
+    # Late 2nd half with a red card as the most recent event.
+    event = ctx.soccer.LastEvent(ctx.soccer.EVENT_RED_CARD, "85'", "J. Vertonghen", ctx.soccer.SIDE_AWAY)
+    _publish_soccer_live(
+        ctx, away="BEL", home="USA", away_score=1, home_score=0,
+        clock_seconds=87 * 60 + 50, half=2, event=event,
+    )
+
+
+@scenario("soccer-live-quiet", compatible_variants=_SOCCER_VARIANTS)
+def soccer_live_quiet(ctx: ScenarioContext) -> None:
+    # Early scoreless match, nothing in the ticker: the sparse case.
+    _publish_soccer_live(
+        ctx, away="POR", home="SEA", away_score=0, home_score=0,
+        clock_seconds=6 * 60 + 30, half=1,
+    )
+
+
+@scenario("soccer-pregame", duration_ms=8000, compatible_variants={"default"})
+def soccer_pregame(ctx: ScenarioContext) -> None:
+    # Reuses the whole MLB pregame pipeline: the league name rides the venue
+    # slot, and soccer's permanently-absent fields (records, weather,
+    # probables) render exactly like the pregame-sparse case.
+    soccer = ctx.soccer
+    p_sea, a_sea = _SOCCER_TEAMS["SEA"]
+    p_por, a_por = _SOCCER_TEAMS["POR"]
+    game = soccer.PregameGame(
+        game_id="401700101",
+        start_epoch=_START_EPOCH,
+        league="MLS",
+        home=soccer.pregame_team("SEA", ctx.mlb.TeamColors(p_sea, a_sea)),
+        away=soccer.pregame_team("POR", ctx.mlb.TeamColors(p_por, a_por)),
+    )
+    home_logo, away_logo = _soccer_logos(ctx, game)
+    ctx.state.set_pregame(game, home_logo, away_logo, _UTC_OFFSET_EDT)
+
+
+def _soccer_final_team(ctx, abbr, score, scorers):
+    p, a = _SOCCER_TEAMS[abbr]
+    return ctx.soccer.FinalTeam(abbr, score, ctx.mlb.TeamColors(p, a), scorers)
+
+
+def _publish_soccer_final(ctx, game):
+    home_logo, away_logo = _soccer_logos(ctx, game)
+    ctx.state.set_soccer_final(game, home_logo, away_logo)
+
+
+@scenario("soccer-final", duration_ms=8000, compatible_variants={"default"})
+def soccer_final(ctx: ScenarioContext) -> None:
+    game = ctx.soccer.FinalGame(
+        game_id="401700200",
+        home=_soccer_final_team(ctx, "SEA", 2, "Morris 12', Ruidiaz 78'"),
+        away=_soccer_final_team(ctx, "POR", 1, "Mora 55'"),
+    )
+    _publish_soccer_final(ctx, game)
+
+
+@scenario("soccer-final-draw", duration_ms=6000, compatible_variants={"default"})
+def soccer_final_draw(ctx: ScenarioContext) -> None:
+    # A draw is a real result: both teams keep their color.
+    game = ctx.soccer.FinalGame(
+        game_id="401700201",
+        home=_soccer_final_team(ctx, "USA", 1, "Pulisic 45'+1'"),
+        away=_soccer_final_team(ctx, "BEL", 1, "De Bruyne 60'"),
+    )
+    _publish_soccer_final(ctx, game)
+
+
+# =============================================================================
 # Polish animations
 # =============================================================================
 
@@ -398,7 +609,7 @@ def toast_dim_pulse(ctx: ScenarioContext) -> None:
         play_text="Strike 1.",
     )
     _publish_live(ctx, live)
-    ctx.state.set_toast("SKIPPING", sticky=True)
+    ctx.state.set_toast(sticky=True, kind=ctx.state.TOAST_SPINNER)
     ctx.state.pulse_toast()   # stamps the dim at t0; set_toast must precede it
 
 

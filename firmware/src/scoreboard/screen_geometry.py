@@ -32,6 +32,7 @@ unscii_8 = 8px/char x 8px tall, unscii_16 = 8px/char x 16px tall. Logos are
 # "Line-score forward".
 PREGAME_VARIANT = "C"
 FINAL_VARIANT = "C"
+SOCCER_LIVE_VARIANT = "A"
 
 # Draw the DIM_GRAY vline/hline dividers on every game-facing screen (live,
 # pregame, final). A style-wide switch: the screens must read consistently, so
@@ -189,6 +190,93 @@ _FINAL = {
 }
 
 
+# =============================================================================
+# SOCCER LIVE variant tables
+# =============================================================================
+# Same visual frame as the MLB live screen (identity column left, data column
+# right of the x=45 divider, bottom strip below the separator) so slate
+# rotation between sports keeps one silhouette. What changes is the data
+# column's content: soccer is a clock sport, so the running match clock takes
+# the space the field/count block owns for baseball, the period ("1ST"/"2ND")
+# takes the inning ordinal's slot, and the bottom strip carries the last goal
+# or red card instead of pitcher/batter.
+
+# Scroll feel for the last-event scorer line and full-time scorer lists.
+# Same legal-speed constraint as the pregame scroll (must divide 20 FPS).
+SOCCER_SCROLL_PAUSE_MS = 1500
+SOCCER_SCROLL_PX_PER_SEC = 20
+
+_SOCCER_LIVE = {
+    # A "Phase ledger": exact MLB-live silhouette — logos + scores stacked
+    # left with the period short-form where the inning ordinal sat; the big
+    # clock centered alone in the data column; last event in the bottom strip.
+    "A": {
+        "LOGO_AWAY": (0, 0, 24, 24),
+        "SCORE_AWAY": (24, 7, 22, 16),
+        "PHASE": (2, 29, 42, 8),
+        "LOGO_HOME": (0, 40, 24, 24),
+        "SCORE_HOME": (24, 47, 22, 16),
+        "DIVIDER_X": 45,
+        "SEPARATOR_Y": 36,
+        "CLOCK": (46, 10, 82, 16),
+        "EVENT_TOP": (51, 41, 76, 8),
+        "EVENT_NAME": (51, 53, 76, 8),
+        "EVENT_EMPTY": (51, 47, 76, 8),
+    },
+    # B "Clock + phase stacked": identity column without the phase; the data
+    # column carries the clock over the spelled-out period.
+    "B": {
+        "LOGO_AWAY": (0, 0, 24, 24),
+        "SCORE_AWAY": (24, 7, 22, 16),
+        "LOGO_HOME": (0, 40, 24, 24),
+        "SCORE_HOME": (24, 47, 22, 16),
+        "DIVIDER_X": 45,
+        "SEPARATOR_Y": 36,
+        "CLOCK": (46, 5, 82, 16),
+        "PHASE_LONG": (46, 25, 82, 8),
+        "EVENT_TOP": (51, 41, 76, 8),
+        "EVENT_NAME": (51, 53, 76, 8),
+        "EVENT_EMPTY": (51, 47, 76, 8),
+    },
+    # C "Broadcast corners": logos in the top corners with scores inboard
+    # (the final-A silhouette), period chip between the scores, full-width
+    # clock beneath, event strip along the bottom. No vline — this variant
+    # deliberately tests breaking the column frame.
+    "C": {
+        "LOGO_AWAY": (0, 0, 24, 24),
+        "SCORE_AWAY": (26, 4, 22, 16),
+        "PHASE": (48, 8, 32, 8),
+        "SCORE_HOME": (80, 4, 22, 16),
+        "LOGO_HOME": (104, 0, 24, 24),
+        "CLOCK": (0, 26, 128, 16),
+        "SEPARATOR_Y": 44,
+        "EVENT_TOP": (2, 47, 124, 8),
+        "EVENT_NAME": (2, 56, 124, 8),
+        "EVENT_EMPTY": (2, 51, 124, 8),
+    },
+}
+
+
+# =============================================================================
+# SOCCER FINAL table (single design: "FT + scorers")
+# =============================================================================
+# The final-C silhouette with the line score replaced by what soccer actually
+# has: goal scorers. Identity column (logos + unscii_16 scores) left of the
+# divider, scorer lists aligned to their team's row on the right, FULL TIME
+# centered between them. Winner emphasis by color; a draw colors both.
+
+_SOCCER_FINAL = {
+    "LOGO_AWAY": (0, 2, 24, 24),
+    "SCORE_AWAY": (26, 6, 20, 16),
+    "LOGO_HOME": (0, 36, 24, 24),
+    "SCORE_HOME": (26, 40, 20, 16),
+    "DIVIDER_X": 48,
+    "SCORERS_AWAY": (52, 10, 76, 8),
+    "FT_LABEL": (52, 28, 76, 8),
+    "SCORERS_HOME": (52, 44, 76, 8),
+}
+
+
 def pregame_geometry() -> dict:
     """The active PREGAME variant's slot table."""
     return _PREGAME[PREGAME_VARIANT]
@@ -197,6 +285,16 @@ def pregame_geometry() -> dict:
 def final_geometry() -> dict:
     """The active FINAL variant's slot table."""
     return _FINAL[FINAL_VARIANT]
+
+
+def soccer_live_geometry() -> dict:
+    """The active SOCCER LIVE variant's slot table."""
+    return _SOCCER_LIVE[SOCCER_LIVE_VARIANT]
+
+
+def soccer_final_geometry() -> dict:
+    """The soccer FULL TIME slot table (single design)."""
+    return _SOCCER_FINAL
 
 
 def pregame_value_width() -> int:

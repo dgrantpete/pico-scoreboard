@@ -58,12 +58,13 @@ class LogoProvider:
         self._cache_dir = cache_dir
         self._mem: dict[str, framebuf_shim.FrameBuffer] = {}
 
-    def _cache_path(self, abbr: str) -> Path:
-        return self._cache_dir / f"{abbr.lower()}_{_LOGO_W}x{_LOGO_H}.rgb565"
+    def _cache_path(self, abbr: str, sport_league: str) -> Path:
+        prefix = sport_league.replace("/", "_").lower()
+        return self._cache_dir / f"{prefix}_{abbr.lower()}_{_LOGO_W}x{_LOGO_H}.rgb565"
 
-    def _fetch(self, abbr: str) -> bytearray | None:
+    def _fetch(self, abbr: str, sport_league: str) -> bytearray | None:
         url = (
-            f"{self._backend_url}/baseball/mlb/teams/{abbr}/logo"
+            f"{self._backend_url}/{sport_league}/teams/{abbr}/logo"
             f"?width={_LOGO_W}&height={_LOGO_H}&background_color=000000"
         )
         req = urllib.request.Request(url, headers={
@@ -84,27 +85,31 @@ class LogoProvider:
             return None
         buf = bytearray(body[:_LOGO_BYTES])
         self._cache_dir.mkdir(parents=True, exist_ok=True)
-        self._cache_path(abbr).write_bytes(buf)
+        self._cache_path(abbr, sport_league).write_bytes(buf)
         return buf
 
-    def _load_bytes(self, abbr: str, primary_packed: int, alt_packed: int) -> bytearray:
+    def _load_bytes(self, abbr: str, primary_packed: int, alt_packed: int,
+                    sport_league: str) -> bytearray:
         if self._backend_url:
-            cache_path = self._cache_path(abbr)
+            cache_path = self._cache_path(abbr, sport_league)
             if not self._refresh and cache_path.is_file():
                 data = cache_path.read_bytes()
                 if len(data) >= _LOGO_BYTES:
                     return bytearray(data[:_LOGO_BYTES])
-            fetched = self._fetch(abbr)
+            fetched = self._fetch(abbr, sport_league)
             if fetched is not None:
                 return fetched
         return _placeholder_bytes(primary_packed, alt_packed)
 
-    def get(self, abbr: str, primary_packed: int, alt_packed: int) -> framebuf_shim.FrameBuffer:
-        key = abbr.lower()
+    def get(self, abbr: str, primary_packed: int, alt_packed: int,
+            sport_league: str = "baseball/mlb") -> framebuf_shim.FrameBuffer:
+        """Resolve a logo; `sport_league` namespaces the backend path and the
+        caches, mirroring the firmware's league-namespaced LogoPool keys."""
+        key = f"{sport_league}/{abbr}".lower()
         cached = self._mem.get(key)
         if cached is not None:
             return cached
-        buf = self._load_bytes(abbr, primary_packed, alt_packed)
+        buf = self._load_bytes(abbr, primary_packed, alt_packed, sport_league)
         fb = framebuf_shim.FrameBuffer(buf, _LOGO_W, _LOGO_H, framebuf_shim.RGB565)
         self._mem[key] = fb
         return fb

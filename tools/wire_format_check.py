@@ -34,6 +34,7 @@ _pkg = types.ModuleType("scoreboard")
 _pkg.__path__ = [str(FIRMWARE_SRC / "scoreboard")]
 sys.modules["scoreboard"] = _pkg
 mlb = importlib.import_module("scoreboard.mlb")
+soccer = importlib.import_module("scoreboard.soccer")
 inning_half = importlib.import_module("scoreboard.inning_half")
 
 
@@ -107,6 +108,47 @@ def encode_final(
     )
     out += bytes(away_line) + bytes(home_line)
     out += _str(game_id) + _str(away_abbr) + _str(home_abbr)
+    return bytes(out)
+
+
+def encode_soccer_live(
+    *, flags, half, clock_seconds, away_score, home_score,
+    away_pri, away_alt, home_pri, home_alt,
+    game_id, away_abbr, home_abbr, event_clock, event_name,
+    comment_id="", comment_text="",
+) -> bytes:
+    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_IN])
+    out += struct.pack(
+        "<BBHHHIIII",
+        flags, half, clock_seconds, away_score, home_score,
+        away_pri, away_alt, home_pri, home_alt,
+    )
+    out += _str(game_id) + _str(away_abbr) + _str(home_abbr)
+    if flags & 0x02:
+        out += _str(event_clock) + _str(event_name)
+    if flags & 0x20:
+        out += _str(comment_id) + _str(comment_text)
+    return bytes(out)
+
+
+def encode_soccer_pregame(
+    *, start_time, away_pri, away_alt, home_pri, home_alt,
+    game_id, away_abbr, home_abbr,
+) -> bytes:
+    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_PRE])
+    out += struct.pack("<IIIII", start_time, away_pri, away_alt, home_pri, home_alt)
+    out += _str(game_id) + _str(away_abbr) + _str(home_abbr)
+    return bytes(out)
+
+
+def encode_soccer_final(
+    *, away_score, home_score, away_pri, away_alt, home_pri, home_alt,
+    game_id, away_abbr, home_abbr, away_scorers, home_scorers,
+) -> bytes:
+    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_POST])
+    out += struct.pack("<HHIIII", away_score, home_score, away_pri, away_alt, home_pri, home_alt)
+    out += _str(game_id) + _str(away_abbr) + _str(home_abbr)
+    out += _str(away_scorers) + _str(home_scorers)
     return bytes(out)
 
 
@@ -194,6 +236,57 @@ FINAL_EXTRAS = dict(
 )
 
 
+SOCCER_LIVE_FULL = dict(
+    # flags: event present (0x02) + event away (0x08)
+    flags=0x0A, half=1, clock_seconds=51 * 60,
+    away_score=2, home_score=1,
+    away_pri=0xE30613, away_alt=0xFDDA25, home_pri=0x002868, home_alt=0xBF0A30,
+    game_id="401800100", away_abbr="BEL", home_abbr="USA",
+    event_clock="45'+1'", event_name="R. Lukaku",
+)
+
+SOCCER_LIVE_COMMENTARY = dict(
+    # flags: event (0x02) + event away (0x08) + commentary (0x20)
+    flags=0x2A, half=1, clock_seconds=51 * 60,
+    away_score=2, home_score=1,
+    away_pri=0xE30613, away_alt=0xFDDA25, home_pri=0x002868, home_alt=0xBF0A30,
+    game_id="401800100", away_abbr="BEL", home_abbr="USA",
+    event_clock="45'+1'", event_name="R. Lukaku",
+    comment_id="87",
+    comment_text="Goal!  Belgium 2, USA 1. Romelu Lukaku right footed shot to the bottom left corner.",
+)
+
+SOCCER_LIVE_HALFTIME = dict(
+    # flags: halftime (0x01) + event present (0x02) + event home (0x10)
+    flags=0x13, half=1, clock_seconds=51 * 60,
+    away_score=2, home_score=2,
+    away_pri=0xE30613, away_alt=0xFDDA25, home_pri=0x002868, home_alt=0xBF0A30,
+    game_id="401800100", away_abbr="BEL", home_abbr="USA",
+    event_clock="45'+1'", event_name="C. Pulisic",
+)
+
+SOCCER_LIVE_QUIET = dict(
+    flags=0x00, half=2, clock_seconds=87 * 60,
+    away_score=0, home_score=0,
+    away_pri=0x004812, away_alt=0xEAE827, home_pri=0x5D9741, home_alt=0x005595,
+    game_id="401800101", away_abbr="POR", home_abbr="SEA",
+    event_clock="", event_name="",
+)
+
+SOCCER_PREGAME = dict(
+    start_time=1783647600,
+    away_pri=0x004812, away_alt=0xEAE827, home_pri=0x5D9741, home_alt=0x005595,
+    game_id="401800102", away_abbr="POR", home_abbr="SEA",
+)
+
+SOCCER_FINAL = dict(
+    away_score=1, home_score=0,
+    away_pri=0xFF0000, away_alt=0xFFC400, home_pri=0x004812, home_alt=0xEAE827,
+    game_id="401800103", away_abbr="ESP", home_abbr="POR",
+    away_scorers="M. Merino 90'+1'", home_scorers="",
+)
+
+
 # --- Goldens (swap a line to bytes.fromhex(...) to pin Rust bytes) ----------
 
 GOLDEN_LIST = encode_list(LIST_ENTRIES)
@@ -204,6 +297,12 @@ GOLDEN_PREGAME_NONE = encode_pregame(**PREGAME_NONE)
 GOLDEN_FINAL_EVEN = encode_final(**FINAL_EVEN)
 GOLDEN_FINAL_WALKOFF = encode_final(**FINAL_WALKOFF)
 GOLDEN_FINAL_EXTRAS = encode_final(**FINAL_EXTRAS)
+GOLDEN_SOCCER_LIVE_FULL = encode_soccer_live(**SOCCER_LIVE_FULL)
+GOLDEN_SOCCER_LIVE_COMMENTARY = encode_soccer_live(**SOCCER_LIVE_COMMENTARY)
+GOLDEN_SOCCER_LIVE_HALFTIME = encode_soccer_live(**SOCCER_LIVE_HALFTIME)
+GOLDEN_SOCCER_LIVE_QUIET = encode_soccer_live(**SOCCER_LIVE_QUIET)
+GOLDEN_SOCCER_PREGAME = encode_soccer_pregame(**SOCCER_PREGAME)
+GOLDEN_SOCCER_FINAL = encode_soccer_final(**SOCCER_FINAL)
 
 _GOLDENS = [
     ("list", GOLDEN_LIST),
@@ -214,6 +313,12 @@ _GOLDENS = [
     ("final_even", GOLDEN_FINAL_EVEN),
     ("final_walkoff", GOLDEN_FINAL_WALKOFF),
     ("final_extras", GOLDEN_FINAL_EXTRAS),
+    ("soccer_live_full", GOLDEN_SOCCER_LIVE_FULL),
+    ("soccer_live_comm", GOLDEN_SOCCER_LIVE_COMMENTARY),
+    ("soccer_live_ht", GOLDEN_SOCCER_LIVE_HALFTIME),
+    ("soccer_live_quiet", GOLDEN_SOCCER_LIVE_QUIET),
+    ("soccer_pregame", GOLDEN_SOCCER_PREGAME),
+    ("soccer_final", GOLDEN_SOCCER_FINAL),
 ]
 
 
@@ -246,6 +351,35 @@ RUST_PIN_FINAL = bytes.fromhex(
 )
 RUST_PIN_LIST = bytes.fromhex(
     "0203000934303135373037323901093430313537303030310209343031353730303032"
+)
+
+# Soccer goldens (backend/src/wire.rs GOLDEN_SOCCER_* test constants).
+RUST_PIN_SOCCER_LIVE = bytes.fromhex(
+    "02010a01f40b020001001306e30025dafd0068280000300abf000934303138303031"
+    "30300342454c03555341063435272b312709522e204c756b616b75"
+)
+RUST_PIN_SOCCER_COMMENTARY = bytes.fromhex(
+    "02012a01f40b020001001306e30025dafd0068280000300abf000934303138303031"
+    "30300342454c03555341063435272b312709522e204c756b616b7502383753476f61"
+    "6c21202042656c6769756d20322c2055534120312e20526f6d656c75204c756b616b"
+    "7520726967687420666f6f7465642073686f7420746f2074686520626f74746f6d20"
+    "6c65667420636f726e65722e"
+)
+RUST_PIN_SOCCER_HALFTIME = bytes.fromhex(
+    "02011301f40b020002001306e30025dafd0068280000300abf000934303138303031"
+    "30300342454c03555341063435272b31270a432e2050756c69736963"
+)
+RUST_PIN_SOCCER_QUIET = bytes.fromhex(
+    "020100026414000000001248000027e8ea0041975d0095550000093430313830303130"
+    "3103504f5203534541"
+)
+RUST_PIN_SOCCER_PRE = bytes.fromhex(
+    "0200704d506a1248000027e8ea0041975d0095550000093430313830303130"
+    "3203504f5203534541"
+)
+RUST_PIN_SOCCER_FINAL = bytes.fromhex(
+    "0202010000000000ff0000c4ff001248000027e8ea0009343031383030313033034553"
+    "5003504f52104d2e204d6572696e6f203930272b312700"
 )
 
 
@@ -289,6 +423,20 @@ def check_rust_pins() -> None:
     assert game.home.pitcher == "Y. Darvish"
     final = mlb.parse_game_detail(memoryview(RUST_PIN_FINAL))
     assert final.home.line == bytes([0, 1, 0, 0, 2, 0, 0, 2])
+
+    # Soccer: the pure-Python encodings must reproduce the Rust bytes, and
+    # the firmware soccer parser must accept the Rust bytes directly.
+    assert encode_soccer_live(**SOCCER_LIVE_FULL) == RUST_PIN_SOCCER_LIVE
+    assert encode_soccer_live(**SOCCER_LIVE_COMMENTARY) == RUST_PIN_SOCCER_COMMENTARY
+    assert encode_soccer_live(**SOCCER_LIVE_HALFTIME) == RUST_PIN_SOCCER_HALFTIME
+    assert encode_soccer_live(**SOCCER_LIVE_QUIET) == RUST_PIN_SOCCER_QUIET
+    assert encode_soccer_pregame(**SOCCER_PREGAME) == RUST_PIN_SOCCER_PRE
+    assert encode_soccer_final(**SOCCER_FINAL) == RUST_PIN_SOCCER_FINAL
+
+    live = soccer.parse_game_detail(memoryview(RUST_PIN_SOCCER_LIVE), "MLS")
+    assert live.last_event.name == "R. Lukaku"
+    ft = soccer.parse_game_detail(memoryview(RUST_PIN_SOCCER_FINAL), "MLS")
+    assert ft.away.scorers == "M. Merino 90'+1'"
 
 
 # --- Round-trip checks ------------------------------------------------------
@@ -435,6 +583,108 @@ def check_final_copies_out() -> None:
     assert game.away.line == original, "line vec aliased the reusable buffer"
 
 
+def check_soccer_live_full() -> None:
+    game = soccer.parse_game_detail(memoryview(GOLDEN_SOCCER_LIVE_FULL), "WORLD CUP")
+    assert isinstance(game, soccer.LiveGame)
+    assert game.game_id == "401800100"
+    assert game.clock_seconds == 51 * 60
+    assert game.half == 1
+    assert game.halftime is False
+    assert game.away.abbreviation == "BEL"
+    assert game.away.score == 2
+    assert game.away.colors.primary == 0xE30613
+    assert game.away.colors.alternate == 0xFDDA25
+    assert game.home.abbreviation == "USA"
+    assert game.home.score == 1
+    assert game.home.colors.primary == 0x002868
+    ev = game.last_event
+    assert ev is not None
+    assert ev.kind == soccer.EVENT_GOAL
+    assert ev.side == soccer.SIDE_AWAY
+    assert ev.clock_text == "45'+1'"
+    assert ev.name == "R. Lukaku"
+
+
+def check_soccer_live_commentary() -> None:
+    game = soccer.parse_game_detail(memoryview(GOLDEN_SOCCER_LIVE_COMMENTARY), "WORLD CUP")
+    assert isinstance(game, soccer.LiveGame)
+    assert game.comment_id == "87"
+    assert game.comment_text.startswith("Goal!  Belgium 2, USA 1.")
+    # Event fields still parse alongside commentary.
+    assert game.last_event is not None
+    assert game.last_event.name == "R. Lukaku"
+    # No-commentary payloads surface empty strings, not None.
+    quiet = soccer.parse_game_detail(memoryview(GOLDEN_SOCCER_LIVE_QUIET), "MLS")
+    assert quiet.comment_id == "" and quiet.comment_text == ""
+
+
+def check_soccer_live_halftime() -> None:
+    game = soccer.parse_game_detail(memoryview(GOLDEN_SOCCER_LIVE_HALFTIME), "WORLD CUP")
+    assert isinstance(game, soccer.LiveGame)
+    assert game.halftime is True
+    assert game.last_event is not None
+    assert game.last_event.side == soccer.SIDE_HOME
+    assert game.last_event.name == "C. Pulisic"
+
+
+def check_soccer_live_quiet() -> None:
+    game = soccer.parse_game_detail(memoryview(GOLDEN_SOCCER_LIVE_QUIET), "MLS")
+    assert isinstance(game, soccer.LiveGame)
+    assert game.half == 2
+    assert game.clock_seconds == 87 * 60
+    assert game.away.score == 0 and game.home.score == 0
+    assert game.last_event is None
+
+
+def check_soccer_pregame() -> None:
+    game = soccer.parse_game_detail(memoryview(GOLDEN_SOCCER_PREGAME), "MLS")
+    assert isinstance(game, soccer.PregameGame)
+    assert game.game_id == "401800102"
+    assert game.start_epoch == 1783647600
+    # League display name threads into the venue slot (see soccer.PregameGame).
+    assert game.venue == "MLS"
+    # Soccer pregame ducks the MLB pregame contract: records/weather absent,
+    # the abbreviation rides the probable-pitcher slot.
+    assert game.away.wins is None and game.away.losses is None
+    assert game.away.pitcher == "POR"
+    assert game.home.pitcher == "SEA"
+    assert game.weather_temp is None and game.weather_condition is None
+    assert game.away.colors.primary == 0x004812
+    assert game.home.colors.primary == 0x5D9741
+
+
+def check_soccer_final() -> None:
+    game = soccer.parse_game_detail(memoryview(GOLDEN_SOCCER_FINAL), "LA LIGA")
+    assert isinstance(game, soccer.FinalGame)
+    assert game.game_id == "401800103"
+    assert game.away.abbreviation == "ESP"
+    assert game.away.score == 1
+    assert game.away.scorers == "M. Merino 90'+1'"
+    assert game.home.abbreviation == "POR"
+    assert game.home.score == 0
+    assert game.home.scorers == ""
+
+
+def check_soccer_rejections() -> None:
+    def expect_error(payload: bytes, why: str) -> None:
+        try:
+            soccer.parse_game_detail(memoryview(payload), "MLS")
+        except mlb.DeserializeError:
+            return
+        raise AssertionError(f"accepted invalid soccer payload: {why}")
+
+    expect_error(b"", "empty payload")
+    expect_error(bytes([3]) + GOLDEN_SOCCER_LIVE_FULL[1:], "future version")
+    expect_error(bytes([mlb.WIRE_VERSION, 9]), "unknown state")
+    expect_error(GOLDEN_SOCCER_LIVE_FULL[:20], "truncated soccer live fixed section")
+    expect_error(GOLDEN_SOCCER_LIVE_FULL[:-3], "truncated inside event athlete")
+    expect_error(GOLDEN_SOCCER_LIVE_FULL + b"\x00", "trailing bytes after live")
+    expect_error(GOLDEN_SOCCER_PREGAME[:15], "truncated soccer pregame fixed section")
+    expect_error(GOLDEN_SOCCER_PREGAME + b"\x00", "trailing bytes after pregame")
+    expect_error(GOLDEN_SOCCER_FINAL[:-1], "truncated inside scorers")
+    expect_error(GOLDEN_SOCCER_FINAL + b"\x00", "trailing bytes after final")
+
+
 def check_rejections() -> None:
     """Malformed payloads must fail loudly with DeserializeError."""
 
@@ -489,6 +739,13 @@ def main() -> int:
     check_final_walkoff()
     check_final_extras()
     check_final_copies_out()
+    check_soccer_live_full()
+    check_soccer_live_commentary()
+    check_soccer_live_halftime()
+    check_soccer_live_quiet()
+    check_soccer_pregame()
+    check_soccer_final()
+    check_soccer_rejections()
     check_rejections()
     check_rust_pins()
 

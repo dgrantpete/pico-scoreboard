@@ -105,7 +105,7 @@ ota.apply_staged()
 try:
     from microdot import Microdot, Request, Response, send_file
     from scoreboard import Config, ScoreboardApiClient
-    from scoreboard.mlb_poller import MlbPoller
+    from scoreboard.poller import GamePoller, sources_from_config
     from scoreboard.state import set_startup_step, finish_startup, set_display_driver, get_write_state, ThreadHealth
     from scoreboard.dns import run_dns_server
     from scoreboard.api_routes import create_api
@@ -806,31 +806,71 @@ def init_buttons() -> tuple[Button | None, Button | None]:
         return None, None
 
 
-async def button_input_loop(poller: MlbPoller, btn_skip: Button, btn_lock: Button) -> None:
+# Hold a button this long for the league-level action (league skip / league
+# lock). The threshold check runs on the 50ms poll, so the long action fires
+# while the button is STILL HELD (~800-850ms in) — immediate feedback — and
+# the short action moves to the release edge so the two can't both fire.
+_LONG_PRESS_MS = 800
+
+
+class _PressTracker:
+    """Fold one button's event stream into short/long press callbacks.
+
+    Edge-triggered against the previous debounced state (a swallowed
+    sub-debounce blip surfaces as two same-state events and produces no
+    edge). Short press fires on RELEASE (only if the hold stayed under the
+    long threshold); the long action fires mid-hold the moment the
+    threshold passes, checked per poll iteration — button.py emits no
+    events while a button is steadily held, so this must be time-polled.
+    """
+
+    def __init__(self, button: Button, name: str, on_short, on_long) -> None:
+        self._button = button
+        self._name = name
+        self._on_short = on_short
+        self._on_long = on_long
+        self._state = button.initial
+        self._press_ms: int | None = None  # None = released or consumed
+
+    def poll(self) -> None:
+        for ev in self._button.read():
+            if ev.pressed and not self._state.pressed:
+                self._press_ms = ev.ticks_ms
+            elif not ev.pressed and self._state.pressed:
+                if self._press_ms is not None:
+                    logger.debug(f"[INPUT] {self._name}: short press")
+                    self._on_short()
+                self._press_ms = None
+            self._state = ev
+
+        if (
+            self._press_ms is not None
+            and self._state.pressed
+            and time.ticks_diff(time.ticks_ms(), self._press_ms) >= _LONG_PRESS_MS
+        ):
+            logger.debug(f"[INPUT] {self._name}: long press")
+            self._on_long()
+            self._press_ms = None  # consumed: the release won't fire short
+
+
+async def button_input_loop(poller: GamePoller, btn_skip: Button, btn_lock: Button) -> None:
     """
     Poll both buttons and dispatch press edges to the poller.
 
-    Folds the drivers' event streams per button.py's contract: a rising edge
-    (previous state released, new state pressed) triggers the action; repeated
-    same-state events (swallowed sub-debounce blips) are ignored. The 50ms
-    poll period is well inside the 4-event FIFO's tolerance.
+    Button A (skip): short = next game, long = next league.
+    Button B (lock): short = freeze rotation on this game, long = restrict
+    rotation to this game's league.
+
+    The 50ms poll period is well inside the 4-event FIFO's tolerance.
     """
-    skip_state = btn_skip.initial
-    lock_state = btn_lock.initial
+    trackers = (
+        _PressTracker(btn_skip, "button A", poller.skip, poller.skip_league),
+        _PressTracker(btn_lock, "button B", poller.toggle_lock, poller.toggle_league_lock),
+    )
 
     while True:
-        for ev in btn_skip.read():
-            if ev.pressed and not skip_state.pressed:
-                logger.debug("[INPUT] button A pressed: skip")
-                poller.skip()
-            skip_state = ev
-
-        for ev in btn_lock.read():
-            if ev.pressed and not lock_state.pressed:
-                logger.debug("[INPUT] button B pressed: toggle lock")
-                poller.toggle_lock()
-            lock_state = ev
-
+        for tracker in trackers:
+            tracker.poll()
         await asyncio.sleep_ms(50)
 
 
@@ -894,10 +934,11 @@ async def main(regions: Regions, driver: Hub75Driver, health: ThreadHealth, ligh
             api_client = ScoreboardApiClient(config)
             logo_pool = LogoPool(api_client)
             # utc_offset is None when the time sync failed; the poller then
-            # omits local first-pitch times rather than show a wrong-tz one.
-            poller = MlbPoller(config, api_client, logo_pool, utc_offset)
+            # omits local start times rather than show a wrong-tz one.
+            sources = sources_from_config(config)
+            poller = GamePoller(config, api_client, logo_pool, sources, utc_offset)
             asyncio.create_task(poller.run())
-            logger.debug("[MAIN] mlb poller task started")
+            logger.debug(f"[MAIN] game poller task started ({len(sources)} league sources)")
 
             # OTA app-update checks need the network; station mode only
             asyncio.create_task(ota_check_task(config))

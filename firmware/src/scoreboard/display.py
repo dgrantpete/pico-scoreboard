@@ -17,7 +17,10 @@ from hub75 import Hub75Driver, Hub75Display, row_addressing
 from hub75.native import pack_hsv_to_rgb565
 from scoreboard.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, measure_text, ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT
 from scoreboard.inning_half import TOP, BOTTOM
-from scoreboard.state import StateBuffer, ThreadHealth, UiColors, _team_color_to_rgb565
+from scoreboard.state import (
+    StateBuffer, ThreadHealth, UiColors, _team_color_to_rgb565,
+    TOAST_TEXT, TOAST_LOCK, TOAST_UNLOCK, TOAST_SPINNER,
+)
 from scoreboard import screen_geometry
 from scoreboard.config import Config
 from scoreboard.api_client import ScoreboardApiClient
@@ -246,6 +249,10 @@ class Regions:
         # table by the renderer; only (X, Y, W, H) rects become Regions.
         self.pregame = self._build_geometry_regions(display, screen_geometry.pregame_geometry())
         self.final = self._build_geometry_regions(display, screen_geometry.final_geometry())
+
+        # --- Soccer screens ---
+        self.soccer_live = self._build_geometry_regions(display, screen_geometry.soccer_live_geometry())
+        self.soccer_final = self._build_geometry_regions(display, screen_geometry.soccer_final_geometry())
 
     @staticmethod
     def _build_geometry_regions(display, table: dict) -> dict:
@@ -505,6 +512,7 @@ def render_no_games(display: Hub75Display, writer: FontWriter, regions: Regions,
     writer.draw(regions.no_games_title, "NO GAMES", unscii_16, ALIGN_CENTER, 0, colors.primary)
     writer.draw(regions.no_games_subtitle, "scheduled", spleen_5x8, ALIGN_CENTER, 0, colors.secondary)
     _render_toast(writer, regions, state, now_ms)
+    _render_toast_overlay(display, state, now_ms)
 
 
 def render_setup(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
@@ -554,31 +562,120 @@ def render_error(display: Hub75Display, writer: FontWriter, regions: Regions, st
 
 def _toast_active(state: StateBuffer, now_ms: int) -> bool:
     toast = state.toast
-    if toast.updated_ms == 0 or not toast.text:
+    if toast.updated_ms == 0:
+        return False
+    if toast.kind == TOAST_TEXT and not toast.text:
         return False
     window = TOAST_STICKY_MAX_MS if toast.sticky else TOAST_DISPLAY_MS
     return time.ticks_diff(now_ms, toast.updated_ms) < window
 
 
-def _render_toast(writer: FontWriter, regions: Regions, state: StateBuffer, now_ms: int) -> bool:
-    """Draw the transient toast overlay if active. Returns True if drawn.
-
-    A rejected-press dim (toast.pulse_ms set) darkens the text one triangle
-    cycle over TOAST_PULSE_MS toward TOAST_PULSE_DIP, then returns to white.
-    """
-    if not _toast_active(state, now_ms):
-        return False
+def _toast_dim_v(state: StateBuffer, now_ms: int) -> int:
+    """Brightness 0..255 for the toast, honoring a rejected-press dim cycle
+    (toast.pulse_ms set): one triangle dip toward TOAST_PULSE_DIP darkness."""
     toast = state.toast
-    color = WHITE
     if toast.pulse_ms != 0:
         elapsed = time.ticks_diff(now_ms, toast.pulse_ms)
         if 0 <= elapsed < TOAST_PULSE_MS:
             tri = pulse(elapsed, TOAST_PULSE_MS)  # 0..256..0 over the cycle
-            v = 255 - ((tri * TOAST_PULSE_DIP) >> 8)
-            color = rgb565(v, v, v)
+            return 255 - ((tri * TOAST_PULSE_DIP) >> 8)
+    return 255
+
+
+def _render_toast(writer: FontWriter, regions: Regions, state: StateBuffer, now_ms: int) -> bool:
+    """Draw an active TEXT toast into the bottom strip. Returns True if drawn
+    (the caller then skips its own bottom-strip content). Icon-kind toasts
+    render via _render_toast_overlay instead and don't consume the strip."""
+    if state.toast.kind != TOAST_TEXT or not _toast_active(state, now_ms):
+        return False
+    v = _toast_dim_v(state, now_ms)
+    color = WHITE if v == 255 else rgb565(v, v, v)
     regions.play_text.fill(BLACK)
-    writer.draw(regions.play_text, toast.text, unscii_16, ALIGN_CENTER, 0, color)
+    writer.draw(regions.play_text, state.toast.text, unscii_16, ALIGN_CENTER, 0, color)
     return True
+
+
+# --- Icon toast overlay (centered) -------------------------------------------
+# A 34x34 black backdrop centered on the panel keeps the icon legible over
+# any screen content; drawn LAST in each game-facing render so nothing
+# paints over it.
+
+_OVERLAY_SIZE = 34
+_OVERLAY_X = (DISPLAY_WIDTH - _OVERLAY_SIZE) // 2   # 47
+_OVERLAY_Y = (DISPLAY_HEIGHT - _OVERLAY_SIZE) // 2  # 15
+_CX = DISPLAY_WIDTH // 2   # 64
+_CY = DISPLAY_HEIGHT // 2  # 32
+
+# Skip spinner: a comet of dots on a radius-12 ring, one revolution per
+# _SPINNER_PERIOD_MS. The head position is computed in 1/256ths of a dot
+# step, so brightness shifts every 50 ms frame — the fluidity is the point
+# (it demos the 20 FPS pipeline). Dot centers precomputed (cos/sin at 30°
+# steps, r=12), stored as top-left of each 3x3 dot around (64, 32).
+_SPINNER_DOTS = (
+    (74, 31), (72, 37), (68, 41), (63, 42), (57, 41), (53, 37),
+    (51, 31), (53, 25), (57, 21), (63, 20), (68, 21), (72, 25),
+)
+_SPINNER_DOT_PX = 3
+_SPINNER_PERIOD_MS = 1000
+_SPINNER_TRAIL = 10  # dots of fading tail behind the head (2-dot gap)
+
+
+def _draw_spinner(display: Hub75Display, elapsed_ms: int, dim_v: int) -> None:
+    n = len(_SPINNER_DOTS)
+    # Head position in 1/256 dot units, advancing continuously.
+    head = (elapsed_ms % _SPINNER_PERIOD_MS) * (n * 256) // _SPINNER_PERIOD_MS
+    span = _SPINNER_TRAIL * 256
+    for i in range(n):
+        d = (head - i * 256) % (n * 256)  # angular lag behind the head
+        if d >= span:
+            continue
+        v = 255 - (d * 255) // span
+        if dim_v != 255:
+            v = (v * dim_v) >> 8
+        xy = _SPINNER_DOTS[i]
+        display.fill_rect(xy[0], xy[1], _SPINNER_DOT_PX, _SPINNER_DOT_PX, rgb565(v, v, v))
+
+
+def _draw_lock(display: Hub75Display, color: int, is_open: bool) -> None:
+    """A padlock centered on the panel: 14x9 body, 2px-thick shackle.
+
+    Closed: the shackle arch meets the body on both sides. Open: the arch is
+    swung to the right — its left leg hangs in the air beside the body.
+    """
+    bx = _CX - 7
+    by = _CY - 1            # body top
+    display.fill_rect(bx, by, 14, 10, color)
+    # Keyhole: 2x2 head over a 2x3 stem, punched out of the body.
+    display.fill_rect(_CX - 1, by + 2, 2, 2, BLACK)
+    display.fill_rect(_CX - 1, by + 5, 2, 3, BLACK)
+
+    top = by - 9
+    if is_open:
+        sx = bx + 8          # arch shifted right; left leg floats
+        display.fill_rect(sx, top, 10, 2, color)      # top bar
+        display.fill_rect(sx, top + 2, 2, 4, color)   # left leg (short, open)
+        display.fill_rect(sx + 8, top + 2, 2, 7, color)  # right leg into body
+    else:
+        sx = bx + 2          # arch centered over the body
+        display.fill_rect(sx, top, 10, 2, color)
+        display.fill_rect(sx, top + 2, 2, 7, color)
+        display.fill_rect(sx + 8, top + 2, 2, 7, color)
+
+
+def _render_toast_overlay(display: Hub75Display, state: StateBuffer, now_ms: int) -> None:
+    """Draw an active icon toast (lock / unlock / spinner) centered over the
+    screen. Called LAST in each game-facing render function. Text toasts are
+    handled by _render_toast in the bottom strip."""
+    toast = state.toast
+    if toast.kind == TOAST_TEXT or not _toast_active(state, now_ms):
+        return
+    display.fill_rect(_OVERLAY_X, _OVERLAY_Y, _OVERLAY_SIZE, _OVERLAY_SIZE, BLACK)
+    dim_v = _toast_dim_v(state, now_ms)
+    if toast.kind == TOAST_SPINNER:
+        _draw_spinner(display, time.ticks_diff(now_ms, toast.updated_ms), dim_v)
+    else:
+        color = WHITE if dim_v == 255 else rgb565(dim_v, dim_v, dim_v)
+        _draw_lock(display, color, toast.kind == TOAST_UNLOCK)
 
 
 def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int, play_elapsed_ms: int) -> None:
@@ -588,6 +685,7 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
     if live is None:
         render_idle(display, writer, regions, colors)
         _render_toast(writer, regions, state, now_ms)
+        _render_toast_overlay(display, state, now_ms)
         return
 
     # --- Dividers (shared style with the pregame/final screens) ---
@@ -664,40 +762,40 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
         bat_color = DIM_GRAY
 
     # Bottom strip priority: toast (button feedback) > play flash > pitcher/batter.
-    if _render_toast(writer, regions, state, now_ms):
-        return
+    if not _render_toast(writer, regions, state, now_ms):
+        play = state.game.play
+        # Visibility window on the wall rail (a stall consumes it); the scroll
+        # offset below rides the frame rail (a stall stretches it).
+        play_window_ms = time.ticks_diff(now_ms, play.updated_ms)
+        show_play = bool(play.text) and play.updated_ms != 0 and play_window_ms < play.display_ms
 
-    play = state.game.play
-    # Visibility window on the wall rail (a stall consumes it); the scroll
-    # offset below rides the frame rail (a stall stretches it).
-    play_window_ms = time.ticks_diff(now_ms, play.updated_ms)
-    show_play = bool(play.text) and play.updated_ms != 0 and play_window_ms < play.display_ms
-
-    if show_play:
-        if play.strip is not None:
-            writer.draw_strip(
-                regions.play_text, play.strip,
-                ALIGN_LEFT, play_elapsed_ms, WHITE,
-                pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
-                pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
-            )
+        if show_play:
+            if play.strip is not None:
+                writer.draw_strip(
+                    regions.play_text, play.strip,
+                    ALIGN_LEFT, play_elapsed_ms, WHITE,
+                    pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
+                    pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
+                )
+            else:
+                # Text out-sized the strip pool (very long play): glyph fallback.
+                writer.draw(
+                    regions.play_text, play.text, PLAY_TEXT_FONT,
+                    ALIGN_LEFT, play_elapsed_ms, WHITE,
+                    pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
+                    pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
+                )
         else:
-            # Text out-sized the strip pool (very long play): glyph fallback.
-            writer.draw(
-                regions.play_text, play.text, PLAY_TEXT_FONT,
-                ALIGN_LEFT, play_elapsed_ms, WHITE,
-                pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
-                pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
-            )
-    else:
-        at_bat = live.at_bat
-        if at_bat is not None:
-            elapsed_ms = view_elapsed_ms
-            writer.draw(regions.pitcher_name, at_bat.pitcher, spleen_5x8, ALIGN_CENTER, elapsed_ms, pitch_color)
-            writer.draw(regions.batter_name, at_bat.batter, spleen_5x8, ALIGN_CENTER, elapsed_ms, bat_color)
+            at_bat = live.at_bat
+            if at_bat is not None:
+                elapsed_ms = view_elapsed_ms
+                writer.draw(regions.pitcher_name, at_bat.pitcher, spleen_5x8, ALIGN_CENTER, elapsed_ms, pitch_color)
+                writer.draw(regions.batter_name, at_bat.batter, spleen_5x8, ALIGN_CENTER, elapsed_ms, bat_color)
 
-        writer.draw(regions.pitcher_label, "PIT", unscii_8, ALIGN_LEFT, 0, pitch_color)
-        writer.draw(regions.batter_label, "BAT", unscii_8, ALIGN_LEFT, 0, bat_color)
+            writer.draw(regions.pitcher_label, "PIT", unscii_8, ALIGN_LEFT, 0, pitch_color)
+            writer.draw(regions.batter_label, "BAT", unscii_8, ALIGN_LEFT, 0, bat_color)
+
+    _render_toast_overlay(display, state, now_ms)
 
 
 def _cycle_phase(ends: list, elapsed_ms: int) -> tuple:
@@ -830,6 +928,7 @@ def render_pregame(display: Hub75Display, writer: FontWriter, regions: Regions, 
                           ALIGN_CENTER, elapsed, pv.home_color, pause, pxs)
 
     _render_toast(writer, regions, state, now_ms)
+    _render_toast_overlay(display, state, now_ms)
 
 
 def render_final(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int) -> None:
@@ -912,6 +1011,210 @@ def render_final(display: Hub75Display, writer: FontWriter, regions: Regions, st
         writer.integer(fv.home_score, rh[0], rh[1], rh[2], ALIGN_CENTER, home_col, font=r_font)
 
     _render_toast(writer, regions, state, now_ms)
+    _render_toast_overlay(display, state, now_ms)
+
+
+# Fixed glyph advance of the clock font (all shipped fonts are fixed-width);
+# lets the composite clock ("45+6'") be centered with pure integer math.
+_CLOCK_FONT = unscii_16
+_CLOCK_CHAR_W = unscii_16.GLYPHS[ord("0") - 32][1]
+
+
+def _draw_soccer_clock(display: Hub75Display, writer: FontWriter, rect: tuple,
+                       sv, colors: UiColors, now_ms: int) -> None:
+    """Draw the extrapolated match clock, allocation-free.
+
+    The displayed minute is derived per frame from the poll-time anchor:
+    `elapsed = anchor_s + ticks_diff(now_ms, anchor_ms) // 1000`. Integer
+    math only (writer.integer + static "'"/"+" literals), so the clock ticks
+    between polls with zero Core 0 involvement and no per-second commits —
+    a Core 0 stall (TLS reconnect, GC) can't freeze or jump it, and each
+    poll re-anchors any drift away.
+
+    Rail choice: the match clock is REAL time, not motion — a stalled frame
+    must consume match time, so it rides the wall rail (`now_ms` and
+    `clock_anchor_ms` are both ticks-domain; never the frame rail, which
+    would drift the clock from reality by every stall).
+
+    Convention: floor minutes, matching ESPN's displayClock exactly (fixture
+    evidence: "45'+6'" with halftime immediately after = 6 full stoppage
+    minutes played). 23:30 elapsed reads "23'"; past the period's base the
+    clock holds the base and counts added minutes ("45+2'"), drawn in the
+    warning color.
+    """
+    x, y, w, _h = rect
+    normal = colors.clock_normal
+
+    if sv.halftime:
+        writer.aligned_text("HT", x, y, w, ALIGN_CENTER, colors.accent, font=_CLOCK_FONT)
+        return
+
+    elapsed_s = sv.clock_anchor_s
+    if sv.clock_running:
+        elapsed_s += time.ticks_diff(now_ms, sv.clock_anchor_ms) // 1000
+    m = elapsed_s // 60
+    base = sv.base_min
+
+    if m <= base:
+        # At exactly the base minute (45:00-45:59) ESPN still shows "45'".
+        chars = (1 if m < 10 else (2 if m < 100 else 3)) + 1
+        cx = x + (w - chars * _CLOCK_CHAR_W) // 2
+        cx = writer.integer(m, cx, y, 0, ALIGN_LEFT, normal, font=_CLOCK_FONT)
+        writer.text("'", cx, y, normal, font=_CLOCK_FONT)
+    else:
+        # Stoppage time: hold the base minute and count the added minutes.
+        extra = m - base
+        if extra > 99:
+            extra = 99
+        warn = colors.clock_warning
+        chars = (2 if base < 100 else 3) + (1 if extra < 10 else 2) + 2
+        cx = x + (w - chars * _CLOCK_CHAR_W) // 2
+        cx = writer.integer(base, cx, y, 0, ALIGN_LEFT, warn, font=_CLOCK_FONT)
+        cx = writer.text("+", cx, y, warn, font=_CLOCK_FONT)
+        cx = writer.integer(extra, cx, y, 0, ALIGN_LEFT, warn, font=_CLOCK_FONT)
+        writer.text("'", cx, y, warn, font=_CLOCK_FONT)
+
+
+def render_soccer_live(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int, play_elapsed_ms: int) -> None:
+    """Render the live soccer screen for the active screen_geometry variant.
+
+    Shares the MLB live screen's visual frame (identity column, dividers,
+    bottom strip); the data column carries the extrapolated match clock and
+    the period. Bottom strip priority: toast > commentary flash (the latest
+    play-by-play line, one scroll cycle, same machinery as the MLB play
+    flash) > the persistent last goal / red card in the scoring team's
+    color. Scroll motion rides the frame rail; the match clock rides the
+    wall rail (see _draw_soccer_clock).
+    """
+    display.fill(BLACK)
+
+    sv = state.soccer_live
+    geo = screen_geometry.soccer_live_geometry()
+    R = regions.soccer_live
+    elapsed = view_elapsed_ms  # frame rail: motion holds, never jumps
+
+    # --- Dividers ---
+    if screen_geometry.SHOW_DIVIDERS:
+        if "DIVIDER_X" in geo:
+            display.vline(geo["DIVIDER_X"], 0, DISPLAY_HEIGHT, DIM_GRAY)
+        if "SEPARATOR_Y" in geo:
+            sep_x = geo["DIVIDER_X"] + 1 if "DIVIDER_X" in geo else 0
+            display.hline(sep_x, geo["SEPARATOR_Y"], DISPLAY_WIDTH - sep_x, DIM_GRAY)
+
+    # --- Logos + scores ---
+    if state.away_logo is not None:
+        display.blit(state.away_logo, geo["LOGO_AWAY"][0], geo["LOGO_AWAY"][1])
+    if state.home_logo is not None:
+        display.blit(state.home_logo, geo["LOGO_HOME"][0], geo["LOGO_HOME"][1])
+
+    sa = geo["SCORE_AWAY"]
+    writer.integer(sv.away_score, sa[0], sa[1], sa[2], ALIGN_CENTER, WHITE, font=unscii_16)
+    sh = geo["SCORE_HOME"]
+    writer.integer(sv.home_score, sh[0], sh[1], sh[2], ALIGN_CENTER, WHITE, font=unscii_16)
+
+    # --- Period + clock ---
+    if "PHASE" in R and sv.phase_text:
+        writer.draw(R["PHASE"], sv.phase_text, unscii_8, ALIGN_CENTER, 0, WHITE)
+    if "PHASE_LONG" in R and sv.phase_long:
+        writer.draw(R["PHASE_LONG"], sv.phase_long, unscii_8, ALIGN_CENTER, 0, DIM_GRAY)
+
+    _draw_soccer_clock(display, writer, geo["CLOCK"], sv, colors, now_ms)
+
+    # --- Bottom strip: toast > commentary flash > last event ---
+    if not _render_toast(writer, regions, state, now_ms):
+        play = state.game.play
+        play_window_ms = time.ticks_diff(now_ms, play.updated_ms)
+        show_play = bool(play.text) and play.updated_ms != 0 and play_window_ms < play.display_ms
+        if show_play:
+            if play.strip is not None:
+                writer.draw_strip(
+                    regions.play_text, play.strip,
+                    ALIGN_LEFT, play_elapsed_ms, WHITE,
+                    pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
+                    pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
+                )
+            else:
+                writer.draw(
+                    regions.play_text, play.text, PLAY_TEXT_FONT,
+                    ALIGN_LEFT, play_elapsed_ms, WHITE,
+                    pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
+                    pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
+                )
+        elif sv.event_top:
+            pause = screen_geometry.SOCCER_SCROLL_PAUSE_MS
+            pxs = screen_geometry.SOCCER_SCROLL_PX_PER_SEC
+            writer.draw(R["EVENT_TOP"], sv.event_top, spleen_5x8, ALIGN_CENTER, elapsed,
+                        sv.event_color, pause_ms=pause, pixels_per_second=pxs)
+            if sv.event_name:
+                if sv.event_name_strip is not None:
+                    writer.draw_strip(R["EVENT_NAME"], sv.event_name_strip, ALIGN_CENTER,
+                                      elapsed, sv.event_color,
+                                      pause_ms=pause, pixels_per_second=pxs)
+                else:
+                    writer.draw(R["EVENT_NAME"], sv.event_name, unscii_8, ALIGN_CENTER,
+                                elapsed, sv.event_color,
+                                pause_ms=pause, pixels_per_second=pxs)
+        elif "EVENT_EMPTY" in R:
+            # Nothing in the ticker yet: a dim placeholder so the strip
+            # doesn't read as a rendering hole.
+            writer.draw(R["EVENT_EMPTY"], "NO GOALS", spleen_5x8, ALIGN_CENTER, 0, DIM_GRAY)
+
+    _render_toast_overlay(display, state, now_ms)
+
+
+def render_soccer_final(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int) -> None:
+    """Render the soccer full-time screen.
+
+    The final-C silhouette with goal scorers where baseball's line score
+    was. Winner emphasis by color, loser in DIM_GRAY — except a draw, which
+    colors both teams (soccer draws are real results).
+    """
+    display.fill(BLACK)
+
+    fv = state.soccer_final
+    geo = screen_geometry.soccer_final_geometry()
+    R = regions.soccer_final
+    elapsed = view_elapsed_ms  # frame rail: motion holds, never jumps
+
+    if fv.draw:
+        away_col = fv.away_color
+        home_col = fv.home_color
+    elif fv.home_won:
+        away_col = DIM_GRAY
+        home_col = fv.home_color
+    else:
+        away_col = fv.away_color
+        home_col = DIM_GRAY
+
+    # --- Dividers ---
+    if screen_geometry.SHOW_DIVIDERS and "DIVIDER_X" in geo:
+        display.vline(geo["DIVIDER_X"], 0, DISPLAY_HEIGHT, DIM_GRAY)
+
+    # --- Logos + scores ---
+    if state.away_logo is not None:
+        display.blit(state.away_logo, geo["LOGO_AWAY"][0], geo["LOGO_AWAY"][1])
+    if state.home_logo is not None:
+        display.blit(state.home_logo, geo["LOGO_HOME"][0], geo["LOGO_HOME"][1])
+
+    sa = geo["SCORE_AWAY"]
+    writer.integer(fv.away_score, sa[0], sa[1], sa[2], ALIGN_CENTER, away_col, font=unscii_16)
+    sh = geo["SCORE_HOME"]
+    writer.integer(fv.home_score, sh[0], sh[1], sh[2], ALIGN_CENTER, home_col, font=unscii_16)
+
+    # --- FULL TIME + scorers ---
+    writer.draw(R["FT_LABEL"], fv.ft_text, unscii_8, ALIGN_CENTER, 0, colors.accent)
+
+    pause = screen_geometry.SOCCER_SCROLL_PAUSE_MS
+    pxs = screen_geometry.SOCCER_SCROLL_PX_PER_SEC
+    if fv.scorers_away:
+        _text_or_strip(writer, R["SCORERS_AWAY"], fv.scorers_away, fv.scorers_away_strip,
+                       ALIGN_CENTER, elapsed, away_col, pause, pxs)
+    if fv.scorers_home:
+        _text_or_strip(writer, R["SCORERS_HOME"], fv.scorers_home, fv.scorers_home_strip,
+                       ALIGN_CENTER, elapsed, home_col, pause, pxs)
+
+    _render_toast(writer, regions, state, now_ms)
+    _render_toast_overlay(display, state, now_ms)
 
 
 def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int, play_elapsed_ms: int) -> None:
@@ -953,6 +1256,10 @@ def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, st
         render_pregame(display, writer, regions, state, colors, now_ms, view_elapsed_ms)
     elif mode == 'final':
         render_final(display, writer, regions, state, colors, now_ms, view_elapsed_ms)
+    elif mode == 'soccer_live':
+        render_soccer_live(display, writer, regions, state, colors, now_ms, view_elapsed_ms, play_elapsed_ms)
+    elif mode == 'soccer_final':
+        render_soccer_final(display, writer, regions, state, colors, now_ms, view_elapsed_ms)
     else:
         render_idle(display, writer, regions, colors)
 

@@ -51,6 +51,14 @@ _DEFAULTS = {
         "clock_normal": {"r": 0, "g": 255, "b": 0},     # Green - clock with time remaining
         "clock_warning": {"r": 255, "g": 10, "b": 10}   # Red - low time, errors
     },
+    # Which leagues the poller rotates through. `soccer.leagues` holds ESPN
+    # slugs (see scoreboard/soccer.py LEAGUE_NAMES: usa.1, eng.1, mex.1,
+    # fifa.world); empty = soccer off. Edited via the config API/JSON for
+    # now — a settings-UI surface is a frontend follow-up (BACKLOG).
+    "sports": {
+        "mlb": {"enabled": True},
+        "soccer": {"leagues": []}
+    },
     "log": {
         "level": "debug"
     },
@@ -348,6 +356,24 @@ class Config:
     def blanking_time_ns(self) -> int:
         """Blanking time in nanoseconds (0-3000)."""
         return self._data["display"]["blanking_time_ns"]
+
+    # Sports properties
+    @property
+    def mlb_enabled(self) -> bool:
+        """Whether MLB games are polled and rotated."""
+        return bool(self._data["sports"]["mlb"]["enabled"])
+
+    @property
+    def soccer_leagues(self) -> list:
+        """ESPN soccer league slugs to poll (empty list = soccer off).
+
+        Non-list/garbage values degrade to [] so a hand-edited config can't
+        crash the poller construction.
+        """
+        leagues = self._data["sports"]["soccer"]["leagues"]
+        if not isinstance(leagues, list):
+            return []
+        return [s for s in leagues if isinstance(s, str) and s]
 
     # Server properties
     @property
