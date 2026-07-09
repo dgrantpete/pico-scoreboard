@@ -51,8 +51,11 @@
 12. **Multiple `Button` instances per PIO block** — the skip/lock feature runs
     two on PIO1; verify program-offset reuse and deinit ordering on hardware,
     and document the pattern in `button.py` if anything surprising shows up.
-13. **Button UX refinement** — replace MK1 text toasts with proper indicators
-    (loading animation on skip, persistent lock icon while rotation is locked).
+13. **Persistent lock indicator** — the lock/unlock icon toasts landed
+    2026-07-09 (transient, centered), but a *persistent* subtle indicator
+    while rotation or league lock is engaged (small corner glyph?) is still
+    open — right now nothing on screen says the board is locked after the
+    toast fades.
 17. **Re-baseline heap behavior after `gc.threshold(48*1024)`** — the
     threshold landed 2026-07-07 (main.py; calibrated from the measured
     ~4 KB/s churn → collect every ~12 s). Watch a game-day session: free
@@ -131,6 +134,45 @@
     guesses. Note: TLS crypto itself is atomic C — the fix for it is
     fewer requests (item 25's combined backend endpoint also halves the
     poller's TLS round-trips per cycle), not finer yielding.
+
+## Soccer (end-to-end wiring landed 2026-07-09; remaining polish)
+
+Landed 2026-07-09: soccer wire encodings in `wire.rs` (clock as elapsed
+seconds u16, floor-minute convention matching ESPN's displayClock) +
+firmware `soccer.py` parsers cross-checked by `wire_format_check.py`;
+backend serves all three states with struct negotiation (`SoccerGame::Final`
+carries scores + scorer strings); `GamePoller` (`scoreboard/poller.py`)
+merges MLB + configured soccer leagues into one live-first rotation with
+league-namespaced logo keys and the soccer stale-clock guard; config gained
+`sports.mlb.enabled` + `sports.soccer.leagues`; a second preview golden pins
+the soccer live frame.
+
+32. **Soccer live variant pick** — soccer-A ("phase ledger", default) vs
+    soccer-B ("clock + phase stacked") vs soccer-C ("broadcast corners")
+    are all in the preview gallery; lock the winner into
+    `screen_geometry.SOCCER_LIVE_VARIANT` after a gallery review (same
+    ritual as the 2026-07-07 pregame/final picks). Possible polish items
+    after the pick: goal score-flash (NFL-era `should_flash` pattern),
+    red-card count chips, aggregate/penalty shootout states (ESPN
+    descriptions for ET/shootout not yet observed — backend warns and
+    degrades to in-play; extra-time periods 3/4 already render as "ET"
+    with 105/120 stoppage bases).
+
+33. **Sports config hot-reload** — the Sports settings card landed
+    2026-07-09 but league changes are reboot-required (the poller builds
+    its `LeagueSource` list once at startup; the frontend raises the
+    existing reboot dialog). If reboots annoy: rebuild sources inside
+    `GamePoller._refresh_lists` when the config-derived key list changes
+    (reset per-source caches/etags, drop a vanished league lock, rebuild
+    rotation).
+
+34. **Soccer + UX on-hardware shakedown** — first live match day with a
+    real device: the extrapolated clock across 30 s polls (drift should
+    re-anchor invisibly), halftime flip, goal ticker color, commentary
+    flash cadence (does a line per poll feel chatty?), cross-league
+    rotation with MLB on the same slate, long-press feel (800 ms
+    threshold), spinner smoothness on the panel, and heap headroom with
+    the per-league list polls + per-live-game summary fetches.
 
 ## Backend
 
