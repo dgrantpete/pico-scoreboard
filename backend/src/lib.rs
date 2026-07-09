@@ -34,8 +34,8 @@ use espn::EspnClient;
         team::get_team_logo,
         mlb::handler::list_games,
         mlb::handler::get_game,
-        soccer::handler::list_active_games,
-        soccer::handler::get_live_game,
+        soccer::handler::list_games,
+        soccer::handler::get_game,
         app_update::handler::get_app_manifest,
         app_update::handler::get_app_image,
     ),
@@ -66,7 +66,10 @@ use espn::EspnClient;
         soccer::SoccerGame,
         soccer::SoccerTeam,
         soccer::SoccerTeamState,
+        soccer::SoccerFinalTeam,
         soccer::LastEvent,
+        soccer::EventKind,
+        soccer::Commentary,
         soccer::Side,
     )),
     modifiers(&SecurityAddon),
@@ -196,10 +199,10 @@ pub async fn run() {
         )
         .route("/baseball/mlb/games", get(mlb::list_games))
         .route("/baseball/mlb/games/{game_id}", get(mlb::get_game))
-        .route("/soccer/{league}/games", get(soccer::list_active_games))
+        .route("/soccer/{league}/games", get(soccer::list_games))
         .route(
             "/soccer/{league}/games/{game_id}",
-            get(soccer::get_live_game),
+            get(soccer::get_game),
         )
         .route("/app/manifest", get(app_update::get_app_manifest))
         .route("/app/image", get(app_update::get_app_image))

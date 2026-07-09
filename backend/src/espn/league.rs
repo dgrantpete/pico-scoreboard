@@ -129,3 +129,14 @@ pub fn scoreboard_url(config: &EspnConfig, league: &impl EspnLeague) -> String {
         league.espn_league()
     )
 }
+
+/// Per-event summary URL (rich data: commentary, key events, boxscore).
+pub fn summary_url(config: &EspnConfig, league: &impl EspnLeague, event_id: &str) -> String {
+    format!(
+        "{}/{}/{}/summary?event={}",
+        config.base_url,
+        league.espn_sport(),
+        league.espn_league(),
+        event_id
+    )
+}

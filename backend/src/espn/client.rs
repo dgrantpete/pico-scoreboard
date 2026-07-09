@@ -16,9 +16,10 @@ const LOGO_CACHE_CAPACITY: usize = 64;
 /// of Picos collapses into (at most) one upstream fetch per TTL window.
 const JSON_CACHE_TTL: Duration = Duration::from_secs(5);
 
-/// Distinct JSON URLs cached at once: one per pollable league, with headroom.
-/// LRU rather than a plain map so date-parameterized URLs can't grow unbounded.
-const JSON_CACHE_CAPACITY: usize = 8;
+/// Distinct JSON URLs cached at once: one per pollable league plus a summary
+/// URL per live soccer game (commentary), with headroom. LRU rather than a
+/// plain map so parameterized URLs can't grow unbounded.
+const JSON_CACHE_CAPACITY: usize = 16;
 
 /// HTTP client for ESPN with in-memory logo and JSON caches.
 #[derive(Debug, Clone)]

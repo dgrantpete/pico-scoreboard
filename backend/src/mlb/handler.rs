@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     Json,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, header},
     response::{IntoResponse, Response},
 };
 
@@ -12,7 +12,7 @@ use crate::auth::ApiKey;
 use crate::error::{AppError, ErrorResponse};
 use crate::espn::league::{self, Mlb};
 use crate::espn::types::{RawScoreboard, find_event, parse_events};
-use crate::shared::etag::compute_games_etag;
+use crate::shared::etag::{games_response, wants_struct};
 use crate::wire;
 
 use super::transform::{
@@ -25,15 +25,6 @@ fn scoreboard_url(state: &AppState) -> String {
     league::scoreboard_url(&state.config.espn, &Mlb)
 }
 
-/// True when the client asked for the packed binary format (see `wire.rs`).
-fn wants_struct(headers: &HeaderMap) -> bool {
-    headers.get_all(header::ACCEPT).iter().any(|v| {
-        v.to_str()
-            .map(|s| s.contains(wire::STRUCT_CONTENT_TYPE))
-            .unwrap_or(false)
-    })
-}
-
 /// The list state of an event's first competition, or `None` for events with
 /// nothing displayable — a rain-delayed live game (non-inning `shortDetail`) is
 /// excluded so the firmware never advertises a live game it can't then fetch.
@@ -44,53 +35,6 @@ fn list_state(competition: &EspnCompetition) -> Option<GameState> {
         EspnCompetition::Live { short_detail, .. } => {
             parse_inning_half(short_detail).map(|_| GameState::Live)
         }
-    }
-}
-
-/// Build a 200-or-304 response for `GET /baseball/mlb/games` from the game
-/// list entries, the client's `If-None-Match` header, and the negotiated
-/// format.
-///
-/// The ETag is computed over per-game `"{id}:{state_code}"` tokens — a state
-/// flip (pregame → live) with the same id set busts the client's 304. Both
-/// representations share the ETag (with `Vary: Accept`); there are no shared
-/// caches in this deployment and a given client always requests one format.
-fn build_games_response(
-    entries: Vec<GameListEntry>,
-    if_none_match: Option<&str>,
-    use_struct: bool,
-) -> Response {
-    let tokens: Vec<String> = entries
-        .iter()
-        .map(|e| format!("{}:{}", e.id, e.state.code()))
-        .collect();
-    let etag = compute_games_etag(&tokens);
-    let quoted = format!("\"{}\"", etag);
-
-    if if_none_match == Some(quoted.as_str()) {
-        return (
-            StatusCode::NOT_MODIFIED,
-            [(header::ETAG, quoted.as_str()), (header::VARY, "Accept")],
-        )
-            .into_response();
-    }
-
-    if use_struct {
-        (
-            [
-                (header::ETAG, quoted.as_str()),
-                (header::VARY, "Accept"),
-                (header::CONTENT_TYPE, wire::STRUCT_CONTENT_TYPE),
-            ],
-            wire::encode_game_list(&entries),
-        )
-            .into_response()
-    } else {
-        (
-            [(header::ETAG, quoted.as_str()), (header::VARY, "Accept")],
-            Json(entries),
-        )
-            .into_response()
     }
 }
 
@@ -132,11 +76,7 @@ pub async fn list_games(
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok());
 
-    Ok(build_games_response(
-        entries,
-        if_none_match,
-        wants_struct(&headers),
-    ))
+    Ok(games_response(entries, if_none_match, wants_struct(&headers)))
 }
 
 /// GET /baseball/mlb/games/{game_id} — state snapshot for one MLB game.
@@ -216,7 +156,9 @@ pub async fn get_game(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::etag::compute_games_etag;
     use axum::body::to_bytes;
+    use axum::http::StatusCode;
 
     fn entries(xs: &[(&str, GameState)]) -> Vec<GameListEntry> {
         xs.iter()
@@ -244,7 +186,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_200_with_etag_when_no_if_none_match() {
-        let resp = build_games_response(
+        let resp = games_response(
             entries(&[("401570001", GameState::Live), ("401570002", GameState::Final)]),
             None,
             false,
@@ -261,7 +203,7 @@ mod tests {
     async fn returns_304_without_body_when_if_none_match_matches() {
         let list = entries(&[("401570002", GameState::Live), ("401570001", GameState::Pregame)]);
         let tag = format!("\"{}\"", compute_games_etag(&tokens(&list)));
-        let resp = build_games_response(list, Some(tag.as_str()), false);
+        let resp = games_response(list, Some(tag.as_str()), false);
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(etag_header(&resp), tag);
         let body = to_bytes(resp.into_body(), 4096).await.unwrap();
@@ -275,7 +217,7 @@ mod tests {
         let before_tag = format!("\"{}\"", compute_games_etag(&tokens(&before)));
 
         let after = entries(&[("401570001", GameState::Live), ("401570002", GameState::Live)]);
-        let resp = build_games_response(after, Some(before_tag.as_str()), false);
+        let resp = games_response(after, Some(before_tag.as_str()), false);
 
         assert_eq!(resp.status(), StatusCode::OK);
         assert_ne!(etag_header(&resp), before_tag);
@@ -288,11 +230,11 @@ mod tests {
             ("401570001", GameState::Live),
         ]);
         let json_tag = {
-            let resp = build_games_response(list.clone(), None, false);
+            let resp = games_response(list.clone(), None, false);
             etag_header(&resp).to_string()
         };
 
-        let resp = build_games_response(list, None, true);
+        let resp = games_response(list, None, true);
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(etag_header(&resp), json_tag);
         assert_eq!(
