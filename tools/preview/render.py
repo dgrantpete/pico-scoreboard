@@ -3,7 +3,9 @@
 For each frame the loop replicates the Core 1 display tick exactly: set the
 virtual clock, latch the published state via `acquire_display_state()`, call the
 renderer with the real `render_frame` signature
-`(display, writer, regions, state, colors, now_ms)`, and snapshot the RGB565
+`(display, writer, regions, state, colors, now_ms, view_elapsed_ms,
+play_elapsed_ms)` — the two frame-rail elapsed values latched exactly the way
+the Core 1 thread latches them — and snapshot the RGB565
 buffer. A static scenario yields one frame; an animated one yields
 `duration_ms // 50` frames spaced 50 ms apart in virtual time.
 """
@@ -44,11 +46,26 @@ def render_scenario(ctx, scenario, variant, display, writer, regions) -> "list[b
         regions = ctx.display.Regions(display)
 
         base = ctx.clock.now
+        # Frame-rail latching, mirroring run_display_thread: the rail advances
+        # one FRAME_MS per frame and epochs re-latch when their stamp changes.
+        anim_ms = 0
+        view_stamp = None
+        view_epoch = 0
+        play_stamp = None
+        play_epoch = 0
         for i in range(frame_count):
             now = base + i * 50
             ctx.clock.set(now)
             state, _seq = ctx.state.acquire_display_state()
-            renderer(display, writer, regions, state, state.ui_colors, now)
+            anim_ms += 50
+            if state.animation_start_ms != view_stamp:
+                view_stamp = state.animation_start_ms
+                view_epoch = anim_ms
+            if state.game.play.updated_ms != play_stamp:
+                play_stamp = state.game.play.updated_ms
+                play_epoch = anim_ms
+            renderer(display, writer, regions, state, state.ui_colors, now,
+                     anim_ms - view_epoch, anim_ms - play_epoch)
             frames.append(bytes(display.buffer))
     return frames
 
@@ -75,5 +92,8 @@ def render_golden_frame(ctx, display, writer, regions, scenario_name, elapsed_ms
         now = ctx.clock.now + elapsed_ms
         ctx.clock.set(now)
         state, _seq = ctx.state.acquire_display_state()
-        renderer(display, writer, regions, state, state.ui_colors, now)
+        # Under ideal pacing the frame rail equals the wall rail, so the fixed
+        # golden offset serves as both elapsed values.
+        renderer(display, writer, regions, state, state.ui_colors, now,
+                 elapsed_ms, elapsed_ms)
     return bytes(display.buffer)

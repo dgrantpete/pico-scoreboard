@@ -581,7 +581,7 @@ def _render_toast(writer: FontWriter, regions: Regions, state: StateBuffer, now_
     return True
 
 
-def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
+def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int, play_elapsed_ms: int) -> None:
     display.fill(BLACK)
 
     live = state.game.live
@@ -629,7 +629,7 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
     outs_critical = live.count.outs == 2
 
     if balls_critical or strikes_critical or outs_critical:
-        p = pulse(now_ms)
+        p = pulse(view_elapsed_ms)
         v = CRITICAL_PULSE_V_BASE + ((p * CRITICAL_PULSE_V_RANGE) >> 8)
         s = (p * CRITICAL_PULSE_S_MAX) >> 8
         pulsed = pack_hsv_to_rgb565(0, s, v)
@@ -668,14 +668,16 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
         return
 
     play = state.game.play
-    play_elapsed = time.ticks_diff(now_ms, play.updated_ms)
-    show_play = bool(play.text) and play.updated_ms != 0 and play_elapsed < play.display_ms
+    # Visibility window on the wall rail (a stall consumes it); the scroll
+    # offset below rides the frame rail (a stall stretches it).
+    play_window_ms = time.ticks_diff(now_ms, play.updated_ms)
+    show_play = bool(play.text) and play.updated_ms != 0 and play_window_ms < play.display_ms
 
     if show_play:
         if play.strip is not None:
             writer.draw_strip(
                 regions.play_text, play.strip,
-                ALIGN_LEFT, play_elapsed, WHITE,
+                ALIGN_LEFT, play_elapsed_ms, WHITE,
                 pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
                 pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
             )
@@ -683,14 +685,14 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
             # Text out-sized the strip pool (very long play): glyph fallback.
             writer.draw(
                 regions.play_text, play.text, PLAY_TEXT_FONT,
-                ALIGN_LEFT, play_elapsed, WHITE,
+                ALIGN_LEFT, play_elapsed_ms, WHITE,
                 pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
                 pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
             )
     else:
         at_bat = live.at_bat
         if at_bat is not None:
-            elapsed_ms = time.ticks_diff(now_ms, state.animation_start_ms)
+            elapsed_ms = view_elapsed_ms
             writer.draw(regions.pitcher_name, at_bat.pitcher, spleen_5x8, ALIGN_CENTER, elapsed_ms, pitch_color)
             writer.draw(regions.batter_name, at_bat.batter, spleen_5x8, ALIGN_CENTER, elapsed_ms, bat_color)
 
@@ -729,7 +731,7 @@ def _text_or_strip(writer, region, text, strip, align, elapsed, color, pause, px
                     pause_ms=pause, pixels_per_second=pxs)
 
 
-def render_pregame(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
+def render_pregame(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int) -> None:
     """Render the pregame screen for the active screen_geometry variant.
 
     Logos identify the teams (no abbreviations). Records sit beside the logos;
@@ -742,7 +744,7 @@ def render_pregame(display: Hub75Display, writer: FontWriter, regions: Regions, 
     geo = screen_geometry.pregame_geometry()
     variant = screen_geometry.PREGAME_VARIANT
     R = regions.pregame
-    elapsed = time.ticks_diff(now_ms, state.animation_start_ms)
+    elapsed = view_elapsed_ms  # frame rail: motion holds, never jumps
 
     # --- Logos ---
     if state.away_logo is not None and "LOGO_AWAY" in geo:
@@ -830,7 +832,7 @@ def render_pregame(display: Hub75Display, writer: FontWriter, regions: Regions, 
     _render_toast(writer, regions, state, now_ms)
 
 
-def render_final(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
+def render_final(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int) -> None:
     """Render the final screen for the active screen_geometry variant.
 
     Winner emphasis is by color: the winning team's score and R total render in
@@ -843,7 +845,7 @@ def render_final(display: Hub75Display, writer: FontWriter, regions: Regions, st
     fv = state.final
     geo = screen_geometry.final_geometry()
     R = regions.final
-    elapsed = time.ticks_diff(now_ms, state.animation_start_ms)
+    elapsed = view_elapsed_ms  # frame rail: motion holds, never jumps
 
     if fv.home_won:
         away_col = DIM_GRAY
@@ -912,12 +914,26 @@ def render_final(display: Hub75Display, writer: FontWriter, regions: Regions, st
     _render_toast(writer, regions, state, now_ms)
 
 
-def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
+def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int, play_elapsed_ms: int) -> None:
     """
     Render a frame based on current display state.
 
-    Pure function: all timing-dependent computations use the passed now_ms
-    timestamp rather than querying time internally.
+    Pure function of its time inputs — nothing here queries the clock.
+
+    Two time rails (rule: a stall STRETCHES motion but CONSUMES waiting):
+    - `now_ms` (wall rail): event windows and durations — toast lifetime,
+      the play-flash visibility window. A GC-stalled frame still counts
+      against these, so feedback timing stays honest.
+    - `view_elapsed_ms` / `play_elapsed_ms` (frame rail): advance exactly
+      FRAME_MS per rendered frame, latched to their epochs
+      (state.animation_start_ms / play.updated_ms) by the display thread.
+      All continuous motion — scroll offsets, the count-dot pulse — rides
+      these, so a stalled frame holds position for one frame instead of
+      jumping. Under perfect pacing the rails are identical.
+    The pregame cycle (phase dwell + in-phase scroll) rides the frame rail
+    as a unit: dwell is sized to one scroll cycle, and that coupling matters
+    more than dwell exactness. Low-stakes modes (startup/setup/no_games)
+    keep the wall rail.
     """
     mode = state.mode
 
@@ -932,11 +948,11 @@ def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, st
     elif mode == 'error':
         render_error(display, writer, regions, state, colors)
     elif mode == 'game':
-        render_game(display, writer, regions, state, colors, now_ms)
+        render_game(display, writer, regions, state, colors, now_ms, view_elapsed_ms, play_elapsed_ms)
     elif mode == 'pregame':
-        render_pregame(display, writer, regions, state, colors, now_ms)
+        render_pregame(display, writer, regions, state, colors, now_ms, view_elapsed_ms)
     elif mode == 'final':
-        render_final(display, writer, regions, state, colors, now_ms)
+        render_final(display, writer, regions, state, colors, now_ms, view_elapsed_ms)
     else:
         render_idle(display, writer, regions, colors)
 
@@ -993,6 +1009,18 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
     _hb_worst = 0
     _hb_last_report = _hb_prev_ms
 
+    # Frame rail: advances exactly FRAME_MS per loop tick, so motion derived
+    # from it holds position through a stalled frame instead of jumping (the
+    # wall clock keeps running through a GC pause; this clock doesn't).
+    # Core 0's epoch stamps (animation_start_ms, play.updated_ms) are in the
+    # ticks domain, so they are never subtracted against this rail directly —
+    # the latches below translate an epoch CHANGE into "frame-rail time zero".
+    anim_ms = 0
+    view_epoch_stamp = -1
+    view_epoch_anim = 0
+    play_epoch_stamp = -1
+    play_epoch_anim = 0
+
     deadline = time.ticks_ms()
 
     while True:
@@ -1015,6 +1043,15 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
             # Latch the latest committed state for this frame.
             state, seq = acquire_display_state()
 
+            # Advance the frame rail and re-latch epochs on change.
+            anim_ms += FRAME_MS
+            if state.animation_start_ms != view_epoch_stamp:
+                view_epoch_stamp = state.animation_start_ms
+                view_epoch_anim = anim_ms
+            if state.game.play.updated_ms != play_epoch_stamp:
+                play_epoch_stamp = state.game.play.updated_ms
+                play_epoch_anim = anim_ms
+
             toast_active = _toast_active(state, now_ms)
             skip = (seq == last_rendered_seq
                     and state.mode in _STATIC_MODES
@@ -1022,7 +1059,8 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
                     and not last_frame_had_toast)
 
             if not skip:
-                render_frame(display, writer, regions, state, state.ui_colors, now_ms)
+                render_frame(display, writer, regions, state, state.ui_colors, now_ms,
+                             anim_ms - view_epoch_anim, anim_ms - play_epoch_anim)
                 display.show()
                 last_rendered_seq = seq
                 last_frame_had_toast = toast_active
