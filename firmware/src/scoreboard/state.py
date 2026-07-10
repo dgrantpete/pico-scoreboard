@@ -1215,11 +1215,41 @@ def update_ui_colors(config: Config) -> None:
 
 _display_driver: Hub75Driver | None = None
 
+# The Regions instance, registered by main.py after display init, so config
+# updates can rebuild the variant-driven region tables at runtime (same
+# registration pattern as the driver below).
+_display_regions = None
+
 
 def set_display_driver(driver: Hub75Driver) -> None:
     """Set the display driver reference for runtime frequency updates."""
     global _display_driver
     _display_driver = driver
+
+
+def set_display_regions(regions) -> None:
+    """Register the Regions instance for runtime variant rebuilds."""
+    global _display_regions
+    _display_regions = regions
+
+
+def update_screen_variants(config: Config) -> None:
+    """Apply the configured screen-layout variants (config display.variants).
+
+    Sets the screen_geometry selectors first, then rebuilds the variant
+    Regions (when registered — at boot this runs before display init to
+    seed the selectors, and Regions are then built directly from them).
+    Applied live: the game-facing screens re-read geometry every frame.
+    Scroll dwell strings pre-built against the previous variant's widths
+    (set_pregame) refresh on the next poll commit.
+    """
+    v = config.screen_variants
+    active = screen_geometry.set_variants(
+        v.get("pregame"), v.get("final"), v.get("soccer_live")
+    )
+    if _display_regions is not None:
+        _display_regions.rebuild_variant_regions()
+    logger.debug("[CONFIG] screen variants: pregame=%s final=%s soccer=%s" % active)
 
 
 def update_display_frequency(config: Config) -> None:

@@ -42,7 +42,11 @@ _DEFAULTS = {
         "data_frequency_khz": 20000,
         "target_refresh_rate": 120,
         "gamma": {"type": "srgb"},
-        "blanking_time_ns": 0
+        "blanking_time_ns": 0,
+        # Screen layout variants (see scoreboard/screen_geometry.py tables).
+        # Applied live on config save — flip these from the settings page to
+        # compare layouts on the panel without a reboot.
+        "variants": {"pregame": "C", "final": "C", "soccer_live": "A"}
     },
     "colors": {
         "primary": {"r": 255, "g": 255, "b": 255},      # White - dividers, status text
@@ -356,6 +360,16 @@ class Config:
     def blanking_time_ns(self) -> int:
         """Blanking time in nanoseconds (0-3000)."""
         return self._data["display"]["blanking_time_ns"]
+
+    @property
+    def screen_variants(self) -> dict:
+        """Configured screen-layout variant letters (pregame/final/soccer_live).
+
+        Values are validated (and silently corrected) by
+        screen_geometry.set_variants; garbage here can't crash rendering.
+        """
+        v = self._data["display"].get("variants")
+        return v if isinstance(v, dict) else {}
 
     # Sports properties
     @property

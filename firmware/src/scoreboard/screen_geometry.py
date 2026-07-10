@@ -277,6 +277,25 @@ _SOCCER_FINAL = {
 }
 
 
+def set_variants(pregame: str | None, final: str | None, soccer_live: str | None) -> tuple:
+    """Apply configured layout variants (config `display.variants`).
+
+    Unknown letters are ignored (the current selection stays), so a
+    hand-edited config can't select a nonexistent table. Returns the active
+    (pregame, final, soccer_live) triple for logging. Callers that flip
+    variants at runtime must rebuild the display Regions afterwards
+    (state.update_screen_variants owns that sequencing).
+    """
+    global PREGAME_VARIANT, FINAL_VARIANT, SOCCER_LIVE_VARIANT
+    if pregame in _PREGAME:
+        PREGAME_VARIANT = pregame
+    if final in _FINAL:
+        FINAL_VARIANT = final
+    if soccer_live in _SOCCER_LIVE:
+        SOCCER_LIVE_VARIANT = soccer_live
+    return (PREGAME_VARIANT, FINAL_VARIANT, SOCCER_LIVE_VARIANT)
+
+
 def pregame_geometry() -> dict:
     """The active PREGAME variant's slot table."""
     return _PREGAME[PREGAME_VARIANT]

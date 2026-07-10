@@ -14,7 +14,8 @@ except ImportError:
 
 from scoreboard.state import (
     update_ui_colors, update_display_frequency,
-    update_display_refresh_rate, update_display_gamma, update_display_blanking_time
+    update_display_refresh_rate, update_display_gamma, update_display_blanking_time,
+    update_screen_variants
 )
 
 def create_api(config: Config, get_network_status: "Callable[[], dict]") -> Microdot:
@@ -57,6 +58,8 @@ def create_api(config: Config, get_network_status: "Callable[[], dict]") -> Micr
                 update_display_gamma(config)
             if 'blanking_time_ns' in data['display']:
                 update_display_blanking_time(config)
+            if 'variants' in data['display']:
+                update_screen_variants(config)
         return config.raw
 
     @api.get('/status')

@@ -23,6 +23,14 @@ export type GammaConfig =
 	| { type: "none" };
 
 // Display configuration
+// Screen layout variant letters (see firmware scoreboard/screen_geometry.py
+// tables). Applied live on save — no reboot.
+export interface VariantsConfig {
+	pregame: string;
+	final: string;
+	soccer_live: string;
+}
+
 export interface DisplayConfig {
 	brightness: number; // 0-100
 	poll_interval_seconds: number; // min: 1
@@ -31,6 +39,7 @@ export interface DisplayConfig {
 	target_refresh_rate: number; // 30-240 Hz
 	gamma: GammaConfig;
 	blanking_time_ns: number; // 0-3000 nanoseconds
+	variants: VariantsConfig;
 }
 
 export type DisplayConfigUpdate = Partial<DisplayConfig>;

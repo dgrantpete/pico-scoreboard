@@ -13,6 +13,7 @@
 	import BackendApiCard from "$lib/components/settings/BackendApiCard.svelte";
 	import GameCard from "$lib/components/settings/GameCard.svelte";
 	import SportsCard from "$lib/components/settings/SportsCard.svelte";
+	import ScreenLayoutsCard from "$lib/components/settings/ScreenLayoutsCard.svelte";
 	import DisplayCard from "$lib/components/settings/DisplayCard.svelte";
 	import ColorsCard from "$lib/components/settings/ColorsCard.svelte";
 	import AdvancedCard from "$lib/components/settings/AdvancedCard.svelte";
@@ -65,6 +66,7 @@
 		<BackendApiCard />
 		<GameCard />
 		<SportsCard />
+		<ScreenLayoutsCard />
 		<DisplayCard />
 		<ColorsCard />
 		<AdvancedCard />

@@ -243,14 +243,28 @@ class Regions:
         self.error_line_2 = Region(display, 0, 44, DISPLAY_WIDTH, 8)
         self.error_line_3 = Region(display, 0, 54, DISPLAY_WIDTH, 8)
 
-        # --- Pregame / final screens ---
-        # Built from the active screen_geometry variant table (name -> Region).
-        # Scalar entries (DIVIDER_X, SEPARATOR_Y) are read straight from the
-        # table by the renderer; only (X, Y, W, H) rects become Regions.
+        # --- Pregame / final / soccer screens ---
+        # Built from the active screen_geometry variant tables (name ->
+        # Region). Scalar entries (DIVIDER_X, SEPARATOR_Y) are read straight
+        # from the table by the renderer; only (X, Y, W, H) rects become
+        # Regions. Rebuilt at runtime when the configured variants change.
+        self.rebuild_variant_regions()
+
+    def rebuild_variant_regions(self) -> None:
+        """(Re)build the variant-driven region tables (pregame / final /
+        soccer) from the ACTIVE screen_geometry selections.
+
+        MUST be called on Core 0 only (same contract as update_for_qr).
+        Each table is built fresh and published with a single attribute
+        store, so the display thread sees either the old dict or the new
+        one — never a half-built table. A frame that latches the new
+        geometry constants against an old region dict can throw once; the
+        render loop's per-frame try/except absorbs it and the next frame is
+        consistent.
+        """
+        display = self._display
         self.pregame = self._build_geometry_regions(display, screen_geometry.pregame_geometry())
         self.final = self._build_geometry_regions(display, screen_geometry.final_geometry())
-
-        # --- Soccer screens ---
         self.soccer_live = self._build_geometry_regions(display, screen_geometry.soccer_live_geometry())
         self.soccer_final = self._build_geometry_regions(display, screen_geometry.soccer_final_geometry())
 

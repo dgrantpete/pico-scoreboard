@@ -992,8 +992,14 @@ if __name__ == '__main__':
     # thread is spawned — once the thread is running, Core 0 must not touch
     # the framebuffer directly.
     logger.debug("[MAIN] display init started")
+    # Seed the screen-layout variant selectors from config BEFORE Regions are
+    # built (regions not registered yet -> selectors only), then register the
+    # built Regions so later config saves can rebuild them live.
+    from scoreboard.state import update_screen_variants, set_display_regions
+    update_screen_variants(config)
     driver, display, writer, regions = init_display(config)
     set_display_driver(driver)
+    set_display_regions(regions)
     logger.debug("[MAIN] display initialized")
 
     # Pre-compute UI colors so the first rendered frame has correct colors
