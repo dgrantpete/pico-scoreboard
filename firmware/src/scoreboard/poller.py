@@ -35,7 +35,7 @@ from .display import LogoPool, play_text_display_ms
 from . import mlb
 from . import nba
 from . import soccer
-from .mlb import (
+from .wire import (
     DeserializeError,
     GAME_STATE_PRE,
     GAME_STATE_IN,

@@ -26,13 +26,14 @@ from pathlib import Path
 
 FIRMWARE_SRC = Path(__file__).resolve().parent.parent / "firmware" / "src"
 
-# Import scoreboard.mlb WITHOUT executing scoreboard/__init__.py (which pulls
+# Import the scoreboard modules WITHOUT executing scoreboard/__init__.py (which pulls
 # in MicroPython-only modules like hub75): pre-seed sys.modules with a
 # synthetic package whose __path__ points at the real directory, so the
 # import machinery resolves submodules but never runs the package init.
 _pkg = types.ModuleType("scoreboard")
 _pkg.__path__ = [str(FIRMWARE_SRC / "scoreboard")]
 sys.modules["scoreboard"] = _pkg
+wire = importlib.import_module("scoreboard.wire")
 mlb = importlib.import_module("scoreboard.mlb")
 nba = importlib.import_module("scoreboard.nba")
 soccer = importlib.import_module("scoreboard.soccer")
@@ -49,7 +50,7 @@ def _str(s: str) -> bytes:
 
 
 def encode_list(entries: list[tuple[int, str]]) -> bytes:
-    out = bytearray([mlb.WIRE_VERSION, len(entries)])
+    out = bytearray([wire.WIRE_VERSION, len(entries)])
     for state, game_id in entries:
         out.append(state)
         out += _str(game_id)
@@ -61,7 +62,7 @@ def encode_live(
     away_score, home_score, away_pri, away_alt, home_pri, home_alt,
     game_id, away_abbr, home_abbr, pitcher, batter, last_play_id, last_play_text,
 ) -> bytes:
-    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_IN])
+    out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_IN])
     out += struct.pack(
         "<BBBBBBBHHIIII",
         flags, inning_number, half, balls, strikes, outs, bases,
@@ -80,7 +81,7 @@ def encode_pregame(
     game_id, away_abbr, home_abbr, venue,
     condition, away_probable, home_probable,
 ) -> bytes:
-    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_PRE])
+    out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_PRE])
     out += struct.pack(
         "<BBHHHHIIIII",
         flags, temperature, away_wins, away_losses, home_wins, home_losses,
@@ -101,7 +102,7 @@ def encode_final(
     away_pri, away_alt, home_pri, home_alt,
     game_id, away_abbr, home_abbr,
 ) -> bytes:
-    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_POST])
+    out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_POST])
     out += struct.pack(
         "<BBBHHIIII",
         innings_played, len(away_line), len(home_line), away_score, home_score,
@@ -118,7 +119,7 @@ def encode_soccer_live(
     game_id, away_abbr, home_abbr, event_clock, event_name,
     comment_id="", comment_text="",
 ) -> bytes:
-    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_IN])
+    out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_IN])
     out += struct.pack(
         "<BBHHHIIII",
         flags, half, clock_seconds, away_score, home_score,
@@ -136,7 +137,7 @@ def encode_soccer_pregame(
     *, start_time, away_pri, away_alt, home_pri, home_alt,
     game_id, away_abbr, home_abbr,
 ) -> bytes:
-    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_PRE])
+    out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_PRE])
     out += struct.pack("<IIIII", start_time, away_pri, away_alt, home_pri, home_alt)
     out += _str(game_id) + _str(away_abbr) + _str(home_abbr)
     return bytes(out)
@@ -147,7 +148,7 @@ def encode_nba_live(
     away_pri, away_alt, home_pri, home_alt,
     game_id, away_abbr, home_abbr, clock, last_play_id, last_play_text,
 ) -> bytes:
-    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_IN])
+    out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_IN])
     out += struct.pack(
         "<BBBHHIIII",
         flags, period, phase, away_score, home_score,
@@ -164,7 +165,7 @@ def encode_nba_pregame(
     start_time, away_pri, away_alt, home_pri, home_alt,
     game_id, away_abbr, home_abbr, venue,
 ) -> bytes:
-    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_PRE])
+    out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_PRE])
     out += struct.pack(
         "<BHHHHIIIII",
         flags, away_wins, away_losses, home_wins, home_losses,
@@ -179,7 +180,7 @@ def encode_nba_final(
     away_pri, away_alt, home_pri, home_alt,
     game_id, away_abbr, home_abbr,
 ) -> bytes:
-    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_POST])
+    out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_POST])
     out += struct.pack(
         "<BBBHHIIII",
         periods_played, len(away_line), len(home_line), away_score, home_score,
@@ -194,7 +195,7 @@ def encode_soccer_final(
     *, away_score, home_score, away_pri, away_alt, home_pri, home_alt,
     game_id, away_abbr, home_abbr, away_scorers, home_scorers,
 ) -> bytes:
-    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_POST])
+    out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_POST])
     out += struct.pack("<HHIIII", away_score, home_score, away_pri, away_alt, home_pri, home_alt)
     out += _str(game_id) + _str(away_abbr) + _str(home_abbr)
     out += _str(away_scorers) + _str(home_scorers)
@@ -213,9 +214,9 @@ _V1_FULL = bytes.fromhex(
 )
 
 LIST_ENTRIES = [
-    (mlb.GAME_STATE_POST, "401570729"),
-    (mlb.GAME_STATE_PRE, "401570001"),
-    (mlb.GAME_STATE_IN, "401570500"),
+    (wire.GAME_STATE_POST, "401570729"),
+    (wire.GAME_STATE_PRE, "401570001"),
+    (wire.GAME_STATE_IN, "401570500"),
 ]
 
 LIVE_FULL = dict(
@@ -550,9 +551,9 @@ def check_rust_pins() -> None:
     ) == RUST_PIN_FINAL
 
     assert encode_list([
-        (mlb.GAME_STATE_PRE, "401570729"),
-        (mlb.GAME_STATE_IN, "401570001"),
-        (mlb.GAME_STATE_POST, "401570002"),
+        (wire.GAME_STATE_PRE, "401570729"),
+        (wire.GAME_STATE_IN, "401570001"),
+        (wire.GAME_STATE_POST, "401570002"),
     ]) == RUST_PIN_LIST
 
     # And the firmware parser accepts the Rust bytes directly.
@@ -594,14 +595,14 @@ def check_rust_pins() -> None:
 # --- Round-trip checks ------------------------------------------------------
 
 def check_list() -> None:
-    games = mlb.parse_game_list(memoryview(GOLDEN_LIST))
+    games = wire.parse_game_list(memoryview(GOLDEN_LIST))
     assert games == LIST_ENTRIES, games
 
 
 def check_live_full() -> None:
     # Pins the plan invariant: a v2 live payload is the v1 body with its single
     # version byte replaced by the 2-byte version+state header.
-    assert GOLDEN_LIVE_FULL == bytes([mlb.WIRE_VERSION, mlb.GAME_STATE_IN]) + _V1_FULL[1:]
+    assert GOLDEN_LIVE_FULL == bytes([wire.WIRE_VERSION, wire.GAME_STATE_IN]) + _V1_FULL[1:]
 
     game = mlb.parse_game_detail(memoryview(GOLDEN_LIVE_FULL))
     assert isinstance(game, mlb.LiveGame)
@@ -806,13 +807,13 @@ def check_nba_rejections() -> None:
     def expect_error(payload: bytes, why: str) -> None:
         try:
             nba.parse_game_detail(memoryview(payload))
-        except mlb.DeserializeError:
+        except wire.DeserializeError:
             return
         raise AssertionError(f"accepted invalid NBA payload: {why}")
 
     expect_error(b"", "empty payload")
     expect_error(bytes([3]) + GOLDEN_NBA_LIVE_FULL[1:], "future version")
-    expect_error(bytes([mlb.WIRE_VERSION, 9]), "unknown state")
+    expect_error(bytes([wire.WIRE_VERSION, 9]), "unknown state")
     expect_error(GOLDEN_NBA_LIVE_FULL[:20], "truncated NBA live fixed section")
     expect_error(GOLDEN_NBA_LIVE_FULL[:-3], "truncated inside last play text")
     expect_error(GOLDEN_NBA_LIVE_FULL + b"\x00", "trailing bytes after live")
@@ -916,13 +917,13 @@ def check_soccer_rejections() -> None:
     def expect_error(payload: bytes, why: str) -> None:
         try:
             soccer.parse_game_detail(memoryview(payload), "MLS")
-        except mlb.DeserializeError:
+        except wire.DeserializeError:
             return
         raise AssertionError(f"accepted invalid soccer payload: {why}")
 
     expect_error(b"", "empty payload")
     expect_error(bytes([3]) + GOLDEN_SOCCER_LIVE_FULL[1:], "future version")
-    expect_error(bytes([mlb.WIRE_VERSION, 9]), "unknown state")
+    expect_error(bytes([wire.WIRE_VERSION, 9]), "unknown state")
     expect_error(GOLDEN_SOCCER_LIVE_FULL[:20], "truncated soccer live fixed section")
     expect_error(GOLDEN_SOCCER_LIVE_FULL[:-3], "truncated inside event athlete")
     expect_error(GOLDEN_SOCCER_LIVE_FULL + b"\x00", "trailing bytes after live")
@@ -938,14 +939,14 @@ def check_rejections() -> None:
     def expect_error(payload: bytes, why: str) -> None:
         try:
             mlb.parse_game_detail(memoryview(payload))
-        except mlb.DeserializeError:
+        except wire.DeserializeError:
             return
         raise AssertionError(f"accepted invalid payload: {why}")
 
     expect_error(b"", "empty payload")
     expect_error(b"{" + GOLDEN_LIVE_FULL[1:], "JSON body masquerading (bad version)")
     expect_error(bytes([3]) + GOLDEN_LIVE_FULL[1:], "future version")
-    expect_error(bytes([mlb.WIRE_VERSION, 9]) + GOLDEN_LIVE_FULL[2:], "unknown state")
+    expect_error(bytes([wire.WIRE_VERSION, 9]) + GOLDEN_LIVE_FULL[2:], "unknown state")
     expect_error(GOLDEN_LIVE_FULL[:20], "truncated live fixed section")
     expect_error(GOLDEN_LIVE_FULL[:-5], "truncated inside final live string")
     expect_error(GOLDEN_LIVE_FULL + b"\x00", "trailing bytes after live")
@@ -965,8 +966,8 @@ def check_rejections() -> None:
 
     def expect_list_error(payload: bytes, why: str) -> None:
         try:
-            mlb.parse_game_list(memoryview(payload))
-        except mlb.DeserializeError:
+            wire.parse_game_list(memoryview(payload))
+        except wire.DeserializeError:
             return
         raise AssertionError(f"accepted invalid list: {why}")
 

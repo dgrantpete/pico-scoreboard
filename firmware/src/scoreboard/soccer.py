@@ -16,27 +16,24 @@ polls from a ticks_ms anchor (see state.SoccerLiveView), which a string
 cannot support.
 
 Shared value types (TeamColors, TeamState, PregameTeam) and the wire
-primitives (version check, string reader, state codes, the sport-agnostic
-game-list parser) are reused from scoreboard.mlb — a shared-module split is
-deferred until a third sport needs them.
+primitives (version check, string reader, state codes) come from
+scoreboard.wire — same contract as scoreboard/mlb.py and scoreboard/nba.py.
 """
 
 import struct
 
-from .mlb import (
+from .wire import (
     DeserializeError,
     GAME_STATE_IN,
     GAME_STATE_POST,
     GAME_STATE_PRE,
+    HDR_SIZE,
     PregameTeam,
     TeamColors,
     TeamState,
-    _check_version,
-    _read_str,
+    check_version,
+    read_str,
 )
-
-# Common detail header: byte0 = version, byte1 = state (mlb.WIRE_VERSION).
-_HDR_SIZE = 2
 
 # Live fixed section (offset 2): flags, half, clock_seconds u16, away/home
 # score u16, then away/home color pairs u32.
@@ -141,27 +138,27 @@ class LiveGame:
     def from_struct(cls, buf) -> "LiveGame":
         """Parse a soccer live payload (see backend/src/wire.rs)."""
         end = len(buf)
-        _check_version(buf, end)
-        if end < _HDR_SIZE + _LIVE_SIZE:
+        check_version(buf, end)
+        if end < HDR_SIZE + _LIVE_SIZE:
             raise DeserializeError(
-                "@2", f"truncated fixed section: {end} < {_HDR_SIZE + _LIVE_SIZE}"
+                "@2", f"truncated fixed section: {end} < {HDR_SIZE + _LIVE_SIZE}"
             )
 
         (
             flags, half, clock_seconds,
             away_score, home_score,
             away_primary, away_alternate, home_primary, home_alternate,
-        ) = struct.unpack_from(_LIVE_FMT, buf, _HDR_SIZE)
+        ) = struct.unpack_from(_LIVE_FMT, buf, HDR_SIZE)
 
-        o = _HDR_SIZE + _LIVE_SIZE  # 26
-        game_id, o = _read_str(buf, o, end, "game_id")
-        away_abbr, o = _read_str(buf, o, end, "away abbreviation")
-        home_abbr, o = _read_str(buf, o, end, "home abbreviation")
+        o = HDR_SIZE + _LIVE_SIZE  # 26
+        game_id, o = read_str(buf, o, end, "game_id")
+        away_abbr, o = read_str(buf, o, end, "away abbreviation")
+        home_abbr, o = read_str(buf, o, end, "home abbreviation")
 
         last_event: LastEvent | None = None
         if flags & _FLAG_EVENT:
-            event_clock, o = _read_str(buf, o, end, "event clock")
-            event_name, o = _read_str(buf, o, end, "event athlete")
+            event_clock, o = read_str(buf, o, end, "event clock")
+            event_name, o = read_str(buf, o, end, "event athlete")
             if flags & _FLAG_EVENT_AWAY:
                 side = SIDE_AWAY
             elif flags & _FLAG_EVENT_HOME:
@@ -174,8 +171,8 @@ class LiveGame:
         comment_id = ''
         comment_text = ''
         if flags & _FLAG_COMMENTARY:
-            comment_id, o = _read_str(buf, o, end, "commentary id")
-            comment_text, o = _read_str(buf, o, end, "commentary text")
+            comment_id, o = read_str(buf, o, end, "commentary id")
+            comment_text, o = read_str(buf, o, end, "commentary text")
 
         if o != end:
             raise DeserializeError(f"@{o}", f"{end - o} unexpected trailing bytes")
@@ -224,21 +221,21 @@ class PregameGame:
         endpoint it hit).
         """
         end = len(buf)
-        _check_version(buf, end)
-        if end < _HDR_SIZE + _PRE_SIZE:
+        check_version(buf, end)
+        if end < HDR_SIZE + _PRE_SIZE:
             raise DeserializeError(
-                "@2", f"truncated fixed section: {end} < {_HDR_SIZE + _PRE_SIZE}"
+                "@2", f"truncated fixed section: {end} < {HDR_SIZE + _PRE_SIZE}"
             )
 
         (
             start_time,
             away_primary, away_alternate, home_primary, home_alternate,
-        ) = struct.unpack_from(_PRE_FMT, buf, _HDR_SIZE)
+        ) = struct.unpack_from(_PRE_FMT, buf, HDR_SIZE)
 
-        o = _HDR_SIZE + _PRE_SIZE  # 22
-        game_id, o = _read_str(buf, o, end, "game_id")
-        away_abbr, o = _read_str(buf, o, end, "away abbreviation")
-        home_abbr, o = _read_str(buf, o, end, "home abbreviation")
+        o = HDR_SIZE + _PRE_SIZE  # 22
+        game_id, o = read_str(buf, o, end, "game_id")
+        away_abbr, o = read_str(buf, o, end, "away abbreviation")
+        home_abbr, o = read_str(buf, o, end, "home abbreviation")
 
         if o != end:
             raise DeserializeError(f"@{o}", f"{end - o} unexpected trailing bytes")
@@ -292,23 +289,23 @@ class FinalGame:
     def from_struct(cls, buf) -> "FinalGame":
         """Parse a soccer full-time payload (see backend/src/wire.rs)."""
         end = len(buf)
-        _check_version(buf, end)
-        if end < _HDR_SIZE + _FINAL_SIZE:
+        check_version(buf, end)
+        if end < HDR_SIZE + _FINAL_SIZE:
             raise DeserializeError(
-                "@2", f"truncated fixed section: {end} < {_HDR_SIZE + _FINAL_SIZE}"
+                "@2", f"truncated fixed section: {end} < {HDR_SIZE + _FINAL_SIZE}"
             )
 
         (
             away_score, home_score,
             away_primary, away_alternate, home_primary, home_alternate,
-        ) = struct.unpack_from(_FINAL_FMT, buf, _HDR_SIZE)
+        ) = struct.unpack_from(_FINAL_FMT, buf, HDR_SIZE)
 
-        o = _HDR_SIZE + _FINAL_SIZE  # 22
-        game_id, o = _read_str(buf, o, end, "game_id")
-        away_abbr, o = _read_str(buf, o, end, "away abbreviation")
-        home_abbr, o = _read_str(buf, o, end, "home abbreviation")
-        away_scorers, o = _read_str(buf, o, end, "away scorers")
-        home_scorers, o = _read_str(buf, o, end, "home scorers")
+        o = HDR_SIZE + _FINAL_SIZE  # 22
+        game_id, o = read_str(buf, o, end, "game_id")
+        away_abbr, o = read_str(buf, o, end, "away abbreviation")
+        home_abbr, o = read_str(buf, o, end, "home abbreviation")
+        away_scorers, o = read_str(buf, o, end, "away scorers")
+        home_scorers, o = read_str(buf, o, end, "home scorers")
 
         if o != end:
             raise DeserializeError(f"@{o}", f"{end - o} unexpected trailing bytes")
@@ -327,8 +324,8 @@ def parse_game_detail(buf, league: str) -> "LiveGame | PregameGame | FinalGame":
     model (live/final don't need it).
     """
     end = len(buf)
-    _check_version(buf, end)
-    if end < _HDR_SIZE:
+    check_version(buf, end)
+    if end < HDR_SIZE:
         raise DeserializeError("@1", "truncated before state byte")
     state = buf[1]
     if state == GAME_STATE_IN:

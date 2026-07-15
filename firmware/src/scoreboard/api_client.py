@@ -14,7 +14,7 @@ import uasyncio as asyncio
 from .config import Config
 import scoreboard.logger as logger
 from .logger import DEBUG
-from .mlb import (
+from .wire import (
     parse_game_list,
     STRUCT_CONTENT_TYPE,
 )
