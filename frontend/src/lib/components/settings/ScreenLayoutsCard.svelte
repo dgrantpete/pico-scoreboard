@@ -3,7 +3,20 @@
 	import type { VariantsConfig } from "$lib/api/types";
 
 	// Mirrors the variant tables in firmware scoreboard/screen_geometry.py.
-	// Applied live on save, so layouts can be compared on the panel quickly.
+	// Keys are per sport × screen so every sport's look can be tuned
+	// independently. Applied live on save, so layouts can be compared on the
+	// panel quickly. The option lists are shared while the sports still ship
+	// the same designs; they fork alongside the firmware tables.
+	const PREGAME_OPTIONS = [
+		{ value: "A", label: "A — Cycling ledger" },
+		{ value: "B", label: "B — All at once" },
+		{ value: "C", label: "C — Big time" },
+	];
+	const FINAL_OPTIONS = [
+		{ value: "A", label: "A — Marquee + boxscore" },
+		{ value: "B", label: "B — Stacked ledger" },
+		{ value: "C", label: "C — Line-score forward" },
+	];
 	const LAYOUTS: {
 		key: keyof VariantsConfig;
 		label: string;
@@ -11,24 +24,34 @@
 		options: { value: string; label: string }[];
 	}[] = [
 		{
-			key: "pregame",
-			label: "Pregame",
-			hint: "Upcoming-game screen (both sports)",
-			options: [
-				{ value: "A", label: "A — Cycling ledger" },
-				{ value: "B", label: "B — All at once" },
-				{ value: "C", label: "C — Big time" },
-			],
+			key: "mlb_pregame",
+			label: "MLB Pregame",
+			hint: "Upcoming-game screen for baseball",
+			options: PREGAME_OPTIONS,
 		},
 		{
-			key: "final",
-			label: "Baseball Final",
-			hint: "MLB final screen with the line score",
-			options: [
-				{ value: "A", label: "A — Marquee + boxscore" },
-				{ value: "B", label: "B — Stacked ledger" },
-				{ value: "C", label: "C — Line-score forward" },
-			],
+			key: "mlb_final",
+			label: "MLB Final",
+			hint: "Baseball final screen with the line score",
+			options: FINAL_OPTIONS,
+		},
+		{
+			key: "nba_pregame",
+			label: "NBA Pregame",
+			hint: "Upcoming-game screen for basketball",
+			options: PREGAME_OPTIONS,
+		},
+		{
+			key: "nba_final",
+			label: "NBA Final",
+			hint: "Basketball final screen with the quarter line score",
+			options: FINAL_OPTIONS,
+		},
+		{
+			key: "soccer_pregame",
+			label: "Soccer Pregame",
+			hint: "Upcoming-match screen for soccer",
+			options: PREGAME_OPTIONS,
 		},
 		{
 			key: "soccer_live",

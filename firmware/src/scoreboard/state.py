@@ -323,6 +323,9 @@ class PregameView:
         self.weather_strip = None
         self.away_pitcher_strip = None
         self.home_pitcher_strip = None
+        # Sport-scoped variant key ('mlb_...'), stamped by the
+        # setter; selects geometry + regions for this view's sport.
+        self.variant_key: str = 'mlb_pregame'
 
     def copy_from(self, other: "PregameView") -> None:
         self.game_id = other.game_id
@@ -351,6 +354,7 @@ class PregameView:
         self.away_pitcher_strip = other.away_pitcher_strip
         self.home_pitcher_strip = other.home_pitcher_strip
         self.alt_ends = other.alt_ends
+        self.variant_key = other.variant_key
 
 
 class FinalView:
@@ -376,6 +380,9 @@ class FinalView:
         self.home_won: bool = False
         self.away_color: int = 0xFFFF
         self.home_color: int = 0xFFFF
+        # Sport-scoped variant key ('mlb_...'), stamped by the
+        # setter; selects geometry + regions for this view's sport.
+        self.variant_key: str = 'mlb_final'
 
     def copy_from(self, other: "FinalView") -> None:
         self.game_id = other.game_id
@@ -392,6 +399,7 @@ class FinalView:
         self.home_won = other.home_won
         self.away_color = other.away_color
         self.home_color = other.home_color
+        self.variant_key = other.variant_key
 
 
 class SoccerLiveView:
@@ -1046,7 +1054,8 @@ def _build_pregame_cycle(entries: list, width: int) -> tuple:
     return labels, texts, bigs, ends, strips
 
 
-def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None) -> None:
+def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None,
+                sport: str = 'mlb') -> None:
     """Publish a pregame screen from a parsed PregameGame.
 
     Pre-builds record strings, local first-pitch time ("7:05 PM"; omitted
@@ -1064,6 +1073,7 @@ def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None) -> None:
     state = get_write_state()
     view_changed = state.mode != 'pregame' or state.pregame.game_id != game.game_id
     state.mode = 'pregame'
+    state.pregame.variant_key = sport + '_pregame'
     if view_changed:
         state.animation_start_ms = time.ticks_ms()
     state.away_logo = away_logo
@@ -1120,7 +1130,7 @@ def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None) -> None:
         _HOME_PITCHER_POOL.render(pv.home_pitcher, spleen_5x8) if pv.home_pitcher else None
     )
 
-    width = screen_geometry.pregame_value_width()
+    width = screen_geometry.pregame_value_width(state.pregame.variant_key)
     labels, texts, bigs, ends, strips = _build_pregame_cycle(
         [("VENUE", pv.venue_text, False, venue_strip),
          ("1ST PITCH", pv.time_text, True, None),
@@ -1208,6 +1218,7 @@ def set_final(game, home_logo, away_logo) -> None:
     state.home_logo = home_logo
     fv = state.final
     fv.game_id = game.game_id
+    fv.variant_key = 'mlb_final'
 
     away = game.away
     home = game.home
@@ -1406,6 +1417,7 @@ def set_nba_final(game, home_logo, away_logo) -> None:
     state.home_logo = home_logo
     fv = state.final
     fv.game_id = game.game_id
+    fv.variant_key = 'nba_final'
 
     away = game.away
     home = game.home
@@ -1485,13 +1497,10 @@ def update_screen_variants(config: Config) -> None:
     Scroll dwell strings pre-built against the previous variant's widths
     (set_pregame) refresh on the next poll commit.
     """
-    v = config.screen_variants
-    active = screen_geometry.set_variants(
-        v.get("pregame"), v.get("final"), v.get("soccer_live")
-    )
+    active = screen_geometry.set_variants(config.screen_variants)
     if _display_regions is not None:
         _display_regions.rebuild_variant_regions()
-    logger.debug("[CONFIG] screen variants: pregame=%s final=%s soccer=%s" % active)
+    logger.debug("[CONFIG] screen variants: %s" % (active,))
 
 
 def update_show_dividers(config: Config) -> None:

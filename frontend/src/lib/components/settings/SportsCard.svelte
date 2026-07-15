@@ -1,5 +1,18 @@
 <script lang="ts">
 	import { settingsStore } from "$lib/stores/settings.svelte";
+	import type { Config } from "$lib/api/types";
+
+	// Single-league sports ({enabled} config shape): one registry row per
+	// sport; a 4th sport is one entry here. Multi-league sports ({leagues[]}
+	// shape) get a slug list like SOCCER_LEAGUES below.
+	const ENABLED_SPORTS: {
+		key: keyof Config["sports"] & ("mlb" | "nba");
+		label: string;
+		hint: string;
+	}[] = [
+		{ key: "mlb", label: "MLB", hint: "Major League Baseball" },
+		{ key: "nba", label: "NBA", hint: "National Basketball Association" },
+	];
 
 	// Mirrors the firmware's league registry (scoreboard/soccer.py
 	// LEAGUE_NAMES / backend espn/league.rs). Values are ESPN league slugs.
@@ -9,6 +22,11 @@
 		{ slug: "mex.1", label: "Liga MX", hint: "Mexican top flight" },
 		{ slug: "fifa.world", label: "World Cup", hint: "FIFA World Cup" },
 	];
+
+	function toggleSport(key: "mlb" | "nba") {
+		const current = settingsStore.config?.sports[key]?.enabled ?? false;
+		settingsStore.updateSports(key, { enabled: !current });
+	}
 
 	function toggleLeague(slug: string) {
 		const current = settingsStore.config?.sports.soccer.leagues ?? [];
@@ -29,41 +47,22 @@
 			</p>
 		</header>
 		<div class="card-content">
-			<div class="row-between">
-				<div class="label-group">
-					<span class="label-text">MLB</span>
-					<p class="text-sm text-muted">Major League Baseball</p>
+			{#each ENABLED_SPORTS as sport (sport.key)}
+				<div class="row-between">
+					<div class="label-group">
+						<span class="label-text">{sport.label}</span>
+						<p class="text-sm text-muted">{sport.hint}</p>
+					</div>
+					<label class="switch">
+						<input
+							type="checkbox"
+							checked={config.sports[sport.key].enabled}
+							onchange={() => toggleSport(sport.key)}
+						/>
+						<span class="switch-track"><span class="switch-thumb"></span></span>
+					</label>
 				</div>
-				<label class="switch">
-					<input
-						type="checkbox"
-						checked={config.sports.mlb.enabled}
-						onchange={() =>
-							settingsStore.updateSports("mlb", {
-								enabled: !settingsStore.config?.sports.mlb.enabled,
-							})}
-					/>
-					<span class="switch-track"><span class="switch-thumb"></span></span>
-				</label>
-			</div>
-
-			<div class="row-between">
-				<div class="label-group">
-					<span class="label-text">NBA</span>
-					<p class="text-sm text-muted">National Basketball Association</p>
-				</div>
-				<label class="switch">
-					<input
-						type="checkbox"
-						checked={config.sports.nba.enabled}
-						onchange={() =>
-							settingsStore.updateSports("nba", {
-								enabled: !settingsStore.config?.sports.nba.enabled,
-							})}
-					/>
-					<span class="switch-track"><span class="switch-thumb"></span></span>
-				</label>
-			</div>
+			{/each}
 
 			<hr class="separator" />
 

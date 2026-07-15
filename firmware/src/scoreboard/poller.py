@@ -89,9 +89,10 @@ class LeagueSource:
     never collide with another league's "POR".
     """
 
-    def __init__(self, key: str, tag: str, base_path: str, parse,
+    def __init__(self, key: str, sport: str, tag: str, base_path: str, parse,
                  commit_live, commit_final) -> None:
         self.key = key            # e.g. "baseball/mlb", "soccer/usa.1"
+        self.sport = sport        # 'mlb' / 'nba' / 'soccer' — variant scoping
         self.tag = tag            # log tag, e.g. "MLB", "USA.1"
         self.base_path = base_path  # e.g. "/baseball/mlb", "/soccer/usa.1"
         self.parse = parse
@@ -176,12 +177,12 @@ def _commit_nba_live(poller, game_id: str, live, home_logo, away_logo) -> None:
 
 
 def mlb_source() -> LeagueSource:
-    return LeagueSource("baseball/mlb", "MLB", "/baseball/mlb",
+    return LeagueSource("baseball/mlb", "mlb", "MLB", "/baseball/mlb",
                         mlb.parse_game_detail, _commit_mlb_live, set_final)
 
 
 def nba_source() -> LeagueSource:
-    return LeagueSource("basketball/nba", "NBA", "/basketball/nba",
+    return LeagueSource("basketball/nba", "nba", "NBA", "/basketball/nba",
                         nba.parse_game_detail, _commit_nba_live, set_nba_final)
 
 
@@ -191,7 +192,7 @@ def soccer_source(slug: str) -> LeagueSource:
     def parse(buf):
         return soccer.parse_game_detail(buf, league_name)
 
-    return LeagueSource("soccer/" + slug, slug.upper(), "/soccer/" + slug,
+    return LeagueSource("soccer/" + slug, "soccer", slug.upper(), "/soccer/" + slug,
                         parse, _commit_soccer_live, set_soccer_final)
 
 
@@ -551,7 +552,8 @@ class GamePoller:
         if ws == GAME_STATE_IN:
             source.commit_live(self, game_id, detail, home_logo, away_logo)
         elif ws == GAME_STATE_PRE:
-            set_pregame(detail, home_logo, away_logo, self._utc_offset_s)
+            set_pregame(detail, home_logo, away_logo, self._utc_offset_s,
+                        source.sport)
         elif ws == GAME_STATE_POST:
             source.commit_final(detail, home_logo, away_logo)
         else:

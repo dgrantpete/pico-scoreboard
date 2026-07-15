@@ -319,11 +319,19 @@ class Regions:
         consistent.
         """
         display = self._display
-        self.pregame = self._build_geometry_regions(display, screen_geometry.pregame_geometry())
-        self.final = self._build_geometry_regions(display, screen_geometry.final_geometry())
-        self.soccer_live = self._build_geometry_regions(display, screen_geometry.soccer_live_geometry())
-        self.soccer_final = self._build_geometry_regions(display, screen_geometry.soccer_final_geometry())
-        self.nba_live = self._build_geometry_regions(display, screen_geometry.nba_live_geometry())
+        # One region dict per sport x screen key. Keys whose active tables
+        # are the same object (sports still sharing a design) share one
+        # built dict, so the split costs no extra Region objects until a
+        # design actually diverges.
+        built: dict = {}
+        by_table: dict = {}
+        for key in screen_geometry.variant_keys():
+            table = screen_geometry.geometry_for(key)
+            tid = id(table)
+            if tid not in by_table:
+                by_table[tid] = self._build_geometry_regions(display, table)
+            built[key] = by_table[tid]
+        self.variant = built
 
     @staticmethod
     def _build_geometry_regions(display, table: dict) -> dict:
@@ -1034,9 +1042,9 @@ def render_pregame(display: Hub75Display, writer: FontWriter, regions: Regions, 
     display.fill(BLACK)
 
     pv = state.pregame
-    geo = screen_geometry.pregame_geometry()
-    variant = screen_geometry.PREGAME_VARIANT
-    R = regions.pregame
+    geo = screen_geometry.geometry_for(pv.variant_key)
+    variant = screen_geometry.active_variant(pv.variant_key)
+    R = regions.variant[pv.variant_key]
     elapsed = view_elapsed_ms  # frame rail: motion holds, never jumps
 
     # --- Logos ---
@@ -1137,8 +1145,8 @@ def render_final(display: Hub75Display, writer: FontWriter, regions: Regions, st
     display.fill(BLACK)
 
     fv = state.final
-    geo = screen_geometry.final_geometry()
-    R = regions.final
+    geo = screen_geometry.geometry_for(fv.variant_key)
+    R = regions.variant[fv.variant_key]
     elapsed = view_elapsed_ms  # frame rail: motion holds, never jumps
 
     if fv.home_won:
@@ -1284,8 +1292,8 @@ def render_soccer_live(display: Hub75Display, writer: FontWriter, regions: Regio
     display.fill(BLACK)
 
     sv = state.soccer_live
-    geo = screen_geometry.soccer_live_geometry()
-    R = regions.soccer_live
+    geo = screen_geometry.geometry_for('soccer_live')
+    R = regions.variant['soccer_live']
     elapsed = view_elapsed_ms  # frame rail: motion holds, never jumps
 
     # --- Dividers ---
@@ -1364,8 +1372,8 @@ def render_nba_live(display: Hub75Display, writer: FontWriter, regions: Regions,
     display.fill(BLACK)
 
     nv = state.nba_live
-    geo = screen_geometry.nba_live_geometry()
-    R = regions.nba_live
+    geo = screen_geometry.geometry_for('nba_live')
+    R = regions.variant['nba_live']
 
     # --- Dividers ---
     if screen_geometry.SHOW_DIVIDERS:
@@ -1423,8 +1431,8 @@ def render_soccer_final(display: Hub75Display, writer: FontWriter, regions: Regi
     display.fill(BLACK)
 
     fv = state.soccer_final
-    geo = screen_geometry.soccer_final_geometry()
-    R = regions.soccer_final
+    geo = screen_geometry.geometry_for('soccer_final')
+    R = regions.variant['soccer_final']
     elapsed = view_elapsed_ms  # frame rail: motion holds, never jumps
 
     if fv.draw:

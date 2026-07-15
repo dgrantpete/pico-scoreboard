@@ -9,11 +9,15 @@ round-trip would buy nothing. Their rectangles live here as plain code, the
 same way the startup / idle / error regions are code-defined in
 `display.Regions.__init__`.
 
-Each screen offers three design variants (A/B/C). `PREGAME_VARIANT` and
-`FINAL_VARIANT` select the active table independently -- the user may mix,
-e.g. pregame "B" with final "A". The desktop preview flips these module
-constants per variant column (see tools/preview/variants.py); the firmware
-ships whichever letter the user picks.
+Variant selection is scoped PER SPORT x SCREEN (config `display.variants`
+keys like `mlb_pregame`, `soccer_live`): each key picks a letter from its
+table set independently, so any sport's screen can diverge without touching
+the others. Table sets start as shared references (the sports currently
+ship identical designs); forking a sport's look = write a new table dict
+and point that key's entry at it. Keys with a single design (soccer_final,
+nba_live) live in the same registry for uniform access but are not exposed
+in config until a second design exists. The desktop preview overrides the
+`_ACTIVE` selection dict per variant column (see tools/preview/variants.py).
 
 Geometry tables map a slot NAME to either:
   * a 4-tuple ``(X, Y, W, H)`` -- built into a `Region` by `display.Regions`
@@ -27,12 +31,6 @@ unscii_8 = 8px/char x 8px tall, unscii_16 = 8px/char x 16px tall. Logos are
 24x24; the panel is 128x64.
 """
 
-# Active variant selectors (independent). Overridden per-column by the preview.
-# User-picked (2026-07-07 gallery review): pregame "Big time", final
-# "Line-score forward".
-PREGAME_VARIANT = "C"
-FINAL_VARIANT = "C"
-SOCCER_LIVE_VARIANT = "A"
 
 # Draw the DIM_GRAY vline/hline dividers on every game-facing screen (live,
 # pregame, final). A style-wide switch: the screens must read consistently, so
@@ -326,59 +324,73 @@ _SOCCER_FINAL = {
 }
 
 
-def set_variants(pregame: str | None, final: str | None, soccer_live: str | None) -> tuple:
+# Variant registry: config key -> {letter: slot table}. Shared references
+# on purpose (see module docstring); _CONFIGURABLE lists the keys the
+# settings UI exposes (>1 design exists). Defaults per the 2026-07-07
+# gallery review: pregame "Big time" (C), final "Line-score forward" (C).
+_TABLES = {
+    "mlb_pregame": _PREGAME,
+    "nba_pregame": _PREGAME,
+    "soccer_pregame": _PREGAME,
+    "mlb_final": _FINAL,
+    "nba_final": _FINAL,
+    "soccer_live": _SOCCER_LIVE,
+    "soccer_final": {"A": _SOCCER_FINAL},
+    "nba_live": {"A": _NBA_LIVE},
+}
+
+_ACTIVE = {
+    "mlb_pregame": "C",
+    "nba_pregame": "C",
+    "soccer_pregame": "C",
+    "mlb_final": "C",
+    "nba_final": "C",
+    "soccer_live": "A",
+    "soccer_final": "A",
+    "nba_live": "A",
+}
+
+
+def variant_keys() -> tuple:
+    """Every registered sport x screen key (regions are built for all)."""
+    return tuple(_TABLES.keys())
+
+
+def set_variants(variants: dict) -> dict:
     """Apply configured layout variants (config `display.variants`).
 
-    Unknown letters are ignored (the current selection stays), so a
-    hand-edited config can't select a nonexistent table. Returns the active
-    (pregame, final, soccer_live) triple for logging. Callers that flip
-    variants at runtime must rebuild the display Regions afterwards
-    (state.update_screen_variants owns that sequencing).
+    Unknown keys and unknown letters are ignored (the current selection
+    stays), so a hand-edited or pre-rename config can't select a
+    nonexistent table. Returns the active selection dict for logging.
+    Callers that flip variants at runtime must rebuild the display Regions
+    afterwards (state.update_screen_variants owns that sequencing).
     """
-    global PREGAME_VARIANT, FINAL_VARIANT, SOCCER_LIVE_VARIANT
-    if pregame in _PREGAME:
-        PREGAME_VARIANT = pregame
-    if final in _FINAL:
-        FINAL_VARIANT = final
-    if soccer_live in _SOCCER_LIVE:
-        SOCCER_LIVE_VARIANT = soccer_live
-    return (PREGAME_VARIANT, FINAL_VARIANT, SOCCER_LIVE_VARIANT)
+    for key, letter in variants.items():
+        tables = _TABLES.get(key)
+        if tables is not None and letter in tables:
+            _ACTIVE[key] = letter
+    return dict(_ACTIVE)
 
 
-def pregame_geometry() -> dict:
-    """The active PREGAME variant's slot table."""
-    return _PREGAME[PREGAME_VARIANT]
+def active_variant(key: str) -> str:
+    """The active design letter for one sport x screen key."""
+    return _ACTIVE[key]
 
 
-def final_geometry() -> dict:
-    """The active FINAL variant's slot table."""
-    return _FINAL[FINAL_VARIANT]
+def geometry_for(key: str) -> dict:
+    """The active slot table for one sport x screen key."""
+    return _TABLES[key][_ACTIVE[key]]
 
 
-def soccer_live_geometry() -> dict:
-    """The active SOCCER LIVE variant's slot table."""
-    return _SOCCER_LIVE[SOCCER_LIVE_VARIANT]
-
-
-def nba_live_geometry() -> dict:
-    """The NBA live slot table (single design)."""
-    return _NBA_LIVE
-
-
-def soccer_final_geometry() -> dict:
-    """The soccer FULL TIME slot table (single design)."""
-    return _SOCCER_FINAL
-
-
-def pregame_value_width() -> int:
-    """Width (px) of the cycling info value region for the active variant.
+def pregame_value_width(key: str) -> int:
+    """Width (px) of the cycling info value region for `key`'s active table.
 
     state.set_pregame sizes each info phase's scroll dwell against this, so the
     pre-computed per-phase dwell matches the region the renderer actually
     scrolls the text in. B has no cycling value; its venue row width is a
     reasonable stand-in (its info lines are pre-built the same way).
     """
-    g = _PREGAME[PREGAME_VARIANT]
+    g = geometry_for(key)
     if "INFO_VALUE" in g:
         return g["INFO_VALUE"][2]
     if "INFO_CYCLE" in g:

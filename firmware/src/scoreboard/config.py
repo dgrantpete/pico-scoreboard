@@ -46,7 +46,11 @@ _DEFAULTS = {
         # Screen layout variants (see scoreboard/screen_geometry.py tables).
         # Applied live on config save — flip these from the settings page to
         # compare layouts on the panel without a reboot.
-        "variants": {"pregame": "C", "final": "C", "soccer_live": "A"},
+        "variants": {
+            "mlb_pregame": "C", "nba_pregame": "C", "soccer_pregame": "C",
+            "mlb_final": "C", "nba_final": "C",
+            "soccer_live": "A",
+        },
         # Divider lines between screen sections; applied live.
         "show_dividers": True,
         # Game-description scroll speed (MLB play-by-play + soccer event/
@@ -371,7 +375,8 @@ class Config:
 
     @property
     def screen_variants(self) -> dict:
-        """Configured screen-layout variant letters (pregame/final/soccer_live).
+        """Configured screen-layout variant letters, keyed per sport x screen
+        (mlb_pregame, nba_final, soccer_live, ...).
 
         Values are validated (and silently corrected) by
         screen_geometry.set_variants; garbage here can't crash rendering.

@@ -37,7 +37,13 @@ class Variant:
 
     @contextmanager
     def apply(self):
-        """Temporarily install this variant's constant overrides."""
+        """Temporarily install this variant's constant overrides.
+
+        A dict-valued override onto an existing dict attr MERGES (the module
+        keeps its object identity semantics: a fresh merged dict is
+        installed, the original restored on exit) — this is how per-key
+        selections like screen_geometry._ACTIVE are partially overridden.
+        """
         saved = []  # (module, attr, had_it, old_value)
         try:
             for module_path, consts in self.overrides.items():
@@ -46,7 +52,12 @@ class Variant:
                     had_it = hasattr(module, attr)
                     old = getattr(module, attr, None)
                     saved.append((module, attr, had_it, old))
-                    setattr(module, attr, value)
+                    if had_it and isinstance(old, dict) and isinstance(value, dict):
+                        merged = dict(old)
+                        merged.update(value)
+                        setattr(module, attr, merged)
+                    else:
+                        setattr(module, attr, value)
             yield
         finally:
             for module, attr, had_it, old in reversed(saved):
@@ -74,14 +85,18 @@ def compatible_variants(scenario) -> "list[Variant]":
 # Default: no overrides, whatever screen_geometry ships as the active variant.
 register(Variant("default"))
 
-# Screen-geometry variants: flip the active PREGAME/FINAL table. The renderer
-# is the normal render_frame (it dispatches by mode); scenarios opt in via
+# Screen-geometry variants: flip the active table for every sport sharing
+# that screen (partial merges into screen_geometry._ACTIVE). The renderer is
+# the normal render_frame (it dispatches by mode); scenarios opt in via
 # compatible_variants so pregame variants only pair with pregame scenarios etc.
 _SG = "scoreboard.screen_geometry"
 for _letter in ("A", "B", "C"):
-    register(Variant(f"pregame-{_letter}", overrides={_SG: {"PREGAME_VARIANT": _letter}}))
-    register(Variant(f"final-{_letter}", overrides={_SG: {"FINAL_VARIANT": _letter}}))
-    register(Variant(f"soccer-{_letter}", overrides={_SG: {"SOCCER_LIVE_VARIANT": _letter}}))
+    register(Variant(f"pregame-{_letter}", overrides={_SG: {"_ACTIVE": {
+        "mlb_pregame": _letter, "nba_pregame": _letter, "soccer_pregame": _letter}}}))
+    register(Variant(f"final-{_letter}", overrides={_SG: {"_ACTIVE": {
+        "mlb_final": _letter, "nba_final": _letter}}}))
+    register(Variant(f"soccer-{_letter}", overrides={_SG: {"_ACTIVE": {
+        "soccer_live": _letter}}}))
 
 # Divider on/off comparison (config display.show_dividers); scenarios opt in.
 register(Variant("no-dividers", overrides={_SG: {"SHOW_DIVIDERS": False}}))
