@@ -49,6 +49,7 @@ class ScenarioContext:
         self.clock: VirtualClock = env.clock
         self.logos = logos
         self.mlb = env.mlb
+        self.nba = env.nba
         self.soccer = env.soccer
         self.state = env.state
         self.display = env.display
@@ -125,12 +126,14 @@ def _publish_live(ctx: ScenarioContext, live, play_text=None, play_id=None):
     st.away_logo = ctx.logos.get(live.away.abbreviation, ap, aa)
     st.home_logo = ctx.logos.get(live.home.abbreviation, hp, ha)
     if play_text is not None:
+        # Mirror the poller's commit: fit first (text, window, and strip
+        # must agree), then pre-render the strip so previews exercise the
+        # same fast path the device renders with.
+        play_text = ctx.state.fit_play_text(play_text)
         st.game.play.id = play_id or "play-flash"
         st.game.play.text = play_text
         st.game.play.updated_ms = ctx.clock.now
         st.game.play.display_ms = ctx.display.play_text_display_ms(play_text)
-        # Mirror the poller: pre-render the strip so previews exercise the
-        # same fast path the device renders with.
         st.game.play.strip = ctx.state.build_play_strip(play_text)
     ctx.state.commit_state()
 
@@ -143,6 +146,27 @@ def _publish_live(ctx: ScenarioContext, live, play_text=None, play_id=None):
 def startup(ctx: ScenarioContext) -> None:
     # set_startup_step publishes mode='startup' and pre-builds the strings.
     ctx.state.set_startup_step(3, 5, "Connecting WiFi", "ssid: home-network")
+
+
+@scenario("startup_retry", compatible_variants={"default"})
+def startup_retry(ctx: ScenarioContext) -> None:
+    # WiFi attempt 2 of 3: the monotonic clamp holds the bar at 3/5 while the
+    # attempt dots (2 of 3 filled) and "Retry" text carry the retry signal.
+    ctx.state.set_startup_step(3, 5, "Retry 2/3", "home-network",
+                               attempt=2, attempts_total=3)
+
+
+@scenario("updating", compatible_variants={"default"})
+def updating(ctx: ScenarioContext) -> None:
+    # OTA download in progress (driven by main.ota_check_task's on_progress).
+    ctx.state.set_updating_progress(34, "a3f9c21")
+
+
+@scenario("updating_countdown", compatible_variants={"default"})
+def updating_countdown(ctx: ScenarioContext) -> None:
+    # Post-download restart countdown; version detail carries forward.
+    ctx.state.set_updating_progress(100, "a3f9c21")
+    ctx.state.set_updating_countdown(3)
 
 
 @scenario("idle", compatible_variants={"default"})
@@ -176,7 +200,7 @@ def setup_fresh(ctx: ScenarioContext) -> None:
 # Live game screens
 # =============================================================================
 
-@scenario("live-basic", compatible_variants={"default"})
+@scenario("live-basic", compatible_variants={"default", "no-dividers"})
 def live_basic(ctx: ScenarioContext) -> None:
     live = _live_game(
         ctx.mlb, away="BOS", home="NYY", inning_num=5, half=ctx.mlb.TOP,
@@ -257,6 +281,21 @@ def live_toast_unlocked(ctx: ScenarioContext) -> None:
     ctx.state.set_toast(kind=ctx.state.TOAST_UNLOCK)
 
 
+@scenario("live-toast-fadeout", duration_ms=2200, compatible_variants={"default"})
+def live_toast_fadeout(ctx: ScenarioContext) -> None:
+    # Non-sticky lock: full overlay life cycle in one GIF — dim ladder eases
+    # in (200 ms), holds at half through the 1500 ms window, eases back out.
+    live = _live_game(
+        ctx.mlb, away="LAD", home="SF", inning_num=3, half=ctx.mlb.TOP,
+        balls=2, strikes=1, outs=1, bases=(True, False, False),
+        away_score=1, home_score=0,
+        at_bat=ctx.mlb.AtBat("L. Webb", "F. Freeman"),
+        play_text="Strike 1.",
+    )
+    _publish_live(ctx, live)
+    ctx.state.set_toast(kind=ctx.state.TOAST_LOCK)
+
+
 @scenario("live-no-atbat", compatible_variants={"default"})
 def live_no_atbat(ctx: ScenarioContext) -> None:
     # Middle of the inning: no active at-bat, so pitcher/batter go blank.
@@ -299,7 +338,7 @@ _START_EPOCH = 83100
 _UTC_OFFSET_EDT = -4 * 3600
 
 
-@scenario("pregame-full", duration_ms=12000, compatible_variants=_PREGAME_VARIANTS)
+@scenario("pregame-full", duration_ms=12000, compatible_variants=_PREGAME_VARIANTS | {"no-dividers"})
 def pregame_full(ctx: ScenarioContext) -> None:
     game = ctx.mlb.PregameGame(
         game_id="401570100",
@@ -361,7 +400,7 @@ def _publish_final(ctx, game):
     ctx.state.set_final(game, home_logo, away_logo)
 
 
-@scenario("final-9", duration_ms=6000, compatible_variants=_FINAL_VARIANTS)
+@scenario("final-9", duration_ms=6000, compatible_variants=_FINAL_VARIANTS | {"no-dividers"})
 def final_9(ctx: ScenarioContext) -> None:
     game = ctx.mlb.FinalGame(
         game_id="401570200",
@@ -467,7 +506,7 @@ def _publish_soccer_live(ctx, *, away, home, away_score, home_score,
     ctx.state.set_soccer_live(game, home_logo, away_logo)
 
 
-@scenario("soccer-live-1h", duration_ms=5000, compatible_variants=_SOCCER_VARIANTS)
+@scenario("soccer-live-1h", duration_ms=5000, compatible_variants=_SOCCER_VARIANTS | {"no-dividers"})
 def soccer_live_1h(ctx: ScenarioContext) -> None:
     # 1st half, clock anchored at 22:58 so the GIF catches the 22' -> 23'
     # minute flip from pure Core-1 extrapolation (no re-poll in the window).
@@ -505,6 +544,8 @@ def soccer_live_commentary(ctx: ScenarioContext) -> None:
     play.id = "comm-87"
     play.text = text
     play.updated_ms = ctx.clock.now
+    text = ctx.state.fit_play_text(text)  # mirrors the poller's commit
+    play.text = text
     play.display_ms = ctx.display.play_text_display_ms(text)
     play.strip = ctx.state.build_play_strip(text)
     ctx.state.commit_state()
@@ -572,7 +613,7 @@ def _publish_soccer_final(ctx, game):
     ctx.state.set_soccer_final(game, home_logo, away_logo)
 
 
-@scenario("soccer-final", duration_ms=8000, compatible_variants={"default"})
+@scenario("soccer-final", duration_ms=8000, compatible_variants={"default", "no-dividers"})
 def soccer_final(ctx: ScenarioContext) -> None:
     game = ctx.soccer.FinalGame(
         game_id="401700200",
@@ -591,6 +632,160 @@ def soccer_final_draw(ctx: ScenarioContext) -> None:
         away=_soccer_final_team(ctx, "BEL", 1, "De Bruyne 60'"),
     )
     _publish_soccer_final(ctx, game)
+
+
+# =============================================================================
+# NBA screens
+# =============================================================================
+# The live screen is a single design (no geometry variants); pregame reuses
+# the MLB pregame pipeline (real venue + records, no weather/probables), and
+# the final reuses the whole MLB final screen with quarters in the columns.
+
+_NBA_TEAMS = {
+    "DEN": (0x0E2240, 0xFEC524),
+    "OKC": (0x007AC1, 0xEF3B24),
+    "LAL": (0x552583, 0xFDB927),
+    "PHX": (0x29127A, 0xE56020),
+}
+
+_NBA_LEAGUE = "basketball/nba"
+
+
+def _nba_logos(ctx, game):
+    ap, aa = _NBA_TEAMS[game.away.abbreviation]
+    hp, ha = _NBA_TEAMS[game.home.abbreviation]
+    away_logo = ctx.logos.get(game.away.abbreviation, ap, aa, _NBA_LEAGUE)
+    home_logo = ctx.logos.get(game.home.abbreviation, hp, ha, _NBA_LEAGUE)
+    return home_logo, away_logo
+
+
+def _nba_state(ctx, abbr, score):
+    p, a = _NBA_TEAMS[abbr]
+    return ctx.mlb.TeamState(abbr, score, ctx.mlb.TeamColors(p, a))
+
+
+def _publish_nba_live(ctx, *, away, home, away_score, home_score,
+                      period, clock, phase, play=None):
+    nba = ctx.nba
+    game = nba.LiveGame(
+        game_id="401811037",
+        period=period,
+        clock=clock,
+        phase=phase,
+        home=_nba_state(ctx, home, home_score),
+        away=_nba_state(ctx, away, away_score),
+        last_play=play,
+    )
+    home_logo, away_logo = _nba_logos(ctx, game)
+    ctx.state.set_nba_live(game, home_logo, away_logo)
+
+
+@scenario("nba-live", duration_ms=6000, compatible_variants={"default", "no-dividers"})
+def nba_live(ctx: ScenarioContext) -> None:
+    # Mid-3rd-quarter game with a fresh play flashing through the bottom
+    # strip (same machinery as the MLB play flash), then falling to empty.
+    text = "Jamal Murray makes 26-foot three point jumper (Nikola Jokic assists)."
+    _publish_nba_live(
+        ctx, away="OKC", home="DEN", away_score=75, home_score=77,
+        period=3, clock="4:37", phase=ctx.nba.PHASE_IN_PROGRESS,
+    )
+    st = ctx.state.get_write_state()
+    play = st.game.play
+    play.id = "p-411"
+    fitted = ctx.state.fit_play_text(text)  # mirrors the poller's commit
+    play.text = fitted
+    play.updated_ms = ctx.clock.now
+    play.display_ms = ctx.display.play_text_display_ms(fitted)
+    play.strip = ctx.state.build_play_strip(fitted)
+    ctx.state.commit_state()
+    nba_live.scenario.duration_ms = ctx.display.play_text_display_ms(fitted) + 1000
+
+
+@scenario("nba-live-crunch", compatible_variants={"default"})
+def nba_live_crunch(ctx: ScenarioContext) -> None:
+    # Sub-minute 4th-quarter clock ("24.7", no colon): warning color, and
+    # both scores at three digits exercising the widened score slots.
+    _publish_nba_live(
+        ctx, away="OKC", home="DEN", away_score=112, home_score=110,
+        period=4, clock="24.7", phase=ctx.nba.PHASE_IN_PROGRESS,
+    )
+
+
+@scenario("nba-halftime", compatible_variants={"default"})
+def nba_halftime(ctx: ScenarioContext) -> None:
+    # The interval: clock slot reads HT in accent, period chip stays empty.
+    _publish_nba_live(
+        ctx, away="PHX", home="LAL", away_score=52, home_score=74,
+        period=2, clock="0.0", phase=ctx.nba.PHASE_HALFTIME,
+    )
+
+
+@scenario("nba-end-of-period", compatible_variants={"default"})
+def nba_end_of_period(ctx: ScenarioContext) -> None:
+    # Between quarters: END in accent, the just-finished quarter in the chip.
+    _publish_nba_live(
+        ctx, away="OKC", home="DEN", away_score=88, home_score=91,
+        period=3, clock="0.0", phase=ctx.nba.PHASE_END_OF_PERIOD,
+    )
+
+
+@scenario("nba-overtime", compatible_variants={"default"})
+def nba_overtime(ctx: ScenarioContext) -> None:
+    # Overtime (period 5): the chip reads OT. Never observed in the corpus;
+    # pinned here so the first real OT game has a rehearsed screen.
+    _publish_nba_live(
+        ctx, away="OKC", home="DEN", away_score=118, home_score=118,
+        period=5, clock="2:11", phase=ctx.nba.PHASE_IN_PROGRESS,
+    )
+
+
+def _nba_final_team(ctx, abbr, score, line):
+    p, a = _NBA_TEAMS[abbr]
+    return ctx.nba.FinalTeam(abbr, ctx.mlb.TeamColors(p, a), score, bytes(line))
+
+
+@scenario("nba-pregame", duration_ms=10000, compatible_variants=_PREGAME_VARIANTS)
+def nba_pregame(ctx: ScenarioContext) -> None:
+    # Reuses the whole MLB pregame pipeline: real venue and records; the
+    # fields basketball never has (weather, probables) stay absent.
+    nba = ctx.nba
+    p_lal, a_lal = _NBA_TEAMS["LAL"]
+    p_phx, a_phx = _NBA_TEAMS["PHX"]
+    game = nba.PregameGame(
+        game_id="401811040",
+        start_epoch=_START_EPOCH,
+        venue="crypto.com Arena",
+        home=ctx.mlb.PregameTeam("LAL", ctx.mlb.TeamColors(p_lal, a_lal), 50, 32, None),
+        away=ctx.mlb.PregameTeam("PHX", ctx.mlb.TeamColors(p_phx, a_phx), 40, 42, None),
+    )
+    home_logo, away_logo = _nba_logos(ctx, game)
+    ctx.state.set_pregame(game, home_logo, away_logo, _UTC_OFFSET_EDT)
+
+
+@scenario("nba-final", duration_ms=6000, compatible_variants=_FINAL_VARIANTS)
+def nba_final(ctx: ScenarioContext) -> None:
+    # Quarters in the line-score columns, "T" over the pinned totals.
+    game = ctx.nba.FinalGame(
+        game_id="401811026",
+        periods_played=4,
+        away=_nba_final_team(ctx, "OKC", 118, (30, 28, 30, 30)),
+        home=_nba_final_team(ctx, "DEN", 100, (25, 25, 25, 25)),
+    )
+    home_logo, away_logo = _nba_logos(ctx, game)
+    ctx.state.set_nba_final(game, home_logo, away_logo)
+
+
+@scenario("nba-final-ot", duration_ms=6000, compatible_variants=_FINAL_VARIANTS)
+def nba_final_ot(ctx: ScenarioContext) -> None:
+    # Five columns and "F/OT" — the unseen-in-corpus case, rehearsed.
+    game = ctx.nba.FinalGame(
+        game_id="401811027",
+        periods_played=5,
+        away=_nba_final_team(ctx, "PHX", 130, (30, 28, 30, 30, 12)),
+        home=_nba_final_team(ctx, "LAL", 125, (25, 25, 25, 25, 25)),
+    )
+    home_logo, away_logo = _nba_logos(ctx, game)
+    ctx.state.set_nba_final(game, home_logo, away_logo)
 
 
 # =============================================================================

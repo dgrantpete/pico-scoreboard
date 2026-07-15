@@ -27,9 +27,10 @@ import framebuf
 from hub75 import Hub75Driver, gamma as gamma_mod
 from scoreboard.config import Config
 import scoreboard.logger as logger
-from scoreboard.fonts import rgb565, measure_text, render_strip, spleen_5x8, unscii_8, unscii_16
+from scoreboard.fonts import rgb565, measure_text, fit_text, render_strip, spleen_5x8, unscii_8, unscii_16
 from scoreboard import screen_geometry
 from scoreboard.mlb import LiveGame
+from scoreboard.nba import PHASE_END_OF_PERIOD, PHASE_HALFTIME, period_name
 from scoreboard.soccer import EVENT_GOAL, SIDE_AWAY, SIDE_HOME, base_minutes
 
 
@@ -104,6 +105,8 @@ class StartupState:
         self.step_text: str = ''    # e.g. "2/5" — pre-built, drawn verbatim
         self.operation: str = ''    # pre-truncated
         self.detail: str = ''       # pre-truncated
+        self.attempt: int = 0          # WiFi attempt in progress (0 = hide dots)
+        self.attempts_total: int = 0   # retry budget (0 = hide dots)
 
     def copy_from(self, other: "StartupState") -> None:
         self.step = other.step
@@ -111,6 +114,8 @@ class StartupState:
         self.step_text = other.step_text
         self.operation = other.operation
         self.detail = other.detail
+        self.attempt = other.attempt
+        self.attempts_total = other.attempts_total
 
 
 class SetupState:
@@ -157,6 +162,22 @@ class ErrorState:
     def copy_from(self, other: "ErrorState") -> None:
         self.title = other.title
         self.lines = other.lines
+
+
+class UpdatingState:
+    """OTA update screen state. Strings are pre-built by set_updating_*."""
+
+    def __init__(self) -> None:
+        self.progress: int = 0        # Progress bar fill, 0-100
+        self.percent_text: str = ''   # e.g. "34%" — beside the bar; '' hides it
+        self.phase: str = ''          # "Downloading" / "Restarting in N"
+        self.detail: str = ''         # e.g. "v a3f9c21"
+
+    def copy_from(self, other: "UpdatingState") -> None:
+        self.progress = other.progress
+        self.percent_text = other.percent_text
+        self.phase = other.phase
+        self.detail = other.detail
 
 
 class PlayState:
@@ -208,6 +229,16 @@ TOAST_TEXT = 0
 TOAST_LOCK = 1
 TOAST_UNLOCK = 2
 TOAST_SPINNER = 3
+
+# How long a transient toast stays on screen after set_toast(). Lives here
+# (not display.py) so clear_toast_if_sticky can re-stamp a cleared sticky
+# toast as just-expired without importing display.
+TOAST_DISPLAY_MS = 1500
+
+# Sticky toast (an in-flight SKIP) is torn down by the poller's tick
+# `finally`; this is only a belt against a logic bug stranding it on screen.
+# Requests hard cap at 15s, so 20s can only be reached by a bug.
+TOAST_STICKY_MAX_MS = 20_000
 
 
 class ToastState:
@@ -327,7 +358,8 @@ class FinalView:
         self.game_id: str = ''
         self.away_score: int = 0
         self.home_score: int = 0
-        self.final_text: str = 'FINAL'   # "FINAL" or "F/10" for extras
+        self.final_text: str = 'FINAL'   # "FINAL", "F/10" (extras), "F/OT"
+        self.total_label: str = 'R'      # pinned totals header: R (MLB) / T (NBA)
         self.ls_header: str = ''          # inning numbers, 3 chars/col
         self.ls_away: str = ''            # away runs, 3 chars/col
         self.ls_home: str = ''            # home runs, 3 chars/col ("  X" for missing)
@@ -344,6 +376,7 @@ class FinalView:
         self.away_score = other.away_score
         self.home_score = other.home_score
         self.final_text = other.final_text
+        self.total_label = other.total_label
         self.ls_header = other.ls_header
         self.ls_away = other.ls_away
         self.ls_home = other.ls_home
@@ -436,6 +469,35 @@ class SoccerFinalView:
         self.scorers_home_strip = other.scorers_home_strip
 
 
+class NbaLiveView:
+    """Pre-built live NBA screen data.
+
+    Unlike soccer there is no clock anchor: a basketball stop-clock cannot be
+    extrapolated (no clock-running signal from ESPN), so `clock_text` is the
+    exact poll-time string and is simply re-drawn until the next poll.
+    Break states swap it for "HT" / "END" (accent color) — the phase, not the
+    clock, is the render signal during breaks.
+    """
+
+    def __init__(self) -> None:
+        self.game_id: str = ''
+        self.away_score: int = 0
+        self.home_score: int = 0
+        self.phase_text: str = ''       # "Q3" / "OT" / "2OT" ('' at halftime)
+        self.clock_text: str = ''       # "4:37" / "53.0", or "HT" / "END"
+        self.clock_accent: bool = False  # break state: draw in accent color
+        self.clock_low: bool = False     # sub-minute in-play clock: warning color
+
+    def copy_from(self, other: "NbaLiveView") -> None:
+        self.game_id = other.game_id
+        self.away_score = other.away_score
+        self.home_score = other.home_score
+        self.phase_text = other.phase_text
+        self.clock_text = other.clock_text
+        self.clock_accent = other.clock_accent
+        self.clock_low = other.clock_low
+
+
 class UiColors:
     """Pre-computed UI colors (RGB565), set by Core 0."""
 
@@ -464,12 +526,14 @@ class StateBuffer:
         self.startup: StartupState = StartupState()
         self.setup: SetupState = SetupState()
         self.error: ErrorState = ErrorState()
+        self.updating: UpdatingState = UpdatingState()
         self.ui_colors: UiColors = UiColors()
         self.game: MlbGameSnapshot = MlbGameSnapshot()
         self.pregame: PregameView = PregameView()
         self.final: FinalView = FinalView()
         self.soccer_live: SoccerLiveView = SoccerLiveView()
         self.soccer_final: SoccerFinalView = SoccerFinalView()
+        self.nba_live: NbaLiveView = NbaLiveView()
         self.toast: ToastState = ToastState()
         self.home_logo: framebuf.FrameBuffer | None = None
         self.away_logo: framebuf.FrameBuffer | None = None
@@ -481,12 +545,14 @@ class StateBuffer:
         self.startup.copy_from(other.startup)
         self.setup.copy_from(other.setup)
         self.error.copy_from(other.error)
+        self.updating.copy_from(other.updating)
         self.ui_colors.copy_from(other.ui_colors)
         self.game.copy_from(other.game)
         self.pregame.copy_from(other.pregame)
         self.final.copy_from(other.final)
         self.soccer_live.copy_from(other.soccer_live)
         self.soccer_final.copy_from(other.soccer_final)
+        self.nba_live.copy_from(other.nba_live)
         self.toast.copy_from(other.toast)
         self.home_logo = other.home_logo
         self.away_logo = other.away_logo
@@ -586,12 +652,18 @@ def set_mode(mode: str) -> None:
     commit_state()
 
 
-def set_startup_step(step: int, total: int, operation: str, detail: str = '') -> None:
+def set_startup_step(step: int, total: int, operation: str, detail: str = '',
+                     attempt: int = 0, attempts_total: int = 0) -> None:
     """
     Update startup progress display.
 
     No-op after finish_startup() is called. Pre-builds the strings the
     display thread draws so Core 1 never formats text.
+
+    The visible step is monotonic: a caller re-entering an earlier step
+    (the WiFi retry loop) keeps the bar and counter at their high-water
+    mark — retries read as text + attempt dots, never as backward motion.
+    `attempt`/`attempts_total` drive the dots (0 hides them).
     """
     if not _startup_phase:
         return
@@ -599,11 +671,15 @@ def set_startup_step(step: int, total: int, operation: str, detail: str = '') ->
     state = get_write_state()
     state.mode = 'startup'
     startup = state.startup
+    if step < startup.step:
+        step = startup.step
     startup.step = step
     startup.total_steps = total
     startup.step_text = f"{step}/{total}"
     startup.operation = _truncate_line(operation)
     startup.detail = _truncate_line(detail)
+    startup.attempt = attempt
+    startup.attempts_total = attempts_total
     commit_state()
 
 
@@ -615,6 +691,8 @@ def _clear_startup_state(state: StateBuffer) -> None:
     startup.step_text = ''
     startup.operation = ''
     startup.detail = ''
+    startup.attempt = 0
+    startup.attempts_total = 0
 
 
 def finish_startup(target_mode: str, **mode_kwargs) -> None:
@@ -752,6 +830,38 @@ def set_error(title: str, lines: list[str] | None = None) -> None:
     commit_state()
 
 
+def set_updating_progress(percent: int, version_short: str) -> None:
+    """
+    Show the OTA update screen with download progress.
+
+    Thread-safe: writes the back buffer and commits. Called from the OTA
+    progress callback on Core 0 (once per percent change).
+    """
+    state = get_write_state()
+    state.mode = 'updating'
+    updating = state.updating
+    updating.progress = percent
+    updating.percent_text = f"{percent}%"
+    updating.phase = "Downloading"
+    updating.detail = _truncate_line(f"v {version_short}")
+    commit_state()
+
+
+def set_updating_countdown(seconds: int) -> None:
+    """
+    Show the pre-restart countdown on the OTA update screen (bar full).
+
+    Keeps the version detail from the download phase via carry-forward.
+    """
+    state = get_write_state()
+    state.mode = 'updating'
+    updating = state.updating
+    updating.progress = 100
+    updating.percent_text = ''
+    updating.phase = f"Restarting in {seconds}"
+    commit_state()
+
+
 def set_toast(text: str = '', sticky: bool = False, kind: int = TOAST_TEXT) -> None:
     """
     Show a transient overlay (button feedback): bottom-strip text
@@ -779,14 +889,17 @@ def clear_toast_if_sticky() -> None:
     Called from the SKIP tick's `finally` so a LOCKED/one-shot toast fired by
     an unrelated press mid-skip is never clobbered -- only the sticky SKIPPING
     toast this tick owns is torn down.
+
+    The stamp is rewound to "just expired" rather than zeroed, and `kind` is
+    kept, so the display thread's overlay fade-out eases the dim back out
+    instead of snapping (it needs to know an icon toast was up).
     """
     state = get_write_state()
     toast = state.toast
     if not toast.sticky:
         return
     toast.text = ''
-    toast.kind = TOAST_TEXT
-    toast.updated_ms = 0
+    toast.updated_ms = time.ticks_add(time.ticks_ms(), -TOAST_DISPLAY_MS)
     toast.sticky = False
     toast.pulse_ms = 0
     commit_state()
@@ -850,14 +963,34 @@ _VENUE_POOL = _StripPool(256, 8)         # 51 spleen chars
 _WEATHER_POOL = _StripPool(256, 8)
 _AWAY_PITCHER_POOL = _StripPool(128, 8)
 _HOME_PITCHER_POOL = _StripPool(128, 8)
-_PLAY_POOL = _StripPool(640, 16)         # 80 unscii_16 chars; longer -> glyphs
+# Sized to the wire format's 255-byte string cap: 255 unscii_16 chars x 8 px
+# = 2040 px <= 2048, so NO legal play/commentary text can overflow the pool
+# and the per-glyph fallback is structurally unreachable (it halved the
+# effective frame rate — and with it the visible scroll speed — on long
+# lines, measured 2026-07-12). Costs 8 KB (2 x 4 KB ping-pong) vs 2.5 KB at
+# the old 640 px; blit cost per frame is unchanged (clipped to the region).
+_PLAY_POOL = _StripPool(2048, 16)
 _EVENT_NAME_POOL = _StripPool(128, 8)    # soccer scorer short name (16 unscii_8 chars)
 _SCORERS_AWAY_POOL = _StripPool(320, 8)  # soccer full-time scorer lists
 _SCORERS_HOME_POOL = _StripPool(320, 8)
 
 
+def fit_play_text(text: str) -> str:
+    """Clamp a play/commentary line to the play strip pool's capacity.
+
+    Apply BEFORE build_play_strip / play_text_display_ms so the stored
+    text, its display window, and the strip all describe the same string.
+    With the pool sized past the wire format's 255-char string cap this is
+    a no-op for anything the backend can send — kept as the belt that
+    makes the strip's existence an invariant (the renderer has no glyph
+    fallback for flashes; Core 1 must never glyph-loop one)."""
+    return fit_text(text, unscii_16, _PLAY_POOL.cap_px)
+
+
 def build_play_strip(text: str):
-    """Pre-render a play-flash strip (Core 0, on new-play commit)."""
+    """Pre-render a play-flash strip (Core 0, on new-play commit).
+
+    Callers pass fit_play_text()'d text, so this never returns None."""
     return _PLAY_POOL.render(text, unscii_16)
 
 
@@ -1007,7 +1140,7 @@ def _final_ls_cell(run: int) -> str:
 
 
 def set_final(game, home_logo, away_logo) -> None:
-    """Publish a final screen from a parsed FinalGame.
+    """Publish a final screen from a parsed mlb.FinalGame.
 
     Line-score rows (header / away / home) are built as equal-char-count
     strings -- 3 chars per inning column -- so the three rows measure
@@ -1040,6 +1173,9 @@ def set_final(game, home_logo, away_logo) -> None:
     fv.away_color = _team_color_to_rgb565(away.colors.primary)
     fv.home_color = _team_color_to_rgb565(home.colors.primary)
     fv.final_text = ("F/%d" % innings) if innings > 9 else "FINAL"
+    # Stamped every call: the write buffer carries the previous commit
+    # forward, which may have been another sport's final.
+    fv.total_label = 'R'
 
     header: list[str] = []
     away_row: list[str] = []
@@ -1188,6 +1324,106 @@ def set_soccer_final(game, home_logo, away_logo) -> None:
 
 
 # =============================================================================
+# NBA screen setters (Core 0 string pre-build)
+# =============================================================================
+
+def set_nba_live(game, home_logo, away_logo) -> None:
+    """Publish a live NBA screen from a parsed nba.LiveGame.
+
+    Pre-builds the period chip ("Q3" / "OT") and the clock slot. The clock
+    is the poll-time display string, never extrapolated (a stop-clock has no
+    usable run signal); break states replace it with "HT" / "END" in the
+    accent color and an in-play sub-minute clock ("53.0" — no colon) draws
+    in the warning color for crunch time.
+    """
+    state = get_write_state()
+    view_changed = state.mode != 'nba_live' or state.nba_live.game_id != game.game_id
+    state.mode = 'nba_live'
+    if view_changed:
+        state.animation_start_ms = time.ticks_ms()
+    state.away_logo = away_logo
+    state.home_logo = home_logo
+    nv = state.nba_live
+    nv.game_id = game.game_id
+
+    nv.away_score = game.away.score
+    nv.home_score = game.home.score
+
+    if game.phase == PHASE_HALFTIME:
+        # The clock slot renders "HT"; the period chip stays empty so the
+        # state isn't announced twice (soccer halftime convention).
+        nv.phase_text = ''
+        nv.clock_text = 'HT'
+        nv.clock_accent = True
+        nv.clock_low = False
+    elif game.phase == PHASE_END_OF_PERIOD:
+        nv.phase_text = period_name(game.period)
+        nv.clock_text = 'END'
+        nv.clock_accent = True
+        nv.clock_low = False
+    else:
+        nv.phase_text = period_name(game.period)
+        nv.clock_text = game.clock
+        nv.clock_accent = False
+        nv.clock_low = ':' not in game.clock
+
+    commit_state()
+
+
+def set_nba_final(game, home_logo, away_logo) -> None:
+    """Publish a final NBA screen from a parsed nba.FinalGame.
+
+    Reuses the (sport-agnostic) final screen wholesale: mode 'final', the
+    same FinalView, geometry, and renderer as MLB — quarters in the header
+    columns instead of innings, "T" over the pinned totals instead of "R",
+    and "F/OT" ("F/2OT", ...) when overtime was played.
+    """
+    state = get_write_state()
+    view_changed = state.mode != 'final' or state.final.game_id != game.game_id
+    state.mode = 'final'
+    if view_changed:
+        state.animation_start_ms = time.ticks_ms()
+    state.away_logo = away_logo
+    state.home_logo = home_logo
+    fv = state.final
+    fv.game_id = game.game_id
+
+    away = game.away
+    home = game.home
+    periods = game.periods_played
+
+    fv.away_score = away.score
+    fv.home_score = home.score
+    fv.home_won = home.score > away.score
+    fv.away_color = _team_color_to_rgb565(away.colors.primary)
+    fv.home_color = _team_color_to_rgb565(home.colors.primary)
+    if periods <= 4:
+        fv.final_text = "FINAL"
+    elif periods == 5:
+        fv.final_text = "F/OT"
+    else:
+        fv.final_text = "F/%dOT" % (periods - 4)
+    fv.total_label = 'T'
+
+    header: list[str] = []
+    away_row: list[str] = []
+    home_row: list[str] = []
+    for i in range(periods):
+        header.append("%2d " % (i + 1))
+        away_row.append(_final_ls_cell(away.line[i]) if i < len(away.line) else " X ")
+        home_row.append(_final_ls_cell(home.line[i]) if i < len(home.line) else " X ")
+    fv.ls_header = "".join(header)
+    fv.ls_away = "".join(away_row)
+    fv.ls_home = "".join(home_row)
+
+    fv.ls_header_strip = _LS_HEADER_POOL.render(fv.ls_header, spleen_5x8)
+    fv.ls_away_strip = _LS_AWAY_POOL.render(fv.ls_away, spleen_5x8)
+    fv.ls_home_strip = _LS_HOME_POOL.render(fv.ls_home, spleen_5x8)
+
+    commit_state()
+
+
+# =============================================================================
 # Pre-computed display values (set by Core 0, read by Core 1)
 # =============================================================================
 
@@ -1250,6 +1486,18 @@ def update_screen_variants(config: Config) -> None:
     if _display_regions is not None:
         _display_regions.rebuild_variant_regions()
     logger.debug("[CONFIG] screen variants: pregame=%s final=%s soccer=%s" % active)
+
+
+def update_show_dividers(config: Config) -> None:
+    """Apply config display.show_dividers (live; read per frame)."""
+    on = screen_geometry.set_show_dividers(config.show_dividers)
+    logger.debug("[CONFIG] dividers: %s" % ("on" if on else "off"))
+
+
+def update_scroll_speed(config: Config) -> None:
+    """Apply config display.scroll_speed_px_per_sec (live; read per use)."""
+    v = screen_geometry.set_scroll_speed(config.scroll_speed_px_per_sec)
+    logger.debug("[CONFIG] scroll speed: %d px/s" % v)
 
 
 def update_display_frequency(config: Config) -> None:

@@ -3,6 +3,9 @@
 `micropython`  - `const`, `native`, `viper` are all identity decorators. The
                  only viper function on the render path is `fonts.rgb565`
                  (plain integer bit-twiddling), so identity is exact.
+                 (`display._dim_frame` also compiles as viper on device,
+                 but it selects a pure-Python body under CPython via
+                 `sys.implementation.name`, so identity never applies to it.)
 `machine`      - a no-op `Pin` (display.py imports it; the preview drives no IO).
 `uasyncio`     - aliased to the stdlib `asyncio` (api_client imports it at
                  module load; the preview never runs the event loop).

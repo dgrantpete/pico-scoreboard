@@ -47,6 +47,24 @@
 				</label>
 			</div>
 
+			<div class="row-between">
+				<div class="label-group">
+					<span class="label-text">NBA</span>
+					<p class="text-sm text-muted">National Basketball Association</p>
+				</div>
+				<label class="switch">
+					<input
+						type="checkbox"
+						checked={config.sports.nba.enabled}
+						onchange={() =>
+							settingsStore.updateSports("nba", {
+								enabled: !settingsStore.config?.sports.nba.enabled,
+							})}
+					/>
+					<span class="switch-track"><span class="switch-thumb"></span></span>
+				</label>
+			</div>
+
 			<hr class="separator" />
 
 			<div class="field-group">

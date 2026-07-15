@@ -47,6 +47,15 @@
 		if (!current) return;
 		settingsStore.updateDisplay("variants", { ...current, [key]: value });
 	}
+
+	// Mirrors screen_geometry._SCROLL_SPEEDS: only speeds that evenly divide
+	// the panel's 20 FPS refresh stay smooth.
+	const SCROLL_SPEED_OPTIONS = [
+		{ value: 5, label: "5 px/s — Slowest" },
+		{ value: 10, label: "10 px/s — Slow" },
+		{ value: 20, label: "20 px/s — Default" },
+		{ value: 40, label: "40 px/s — Fast" },
+	];
 </script>
 
 {#if settingsStore.config}
@@ -79,6 +88,53 @@
 					<p class="hint">{layout.hint}</p>
 				</div>
 			{/each}
+
+			<hr class="separator" />
+
+			<div class="row-between">
+				<div class="label-group">
+					<span class="label-text">Divider Lines</span>
+					<p class="text-sm text-muted">
+						Thin gray lines between sections on the game screens. Applies
+						right after saving — toggle to compare on the panel.
+					</p>
+				</div>
+				<label class="switch">
+					<input
+						type="checkbox"
+						checked={config.display.show_dividers}
+						onchange={() =>
+							settingsStore.updateDisplay(
+								"show_dividers",
+								!settingsStore.config?.display.show_dividers,
+							)}
+					/>
+					<span class="switch-track"><span class="switch-thumb"></span></span>
+				</label>
+			</div>
+
+			<hr class="separator" />
+
+			<div class="field-group">
+				<label for="scroll-speed">Text Scroll Speed</label>
+				<select
+					id="scroll-speed"
+					value={config.display.scroll_speed_px_per_sec}
+					onchange={(e) =>
+						settingsStore.updateDisplay(
+							"scroll_speed_px_per_sec",
+							Number((e.currentTarget as HTMLSelectElement).value),
+						)}
+				>
+					{#each SCROLL_SPEED_OPTIONS as option}
+						<option value={option.value}>{option.label}</option>
+					{/each}
+				</select>
+				<p class="hint">
+					Play-by-play and goal-scorer text. Limited to speeds that stay
+					smooth at the panel's 20 FPS. Applies live.
+				</p>
+			</div>
 		</div>
 	</section>
 {/if}

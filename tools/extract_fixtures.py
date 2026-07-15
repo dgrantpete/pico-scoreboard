@@ -24,7 +24,7 @@ Predicate = Callable[[dict, dict], bool]
 
 
 def _description(target: str, extra: Callable[[dict], bool] = lambda c: True) -> Predicate:
-    """Match on soccer's `status.type.description`, with an optional extra check."""
+    """Match on `status.type.description`, with an optional extra check."""
     return lambda _ev, c: c["status"]["type"].get("description") == target and extra(c)
 
 
@@ -106,6 +106,39 @@ GROUPS: list[tuple[str, str, list[tuple[str, Predicate]]]] = [
             ("live_inning", _live_inning),
             ("rain_delay", _rain_delay),
             ("final", _final),
+        ],
+    ),
+    (
+        "nba",
+        "nba",
+        [
+            ("pregame", _description("Scheduled")),
+            (
+                "in_progress",
+                _description(
+                    "In Progress",
+                    lambda c: ":" in c["status"]["displayClock"]
+                    and bool((c.get("situation") or {}).get("lastPlay")),
+                ),
+            ),
+            # Sub-minute clock switches to "SS.d" form (e.g. "53.0").
+            (
+                "in_progress_subminute",
+                _description(
+                    "In Progress", lambda c: ":" not in c["status"]["displayClock"]
+                ),
+            ),
+            # Early-game glitch bucket: situation present but empty ({}).
+            (
+                "in_progress_no_last_play",
+                _description(
+                    "In Progress",
+                    lambda c: not (c.get("situation") or {}).get("lastPlay"),
+                ),
+            ),
+            ("halftime", _description("Halftime")),
+            ("end_of_period", _description("End of Period")),
+            ("final", _description("Final")),
         ],
     ),
 ]

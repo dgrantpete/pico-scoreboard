@@ -156,7 +156,7 @@ class ScoreboardApiClient:
 
     async def _get_logo_inner(self, url: str, path: str, headers: dict) -> tuple[int, memoryview]:
         _t = time.ticks_ms()
-        async with self._session.get(url, headers=headers, ssl=True) as resp:
+        async with self._session.get(url, headers=headers, ssl=None) as resp:
             result = (resp.status, await resp.readinto(self._response_mv))
             _log_api("LOGO", path, resp.status, _t)
             return result
@@ -168,7 +168,7 @@ class ScoreboardApiClient:
         bodies are always JSON regardless of the Accept header).
         """
         _t = time.ticks_ms()
-        async with self._session.get(url, headers=headers, ssl=True) as resp:
+        async with self._session.get(url, headers=headers, ssl=None) as resp:
             filled = await resp.readinto(self._response_mv)
             _log_api(tag, path, resp.status, _t)
             if resp.status >= 400:
@@ -199,7 +199,7 @@ class ScoreboardApiClient:
         self, url: str, path: str, tag: str, headers: dict
     ) -> tuple[int, list[tuple[int, str]], str | None]:
         _t = time.ticks_ms()
-        async with self._session.get(url, headers=headers, ssl=True) as resp:
+        async with self._session.get(url, headers=headers, ssl=None) as resp:
             etag = None
             if resp.headers:
                 for k in resp.headers:

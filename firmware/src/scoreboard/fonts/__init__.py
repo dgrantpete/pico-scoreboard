@@ -49,6 +49,25 @@ def measure_text(string: str, font) -> int:
     return width
 
 
+def fit_text(string: str, font, cap_px: int, ellipsis: str = "...") -> str:
+    """Truncate `string` (with an ellipsis) so it measures <= cap_px.
+
+    Core 0 / commit-time helper: strip pools have fixed capacity, and text
+    that overflows one forces the display thread onto the per-glyph draw
+    path — measured 2026-07-12 at >50 ms/frame for a 172-char line, i.e.
+    half of all frames blown. Fitting at commit keeps every flash on the
+    single-blit strip path. Returns the string unchanged when it fits."""
+    if measure_text(string, font) <= cap_px:
+        return string
+    budget = cap_px - measure_text(ellipsis, font)
+    width = 0
+    for i, char in enumerate(string):
+        width += _glyph(font, ord(char))[1]
+        if width > budget:
+            return string[:i].rstrip() + ellipsis
+    return string
+
+
 def calculate_scroll_offset(
     text_width: int,
     display_width: int,

@@ -46,7 +46,13 @@ _DEFAULTS = {
         # Screen layout variants (see scoreboard/screen_geometry.py tables).
         # Applied live on config save — flip these from the settings page to
         # compare layouts on the panel without a reboot.
-        "variants": {"pregame": "C", "final": "C", "soccer_live": "A"}
+        "variants": {"pregame": "C", "final": "C", "soccer_live": "A"},
+        # Divider lines between screen sections; applied live.
+        "show_dividers": True,
+        # Game-description scroll speed (MLB play-by-play + soccer event/
+        # scorer text), px/s. Restricted to the smooth set in
+        # screen_geometry._SCROLL_SPEEDS; applied live.
+        "scroll_speed_px_per_sec": 20
     },
     "colors": {
         "primary": {"r": 255, "g": 255, "b": 255},      # White - dividers, status text
@@ -55,12 +61,14 @@ _DEFAULTS = {
         "clock_normal": {"r": 0, "g": 255, "b": 0},     # Green - clock with time remaining
         "clock_warning": {"r": 255, "g": 10, "b": 10}   # Red - low time, errors
     },
-    # Which leagues the poller rotates through. `soccer.leagues` holds ESPN
-    # slugs (see scoreboard/soccer.py LEAGUE_NAMES: usa.1, eng.1, mex.1,
-    # fifa.world); empty = soccer off. Edited via the config API/JSON for
-    # now — a settings-UI surface is a frontend follow-up (BACKLOG).
+    # Which leagues the poller rotates through, edited from the settings
+    # page's Sports card. `soccer.leagues` holds ESPN slugs (see
+    # scoreboard/soccer.py LEAGUE_NAMES: usa.1, eng.1, mex.1, fifa.world);
+    # empty = soccer off. NBA defaults off like soccer — flip it on when the
+    # season is on.
     "sports": {
         "mlb": {"enabled": True},
+        "nba": {"enabled": False},
         "soccer": {"leagues": []}
     },
     "log": {
@@ -371,11 +379,30 @@ class Config:
         v = self._data["display"].get("variants")
         return v if isinstance(v, dict) else {}
 
+    @property
+    def show_dividers(self) -> bool:
+        """Whether the DIM_GRAY divider lines are drawn on game screens."""
+        return bool(self._data["display"].get("show_dividers", True))
+
+    @property
+    def scroll_speed_px_per_sec(self) -> int:
+        """Game-description scroll speed (px/s). Clamped to the smooth set
+        by screen_geometry.set_scroll_speed; garbage degrades to 20."""
+        try:
+            return int(self._data["display"].get("scroll_speed_px_per_sec", 20))
+        except (TypeError, ValueError):
+            return 20
+
     # Sports properties
     @property
     def mlb_enabled(self) -> bool:
         """Whether MLB games are polled and rotated."""
         return bool(self._data["sports"]["mlb"]["enabled"])
+
+    @property
+    def nba_enabled(self) -> bool:
+        """Whether NBA games are polled and rotated."""
+        return bool(self._data["sports"]["nba"]["enabled"])
 
     @property
     def soccer_leagues(self) -> list:

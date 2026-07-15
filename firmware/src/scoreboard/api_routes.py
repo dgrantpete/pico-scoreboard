@@ -15,7 +15,7 @@ except ImportError:
 from scoreboard.state import (
     update_ui_colors, update_display_frequency,
     update_display_refresh_rate, update_display_gamma, update_display_blanking_time,
-    update_screen_variants
+    update_screen_variants, update_show_dividers, update_scroll_speed
 )
 
 def create_api(config: Config, get_network_status: "Callable[[], dict]") -> Microdot:
@@ -60,6 +60,10 @@ def create_api(config: Config, get_network_status: "Callable[[], dict]") -> Micr
                 update_display_blanking_time(config)
             if 'variants' in data['display']:
                 update_screen_variants(config)
+            if 'show_dividers' in data['display']:
+                update_show_dividers(config)
+            if 'scroll_speed_px_per_sec' in data['display']:
+                update_scroll_speed(config)
         return config.raw
 
     @api.get('/status')

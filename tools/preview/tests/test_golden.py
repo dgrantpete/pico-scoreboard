@@ -7,6 +7,8 @@ that alters even one pixel trips it.
 - `live-critical-count` @ 500 ms — MLB live, the peak of the count-dot pulse.
 - `soccer-live-stoppage` @ 500 ms — soccer live (variant A), stoppage clock
   in the warning color plus the last-event strip.
+- `nba-live` @ 500 ms — NBA live, period chip + poll-time clock with the
+  play flash scrolling through the bottom strip.
 
 If the generated layout/font artifacts are missing the tests skip with the
 build instruction rather than failing. On a hash mismatch the actual hash is
@@ -32,11 +34,15 @@ if _REPO_ROOT not in sys.path:
 # live-critical-count history: updated for the C8 critical-dot red tint —
 # at 500ms (pulse peak) the count dots pack pack_hsv_to_rgb565(0, s>0, v)
 # instead of grayscale; verified against the critical-red-tint gallery.
+# Updated again for team-colored base markers (bases loaded, BOTTOM half →
+# SF-orange markers instead of gold); verified in the gallery.
 _GOLDENS = [
     ("live-critical-count", 500,
-     "a7b1fa409e3e45081fd4e835db034eba7621b92a6f08b3c89a925a8edd97f31e"),
+     "68c60fc0063ce6626cdcaa1bddba670fbb6ed669df68cde9f02ad3009a0ddf84"),
     ("soccer-live-stoppage", 500,
      "5cd32164d34ff0f5a549150151987eb6d67e5e71a65675a95645ceed20032ac6"),
+    ("nba-live", 500,
+     "c13366aa89346ba843f6c3346931cbffd69af7a5e1678f0ac460c38a1790572d"),
 ]
 
 

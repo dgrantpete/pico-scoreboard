@@ -76,6 +76,33 @@ PREGAME_SCROLL_PX_PER_SEC = 20
 FINAL_LS_PAUSE_MS = 1800
 FINAL_LS_PX_PER_SEC = 10
 
+# One user-configurable speed (config `display.scroll_speed_px_per_sec`) for
+# the game-description scrollers: the MLB play-by-play flash and the soccer
+# live-event / full-time scorer lines. Pregame (PREGAME_SCROLL_*) and the
+# final line score (FINAL_LS_*) keep their own feel. Restricted to the legal
+# smooth set above.
+GAME_SCROLL_PX_PER_SEC = 20
+_SCROLL_SPEEDS = (5, 10, 20, 40)
+
+
+def set_scroll_speed(px_per_sec) -> int:
+    """Apply config display.scroll_speed_px_per_sec; anything outside the
+    smooth set falls back to the default 20. Renderers (and Core 0's
+    play-window math) re-read the global on every use, so this applies live.
+    A play flash already on screen keeps its old display window while
+    scrolling at the new rate — self-corrects on the next play."""
+    global GAME_SCROLL_PX_PER_SEC
+    GAME_SCROLL_PX_PER_SEC = px_per_sec if px_per_sec in _SCROLL_SPEEDS else 20
+    return GAME_SCROLL_PX_PER_SEC
+
+
+def set_show_dividers(enabled) -> bool:
+    """Apply config display.show_dividers. Renderers re-read the flag every
+    frame, so this applies live with no Regions rebuild."""
+    global SHOW_DIVIDERS
+    SHOW_DIVIDERS = bool(enabled)
+    return SHOW_DIVIDERS
+
 
 # =============================================================================
 # PREGAME variant tables (away above home, matching the live game screen)
@@ -201,10 +228,9 @@ _FINAL = {
 # takes the inning ordinal's slot, and the bottom strip carries the last goal
 # or red card instead of pitcher/batter.
 
-# Scroll feel for the last-event scorer line and full-time scorer lists.
-# Same legal-speed constraint as the pregame scroll (must divide 20 FPS).
+# Pause feel for the last-event scorer line and full-time scorer lists; the
+# speed is the shared GAME_SCROLL_PX_PER_SEC (user-configurable, see above).
 SOCCER_SCROLL_PAUSE_MS = 1500
-SOCCER_SCROLL_PX_PER_SEC = 20
 
 _SOCCER_LIVE = {
     # A "Phase ledger": exact MLB-live silhouette — logos + scores stacked
@@ -254,6 +280,29 @@ _SOCCER_LIVE = {
         "EVENT_NAME": (2, 56, 124, 8),
         "EVENT_EMPTY": (2, 51, 124, 8),
     },
+}
+
+
+# =============================================================================
+# NBA LIVE table (single design: "quarter + clock ledger")
+# =============================================================================
+# The soccer-A silhouette adapted for basketball: identity column left
+# (logos + scores stacked, the period chip where soccer's half sat), the
+# clock string centered in the data column, and the shared play-flash strip
+# along the bottom (regions.play_text — NBA has no persistent event ticker;
+# the last play flashes once on change, like MLB). NBA scores reach three
+# digits, so the identity column is 4px wider than soccer's: divider at 49,
+# 25px score slots (3 unscii_16 digits = 24px).
+
+_NBA_LIVE = {
+    "LOGO_AWAY": (0, 0, 24, 24),
+    "SCORE_AWAY": (24, 7, 25, 16),
+    "PHASE": (2, 29, 46, 8),
+    "LOGO_HOME": (0, 40, 24, 24),
+    "SCORE_HOME": (24, 47, 25, 16),
+    "DIVIDER_X": 49,
+    "SEPARATOR_Y": 36,
+    "CLOCK": (50, 10, 78, 16),
 }
 
 
@@ -309,6 +358,11 @@ def final_geometry() -> dict:
 def soccer_live_geometry() -> dict:
     """The active SOCCER LIVE variant's slot table."""
     return _SOCCER_LIVE[SOCCER_LIVE_VARIANT]
+
+
+def nba_live_geometry() -> dict:
+    """The NBA live slot table (single design)."""
+    return _NBA_LIVE
 
 
 def soccer_final_geometry() -> dict:

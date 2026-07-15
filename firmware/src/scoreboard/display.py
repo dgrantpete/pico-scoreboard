@@ -10,8 +10,11 @@ Core 0 when the state changed (see scoreboard/state.py), so the render loop
 does no per-frame text formatting.
 """
 
+import gc
+import sys
 import time
 import framebuf
+import micropython
 from machine import Pin
 from hub75 import Hub75Driver, Hub75Display, row_addressing
 from hub75.native import pack_hsv_to_rgb565
@@ -20,6 +23,7 @@ from scoreboard.inning_half import TOP, BOTTOM
 from scoreboard.state import (
     StateBuffer, ThreadHealth, UiColors, _team_color_to_rgb565,
     TOAST_TEXT, TOAST_LOCK, TOAST_UNLOCK, TOAST_SPINNER,
+    TOAST_DISPLAY_MS, TOAST_STICKY_MAX_MS,
 )
 from scoreboard import screen_geometry
 from scoreboard.config import Config
@@ -50,6 +54,9 @@ from scoreboard.layout import pitcher_name as pitcher_name_loc
 from scoreboard.layout import batter_label as batter_label_loc
 from scoreboard.layout import batter_name as batter_name_loc
 from scoreboard.layout import play_text as play_text_loc
+from scoreboard.layout import toast_spinner as toast_spinner_sprite
+from scoreboard.layout import toast_lock_closed as toast_lock_closed_sprite
+from scoreboard.layout import toast_lock_open as toast_lock_open_sprite
 
 # Fixed colors
 BLACK = 0
@@ -81,25 +88,74 @@ DISPLAY_HEIGHT = 64
 # (see screen_geometry's scroll-speed note).
 FRAME_MS = 50
 
+# TEMPORARY (2026-07-11 GC/stutter investigation — remove when done): sample
+# gc.mem_alloc() once per display tick and log a [MEMPROF] window summary to
+# the RAM log ring every 10 s. Read the ring over USB afterwards; never over
+# HTTP (that perturbs what we're measuring) and never at ERROR level (a
+# flash flush from the ring would lock out this core and CAUSE stutter).
+# The mem_alloc() call walks the heap ATB (~0.5 ms) — acceptable while
+# profiling, not free.
+MEM_PROFILE = True
+
+# Whole-frame dim under icon toasts, with a short fade ladder on both edges.
+# Each 32-bit word holds two RGB565 pixels; a brightness factor k/8 is a sum
+# of masked shifts — (w>>1)&m1 [+ (w>>2)&m2] [+ (w>>3)&m3] — where each mask
+# clears the bits that would bleed across the R5/G6/B5 field boundaries after
+# that shift (m1 also clears the arithmetic shift's bit-31 sign extension).
+# Channel sums can't overflow their fields because the total factor is < 1.
+# Ladder: idx 0 = 7/8, 1 = 3/4, 2 = 5/8, 3 = 1/2 (the held level); fade-in
+# walks 0→3 from toast start, fade-out walks 2→0 after expiry.
+_DIM_WORDS = (DISPLAY_WIDTH * DISPLAY_HEIGHT * 2) // 4
+_FADE_TERMS = ((1, 1), (1, 0), (0, 1), (0, 0))  # idx -> (t2, t3)
+_TOAST_FADE_STEP_MS = 50  # one ladder step per 20 FPS frame
+_TOAST_FADE_OUT_MS = _TOAST_FADE_STEP_MS * 3  # 5/8 → 3/4 → 7/8, then clean
+
+if sys.implementation.name == "micropython":
+    @micropython.viper
+    def _dim_frame(buf, n_words: int, t2: int, t3: int):
+        p = ptr32(buf)  # noqa: F821 — viper builtin
+        # Masks built through variables: the full 32-bit literals overflow
+        # MicroPython's 31-bit small int and box to objects (which viper
+        # can't combine with native ints), and a one-line (a << 16) | b is
+        # constant-folded by mpy-cross into that same boxed object.
+        m1 = 0x7BEF
+        m1 = (m1 << 16) | 0x7BEF
+        m2 = 0x39E7
+        m2 = (m2 << 16) | 0x39E7
+        m3 = 0x18E3
+        m3 = (m3 << 16) | 0x18E3
+        for i in range(n_words):
+            w = p[i]
+            v = (w >> 1) & m1
+            if t2 != 0:
+                v += (w >> 2) & m2
+            if t3 != 0:
+                v += (w >> 3) & m3
+            p[i] = v
+else:
+    # Desktop-preview body: micropython.viper is an identity decorator there
+    # and ptr32 doesn't exist. Must stay mask-identical to the viper branch.
+    def _dim_frame(buf, n_words: int, t2: int, t3: int) -> None:
+        w32 = memoryview(buf).cast("I")
+        for i in range(n_words):
+            w = w32[i]
+            v = (w >> 1) & 0x7BEF7BEF
+            if t2:
+                v += (w >> 2) & 0x39E739E7
+            if t3:
+                v += (w >> 3) & 0x18E318E3
+            w32[i] = v
+
 # Play-by-play flash: the most-recent play text preempts the pitcher/batter
 # view after a new play is detected. Its display window is computed per play
 # (see play_text_display_ms): exactly one scroll cycle — full start pause,
 # scroll to the end, full end pause — so long plays get the time they need
-# and short plays don't linger. Scroll tunables are kept separate from the
-# default scroll feel.
+# and short plays don't linger. The scroll speed itself is the shared,
+# user-configurable screen_geometry.GAME_SCROLL_PX_PER_SEC.
 PLAY_TEXT_SCROLL_PAUSE_MS = 1000
-# Must evenly divide the 20 FPS refresh (see screen_geometry's scroll-speed
-# note): 30 px/s advanced 1.5 px/frame, skipping every third pixel column.
-PLAY_TEXT_SCROLL_PX_PER_SEC = 20
 
-# Button-feedback toast: how long a transient overlay (SKIPPING / LOCKED)
-# stays on screen after set_toast().
-TOAST_DISPLAY_MS = 1500
-
-# Sticky toast (an in-flight SKIP) is torn down by the poller's tick `finally`;
-# this is only a belt against a logic bug stranding it on screen. Requests hard
-# cap at 15s, so 20s can only be reached by a bug.
-TOAST_STICKY_MAX_MS = 20_000
+# TOAST_DISPLAY_MS / TOAST_STICKY_MAX_MS live in scoreboard.state (next to
+# ToastState) so clear_toast_if_sticky can re-stamp without importing display.
 
 # Rejected-press dim: a press during an in-flight skip dims the toast one
 # triangle cycle (TOAST_PULSE_MS) toward TOAST_PULSE_DIP darkness, then back.
@@ -138,7 +194,7 @@ def play_text_display_ms(text: str) -> int:
     """
     text_w = measure_text(text, PLAY_TEXT_FONT)
     max_scroll = text_w - play_text_loc.WIDTH
-    scroll_ms = (max_scroll * 1000) // PLAY_TEXT_SCROLL_PX_PER_SEC if max_scroll > 0 else 0
+    scroll_ms = (max_scroll * 1000) // screen_geometry.GAME_SCROLL_PX_PER_SEC if max_scroll > 0 else 0
     # Mirrors calculate_scroll_offset's cycle: pause + scroll + pause.
     return PLAY_TEXT_SCROLL_PAUSE_MS + scroll_ms + PLAY_TEXT_SCROLL_PAUSE_MS
 
@@ -267,6 +323,7 @@ class Regions:
         self.final = self._build_geometry_regions(display, screen_geometry.final_geometry())
         self.soccer_live = self._build_geometry_regions(display, screen_geometry.soccer_live_geometry())
         self.soccer_final = self._build_geometry_regions(display, screen_geometry.soccer_final_geometry())
+        self.nba_live = self._build_geometry_regions(display, screen_geometry.nba_live_geometry())
 
     @staticmethod
     def _build_geometry_regions(display, table: dict) -> dict:
@@ -346,6 +403,68 @@ def _draw_count_dots(display: Hub75Display, slice_mod: object, filled_count: int
         # blit throws, so later frames don't render with the pulsed color.
         dot_sprite.palette.pixel(1, 0, default_outline)
         dot_sprite.palette.pixel(2, 0, default_fill)
+
+
+# Default base-marker palette entries (the original gold ball), captured at
+# import so the per-frame restore never re-reads a mutated palette.
+_BASE_MARKER_DEFAULT_1 = base_marker_sprite.palette.pixel(1, 0)  # ball body
+_BASE_MARKER_DEFAULT_2 = base_marker_sprite.palette.pixel(2, 0)  # highlight
+_BASE_MARKER_DEFAULT_3 = base_marker_sprite.palette.pixel(3, 0)  # edge shade
+
+# [packed RGB888 key, ball565, highlight565, shade565]; key -1 = empty.
+# Mutated in place — the batting team changes at most once per half-inning,
+# so steady-state frames are allocation-free.
+_base_pal = [-1, 0, 0, 0]
+
+
+def _base_marker_colors(packed: int) -> list:
+    """Base-marker palette derived from the batting team's primary color,
+    memoized on the packed RGB888. Relationships match the original gold
+    sprite: highlight = 7/8 blend toward white, edge shade = 7/8 of the
+    ball color. Integer math only (see pulse() on float churn)."""
+    c = _base_pal
+    if c[0] != packed:
+        r = (packed >> 16) & 0xFF
+        g = (packed >> 8) & 0xFF
+        b = packed & 0xFF
+        # Same brightening policy as _team_color_to_rgb565 (state.py), but we
+        # need the brightened RGB888 channels here to derive the shades.
+        m = r if r >= g and r >= b else (g if g >= b else b)
+        if m < 128:
+            if m == 0:
+                r = g = b = 128
+            else:
+                r = r * 128 // m
+                g = g * 128 // m
+                b = b * 128 // m
+        c[0] = packed
+        c[1] = rgb565(r, g, b)
+        c[2] = rgb565(r + ((255 - r) * 7 >> 3), g + ((255 - g) * 7 >> 3), b + ((255 - b) * 7 >> 3))
+        c[3] = rgb565(r * 7 >> 3, g * 7 >> 3, b * 7 >> 3)
+    return c
+
+
+def _draw_base_markers(display: Hub75Display, bases, packed: int) -> None:
+    """Blit occupied-base markers. `packed` is the batting team's RGB888
+    primary, or -1 (MIDDLE/END half) to keep the default gold palette."""
+    pal = base_marker_sprite.palette
+    if packed >= 0:
+        c = _base_marker_colors(packed)
+        pal.pixel(1, 0, c[1])
+        pal.pixel(2, 0, c[2])
+        pal.pixel(3, 0, c[3])
+    try:
+        if bases.first:
+            display.blit(base_marker_sprite.data, first_base_loc.X, first_base_loc.Y, base_marker_sprite.KEY, pal)  # type: ignore
+        if bases.second:
+            display.blit(base_marker_sprite.data, second_base_loc.X, second_base_loc.Y, base_marker_sprite.KEY, pal)  # type: ignore
+        if bases.third:
+            display.blit(base_marker_sprite.data, third_base_loc.X, third_base_loc.Y, base_marker_sprite.KEY, pal)  # type: ignore
+    finally:
+        if packed >= 0:
+            pal.pixel(1, 0, _BASE_MARKER_DEFAULT_1)
+            pal.pixel(2, 0, _BASE_MARKER_DEFAULT_2)
+            pal.pixel(3, 0, _BASE_MARKER_DEFAULT_3)
 
 
 # =============================================================================
@@ -492,6 +611,15 @@ def draw_progress_bar(display: Hub75Display, x: int, y: int, width: int, height:
 # Render functions for each display mode
 # =============================================================================
 
+class _startup_dots_loc:
+    """WiFi attempt dots, centered in the gap between the progress bar
+    (ends y=31) and the operation line (y=42). Sized for exactly 3 dots —
+    coupled to max_retries=3 in main.start_station_mode."""
+    WIDTH = 3 * (dot_sprite.WIDTH + 1) - 1
+    X = (DISPLAY_WIDTH - WIDTH) // 2
+    Y = 34
+
+
 def render_startup(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors) -> None:
     """Render startup/boot progress screen."""
     display.fill(BLACK)
@@ -507,10 +635,36 @@ def render_startup(display: Hub75Display, writer: FontWriter, regions: Regions, 
     progress = startup.step * 100 // startup.total_steps
     draw_progress_bar(display, bar_x, 24, bar_width, 8, progress, colors)
 
+    if startup.attempts_total > 0:
+        _draw_count_dots(display, _startup_dots_loc, startup.attempt)
+
     writer.draw(regions.startup_step, startup.step_text, spleen_5x8, ALIGN_LEFT, 0, colors.secondary)
     writer.draw(regions.startup_operation, startup.operation, spleen_5x8, ALIGN_CENTER, 0, colors.primary)
     if startup.detail:
         writer.draw(regions.startup_detail, startup.detail, spleen_5x8, ALIGN_CENTER, 0, colors.secondary)
+
+
+def render_updating(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors) -> None:
+    """Render OTA update screen: download progress, then restart countdown.
+
+    Reuses the startup regions — the geometry is identical and the two modes
+    can never coexist ('updating' is only entered long after finish_startup).
+    """
+    display.fill(BLACK)
+
+    updating = state.updating
+
+    writer.draw(regions.startup_title, "UPDATING", unscii_16, ALIGN_CENTER, 0, colors.accent)
+
+    bar_width = 80
+    bar_x = (DISPLAY_WIDTH - bar_width) // 2
+    draw_progress_bar(display, bar_x, 24, bar_width, 8, updating.progress, colors)
+
+    if updating.percent_text:
+        writer.draw(regions.startup_step, updating.percent_text, spleen_5x8, ALIGN_LEFT, 0, colors.secondary)
+    writer.draw(regions.startup_operation, updating.phase, spleen_5x8, ALIGN_CENTER, 0, colors.primary)
+    if updating.detail:
+        writer.draw(regions.startup_detail, updating.detail, spleen_5x8, ALIGN_CENTER, 0, colors.secondary)
 
 
 def render_idle(display: Hub75Display, writer: FontWriter, regions: Regions, colors: UiColors) -> None:
@@ -584,6 +738,17 @@ def _toast_active(state: StateBuffer, now_ms: int) -> bool:
     return time.ticks_diff(now_ms, toast.updated_ms) < window
 
 
+def _toast_overlay_fading(state: StateBuffer, now_ms: int) -> bool:
+    """True while an expired icon toast's dim is still fading back out.
+    The render loop must keep rendering static modes through this tail."""
+    toast = state.toast
+    if toast.kind == TOAST_TEXT or toast.updated_ms == 0:
+        return False
+    window = TOAST_STICKY_MAX_MS if toast.sticky else TOAST_DISPLAY_MS
+    elapsed = time.ticks_diff(now_ms, toast.updated_ms)
+    return window <= elapsed < window + _TOAST_FADE_OUT_MS
+
+
 def _toast_dim_v(state: StateBuffer, now_ms: int) -> int:
     """Brightness 0..255 for the toast, honoring a rejected-press dim cycle
     (toast.pulse_ms set): one triangle dip toward TOAST_PULSE_DIP darkness."""
@@ -610,83 +775,102 @@ def _render_toast(writer: FontWriter, regions: Regions, state: StateBuffer, now_
 
 
 # --- Icon toast overlay (centered) -------------------------------------------
-# A 34x34 black backdrop centered on the panel keeps the icon legible over
-# any screen content; drawn LAST in each game-facing render so nothing
-# paints over it.
+# Compiled sprites (tools/gen_toast_icons.py -> compile_layout.py) blitted
+# with KEY transparency directly over screen content; drawn LAST in each
+# game-facing render so nothing paints over it.
 
-_OVERLAY_SIZE = 34
-_OVERLAY_X = (DISPLAY_WIDTH - _OVERLAY_SIZE) // 2   # 47
-_OVERLAY_Y = (DISPLAY_HEIGHT - _OVERLAY_SIZE) // 2  # 15
 _CX = DISPLAY_WIDTH // 2   # 64
 _CY = DISPLAY_HEIGHT // 2  # 32
 
-# Skip spinner: a comet of dots on a radius-12 ring, one revolution per
+# Skip spinner: a comet of 12 dots on a radius-12 ring, one revolution per
 # _SPINNER_PERIOD_MS. The head position is computed in 1/256ths of a dot
 # step, so brightness shifts every 50 ms frame — the fluidity is the point
-# (it demos the 20 FPS pipeline). Dot centers precomputed (cos/sin at 30°
-# steps, r=12), stored as top-left of each 3x3 dot around (64, 32).
-_SPINNER_DOTS = (
-    (74, 31), (72, 37), (68, 41), (63, 42), (57, 41), (53, 37),
-    (51, 31), (53, 25), (57, 21), (63, 20), (68, 21), (72, 25),
-)
-_SPINNER_DOT_PX = 3
+# (it demos the 20 FPS pipeline). The dots live in one sprite, each dot its
+# own palette index; per frame the 12 entries are rewritten with the comet
+# gradient (or KEY for the gap dots, which the blit then skips).
 _SPINNER_PERIOD_MS = 1000
 _SPINNER_TRAIL = 10  # dots of fading tail behind the head (2-dot gap)
 
+_SPINNER_X = _CX - toast_spinner_sprite.WIDTH // 2    # 51
+_SPINNER_Y = _CY - toast_spinner_sprite.HEIGHT // 2   # 20
+_LOCK_X = _CX - toast_lock_closed_sprite.WIDTH // 2   # 57
+_LOCK_Y = 19  # sprite row 12 (lock body top) lands at y=31
+
+# gen_toast_icons.py bakes dot k's color so its RGB565 value == k + 1, while
+# compile_layout.py assigns palette indices in row-major first-seen order.
+# Invert the baked palette once at import (Core 0, before the render thread
+# overwrites the entries): _SPINNER_PAL[angular index] -> palette index.
+# Contract drift (recolored dots, wrong count) raises here, not mid-render.
+_pal = [0] * 12
+for _p in range(1, 13):
+    _pal[toast_spinner_sprite.palette.pixel(_p, 0) - 1] = _p
+_SPINNER_PAL = tuple(_pal)
+del _pal, _p
+
 
 def _draw_spinner(display: Hub75Display, elapsed_ms: int, dim_v: int) -> None:
-    n = len(_SPINNER_DOTS)
+    pal = toast_spinner_sprite.palette
+    key = toast_spinner_sprite.KEY
     # Head position in 1/256 dot units, advancing continuously.
-    head = (elapsed_ms % _SPINNER_PERIOD_MS) * (n * 256) // _SPINNER_PERIOD_MS
+    head = (elapsed_ms % _SPINNER_PERIOD_MS) * (12 * 256) // _SPINNER_PERIOD_MS
     span = _SPINNER_TRAIL * 256
-    for i in range(n):
-        d = (head - i * 256) % (n * 256)  # angular lag behind the head
+    for i in range(12):
+        d = (head - i * 256) % (12 * 256)  # angular lag behind the head
         if d >= span:
+            pal.pixel(_SPINNER_PAL[i], 0, key)  # maps to KEY -> transparent
             continue
         v = 255 - (d * 255) // span
         if dim_v != 255:
             v = (v * dim_v) >> 8
-        xy = _SPINNER_DOTS[i]
-        display.fill_rect(xy[0], xy[1], _SPINNER_DOT_PX, _SPINNER_DOT_PX, rgb565(v, v, v))
+        pal.pixel(_SPINNER_PAL[i], 0, rgb565(v, v, v))
+    # No palette restore (unlike _draw_count_dots): this sprite has a single
+    # owner and every entry is unconditionally rewritten each frame.
+    display.blit(toast_spinner_sprite.data, _SPINNER_X, _SPINNER_Y, key, pal)
 
 
 def _draw_lock(display: Hub75Display, color: int, is_open: bool) -> None:
-    """A padlock centered on the panel: 14x9 body, 2px-thick shackle.
+    """A padlock centered on the panel: 14x10 body, 2px-thick shackle.
 
-    Closed: the shackle arch meets the body on both sides. Open: the arch is
-    swung to the right — its left leg hangs in the air beside the body.
+    Closed: the shackle meets the body on both sides. Open: the shackle is
+    lifted up — its right leg stays anchored in the body, its left leg
+    leaves a gap. Both sprites share a canvas so one blit position serves.
     """
-    bx = _CX - 7
-    by = _CY - 1            # body top
-    display.fill_rect(bx, by, 14, 10, color)
-    # Keyhole: 2x2 head over a 2x3 stem, punched out of the body.
-    display.fill_rect(_CX - 1, by + 2, 2, 2, BLACK)
-    display.fill_rect(_CX - 1, by + 5, 2, 3, BLACK)
-
-    top = by - 9
-    if is_open:
-        sx = bx + 8          # arch shifted right; left leg floats
-        display.fill_rect(sx, top, 10, 2, color)      # top bar
-        display.fill_rect(sx, top + 2, 2, 4, color)   # left leg (short, open)
-        display.fill_rect(sx + 8, top + 2, 2, 7, color)  # right leg into body
-    else:
-        sx = bx + 2          # arch centered over the body
-        display.fill_rect(sx, top, 10, 2, color)
-        display.fill_rect(sx, top + 2, 2, 7, color)
-        display.fill_rect(sx + 8, top + 2, 2, 7, color)
+    spr = toast_lock_open_sprite if is_open else toast_lock_closed_sprite
+    spr.palette.pixel(1, 0, color)  # sole owner; rewritten before every blit
+    display.blit(spr.data, _LOCK_X, _LOCK_Y, spr.KEY, spr.palette)
 
 
 def _render_toast_overlay(display: Hub75Display, state: StateBuffer, now_ms: int) -> None:
     """Draw an active icon toast (lock / unlock / spinner) centered over the
     screen. Called LAST in each game-facing render function. Text toasts are
-    handled by _render_toast in the bottom strip."""
+    handled by _render_toast in the bottom strip.
+
+    The composed frame under the icon fades down the dim ladder to half
+    brightness (so the icon reads against busy/white backgrounds) and back
+    up after the toast expires — dim only, no icon — so the overlay eases
+    in and out instead of snapping."""
     toast = state.toast
-    if toast.kind == TOAST_TEXT or not _toast_active(state, now_ms):
+    if toast.kind == TOAST_TEXT or toast.updated_ms == 0:
         return
-    display.fill_rect(_OVERLAY_X, _OVERLAY_Y, _OVERLAY_SIZE, _OVERLAY_SIZE, BLACK)
+    elapsed = time.ticks_diff(now_ms, toast.updated_ms)
+    if elapsed < 0:
+        elapsed = 0
+    window = TOAST_STICKY_MAX_MS if toast.sticky else TOAST_DISPLAY_MS
+    if elapsed >= window:
+        # Fade-out tail: walk the ladder back up; the icon is already gone.
+        idx = 2 - (elapsed - window) // _TOAST_FADE_STEP_MS
+        if idx >= 0:
+            t = _FADE_TERMS[idx]
+            _dim_frame(display.buffer, _DIM_WORDS, t[0], t[1])
+        return
+    idx = elapsed // _TOAST_FADE_STEP_MS
+    if idx > 3:
+        idx = 3
+    t = _FADE_TERMS[idx]
+    _dim_frame(display.buffer, _DIM_WORDS, t[0], t[1])
     dim_v = _toast_dim_v(state, now_ms)
     if toast.kind == TOAST_SPINNER:
-        _draw_spinner(display, time.ticks_diff(now_ms, toast.updated_ms), dim_v)
+        _draw_spinner(display, elapsed, dim_v)
     else:
         color = WHITE if dim_v == 255 else rgb565(dim_v, dim_v, dim_v)
         _draw_lock(display, color, toast.kind == TOAST_UNLOCK)
@@ -716,19 +900,22 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
 
     display.blit(field_sprite.data, field_sprite.X, field_sprite.Y, field_sprite.KEY, field_sprite.palette)  # type: ignore
 
-    if live.bases.first:
-        display.blit(base_marker_sprite.data, first_base_loc.X, first_base_loc.Y, base_marker_sprite.KEY, base_marker_sprite.palette)  # type: ignore
-    if live.bases.second:
-        display.blit(base_marker_sprite.data, second_base_loc.X, second_base_loc.Y, base_marker_sprite.KEY, base_marker_sprite.palette)  # type: ignore
-    if live.bases.third:
-        display.blit(base_marker_sprite.data, third_base_loc.X, third_base_loc.Y, base_marker_sprite.KEY, base_marker_sprite.palette)  # type: ignore
+    # Base markers take the batting team's color (top: away bats, bottom:
+    # home bats); transition halves keep the default gold.
+    half = live.inning.half
+    if half is TOP:
+        batting_packed = live.away.colors.primary
+    elif half is BOTTOM:
+        batting_packed = live.home.colors.primary
+    else:
+        batting_packed = -1
+    _draw_base_markers(display, live.bases, batting_packed)
 
     if state.away_logo is not None:
         display.blit(state.away_logo, away_logo_loc.X, away_logo_loc.Y)
     if state.home_logo is not None:
         display.blit(state.home_logo, home_logo_loc.X, home_logo_loc.Y)
 
-    half = live.inning.half
     if half is TOP:
         display.blit(inning_top_sprite.data, inning_top_sprite.X, inning_top_sprite.Y, inning_top_sprite.KEY, inning_top_sprite.palette)  # type: ignore
     elif half is BOTTOM:
@@ -784,21 +971,15 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
         show_play = bool(play.text) and play.updated_ms != 0 and play_window_ms < play.display_ms
 
         if show_play:
-            if play.strip is not None:
-                writer.draw_strip(
-                    regions.play_text, play.strip,
-                    ALIGN_LEFT, play_elapsed_ms, WHITE,
-                    pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
-                    pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
-                )
-            else:
-                # Text out-sized the strip pool (very long play): glyph fallback.
-                writer.draw(
-                    regions.play_text, play.text, PLAY_TEXT_FONT,
-                    ALIGN_LEFT, play_elapsed_ms, WHITE,
-                    pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
-                    pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
-                )
+            # No glyph fallback: fit_play_text + the wire-cap-sized pool
+            # make the strip an invariant (glyph-looping a long line halved
+            # the frame rate and the visible scroll speed with it).
+            writer.draw_strip(
+                regions.play_text, play.strip,
+                ALIGN_LEFT, play_elapsed_ms, WHITE,
+                pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
+                pixels_per_second=screen_geometry.GAME_SCROLL_PX_PER_SEC,
+            )
         else:
             at_bat = live.at_bat
             if at_bat is not None:
@@ -1014,9 +1195,9 @@ def render_final(display: Hub75Display, writer: FontWriter, regions: Regions, st
                 writer.draw(region, text, spleen_5x8, ALIGN_LEFT, elapsed, col,
                             pause_ms=pause, pixels_per_second=pxs)
 
-    # --- Pinned R totals ---
+    # --- Pinned totals (header "R" for MLB runs, "T" for NBA points) ---
     if "R_HEADER" in R:
-        writer.draw(R["R_HEADER"], "R", spleen_5x8, ALIGN_CENTER, 0, DIM_GRAY)
+        writer.draw(R["R_HEADER"], fv.total_label, spleen_5x8, ALIGN_CENTER, 0, DIM_GRAY)
     if "R_AWAY" in geo:
         ra = geo["R_AWAY"]
         r_font = unscii_16 if ra[3] >= 16 else spleen_5x8
@@ -1140,23 +1321,16 @@ def render_soccer_live(display: Hub75Display, writer: FontWriter, regions: Regio
         play_window_ms = time.ticks_diff(now_ms, play.updated_ms)
         show_play = bool(play.text) and play.updated_ms != 0 and play_window_ms < play.display_ms
         if show_play:
-            if play.strip is not None:
-                writer.draw_strip(
-                    regions.play_text, play.strip,
-                    ALIGN_LEFT, play_elapsed_ms, WHITE,
-                    pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
-                    pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
-                )
-            else:
-                writer.draw(
-                    regions.play_text, play.text, PLAY_TEXT_FONT,
-                    ALIGN_LEFT, play_elapsed_ms, WHITE,
-                    pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
-                    pixels_per_second=PLAY_TEXT_SCROLL_PX_PER_SEC,
-                )
+            # No glyph fallback — see render_game (strip is an invariant).
+            writer.draw_strip(
+                regions.play_text, play.strip,
+                ALIGN_LEFT, play_elapsed_ms, WHITE,
+                pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
+                pixels_per_second=screen_geometry.GAME_SCROLL_PX_PER_SEC,
+            )
         elif sv.event_top:
             pause = screen_geometry.SOCCER_SCROLL_PAUSE_MS
-            pxs = screen_geometry.SOCCER_SCROLL_PX_PER_SEC
+            pxs = screen_geometry.GAME_SCROLL_PX_PER_SEC
             writer.draw(R["EVENT_TOP"], sv.event_top, spleen_5x8, ALIGN_CENTER, elapsed,
                         sv.event_color, pause_ms=pause, pixels_per_second=pxs)
             if sv.event_name:
@@ -1172,6 +1346,69 @@ def render_soccer_live(display: Hub75Display, writer: FontWriter, regions: Regio
             # Nothing in the ticker yet: a dim placeholder so the strip
             # doesn't read as a rendering hole.
             writer.draw(R["EVENT_EMPTY"], "NO GOALS", spleen_5x8, ALIGN_CENTER, 0, DIM_GRAY)
+
+    _render_toast_overlay(display, state, now_ms)
+
+
+def render_nba_live(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int, play_elapsed_ms: int) -> None:
+    """Render the live NBA screen (single design, soccer-A silhouette).
+
+    Identity column: stacked logos + scores (3-digit-wide slots) with the
+    period chip ("Q3" / "OT") where soccer's half sat. Data column: the
+    poll-time clock string — never extrapolated (see NbaLiveView) — in the
+    clock color, warning-colored when sub-minute, accent "HT"/"END" during
+    breaks. Bottom strip: toast > play flash (shared machinery); NBA has no
+    persistent ticker, so the strip is empty between flashes like the MLB
+    pitcher/batter view is between plays.
+    """
+    display.fill(BLACK)
+
+    nv = state.nba_live
+    geo = screen_geometry.nba_live_geometry()
+    R = regions.nba_live
+
+    # --- Dividers ---
+    if screen_geometry.SHOW_DIVIDERS:
+        display.vline(geo["DIVIDER_X"], 0, DISPLAY_HEIGHT, DIM_GRAY)
+        display.hline(geo["DIVIDER_X"] + 1, geo["SEPARATOR_Y"],
+                      DISPLAY_WIDTH - geo["DIVIDER_X"] - 1, DIM_GRAY)
+
+    # --- Logos + scores ---
+    if state.away_logo is not None:
+        display.blit(state.away_logo, geo["LOGO_AWAY"][0], geo["LOGO_AWAY"][1])
+    if state.home_logo is not None:
+        display.blit(state.home_logo, geo["LOGO_HOME"][0], geo["LOGO_HOME"][1])
+
+    sa = geo["SCORE_AWAY"]
+    writer.integer(nv.away_score, sa[0], sa[1], sa[2], ALIGN_CENTER, WHITE, font=unscii_16)
+    sh = geo["SCORE_HOME"]
+    writer.integer(nv.home_score, sh[0], sh[1], sh[2], ALIGN_CENTER, WHITE, font=unscii_16)
+
+    # --- Period chip + clock ---
+    if nv.phase_text:
+        writer.draw(R["PHASE"], nv.phase_text, unscii_8, ALIGN_CENTER, 0, WHITE)
+
+    if nv.clock_accent:
+        clock_col = colors.accent
+    elif nv.clock_low:
+        clock_col = colors.clock_warning
+    else:
+        clock_col = colors.clock_normal
+    ck = geo["CLOCK"]
+    writer.aligned_text(nv.clock_text, ck[0], ck[1], ck[2], ALIGN_CENTER, clock_col, font=_CLOCK_FONT)
+
+    # --- Bottom strip: toast > play flash > empty ---
+    if not _render_toast(writer, regions, state, now_ms):
+        play = state.game.play
+        play_window_ms = time.ticks_diff(now_ms, play.updated_ms)
+        if bool(play.text) and play.updated_ms != 0 and play_window_ms < play.display_ms:
+            # No glyph fallback — see render_game (strip is an invariant).
+            writer.draw_strip(
+                regions.play_text, play.strip,
+                ALIGN_LEFT, play_elapsed_ms, WHITE,
+                pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
+                pixels_per_second=screen_geometry.GAME_SCROLL_PX_PER_SEC,
+            )
 
     _render_toast_overlay(display, state, now_ms)
 
@@ -1219,7 +1456,7 @@ def render_soccer_final(display: Hub75Display, writer: FontWriter, regions: Regi
     writer.draw(R["FT_LABEL"], fv.ft_text, unscii_8, ALIGN_CENTER, 0, colors.accent)
 
     pause = screen_geometry.SOCCER_SCROLL_PAUSE_MS
-    pxs = screen_geometry.SOCCER_SCROLL_PX_PER_SEC
+    pxs = screen_geometry.GAME_SCROLL_PX_PER_SEC
     if fv.scorers_away:
         _text_or_strip(writer, R["SCORERS_AWAY"], fv.scorers_away, fv.scorers_away_strip,
                        ALIGN_CENTER, elapsed, away_col, pause, pxs)
@@ -1264,6 +1501,8 @@ def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, st
         render_setup(display, writer, regions, state, colors, now_ms)
     elif mode == 'error':
         render_error(display, writer, regions, state, colors)
+    elif mode == 'updating':
+        render_updating(display, writer, regions, state, colors)
     elif mode == 'game':
         render_game(display, writer, regions, state, colors, now_ms, view_elapsed_ms, play_elapsed_ms)
     elif mode == 'pregame':
@@ -1274,6 +1513,8 @@ def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, st
         render_soccer_live(display, writer, regions, state, colors, now_ms, view_elapsed_ms, play_elapsed_ms)
     elif mode == 'soccer_final':
         render_soccer_final(display, writer, regions, state, colors, now_ms, view_elapsed_ms)
+    elif mode == 'nba_live':
+        render_nba_live(display, writer, regions, state, colors, now_ms, view_elapsed_ms, play_elapsed_ms)
     else:
         render_idle(display, writer, regions, colors)
 
@@ -1285,7 +1526,7 @@ def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, st
 # Modes with no time-driven animation: re-rendering is only needed when a new
 # commit lands (or a toast is fading out). 'game' and 'setup' animate every
 # frame (scrolling text, pulsing count dots) and always redraw.
-_STATIC_MODES = ('idle', 'no_games', 'error', 'startup')
+_STATIC_MODES = ('idle', 'no_games', 'error', 'startup', 'updating')
 
 
 def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regions, health: ThreadHealth) -> None:
@@ -1344,6 +1585,20 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
 
     deadline = time.ticks_ms()
 
+    # [MEMPROF] window state (see MEM_PROFILE). Per-tick mem_alloc deltas:
+    # positive = bytes allocated since last tick (render + whatever Core 0
+    # did meanwhile); negative = a collection ran. `over` counts EVERY tick
+    # that blew the 50 ms budget (health's `slow` only counts >70 ms), so
+    # visible stutters and GC events can be correlated directly.
+    _mp_prev = gc.mem_alloc() if MEM_PROFILE else 0
+    _mp_churn = 0
+    _mp_gcs = 0
+    _mp_worst_d = 0
+    _mp_freed = 0
+    _mp_maxdrop = 0
+    _mp_over = 0
+    _mp_report_ms = time.ticks_ms()
+
     while True:
         # Heartbeat for the watchdog feeder: per tick, not per render.
         health.frame_seq = (health.frame_seq + 1) & 0x3FFFFFF
@@ -1352,6 +1607,24 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
 
         try:
             now_ms = time.ticks_ms()
+
+            if MEM_PROFILE:
+                _mp_now = gc.mem_alloc()
+                _mp_d = _mp_now - _mp_prev
+                _mp_prev = _mp_now
+                if _mp_d >= 0:
+                    _mp_churn += _mp_d
+                    if _mp_d > _mp_worst_d:
+                        _mp_worst_d = _mp_d
+                else:
+                    # mem_alloc dropped: a real collection (drop ~= all
+                    # garbage since the last one) or a C-level explicit
+                    # free (network buffers etc., typically small). Track
+                    # sizes so the two are distinguishable in the report.
+                    _mp_gcs += 1
+                    _mp_freed -= _mp_d
+                    if -_mp_d > _mp_maxdrop:
+                        _mp_maxdrop = -_mp_d
 
             _hb_period = time.ticks_diff(now_ms, _hb_prev_ms)
             _hb_prev_ms = now_ms
@@ -1373,7 +1646,10 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
                 play_epoch_stamp = state.game.play.updated_ms
                 play_epoch_anim = anim_ms
 
-            toast_active = _toast_active(state, now_ms)
+            # "Active" includes the overlay's fade-out tail so static modes
+            # keep rendering until the dim has fully eased back out.
+            toast_active = (_toast_active(state, now_ms)
+                            or _toast_overlay_fading(state, now_ms))
             skip = (seq == last_rendered_seq
                     and state.mode in _STATIC_MODES
                     and not toast_active
@@ -1395,6 +1671,18 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
                 _hb_frames = _hb_slow = _hb_worst = 0
                 _hb_last_report = now_ms
 
+            if MEM_PROFILE and time.ticks_diff(now_ms, _mp_report_ms) >= 10_000:
+                _mp_play = state.game.play
+                if logger.level >= DEBUG:
+                    logger.debug(
+                        "[MEMPROF] churn=%dB/s gc=%d freed=%dB maxdrop=%dB worstd=%dB over=%d mode=%s play=%d strip=%d"
+                        % (_mp_churn // 10, _mp_gcs, _mp_freed, _mp_maxdrop,
+                           _mp_worst_d, _mp_over, state.mode, len(_mp_play.text),
+                           0 if _mp_play.strip is None else 1)
+                    )
+                _mp_churn = _mp_gcs = _mp_worst_d = _mp_freed = _mp_maxdrop = _mp_over = 0
+                _mp_report_ms = now_ms
+
         except Exception as e:
             # Guarded: this path can repeat every frame while erroring, so
             # don't build the message when ERROR logging is off.
@@ -1408,4 +1696,5 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
         else:
             # Overran the budget (e.g. a GC pause): re-anchor instead of
             # bursting frames to catch up.
+            _mp_over += 1
             deadline = time.ticks_ms()

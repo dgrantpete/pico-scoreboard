@@ -4,8 +4,8 @@ A variant names the renderer to call (`"module:function"`, default
 `scoreboard.display:render_frame`) and an optional map of module constants to
 override for the duration of the render:
 
-    Variant("pulse-fast", overrides={
-        "scoreboard.display": {"PLAY_TEXT_SCROLL_PX_PER_SEC": 60},
+    Variant("scroll-fast", overrides={
+        "scoreboard.screen_geometry": {"GAME_SCROLL_PX_PER_SEC": 40},
     })
 
 `apply()` is a context manager that setattr's each override onto the imported
@@ -82,6 +82,9 @@ for _letter in ("A", "B", "C"):
     register(Variant(f"pregame-{_letter}", overrides={_SG: {"PREGAME_VARIANT": _letter}}))
     register(Variant(f"final-{_letter}", overrides={_SG: {"FINAL_VARIANT": _letter}}))
     register(Variant(f"soccer-{_letter}", overrides={_SG: {"SOCCER_LIVE_VARIANT": _letter}}))
+
+# Divider on/off comparison (config display.show_dividers); scenarios opt in.
+register(Variant("no-dividers", overrides={_SG: {"SHOW_DIVIDERS": False}}))
 
 # Critical-count red-tint saturation sweep (paired with critical-red-tint only).
 for _s_max in (0, 48, 80, 128):

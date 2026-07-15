@@ -233,9 +233,10 @@ def _compute_index_etag() -> str | None:
 
 INDEX_ETAG: str | None = _compute_index_etag()
 
-def update_startup_display(step: int, operation: str, detail: str = '') -> None:
+def update_startup_display(step: int, operation: str, detail: str = '',
+                           attempt: int = 0, attempts_total: int = 0) -> None:
     """Update startup progress state. The display thread renders it on its next tick."""
-    set_startup_step(step, 5, operation, detail)
+    set_startup_step(step, 5, operation, detail, attempt, attempts_total)
 
 
 def _resize_setup_regions_for_qr(regions: Regions) -> None:
@@ -363,7 +364,7 @@ async def _sync_time_from_backend() -> int | None:
 
         async def _fetch() -> int | None:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, ssl=True) as resp:
+                async with session.get(url, ssl=None) as resp:
                     if resp.status != 200:
                         logger.error(f"[TIME] sync failed: http={resp.status}")
                         return None
@@ -554,13 +555,18 @@ def start_station_mode() -> network.WLAN | None:
         # Full reset before each attempt
         reset_wlan(wlan)
 
+        # Retries never move the step counter backward (set_startup_step is
+        # monotonic); attempts >1 read as "Retry n/3" plus the attempt dots.
+        scan_op = "WiFi scan" if attempt == 1 else f"Retry {attempt}/{max_retries}"
+        connect_op = "Connecting" if attempt == 1 else f"Retry {attempt}/{max_retries}"
+
         # Scan for available networks
         logger.debug("[WIFI] scan started")
-        update_startup_display(2, "WiFi scan", "Scanning...")
+        update_startup_display(2, scan_op, "Scanning...", attempt, max_retries)
         target_found = False
         try:
             networks = wlan.scan()
-            update_startup_display(2, "WiFi scan", f"Found {len(networks)}")
+            update_startup_display(2, scan_op, f"Found {len(networks)}", attempt, max_retries)
             for net in networks:
                 ssid = net[0].decode('utf-8', 'replace')
                 if ssid == config.ssid:
@@ -568,12 +574,12 @@ def start_station_mode() -> network.WLAN | None:
             logger.debug(f"[WIFI] scan complete: found={len(networks)}, target_visible={target_found}")
         except Exception as e:
             logger.error(f"[WIFI] scan failed: {e}")
-            update_startup_display(2, "WiFi scan", "Scan failed")
+            update_startup_display(2, scan_op, "Scan failed", attempt, max_retries)
 
         logger.debug(f"[WIFI] connecting to ssid={config.ssid}")
-        # Show SSID in detail line (up to 20 chars), attempt counter in operation
+        # Show SSID in detail line (up to 20 chars)
         ssid_display = config.ssid[:20] if len(config.ssid) > 20 else config.ssid
-        update_startup_display(3, f"Connecting ({attempt}/{max_retries})", ssid_display)
+        update_startup_display(3, connect_op, ssid_display, attempt, max_retries)
 
         wlan.connect(config.ssid, config.password)
 
@@ -1048,9 +1054,15 @@ if __name__ == '__main__':
     logger.debug("[MAIN] display init started")
     # Seed the screen-layout variant selectors from config BEFORE Regions are
     # built (regions not registered yet -> selectors only), then register the
-    # built Regions so later config saves can rebuild them live.
-    from scoreboard.state import update_screen_variants, set_display_regions
+    # built Regions so later config saves can rebuild them live. Dividers and
+    # scroll speed are plain screen_geometry globals — seed them here too.
+    from scoreboard.state import (
+        update_screen_variants, update_show_dividers, update_scroll_speed,
+        set_display_regions,
+    )
     update_screen_variants(config)
+    update_show_dividers(config)
+    update_scroll_speed(config)
     driver, display, writer, regions = init_display(config)
     set_display_driver(driver)
     set_display_regions(regions)

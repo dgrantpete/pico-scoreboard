@@ -34,6 +34,7 @@ _pkg = types.ModuleType("scoreboard")
 _pkg.__path__ = [str(FIRMWARE_SRC / "scoreboard")]
 sys.modules["scoreboard"] = _pkg
 mlb = importlib.import_module("scoreboard.mlb")
+nba = importlib.import_module("scoreboard.nba")
 soccer = importlib.import_module("scoreboard.soccer")
 inning_half = importlib.import_module("scoreboard.inning_half")
 
@@ -141,6 +142,54 @@ def encode_soccer_pregame(
     return bytes(out)
 
 
+def encode_nba_live(
+    *, flags, period, phase, away_score, home_score,
+    away_pri, away_alt, home_pri, home_alt,
+    game_id, away_abbr, home_abbr, clock, last_play_id, last_play_text,
+) -> bytes:
+    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_IN])
+    out += struct.pack(
+        "<BBBHHIIII",
+        flags, period, phase, away_score, home_score,
+        away_pri, away_alt, home_pri, home_alt,
+    )
+    out += _str(game_id) + _str(away_abbr) + _str(home_abbr) + _str(clock)
+    if flags & 0x01:
+        out += _str(last_play_id) + _str(last_play_text)
+    return bytes(out)
+
+
+def encode_nba_pregame(
+    *, flags, away_wins, away_losses, home_wins, home_losses,
+    start_time, away_pri, away_alt, home_pri, home_alt,
+    game_id, away_abbr, home_abbr, venue,
+) -> bytes:
+    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_PRE])
+    out += struct.pack(
+        "<BHHHHIIIII",
+        flags, away_wins, away_losses, home_wins, home_losses,
+        start_time, away_pri, away_alt, home_pri, home_alt,
+    )
+    out += _str(game_id) + _str(away_abbr) + _str(home_abbr) + _str(venue)
+    return bytes(out)
+
+
+def encode_nba_final(
+    *, periods_played, away_line, home_line, away_score, home_score,
+    away_pri, away_alt, home_pri, home_alt,
+    game_id, away_abbr, home_abbr,
+) -> bytes:
+    out = bytearray([mlb.WIRE_VERSION, mlb.GAME_STATE_POST])
+    out += struct.pack(
+        "<BBBHHIIII",
+        periods_played, len(away_line), len(home_line), away_score, home_score,
+        away_pri, away_alt, home_pri, home_alt,
+    )
+    out += bytes(away_line) + bytes(home_line)
+    out += _str(game_id) + _str(away_abbr) + _str(home_abbr)
+    return bytes(out)
+
+
 def encode_soccer_final(
     *, away_score, home_score, away_pri, away_alt, home_pri, home_alt,
     game_id, away_abbr, home_abbr, away_scorers, home_scorers,
@@ -236,6 +285,60 @@ FINAL_EXTRAS = dict(
 )
 
 
+NBA_LIVE_FULL = dict(
+    flags=0x01, period=3, phase=nba.PHASE_IN_PROGRESS,
+    away_score=75, home_score=77,
+    away_pri=0x007AC1, away_alt=0xEF3B24, home_pri=0x0E2240, home_alt=0xFEC524,
+    game_id="401811037", away_abbr="OKC", home_abbr="DEN", clock="4:37",
+    last_play_id="401811037411",
+    last_play_text="Zeke Nnaji out of bounds bad pass turnover",
+)
+
+NBA_LIVE_HALFTIME = dict(
+    flags=0x00, period=2, phase=nba.PHASE_HALFTIME,
+    away_score=52, home_score=74,
+    away_pri=0x5D76A9, away_alt=0xF5B112, home_pri=0x4E008E, home_alt=0xF9A01B,
+    game_id="401811036", away_abbr="MEM", home_abbr="UTAH", clock="0.0",
+    last_play_id="", last_play_text="",
+)
+
+NBA_PREGAME_ALL = dict(
+    flags=0x03,
+    away_wins=40, away_losses=42, home_wins=50, home_losses=32,
+    start_time=1775874600,  # 2026-04-11T02:30Z
+    away_pri=0x29127A, away_alt=0xE56020, home_pri=0x552583, home_alt=0xFDB927,
+    game_id="401811040", away_abbr="PHX", home_abbr="LAL",
+    venue="crypto.com Arena",
+)
+
+NBA_PREGAME_NONE = dict(
+    flags=0x00,
+    away_wins=0, away_losses=0, home_wins=0, home_losses=0,
+    start_time=1775874600,
+    away_pri=0x29127A, away_alt=0xE56020, home_pri=0x552583, home_alt=0xFDB927,
+    game_id="401811040", away_abbr="PHX", home_abbr="LAL",
+    venue="crypto.com Arena",
+)
+
+NBA_FINAL = dict(
+    periods_played=4,
+    away_line=[30, 28, 30, 30],
+    home_line=[25, 25, 25, 25],
+    away_score=118, home_score=100,
+    away_pri=0x1D428A, away_alt=0xC8102E, home_pri=0x008CA8, home_alt=0x1D1160,
+    game_id="401811026", away_abbr="DET", home_abbr="CHA",
+)
+
+# Overtime: five periods, five line-score entries per side.
+NBA_FINAL_OT = dict(
+    periods_played=5,
+    away_line=[30, 28, 30, 30, 12],
+    home_line=[25, 25, 25, 25, 10],
+    away_score=130, home_score=110,
+    away_pri=0x1D428A, away_alt=0xC8102E, home_pri=0x008CA8, home_alt=0x1D1160,
+    game_id="401811027", away_abbr="DET", home_abbr="CHA",
+)
+
 SOCCER_LIVE_FULL = dict(
     # flags: event present (0x02) + event away (0x08)
     flags=0x0A, half=1, clock_seconds=51 * 60,
@@ -297,6 +400,12 @@ GOLDEN_PREGAME_NONE = encode_pregame(**PREGAME_NONE)
 GOLDEN_FINAL_EVEN = encode_final(**FINAL_EVEN)
 GOLDEN_FINAL_WALKOFF = encode_final(**FINAL_WALKOFF)
 GOLDEN_FINAL_EXTRAS = encode_final(**FINAL_EXTRAS)
+GOLDEN_NBA_LIVE_FULL = encode_nba_live(**NBA_LIVE_FULL)
+GOLDEN_NBA_LIVE_HALFTIME = encode_nba_live(**NBA_LIVE_HALFTIME)
+GOLDEN_NBA_PREGAME_ALL = encode_nba_pregame(**NBA_PREGAME_ALL)
+GOLDEN_NBA_PREGAME_NONE = encode_nba_pregame(**NBA_PREGAME_NONE)
+GOLDEN_NBA_FINAL = encode_nba_final(**NBA_FINAL)
+GOLDEN_NBA_FINAL_OT = encode_nba_final(**NBA_FINAL_OT)
 GOLDEN_SOCCER_LIVE_FULL = encode_soccer_live(**SOCCER_LIVE_FULL)
 GOLDEN_SOCCER_LIVE_COMMENTARY = encode_soccer_live(**SOCCER_LIVE_COMMENTARY)
 GOLDEN_SOCCER_LIVE_HALFTIME = encode_soccer_live(**SOCCER_LIVE_HALFTIME)
@@ -313,6 +422,12 @@ _GOLDENS = [
     ("final_even", GOLDEN_FINAL_EVEN),
     ("final_walkoff", GOLDEN_FINAL_WALKOFF),
     ("final_extras", GOLDEN_FINAL_EXTRAS),
+    ("nba_live_full", GOLDEN_NBA_LIVE_FULL),
+    ("nba_live_ht", GOLDEN_NBA_LIVE_HALFTIME),
+    ("nba_pregame_all", GOLDEN_NBA_PREGAME_ALL),
+    ("nba_pregame_none", GOLDEN_NBA_PREGAME_NONE),
+    ("nba_final", GOLDEN_NBA_FINAL),
+    ("nba_final_ot", GOLDEN_NBA_FINAL_OT),
     ("soccer_live_full", GOLDEN_SOCCER_LIVE_FULL),
     ("soccer_live_comm", GOLDEN_SOCCER_LIVE_COMMENTARY),
     ("soccer_live_ht", GOLDEN_SOCCER_LIVE_HALFTIME),
@@ -351,6 +466,29 @@ RUST_PIN_FINAL = bytes.fromhex(
 )
 RUST_PIN_LIST = bytes.fromhex(
     "0203000934303135373037323901093430313537303030310209343031353730303032"
+)
+
+# NBA goldens (backend/src/wire.rs GOLDEN_NBA_* test constants).
+RUST_PIN_NBA_LIVE = bytes.fromhex(
+    "02010103004b004d00c17a0000243bef0040220e0024c5fe000934303138313130"
+    "3337034f4b430344454e04343a33370c3430313831313033373431312a5a656b65"
+    "204e6e616a69206f7574206f6620626f756e6473206261642070617373207475726e6f766572"
+)
+RUST_PIN_NBA_HALFTIME = bytes.fromhex(
+    "020100020134004a00a9765d0012b1f5008e004e001ba0f90009343031383131303336"
+    "034d454d045554414803302e30"
+)
+RUST_PIN_NBA_PRE = bytes.fromhex(
+    "02000328002a003200200028b2d9697a1229002060e5008325550027b9fd0009343031"
+    "38313130343003504858034c414c1063727970746f2e636f6d204172656e61"
+)
+RUST_PIN_NBA_PRE_NO_RECORDS = bytes.fromhex(
+    "020000000000000000000028b2d9697a1229002060e5008325550027b9fd0009343031"
+    "38313130343003504858034c414c1063727970746f2e636f6d204172656e61"
+)
+RUST_PIN_NBA_FINAL = bytes.fromhex(
+    "0202040404760064008a421d002e10c800a88c000060111d001e1c1e1e19191919"
+    "093430313831313032360344455403434841"
 )
 
 # Soccer goldens (backend/src/wire.rs GOLDEN_SOCCER_* test constants).
@@ -423,6 +561,20 @@ def check_rust_pins() -> None:
     assert game.home.pitcher == "Y. Darvish"
     final = mlb.parse_game_detail(memoryview(RUST_PIN_FINAL))
     assert final.home.line == bytes([0, 1, 0, 0, 2, 0, 0, 2])
+
+    # NBA: the pure-Python encodings must reproduce the Rust bytes, and the
+    # firmware NBA parser must accept the Rust bytes directly.
+    assert encode_nba_live(**NBA_LIVE_FULL) == RUST_PIN_NBA_LIVE
+    assert encode_nba_live(**NBA_LIVE_HALFTIME) == RUST_PIN_NBA_HALFTIME
+    assert encode_nba_pregame(**NBA_PREGAME_ALL) == RUST_PIN_NBA_PRE
+    assert encode_nba_pregame(**NBA_PREGAME_NONE) == RUST_PIN_NBA_PRE_NO_RECORDS
+    assert encode_nba_final(**NBA_FINAL) == RUST_PIN_NBA_FINAL
+
+    nba_live = nba.parse_game_detail(memoryview(RUST_PIN_NBA_LIVE))
+    assert nba_live.clock == "4:37"
+    assert nba_live.last_play.id == "401811037411"
+    nba_final_game = nba.parse_game_detail(memoryview(RUST_PIN_NBA_FINAL))
+    assert nba_final_game.home.line == bytes([25, 25, 25, 25])
 
     # Soccer: the pure-Python encodings must reproduce the Rust bytes, and
     # the firmware soccer parser must accept the Rust bytes directly.
@@ -583,6 +735,101 @@ def check_final_copies_out() -> None:
     assert game.away.line == original, "line vec aliased the reusable buffer"
 
 
+def check_nba_live_full() -> None:
+    game = nba.parse_game_detail(memoryview(GOLDEN_NBA_LIVE_FULL))
+    assert isinstance(game, nba.LiveGame)
+    assert game.game_id == "401811037"
+    assert game.period == 3
+    assert game.phase == nba.PHASE_IN_PROGRESS
+    assert game.clock == "4:37"
+    assert game.away.abbreviation == "OKC"
+    assert game.away.score == 75
+    assert game.away.colors.primary == 0x007AC1
+    assert game.away.colors.alternate == 0xEF3B24
+    assert game.home.abbreviation == "DEN"
+    assert game.home.score == 77
+    assert game.home.colors.primary == 0x0E2240
+    play = game.last_play
+    assert play is not None
+    assert play.id == "401811037411"
+    assert play.text == "Zeke Nnaji out of bounds bad pass turnover"
+
+
+def check_nba_live_halftime() -> None:
+    game = nba.parse_game_detail(memoryview(GOLDEN_NBA_LIVE_HALFTIME))
+    assert isinstance(game, nba.LiveGame)
+    assert game.phase == nba.PHASE_HALFTIME
+    assert game.period == 2
+    assert game.clock == "0.0"  # break clock is meaningless; phase renders
+    assert game.last_play is None
+    assert game.away.abbreviation == "MEM" and game.away.score == 52
+    assert game.home.abbreviation == "UTAH" and game.home.score == 74
+
+
+def check_nba_pregame() -> None:
+    game = nba.parse_game_detail(memoryview(GOLDEN_NBA_PREGAME_ALL))
+    assert isinstance(game, nba.PregameGame)
+    assert game.game_id == "401811040"
+    assert game.start_epoch == 1775874600
+    assert game.venue == "crypto.com Arena"
+    assert game.away.abbreviation == "PHX"
+    assert game.away.wins == 40 and game.away.losses == 42
+    assert game.home.abbreviation == "LAL"
+    assert game.home.wins == 50 and game.home.losses == 32
+    # NBA ducks the MLB pregame contract: weather/probables permanently absent.
+    assert game.weather_temp is None and game.weather_condition is None
+    assert game.away.pitcher is None and game.home.pitcher is None
+
+    none = nba.parse_game_detail(memoryview(GOLDEN_NBA_PREGAME_NONE))
+    # Unset record flags surface as None even though the wire carries zeros.
+    assert none.away.wins is None and none.away.losses is None
+    assert none.home.wins is None and none.home.losses is None
+
+
+def check_nba_final() -> None:
+    game = nba.parse_game_detail(memoryview(GOLDEN_NBA_FINAL))
+    assert isinstance(game, nba.FinalGame)
+    assert game.game_id == "401811026"
+    assert game.periods_played == 4
+    assert game.away.abbreviation == "DET" and game.away.score == 118
+    assert game.away.line == bytes([30, 28, 30, 30])
+    assert game.home.abbreviation == "CHA" and game.home.score == 100
+    assert game.home.line == bytes([25, 25, 25, 25])
+
+    ot = nba.parse_game_detail(memoryview(GOLDEN_NBA_FINAL_OT))
+    assert ot.periods_played == 5
+    assert len(ot.away.line) == 5 and len(ot.home.line) == 5
+    assert ot.away.line[4] == 12
+
+
+def check_nba_rejections() -> None:
+    def expect_error(payload: bytes, why: str) -> None:
+        try:
+            nba.parse_game_detail(memoryview(payload))
+        except mlb.DeserializeError:
+            return
+        raise AssertionError(f"accepted invalid NBA payload: {why}")
+
+    expect_error(b"", "empty payload")
+    expect_error(bytes([3]) + GOLDEN_NBA_LIVE_FULL[1:], "future version")
+    expect_error(bytes([mlb.WIRE_VERSION, 9]), "unknown state")
+    expect_error(GOLDEN_NBA_LIVE_FULL[:20], "truncated NBA live fixed section")
+    expect_error(GOLDEN_NBA_LIVE_FULL[:-3], "truncated inside last play text")
+    expect_error(GOLDEN_NBA_LIVE_FULL + b"\x00", "trailing bytes after live")
+    expect_error(GOLDEN_NBA_PREGAME_ALL[:20], "truncated NBA pregame fixed section")
+    expect_error(GOLDEN_NBA_PREGAME_ALL + b"\x00", "trailing bytes after pregame")
+    expect_error(GOLDEN_NBA_FINAL[:15], "truncated NBA final fixed section")
+    expect_error(GOLDEN_NBA_FINAL + b"\x00", "trailing bytes after final")
+
+    bad_phase = bytearray(GOLDEN_NBA_LIVE_FULL)
+    bad_phase[4] = 9  # phase code (offset 2 + 2)
+    expect_error(bytes(bad_phase), "invalid live phase code")
+
+    bad_final = bytearray(GOLDEN_NBA_FINAL)
+    bad_final[3] = 200  # away linescore len
+    expect_error(bytes(bad_final), "linescore length overruns body")
+
+
 def check_soccer_live_full() -> None:
     game = soccer.parse_game_detail(memoryview(GOLDEN_SOCCER_LIVE_FULL), "WORLD CUP")
     assert isinstance(game, soccer.LiveGame)
@@ -739,6 +986,11 @@ def main() -> int:
     check_final_walkoff()
     check_final_extras()
     check_final_copies_out()
+    check_nba_live_full()
+    check_nba_live_halftime()
+    check_nba_pregame()
+    check_nba_final()
+    check_nba_rejections()
     check_soccer_live_full()
     check_soccer_live_commentary()
     check_soccer_live_halftime()

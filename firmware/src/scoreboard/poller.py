@@ -1,5 +1,6 @@
 """
-Game polling loop, generalized over leagues (MLB + configured soccer leagues).
+Game polling loop, generalized over leagues (MLB + NBA + configured soccer
+leagues).
 
 Owns all polling state on the `GamePoller` instance. No module-level or
 class-level mutable state — the instance is the single source of truth so
@@ -32,6 +33,7 @@ from .api_client import ApiError, ScoreboardApiClient
 from .config import Config
 from .display import LogoPool, play_text_display_ms
 from . import mlb
+from . import nba
 from . import soccer
 from .mlb import (
     DeserializeError,
@@ -49,9 +51,12 @@ from .state import (
     set_final,
     set_soccer_live,
     set_soccer_final,
+    set_nba_live,
+    set_nba_final,
     clear_toast_if_sticky,
     pulse_toast,
     build_play_strip,
+    fit_play_text,
     TOAST_LOCK,
     TOAST_UNLOCK,
     TOAST_SPINNER,
@@ -103,6 +108,10 @@ def mlb_source() -> LeagueSource:
     return LeagueSource("baseball/mlb", "MLB", "/baseball/mlb", mlb.parse_game_detail)
 
 
+def nba_source() -> LeagueSource:
+    return LeagueSource("basketball/nba", "NBA", "/basketball/nba", nba.parse_game_detail)
+
+
 def soccer_source(slug: str) -> LeagueSource:
     league_name = soccer.LEAGUE_NAMES.get(slug, slug.upper())
 
@@ -113,10 +122,13 @@ def soccer_source(slug: str) -> LeagueSource:
 
 
 def sources_from_config(config: Config) -> list:
-    """The configured league sources, MLB first, soccer leagues in config order."""
+    """The configured league sources: MLB, then NBA, then soccer leagues in
+    config order."""
     sources = []
     if config.mlb_enabled:
         sources.append(mlb_source())
+    if config.nba_enabled:
+        sources.append(nba_source())
     for slug in config.soccer_leagues:
         sources.append(soccer_source(slug))
     return sources
@@ -459,10 +471,14 @@ class GamePoller:
             self._commit_mlb_live(game_id, detail, home_logo, away_logo)
         elif isinstance(detail, soccer.LiveGame):
             self._commit_soccer_live(game_id, detail, home_logo, away_logo)
-        elif isinstance(detail, (mlb.PregameGame, soccer.PregameGame)):
+        elif isinstance(detail, nba.LiveGame):
+            self._commit_nba_live(detail, home_logo, away_logo)
+        elif isinstance(detail, (mlb.PregameGame, nba.PregameGame, soccer.PregameGame)):
             set_pregame(detail, home_logo, away_logo, self._utc_offset_s)
         elif isinstance(detail, mlb.FinalGame):
             set_final(detail, home_logo, away_logo)
+        elif isinstance(detail, nba.FinalGame):
+            set_nba_final(detail, home_logo, away_logo)
         elif isinstance(detail, soccer.FinalGame):
             set_soccer_final(detail, home_logo, away_logo)
         else:
@@ -488,11 +504,39 @@ class GamePoller:
         state = get_write_state()
         play = state.game.play
         if new_id and new_id != play.id:
+            # Fit first: text, display window, and strip must describe the
+            # same string, and the strip must always exist (glyph fallback
+            # costs >50 ms/frame on long lines).
+            text = fit_play_text(live.comment_text)
             play.id = new_id
-            play.text = live.comment_text
+            play.text = text
             play.updated_ms = time.ticks_ms()
-            play.display_ms = play_text_display_ms(live.comment_text)
-            play.strip = build_play_strip(live.comment_text)
+            play.display_ms = play_text_display_ms(text)
+            play.strip = build_play_strip(text)
+            commit_state()
+
+    def _commit_nba_live(self, live, home_logo, away_logo) -> None:
+        set_nba_live(live, home_logo, away_logo)
+
+        # Play flash: same machinery as the MLB play flash, but NBA's last
+        # play is optional (absent before the opening tip) — no play, no
+        # flash, and the shared play slot keeps its previous id so a play
+        # that reappears unchanged doesn't re-flash.
+        play = live.last_play
+        if play is None:
+            return
+        state = get_write_state()
+        ps = state.game.play
+        if play.id != ps.id:
+            # Fit first: text, display window, and strip must describe the
+            # same string, and the strip must always exist (glyph fallback
+            # costs >50 ms/frame on long lines).
+            text = fit_play_text(play.text)
+            ps.id = play.id
+            ps.text = text
+            ps.updated_ms = time.ticks_ms()
+            ps.display_ms = play_text_display_ms(text)
+            ps.strip = build_play_strip(text)
             commit_state()
 
     def _commit_mlb_live(self, game_id: str, live, home_logo, away_logo) -> None:
@@ -510,15 +554,17 @@ class GamePoller:
         # can catch up on the newest play.
         new_play_id = live.last_play.id
         if new_play_id != state.game.play.id:
+            # Fit first: text, display window, and strip must describe the
+            # same string, and the strip must always exist (glyph fallback
+            # costs >50 ms/frame on long lines — measured 2026-07-12).
+            text = fit_play_text(live.last_play.text)
             state.game.play.id = new_play_id
-            state.game.play.text = live.last_play.text
+            state.game.play.text = text
             state.game.play.updated_ms = time.ticks_ms()
             # Window sized to the text: one full scroll cycle, measured here
             # on Core 0 so the display thread never measures text.
-            state.game.play.display_ms = play_text_display_ms(live.last_play.text)
-            # Pre-rendered strip (None if the text out-sizes the pool — the
-            # display then falls back to per-glyph drawing for this play).
-            state.game.play.strip = build_play_strip(live.last_play.text)
+            state.game.play.display_ms = play_text_display_ms(text)
+            state.game.play.strip = build_play_strip(text)
 
         state.home_logo = home_logo
         state.away_logo = away_logo

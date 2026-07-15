@@ -40,6 +40,8 @@ export interface DisplayConfig {
 	gamma: GammaConfig;
 	blanking_time_ns: number; // 0-3000 nanoseconds
 	variants: VariantsConfig;
+	show_dividers: boolean; // divider lines on game screens; applied live
+	scroll_speed_px_per_sec: number; // 5 | 10 | 20 | 40; applied live
 }
 
 export type DisplayConfigUpdate = Partial<DisplayConfig>;
@@ -90,6 +92,7 @@ export type OtaConfigUpdate = Partial<OtaConfig>;
 // scoreboard/soccer.py LEAGUE_NAMES); empty list = soccer off.
 export interface SportsConfig {
 	mlb: { enabled: boolean };
+	nba: { enabled: boolean };
 	soccer: { leagues: string[] };
 }
 
