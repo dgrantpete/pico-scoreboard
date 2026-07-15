@@ -199,11 +199,14 @@ def enter_update_mode(port: str = None) -> bool:
     handshake, and proceeding on a silent failure once erased ROMFS under
     the running app (Core 1 crashed with `NotImplementedError: opcode`).
 
-    Confirmation is positive proof, not timing: main.py's safe-mode branch
-    sets a `_SAFE_MODE` global, and mpremote `exec` shares that namespace.
-    Older deployed main.py lacks the sentinel — for those, fall back to the
-    fs-probe heuristic (fs commands hang while a Core 1 thread is running),
-    which is sound once the request exec is known to have succeeded.
+    Confirmation is positive proof, not timing. Two proofs are accepted:
+    - main.py's safe-mode branch sets a `_SAFE_MODE` global, and mpremote
+      `exec` shares that namespace (requires main.py 2026-07-07+; main.py
+      only updates via USB flash, so one successful flash qualifies a
+      device forever);
+    - no `/main.py` on the filesystem at all (wiped or factory-fresh
+      board): nothing can have started, so the REPL answering is enough.
+    Anything else falls to the manual Button A prompt.
     """
     print("Requesting reboot into safe (update) mode...")
     # --no-follow: machine.reset() kills the connection mid-exec; don't wait.
@@ -224,14 +227,26 @@ def enter_update_mode(port: str = None) -> bool:
                           port, timeout=8, quiet=True)
         if probe is not None and probe.returncode == 0:
             verdict = probe.stdout.decode(errors='replace').strip()
-            if verdict.endswith('SAFE') and not verdict.endswith('UNSAFE'):
-                print("Device is in safe mode.")
-            elif _mpremote(['fs', 'ls', ':'], port, timeout=8, quiet=True) is None:
-                # No sentinel and fs hangs: the app is running. Don't flash.
-                return False
+            if not verdict.endswith('SAFE') or verdict.endswith('UNSAFE'):
+                # No sentinel. One more accepted proof: a board with no
+                # main.py at all cannot have started the app this boot.
+                bare = _mpremote(
+                    ['exec',
+                     "import os; print('APP' if 'main.py' in os.listdir('/') else 'BARE')"],
+                    port, timeout=8, quiet=True)
+                if (bare is not None and bare.returncode == 0
+                        and bare.stdout.decode(errors='replace').strip().endswith('BARE')):
+                    print("Device has no main.py (wiped/fresh board) — safe to flash.")
+                    # The /update flag we wrote had no main.py to consume it;
+                    # clear it or the first post-flash boot lands in safe mode.
+                    _mpremote(['exec',
+                               "import os\ntry:\n os.remove('/update')\nexcept OSError:\n pass"],
+                              port, timeout=8, quiet=True)
+                else:
+                    print("Device responds but did not confirm safe mode.")
+                    return False
             else:
-                print("Device responds without the safe-mode sentinel "
-                      "(older main.py); fs probe is clean — proceeding.")
+                print("Device is in safe mode.")
             # Let the serial port fully release before the next mpremote
             # invocation opens it (Windows COM reopen race).
             time.sleep(1.5)
@@ -323,13 +338,18 @@ def flash_device(source_dir: Path, port: str = None, repl: bool = False, release
     mode first, copy with the app stopped, then hard-reset into the new
     firmware.
 
-    Dev mode (default): everything goes to littlefs — fast iteration, and
-    littlefs shadows any ROMFS app. Release mode: the app ships as a ROMFS
-    image (bytecode executes in place, ~100 KB less heap) with only
-    main.py/config.json on littlefs.
+    Dev mode: everything goes to littlefs — fast iteration, and littlefs
+    shadows any ROMFS app. Release mode: the app ships as a ROMFS image
+    (bytecode executes in place, ~100 KB less heap) with only
+    main.py/config.json on littlefs. The caller resolves the default from
+    build.config.json "flash_release" (see _resolve_deploy_release).
     """
     mode = 'release (ROMFS)' if release else 'dev (littlefs)'
     print(f"Flashing {source_dir.relative_to(root_directory)}/ to device [{mode}]...")
+    if not release:
+        print("  NOTE: dev deploy — littlefs shadows any ROMFS image and the app")
+        print("  runs as RAM bytecode (~100 KB heap cost; frequent GC on a full")
+        print("  heap). Use --release or build.config.json \"flash_release\": true.")
 
     image_path, image_sha = build_romfs_image(source_dir) if release else (None, None)
 
@@ -339,7 +359,12 @@ def flash_device(source_dir: Path, port: str = None, repl: bool = False, release
         print("  1. Hold Button A (GPIO 10) while power-cycling or resetting the Pico")
         print("  2. Keep holding for ~2 seconds after power-up")
         print("  3. The app skips startup and the REPL is free")
-        input("Press Enter once the device has rebooted in safe mode... ")
+        try:
+            input("Press Enter once the device has rebooted in safe mode... ")
+        except EOFError:
+            print("No interactive stdin — aborting without flashing. Put the")
+            print("device in safe mode (Button A) and re-run from a terminal.")
+            return
 
     if release:
         print("Deploying ROMFS image...")
@@ -534,6 +559,31 @@ def main():
     )
     add_common_args(publish_parser)
 
+    def _add_deploy_mode_args(sub) -> None:
+        """--release / --dev pair shared by flash and run.
+
+        The DEPLOY mode is separate from the -c/--configuration BUILD mode
+        (mpy-cross vs plain .py) despite the shared word "release". Default
+        comes from build.config.json `flash_release`; --dev forces a littlefs
+        deploy for one-off iteration.
+        """
+        group = sub.add_mutually_exclusive_group()
+        group.add_argument(
+            '--release',
+            action='store_true',
+            help='Deploy the app as a ROMFS image (in-place execution, ~100 KB '
+                 'less heap) instead of littlefs files. Requires the custom '
+                 'firmware with a ROMFS partition. Default comes from '
+                 'build.config.json "flash_release".'
+        )
+        group.add_argument(
+            '--dev',
+            action='store_true',
+            help='Force a littlefs deploy even when build.config.json sets '
+                 '"flash_release": true. Littlefs files shadow any deployed '
+                 'ROMFS image and load as RAM bytecode (~100 KB heap cost).'
+        )
+
     # flash subcommand
     flash_parser = subparsers.add_parser('flash', help='Build and flash to device')
     flash_parser.add_argument(
@@ -545,13 +595,7 @@ def main():
         '--port',
         help='Serial port for flashing (auto-detect if not specified)'
     )
-    flash_parser.add_argument(
-        '--release',
-        action='store_true',
-        help='Deploy the app as a ROMFS image (in-place execution, ~100 KB '
-             'less heap) instead of littlefs files. Requires the custom '
-             'firmware with a ROMFS partition.'
-    )
+    _add_deploy_mode_args(flash_parser)
     add_common_args(flash_parser)
 
     # run subcommand
@@ -565,12 +609,19 @@ def main():
         '--port',
         help='Serial port for flashing (auto-detect if not specified)'
     )
+    _add_deploy_mode_args(run_parser)
     add_common_args(run_parser)
 
     # Global arguments (for default build command)
     add_common_args(parser)
 
     args = parser.parse_args()
+
+    def _resolve_deploy_release(a) -> bool:
+        """Deploy mode: --dev > --release > build.config.json flash_release."""
+        if a.dev:
+            return False
+        return a.release or bool(_build_config.get('flash_release', False))
 
     # deploy command (doesn't use output_dir or firmware args)
     if args.command == 'deploy':
@@ -605,7 +656,7 @@ def main():
             print(f"Error: {output_dir} does not exist. Run build first or remove --no-build.")
             return 1
 
-        flash_device(output_dir, args.port, repl=False, release=args.release)
+        flash_device(output_dir, args.port, repl=False, release=_resolve_deploy_release(args))
         return 0
 
     # run command
@@ -617,7 +668,7 @@ def main():
             print(f"Error: {output_dir} does not exist. Run build first or remove --no-build.")
             return 1
 
-        flash_device(output_dir, args.port, repl=True)
+        flash_device(output_dir, args.port, repl=True, release=_resolve_deploy_release(args))
         return 0
 
     return 0

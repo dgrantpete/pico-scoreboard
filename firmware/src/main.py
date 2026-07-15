@@ -44,7 +44,8 @@ configured, connects to the specified WiFi network.
 #   - /update flag file — written by `tools/build.py flash`, consumed here,
 #     so the tool can reboot the device into a flashable state on its own.
 
-def _safe_mode_requested() -> bool:
+def _safe_mode_reason() -> "str | None":
+    """Why safe mode was requested ('Button held' / 'Update flag'), or None."""
     import machine
     import os
     import time
@@ -54,7 +55,7 @@ def _safe_mode_requested() -> bool:
         time.sleep_ms(5)  # let the pull-up settle before sampling
         if pin.value() == 0:
             print("[BOOT] safe mode: Button A held at power-up")
-            return True
+            return "Button held"
     except Exception:
         pass
 
@@ -62,21 +63,73 @@ def _safe_mode_requested() -> bool:
         os.stat('/update')
         os.remove('/update')
         print("[BOOT] safe mode: /update flag consumed")
-        return True
+        return "Update flag"
     except OSError:
         pass
 
-    return False
+    return None
 
 
-if _safe_mode_requested():
-    import sys
+def _early_display_show(lines) -> "object | None":
+    """One-shot panel bring-up for the pre-app boot screens (safe mode, OTA
+    apply). The HUB75 driver is CPU-free after construction — PIO + DMA
+    refresh the panel continuously — so a single load+flip keeps the message
+    lit with zero CPU, even after sys.exit() to the REPL.
+
+    Best-effort by design: hub75 may live in ROMFS on release builds and the
+    panel may be absent, so any failure returns None and boot continues.
+    Uses framebuf's built-in 8x8 font (no scoreboard.fonts dependency);
+    lines must be <= 16 chars. First line is the title (amber), rest white.
+    Returns the driver (caller deinit()s it if the app will start) or None.
+    """
+    try:
+        import framebuf
+        from machine import Pin
+        from hub75 import Hub75Driver, row_addressing
+
+        # Same panel wiring as scoreboard.display.init_display; driver
+        # defaults cover frequency/gamma/refresh. Fixed dim brightness —
+        # config.json isn't worth parsing this early.
+        driver = Hub75Driver(
+            row_addressing=row_addressing.Binary(base_pin=Pin(11, Pin.OUT), bit_count=5),
+            shift_register_depth=128,
+            output_enable_pin=Pin(28, Pin.OUT),
+            base_clock_pin=Pin(26, Pin.OUT),
+            base_data_pin=Pin(16, Pin.OUT),
+            brightness=0.3,
+        )
+        width, height = 128, 64
+        buf = bytearray(width * height * 2)
+        fb = framebuf.FrameBuffer(buf, width, height, framebuf.RGB565)
+        line_pitch = 12
+        y = (height - (len(lines) * line_pitch - 4)) // 2
+        for i, line in enumerate(lines):
+            color = 0xFDE0 if i == 0 else 0xFFFF  # amber title, white body
+            fb.text(line, (width - len(line) * 8) // 2, y, color)
+            y += line_pitch
+        driver.load_rgb565(buf)
+        driver.flip()
+        return driver
+    except Exception as e:
+        print("[BOOT] early display unavailable:", e)
+        return None
+
+
+_safe_reason = _safe_mode_reason()
+if _safe_reason is not None:
     # Positive sentinel for tools/build.py: mpremote `exec` shares this
     # namespace, so the flash flow can PROVE safe mode took (a timing
     # heuristic once false-positived and erased ROMFS under the running app).
     _SAFE_MODE = True
     print("[BOOT] application NOT started — REPL is free for mpremote/flashing")
-    sys.exit()
+    # MUST NOT sys.exit() here: SystemExit from main.py is a forced exit to
+    # the rp2 port (ports/rp2/main.c), which SOFT-REBOOTS and re-runs
+    # main.py — with the trigger consumed, that re-entered the app and
+    # silently defeated safe mode every time (2026-07-11). Raising any
+    # other exception halts main.py and drops to the REPL with this
+    # namespace (and the sentinel) intact. The traceback below is expected.
+    # Also keep this path display-free (BACKLOG 38).
+    raise RuntimeError("SAFE MODE (%s) — not an error; REPL is free" % _safe_reason)
 # ----------------------------------------------------------------------------
 
 import network
@@ -118,13 +171,14 @@ try:
     from scoreboard import brightness
     import scoreboard.logger as logger
 except ImportError as e:
-    import sys
     print(f"[BOOT] app import failed: {e}")
     print("[BOOT] ROMFS may be corrupt/missing; attempting OTA self-recovery")
     ota.recover()  # loops until healed + reset; returns only if unrecoverable
     print("[BOOT] recovery not possible; re-deploy with "
           "'python tools/build.py flash [--release]'. REPL is free.")
-    sys.exit()
+    # Not sys.exit(): that soft-reboots and re-runs main.py (see the safe-
+    # mode block above), which would loop recovery forever. Raise instead.
+    raise RuntimeError("app not started — not an error beyond the above; REPL is free")
 
 # Reduce buffer size for memory-constrained environment
 Response.send_file_buffer_size = 2048
