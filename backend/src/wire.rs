@@ -199,7 +199,7 @@
 //! line-score bytes and strings: `game_id`, `away.abbreviation`,
 //! `home.abbreviation`.
 
-use crate::mlb::{FinalGame, InningHalf, LiveGame, MlbGame, PregameGame};
+use crate::mlb::{InningHalf, MlbFinalGame, MlbGame, MlbLiveGame, MlbPregameGame};
 use crate::nba::{LivePhase, NbaFinalGame, NbaGame, NbaLiveGame, NbaPregameGame};
 use crate::shared::game::GameListEntry;
 use crate::soccer::{
@@ -274,7 +274,7 @@ pub fn encode_game(game: &MlbGame) -> Vec<u8> {
     out
 }
 
-fn write_live(out: &mut Vec<u8>, game: &LiveGame) {
+fn write_live(out: &mut Vec<u8>, game: &MlbLiveGame) {
     out.push(if game.at_bat.is_some() { FLAG_AT_BAT } else { 0 });
     out.push(game.inning.number);
     out.push(half_code(&game.inning.half));
@@ -304,7 +304,7 @@ fn write_live(out: &mut Vec<u8>, game: &LiveGame) {
     push_str(out, &game.last_play.text);
 }
 
-fn write_pregame(out: &mut Vec<u8>, game: &PregameGame) {
+fn write_pregame(out: &mut Vec<u8>, game: &MlbPregameGame) {
     let mut flags = 0u8;
     let temperature = match &game.weather {
         Some(w) => {
@@ -372,7 +372,7 @@ fn line_score_bytes(line_score: &[u8]) -> &[u8] {
     }
 }
 
-fn write_final(out: &mut Vec<u8>, game: &FinalGame) {
+fn write_final(out: &mut Vec<u8>, game: &MlbFinalGame) {
     let away_ls = line_score_bytes(&game.away.line_score);
     let home_ls = line_score_bytes(&game.home.line_score);
 
@@ -631,13 +631,14 @@ pub fn encode_game_list(entries: &[GameListEntry]) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::mlb::{
-        AtBat, Bases, Count, FinalTeam, Inning, LastPlay, PregameTeam, TeamState, Weather,
+        MlbAtBat, MlbBases, MlbCount, MlbFinalTeam, MlbInning, MlbLastPlay, MlbPregameTeam,
+        MlbTeamState, MlbWeather,
     };
     use crate::shared::game::{GameState, Record};
     use crate::shared::team::TeamColors;
 
-    fn team(abbrev: &str, score: u32, primary: u32, alternate: u32) -> TeamState {
-        TeamState {
+    fn team(abbrev: &str, score: u32, primary: u32, alternate: u32) -> MlbTeamState {
+        MlbTeamState {
             abbreviation: abbrev.to_string(),
             score,
             colors: TeamColors { primary, alternate },
@@ -652,30 +653,30 @@ mod tests {
     // header + v1 body minus version byte" invariant.
     const GOLDEN_FULL_V1: &str = "010107020302020503000500562c0c005c5c00003930bd0040230c00093430313537303732390353454103424f530b472e20576869746c6f636b0d4a2e20526f6472c3ad6775657a0d34303135373037323930303731294a756c696f20526f6472c3ad6775657a2073696e676c657320746f2063656e746572206669656c642e";
 
-    fn full_live_fixture() -> LiveGame {
-        LiveGame {
+    fn full_live_fixture() -> MlbLiveGame {
+        MlbLiveGame {
             game_id: "401570729".to_string(),
-            inning: Inning {
+            inning: MlbInning {
                 number: 7,
                 half: InningHalf::Bottom,
             },
             home: team("BOS", 5, 0xBD3039, 0x0C2340),
             away: team("SEA", 3, 0x0C2C56, 0x005C5C),
-            count: Count {
+            count: MlbCount {
                 balls: 3,
                 strikes: 2,
                 outs: 2,
             },
-            bases: Bases {
+            bases: MlbBases {
                 first: true,
                 second: false,
                 third: true,
             },
-            at_bat: Some(AtBat {
+            at_bat: Some(MlbAtBat {
                 pitcher: "G. Whitlock".to_string(),
                 batter: "J. Rodríguez".to_string(),
             }),
-            last_play: LastPlay {
+            last_play: MlbLastPlay {
                 id: "4015707290071".to_string(),
                 text: "Julio Rodríguez singles to center field.".to_string(),
             },
@@ -691,16 +692,16 @@ mod tests {
         assert_eq!(hex::encode(&encoded), expected);
     }
 
-    fn pregame_fixture() -> PregameGame {
-        PregameGame {
+    fn pregame_fixture() -> MlbPregameGame {
+        MlbPregameGame {
             game_id: "401570001".to_string(),
             start_time: 1_783_647_600,
             venue: "Petco Park".to_string(),
-            weather: Some(Weather {
+            weather: Some(MlbWeather {
                 condition: "Mostly sunny".to_string(),
                 temperature: 72,
             }),
-            away: PregameTeam {
+            away: MlbPregameTeam {
                 abbreviation: "NYY".to_string(),
                 colors: TeamColors {
                     primary: 0x003087,
@@ -709,7 +710,7 @@ mod tests {
                 record: Some(Record { wins: 44, losses: 46 }),
                 probable_pitcher: Some("G. Marquez".to_string()),
             },
-            home: PregameTeam {
+            home: MlbPregameTeam {
                 abbreviation: "SD".to_string(),
                 colors: TeamColors {
                     primary: 0x2F241D,
@@ -747,7 +748,7 @@ mod tests {
     #[test]
     fn pregame_temperature_clamps_to_u8() {
         let mut game = pregame_fixture();
-        game.weather = Some(Weather {
+        game.weather = Some(MlbWeather {
             condition: "Scorching".to_string(),
             temperature: 300,
         });
@@ -759,7 +760,7 @@ mod tests {
     #[test]
     fn pregame_negative_temperature_clamps_to_zero() {
         let mut game = pregame_fixture();
-        game.weather = Some(Weather {
+        game.weather = Some(MlbWeather {
             condition: "Frigid".to_string(),
             temperature: -40,
         });
@@ -767,11 +768,11 @@ mod tests {
         assert_eq!(bytes[3], 0);
     }
 
-    fn final_fixture() -> FinalGame {
-        FinalGame {
+    fn final_fixture() -> MlbFinalGame {
+        MlbFinalGame {
             game_id: "401570729".to_string(),
             innings_played: 9,
-            away: FinalTeam {
+            away: MlbFinalTeam {
                 abbreviation: "SEA".to_string(),
                 score: 4,
                 colors: TeamColors {
@@ -781,7 +782,7 @@ mod tests {
                 // 9 innings.
                 line_score: vec![1, 0, 0, 2, 0, 0, 1, 0, 0],
             },
-            home: FinalTeam {
+            home: MlbFinalTeam {
                 abbreviation: "BOS".to_string(),
                 score: 5,
                 colors: TeamColors {

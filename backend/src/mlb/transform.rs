@@ -4,8 +4,9 @@ use crate::shared::game::Record;
 use crate::shared::team::{TeamColors, order_home_away, parse_hex_rgb};
 
 use super::types::{
-    AtBat, Bases, Count, EspnCompetitor, EspnSituation, EspnWeather, FinalGame, FinalTeam, Inning,
-    InningHalf, LastPlay, LiveGame, PregameGame, PregameTeam, TeamState, Weather,
+    EspnCompetitor, EspnSituation, EspnWeather, InningHalf, MlbAtBat, MlbBases, MlbCount,
+    MlbFinalGame, MlbFinalTeam, MlbInning, MlbLastPlay, MlbLiveGame, MlbPregameGame, MlbPregameTeam,
+    MlbTeamState, MlbWeather,
 };
 
 /// Parse the inning half from ESPN's `shortDetail` prefix.
@@ -32,14 +33,14 @@ pub(crate) fn parse_inning_half(short_detail: &str) -> Option<InningHalf> {
     }
 }
 
-/// Normalize ESPN's swap-prone weather block into a display-ready `Weather`.
+/// Normalize ESPN's swap-prone weather block into a display-ready `MlbWeather`.
 ///
 /// ESPN randomly swaps `displayValue`/`conditionId` between polls, so the
 /// human condition is identified structurally: it is the member that does not
 /// parse as a number. When both parse as numbers (or both are missing) the
 /// condition is unknown and the whole block degrades to `None`. `Some` is
 /// returned only when a condition text and a temperature both resolve.
-pub(crate) fn normalize_weather(weather: &EspnWeather) -> Option<Weather> {
+pub(crate) fn normalize_weather(weather: &EspnWeather) -> Option<MlbWeather> {
     fn non_numeric(s: &Option<String>) -> Option<&str> {
         let text = s.as_deref()?;
         // A pure number is the conditionId code, never the condition text.
@@ -52,7 +53,7 @@ pub(crate) fn normalize_weather(weather: &EspnWeather) -> Option<Weather> {
 
     let condition = non_numeric(&weather.display_value).or_else(|| non_numeric(&weather.condition_id));
     match (condition, weather.temperature) {
-        (Some(condition), Some(temperature)) => Some(Weather {
+        (Some(condition), Some(temperature)) => Some(MlbWeather {
             condition: condition.to_string(),
             temperature,
         }),
@@ -137,9 +138,9 @@ fn parse_score(c: &EspnCompetitor) -> Result<u32, AppError> {
     })
 }
 
-/// Build a live `TeamState` from an ESPN competitor (score + colors).
-fn competitor_to_team_state(c: &EspnCompetitor) -> Result<TeamState, AppError> {
-    Ok(TeamState {
+/// Build a live `MlbTeamState` from an ESPN competitor (score + colors).
+fn competitor_to_team_state(c: &EspnCompetitor) -> Result<MlbTeamState, AppError> {
+    Ok(MlbTeamState {
         abbreviation: c.team.abbreviation.clone(),
         score: parse_score(c)?,
         colors: parse_team_colors(&c.team)?,
@@ -159,7 +160,7 @@ fn order_competitors(
     )
 }
 
-/// Transform a pre-game competition into a `PregameGame`. `date` and `weather`
+/// Transform a pre-game competition into an `MlbPregameGame`. `date` and `weather`
 /// come from the event level; `venue_name` from the competition.
 pub(crate) fn pregame_competition_to_game(
     event_id: String,
@@ -167,12 +168,12 @@ pub(crate) fn pregame_competition_to_game(
     weather: Option<&EspnWeather>,
     venue_name: String,
     competitors: [EspnCompetitor; 2],
-) -> Result<PregameGame, AppError> {
+) -> Result<MlbPregameGame, AppError> {
     let start_time = parse_start_time(date)?;
     let (home_c, away_c) = order_competitors(&event_id, competitors)?;
 
-    let team = |c: &EspnCompetitor| -> Result<PregameTeam, AppError> {
-        Ok(PregameTeam {
+    let team = |c: &EspnCompetitor| -> Result<MlbPregameTeam, AppError> {
+        Ok(MlbPregameTeam {
             abbreviation: c.team.abbreviation.clone(),
             colors: parse_team_colors(&c.team)?,
             record: parse_record(&c.records),
@@ -180,7 +181,7 @@ pub(crate) fn pregame_competition_to_game(
         })
     };
 
-    Ok(PregameGame {
+    Ok(MlbPregameGame {
         game_id: event_id,
         start_time,
         venue: venue_name,
@@ -190,16 +191,16 @@ pub(crate) fn pregame_competition_to_game(
     })
 }
 
-/// Transform a final competition into a `FinalGame`.
+/// Transform a final competition into an `MlbFinalGame`.
 pub(crate) fn final_competition_to_game(
     event_id: String,
     competitors: [EspnCompetitor; 2],
     period: u8,
-) -> Result<FinalGame, AppError> {
+) -> Result<MlbFinalGame, AppError> {
     let (home_c, away_c) = order_competitors(&event_id, competitors)?;
 
-    let team = |c: &EspnCompetitor| -> Result<FinalTeam, AppError> {
-        Ok(FinalTeam {
+    let team = |c: &EspnCompetitor| -> Result<MlbFinalTeam, AppError> {
+        Ok(MlbFinalTeam {
             abbreviation: c.team.abbreviation.clone(),
             score: parse_score(c)?,
             colors: parse_team_colors(&c.team)?,
@@ -207,7 +208,7 @@ pub(crate) fn final_competition_to_game(
         })
     };
 
-    Ok(FinalGame {
+    Ok(MlbFinalGame {
         game_id: event_id,
         innings_played: period,
         home: team(&home_c)?,
@@ -215,7 +216,7 @@ pub(crate) fn final_competition_to_game(
     })
 }
 
-/// Transform a live competition into a `LiveGame`. Callers must pattern-match
+/// Transform a live competition into an `MlbLiveGame`. Callers must pattern-match
 /// `EspnCompetition::Live` at the call site, so no runtime state check lives
 /// inside this function.
 pub(crate) fn live_competition_to_game(
@@ -224,7 +225,7 @@ pub(crate) fn live_competition_to_game(
     situation: EspnSituation,
     period: u8,
     short_detail: String,
-) -> Result<LiveGame, AppError> {
+) -> Result<MlbLiveGame, AppError> {
     // A live game in a non-inning state (rain delay, suspension) has nothing
     // to display — surface it exactly like a game that isn't live.
     let Some(half) = parse_inning_half(&short_detail) else {
@@ -235,34 +236,34 @@ pub(crate) fn live_competition_to_game(
     let home = competitor_to_team_state(&home_c)?;
     let away = competitor_to_team_state(&away_c)?;
 
-    let count = Count {
+    let count = MlbCount {
         balls: situation.balls,
         strikes: situation.strikes,
         outs: situation.outs,
     };
-    let bases = Bases {
+    let bases = MlbBases {
         first: situation.on_first,
         second: situation.on_second,
         third: situation.on_third,
     };
     let at_bat = match (situation.pitcher, situation.batter) {
-        (Some(pitcher), Some(batter)) => Some(AtBat {
+        (Some(pitcher), Some(batter)) => Some(MlbAtBat {
             pitcher: pitcher.athlete.short_name,
             batter: batter.athlete.short_name,
         }),
         _ => None,
     };
-    let last_play = LastPlay {
+    let last_play = MlbLastPlay {
         id: situation.last_play.id,
         text: situation.last_play.text,
     };
 
-    let inning = Inning {
+    let inning = MlbInning {
         number: period,
         half,
     };
 
-    Ok(LiveGame {
+    Ok(MlbLiveGame {
         game_id: event_id,
         inning,
         home,
@@ -286,7 +287,7 @@ mod tests {
         serde_json::from_str(&raw).expect("fixture parses as an MLB event")
     }
 
-    fn pregame_from(event: EspnEvent) -> PregameGame {
+    fn pregame_from(event: EspnEvent) -> MlbPregameGame {
         let id = event.id;
         let date = event.date;
         let weather = event.weather;

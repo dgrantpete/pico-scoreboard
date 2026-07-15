@@ -200,28 +200,28 @@ pub(crate) struct EspnLastPlay {
 #[derive(Serialize, ToSchema)]
 #[serde(tag = "state", rename_all = "lowercase")]
 pub enum MlbGame {
-    Pregame(PregameGame),
-    Live(LiveGame),
-    Final(FinalGame),
+    Pregame(MlbPregameGame),
+    Live(MlbLiveGame),
+    Final(MlbFinalGame),
 }
 
 /// Pre-game snapshot: matchup, scheduled start, venue, and (when available)
 /// weather, records, and probable pitchers.
 #[derive(Serialize, ToSchema)]
-pub struct PregameGame {
+pub struct MlbPregameGame {
     pub game_id: String,
     /// Scheduled start as a unix epoch (seconds, UTC). The firmware applies
     /// the device's `utc_offset` for local display — it never parses dates.
     pub start_time: u32,
     pub venue: String,
     /// Absent when ESPN's weather block is missing or unusable.
-    pub weather: Option<Weather>,
-    pub home: PregameTeam,
-    pub away: PregameTeam,
+    pub weather: Option<MlbWeather>,
+    pub home: MlbPregameTeam,
+    pub away: MlbPregameTeam,
 }
 
 #[derive(Serialize, ToSchema)]
-pub struct Weather {
+pub struct MlbWeather {
     pub condition: String,
     pub temperature: i16,
 }
@@ -229,7 +229,7 @@ pub struct Weather {
 /// Pre-game team: identity and pre-game context, but no score (there is no
 /// game yet — a fake 0 would invite the firmware to render one).
 #[derive(Serialize, ToSchema)]
-pub struct PregameTeam {
+pub struct MlbPregameTeam {
     /// Team abbreviation, e.g. "BOS" — firmware uses this to fetch the logo.
     pub abbreviation: String,
     pub colors: TeamColors,
@@ -243,15 +243,15 @@ pub struct PregameTeam {
 /// more for extras). No explicit winner — it is derivable from the scores, and
 /// a second copy could disagree with them on a glitch.
 #[derive(Serialize, ToSchema)]
-pub struct FinalGame {
+pub struct MlbFinalGame {
     pub game_id: String,
     pub innings_played: u8,
-    pub home: FinalTeam,
-    pub away: FinalTeam,
+    pub home: MlbFinalTeam,
+    pub away: MlbFinalTeam,
 }
 
 #[derive(Serialize, ToSchema)]
-pub struct FinalTeam {
+pub struct MlbFinalTeam {
     pub abbreviation: String,
     pub score: u32,
     pub colors: TeamColors,
@@ -262,20 +262,20 @@ pub struct FinalTeam {
 
 /// Live state snapshot for one MLB game, tailored for the Pico firmware.
 #[derive(Serialize, ToSchema)]
-pub struct LiveGame {
+pub struct MlbLiveGame {
     pub game_id: String,
-    pub inning: Inning,
-    pub home: TeamState,
-    pub away: TeamState,
-    pub count: Count,
-    pub bases: Bases,
+    pub inning: MlbInning,
+    pub home: MlbTeamState,
+    pub away: MlbTeamState,
+    pub count: MlbCount,
+    pub bases: MlbBases,
     /// Absent between innings or before an at-bat starts.
-    pub at_bat: Option<AtBat>,
-    pub last_play: LastPlay,
+    pub at_bat: Option<MlbAtBat>,
+    pub last_play: MlbLastPlay,
 }
 
 #[derive(Serialize, ToSchema)]
-pub struct TeamState {
+pub struct MlbTeamState {
     /// Team abbreviation, e.g. "BOS" — firmware uses this to fetch the logo.
     pub abbreviation: String,
     pub score: u32,
@@ -283,33 +283,33 @@ pub struct TeamState {
 }
 
 #[derive(Serialize, ToSchema)]
-pub struct Count {
+pub struct MlbCount {
     pub balls: u8,
     pub strikes: u8,
     pub outs: u8,
 }
 
 #[derive(Serialize, ToSchema)]
-pub struct Bases {
+pub struct MlbBases {
     pub first: bool,
     pub second: bool,
     pub third: bool,
 }
 
 #[derive(Serialize, ToSchema)]
-pub struct AtBat {
+pub struct MlbAtBat {
     pub pitcher: String,
     pub batter: String,
 }
 
 #[derive(Serialize, ToSchema)]
-pub struct LastPlay {
+pub struct MlbLastPlay {
     pub id: String,
     pub text: String,
 }
 
 #[derive(Serialize, ToSchema)]
-pub struct Inning {
+pub struct MlbInning {
     pub number: u8,
     pub half: InningHalf,
 }

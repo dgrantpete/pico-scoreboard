@@ -9,6 +9,6 @@ mod types;
 
 pub use handler::{get_game, list_games};
 pub use types::{
-    AtBat, Bases, Count, FinalGame, FinalTeam, Inning, InningHalf, LastPlay, LiveGame, MlbGame,
-    PregameGame, PregameTeam, TeamState, Weather,
+    InningHalf, MlbAtBat, MlbBases, MlbCount, MlbFinalGame, MlbFinalTeam, MlbGame, MlbInning,
+    MlbLastPlay, MlbLiveGame, MlbPregameGame, MlbPregameTeam, MlbTeamState, MlbWeather,
 };
