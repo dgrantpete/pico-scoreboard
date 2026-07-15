@@ -61,8 +61,8 @@ def render_scenario(ctx, scenario, variant, display, writer, regions) -> "list[b
             if state.animation_start_ms != view_stamp:
                 view_stamp = state.animation_start_ms
                 view_epoch = anim_ms
-            if state.game.play.updated_ms != play_stamp:
-                play_stamp = state.game.play.updated_ms
+            if state.play.updated_ms != play_stamp:
+                play_stamp = state.play.updated_ms
                 play_epoch = anim_ms
             renderer(display, writer, regions, state, state.ui_colors, now,
                      anim_ms - view_epoch, anim_ms - play_epoch)

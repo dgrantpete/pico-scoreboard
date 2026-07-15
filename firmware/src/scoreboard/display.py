@@ -879,7 +879,7 @@ def _render_toast_overlay(display: Hub75Display, state: StateBuffer, now_ms: int
 def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int, play_elapsed_ms: int) -> None:
     display.fill(BLACK)
 
-    live = state.game.live
+    live = state.mlb_live.live
     if live is None:
         render_idle(display, writer, regions, colors)
         _render_toast(writer, regions, state, now_ms)
@@ -964,7 +964,7 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
 
     # Bottom strip priority: toast (button feedback) > play flash > pitcher/batter.
     if not _render_toast(writer, regions, state, now_ms):
-        play = state.game.play
+        play = state.play
         # Visibility window on the wall rail (a stall consumes it); the scroll
         # offset below rides the frame rail (a stall stretches it).
         play_window_ms = time.ticks_diff(now_ms, play.updated_ms)
@@ -1317,7 +1317,7 @@ def render_soccer_live(display: Hub75Display, writer: FontWriter, regions: Regio
 
     # --- Bottom strip: toast > commentary flash > last event ---
     if not _render_toast(writer, regions, state, now_ms):
-        play = state.game.play
+        play = state.play
         play_window_ms = time.ticks_diff(now_ms, play.updated_ms)
         show_play = bool(play.text) and play.updated_ms != 0 and play_window_ms < play.display_ms
         if show_play:
@@ -1399,7 +1399,7 @@ def render_nba_live(display: Hub75Display, writer: FontWriter, regions: Regions,
 
     # --- Bottom strip: toast > play flash > empty ---
     if not _render_toast(writer, regions, state, now_ms):
-        play = state.game.play
+        play = state.play
         play_window_ms = time.ticks_diff(now_ms, play.updated_ms)
         if bool(play.text) and play.updated_ms != 0 and play_window_ms < play.display_ms:
             # No glyph fallback — see render_game (strip is an invariant).
@@ -1489,34 +1489,30 @@ def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, st
     more than dwell exactness. Low-stakes modes (startup/setup/no_games)
     keep the wall rail.
     """
-    mode = state.mode
-
-    if mode == 'startup':
-        render_startup(display, writer, regions, state, colors)
-    elif mode == 'idle':
+    renderer = _RENDERERS.get(state.mode)
+    if renderer is None:
         render_idle(display, writer, regions, colors)
-    elif mode == 'no_games':
-        render_no_games(display, writer, regions, state, colors, now_ms)
-    elif mode == 'setup':
-        render_setup(display, writer, regions, state, colors, now_ms)
-    elif mode == 'error':
-        render_error(display, writer, regions, state, colors)
-    elif mode == 'updating':
-        render_updating(display, writer, regions, state, colors)
-    elif mode == 'game':
-        render_game(display, writer, regions, state, colors, now_ms, view_elapsed_ms, play_elapsed_ms)
-    elif mode == 'pregame':
-        render_pregame(display, writer, regions, state, colors, now_ms, view_elapsed_ms)
-    elif mode == 'final':
-        render_final(display, writer, regions, state, colors, now_ms, view_elapsed_ms)
-    elif mode == 'soccer_live':
-        render_soccer_live(display, writer, regions, state, colors, now_ms, view_elapsed_ms, play_elapsed_ms)
-    elif mode == 'soccer_final':
-        render_soccer_final(display, writer, regions, state, colors, now_ms, view_elapsed_ms)
-    elif mode == 'nba_live':
-        render_nba_live(display, writer, regions, state, colors, now_ms, view_elapsed_ms, play_elapsed_ms)
     else:
-        render_idle(display, writer, regions, colors)
+        renderer(display, writer, regions, state, colors, now_ms, view_elapsed_ms, play_elapsed_ms)
+
+
+# Mode -> renderer table (one uniform time-rail signature; the adapters drop
+# the rails a renderer doesn't use). A mode missing here falls back to
+# render_idle in render_frame; adding a sport screen = one entry.
+_RENDERERS = {
+    'startup': lambda d, w, r, s, c, now, view, play: render_startup(d, w, r, s, c),
+    'idle': lambda d, w, r, s, c, now, view, play: render_idle(d, w, r, c),
+    'no_games': lambda d, w, r, s, c, now, view, play: render_no_games(d, w, r, s, c, now),
+    'setup': lambda d, w, r, s, c, now, view, play: render_setup(d, w, r, s, c, now),
+    'error': lambda d, w, r, s, c, now, view, play: render_error(d, w, r, s, c),
+    'updating': lambda d, w, r, s, c, now, view, play: render_updating(d, w, r, s, c),
+    'mlb_live': render_game,
+    'pregame': lambda d, w, r, s, c, now, view, play: render_pregame(d, w, r, s, c, now, view),
+    'final': lambda d, w, r, s, c, now, view, play: render_final(d, w, r, s, c, now, view),
+    'soccer_live': render_soccer_live,
+    'soccer_final': lambda d, w, r, s, c, now, view, play: render_soccer_final(d, w, r, s, c, now, view),
+    'nba_live': render_nba_live,
+}
 
 
 # =============================================================================
@@ -1524,7 +1520,7 @@ def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, st
 # =============================================================================
 
 # Modes with no time-driven animation: re-rendering is only needed when a new
-# commit lands (or a toast is fading out). 'game' and 'setup' animate every
+# commit lands (or a toast is fading out). 'mlb_live' and 'setup' animate every
 # frame (scrolling text, pulsing count dots) and always redraw.
 _STATIC_MODES = ('idle', 'no_games', 'error', 'startup', 'updating')
 
@@ -1642,8 +1638,8 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
             if state.animation_start_ms != view_epoch_stamp:
                 view_epoch_stamp = state.animation_start_ms
                 view_epoch_anim = anim_ms
-            if state.game.play.updated_ms != play_epoch_stamp:
-                play_epoch_stamp = state.game.play.updated_ms
+            if state.play.updated_ms != play_epoch_stamp:
+                play_epoch_stamp = state.play.updated_ms
                 play_epoch_anim = anim_ms
 
             # "Active" includes the overlay's fade-out tail so static modes
@@ -1672,7 +1668,7 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
                 _hb_last_report = now_ms
 
             if MEM_PROFILE and time.ticks_diff(now_ms, _mp_report_ms) >= 10_000:
-                _mp_play = state.game.play
+                _mp_play = state.play
                 if logger.level >= DEBUG:
                     logger.debug(
                         "[MEMPROF] churn=%dB/s gc=%d freed=%dB maxdrop=%dB worstd=%dB over=%d mode=%s play=%d strip=%d"

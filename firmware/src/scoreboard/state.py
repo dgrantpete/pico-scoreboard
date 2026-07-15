@@ -208,20 +208,24 @@ class PlayState:
         self.strip = other.strip
 
 
-class MlbGameSnapshot:
-    """Current MLB game for the display thread to read. Plain data — no methods."""
+class MlbLiveView:
+    """Current MLB live game for the display thread to read. Plain data.
+
+    Still carries the raw parsed LiveGame (render_game formats per frame);
+    the commit-time pre-build every other live view already does is a
+    planned follow-up (set_mlb_live), after which this holds only finished
+    strings/strips/colors like SoccerLiveView/NbaLiveView.
+    """
 
     def __init__(self) -> None:
         self.game_id: str = ''
         self.live: LiveGame | None = None
         self.fetched_ms: int = 0
-        self.play: PlayState = PlayState()
 
-    def copy_from(self, other: "MlbGameSnapshot") -> None:
+    def copy_from(self, other: "MlbLiveView") -> None:
         self.game_id = other.game_id
         self.live = other.live
         self.fetched_ms = other.fetched_ms
-        self.play.copy_from(other.play)
 
 
 # Toast kinds: text renders in the bottom strip; the icon kinds render as a
@@ -530,7 +534,11 @@ class StateBuffer:
         self.error: ErrorState = ErrorState()
         self.updating: UpdatingState = UpdatingState()
         self.ui_colors: UiColors = UiColors()
-        self.game: MlbGameSnapshot = MlbGameSnapshot()
+        self.mlb_live: MlbLiveView = MlbLiveView()
+        # Cross-sport play/commentary flash slot: written by every sport's
+        # live commit (MLB play, NBA play, soccer commentary), rendered by
+        # every live screen. Top-level because it belongs to no one sport.
+        self.play: PlayState = PlayState()
         self.pregame: PregameView = PregameView()
         self.final: FinalView = FinalView()
         self.soccer_live: SoccerLiveView = SoccerLiveView()
@@ -549,7 +557,8 @@ class StateBuffer:
         self.error.copy_from(other.error)
         self.updating.copy_from(other.updating)
         self.ui_colors.copy_from(other.ui_colors)
-        self.game.copy_from(other.game)
+        self.mlb_live.copy_from(other.mlb_live)
+        self.play.copy_from(other.play)
         self.pregame.copy_from(other.pregame)
         self.final.copy_from(other.final)
         self.soccer_live.copy_from(other.soccer_live)

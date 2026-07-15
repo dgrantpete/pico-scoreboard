@@ -136,12 +136,12 @@ def _flash_play(play, new_id: str, raw_text: str) -> bool:
 
 def _commit_mlb_live(poller, game_id: str, live, home_logo, away_logo) -> None:
     state = get_write_state()
-    state.mode = 'game'
-    state.game.game_id = game_id
-    state.game.live = live
-    state.game.fetched_ms = time.ticks_ms()
+    state.mode = 'mlb_live'
+    state.mlb_live.game_id = game_id
+    state.mlb_live.live = live
+    state.mlb_live.fetched_ms = time.ticks_ms()
 
-    _flash_play(state.game.play, live.last_play.id, live.last_play.text)
+    _flash_play(state.play, live.last_play.id, live.last_play.text)
 
     state.home_logo = home_logo
     state.away_logo = away_logo
@@ -160,7 +160,7 @@ def _commit_soccer_live(poller, game_id: str, live, home_logo, away_logo) -> Non
     poller._prev_soccer_clock = (game_id, live.clock_seconds)
 
     # Commentary rides the shared flash slot.
-    if _flash_play(get_write_state().game.play, live.comment_id, live.comment_text):
+    if _flash_play(get_write_state().play, live.comment_id, live.comment_text):
         commit_state()
 
 
@@ -171,7 +171,7 @@ def _commit_nba_live(poller, game_id: str, live, home_logo, away_logo) -> None:
     # no flash, and the shared play slot keeps its previous id so a play
     # that reappears unchanged doesn't re-flash.
     play = live.last_play
-    if play is not None and _flash_play(get_write_state().game.play, play.id, play.text):
+    if play is not None and _flash_play(get_write_state().play, play.id, play.text):
         commit_state()
 
 

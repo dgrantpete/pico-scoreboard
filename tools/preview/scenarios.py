@@ -72,11 +72,11 @@ class ScenarioContext:
         st.toast.updated_ms = 0
         st.error.title = ""
         st.error.lines = []
-        game = st.game
+        game = st.mlb_live
         game.game_id = ""
         game.live = None
         game.fetched_ms = self.clock.now
-        play = game.play
+        play = st.play
         play.id = ""
         play.text = ""
         play.updated_ms = 0
@@ -116,11 +116,11 @@ def _live_game(mlb, *, away, home, inning_num, half, balls, strikes, outs,
 def _publish_live(ctx: ScenarioContext, live, play_text=None, play_id=None):
     """Set mode=game with `live` published + logos; optionally arm a play flash."""
     st = ctx.state.get_write_state()
-    st.mode = "game"
+    st.mode = "mlb_live"
     st.animation_start_ms = ctx.clock.now
-    st.game.game_id = live.game_id
-    st.game.live = live
-    st.game.fetched_ms = ctx.clock.now
+    st.mlb_live.game_id = live.game_id
+    st.mlb_live.live = live
+    st.mlb_live.fetched_ms = ctx.clock.now
     ap, aa = _TEAMS[live.away.abbreviation]
     hp, ha = _TEAMS[live.home.abbreviation]
     st.away_logo = ctx.logos.get(live.away.abbreviation, ap, aa)
@@ -130,11 +130,11 @@ def _publish_live(ctx: ScenarioContext, live, play_text=None, play_id=None):
         # must agree), then pre-render the strip so previews exercise the
         # same fast path the device renders with.
         play_text = ctx.state.fit_play_text(play_text)
-        st.game.play.id = play_id or "play-flash"
-        st.game.play.text = play_text
-        st.game.play.updated_ms = ctx.clock.now
-        st.game.play.display_ms = ctx.display.play_text_display_ms(play_text)
-        st.game.play.strip = ctx.state.build_play_strip(play_text)
+        st.play.id = play_id or "play-flash"
+        st.play.text = play_text
+        st.play.updated_ms = ctx.clock.now
+        st.play.display_ms = ctx.display.play_text_display_ms(play_text)
+        st.play.strip = ctx.state.build_play_strip(play_text)
     ctx.state.commit_state()
 
 
@@ -540,7 +540,7 @@ def soccer_live_commentary(ctx: ScenarioContext) -> None:
         clock_seconds=52 * 60 + 30, half=2, event=event,
     )
     st = ctx.state.get_write_state()
-    play = st.game.play
+    play = st.play
     play.id = "comm-87"
     play.text = text
     play.updated_ms = ctx.clock.now
@@ -690,7 +690,7 @@ def nba_live(ctx: ScenarioContext) -> None:
         period=3, clock="4:37", phase=ctx.nba.PHASE_IN_PROGRESS,
     )
     st = ctx.state.get_write_state()
-    play = st.game.play
+    play = st.play
     play.id = "p-411"
     fitted = ctx.state.fit_play_text(text)  # mirrors the poller's commit
     play.text = fitted
