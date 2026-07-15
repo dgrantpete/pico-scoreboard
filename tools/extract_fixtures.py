@@ -78,6 +78,33 @@ def _final(ev: dict, c: dict) -> bool:
     return _mlb_state(ev, c) == "post"
 
 
+def _has_red_card(c: dict) -> bool:
+    return any(d.get("redCard") for d in c.get("details") or [])
+
+
+def _soccer_live_red_card(_ev: dict, c: dict) -> bool:
+    return c["status"]["type"]["state"] == "in" and _has_red_card(c)
+
+
+def _soccer_home_multi_goal_final(_ev: dict, c: dict) -> bool:
+    """A finished match where the HOME side scored 2+ — exercises the
+    detail_side home branch and multi-goal ordering in scorers_for."""
+    if c["status"]["type"]["state"] != "post":
+        return False
+    home = next(
+        (x for x in c.get("competitors", []) if x.get("homeAway") == "home"), None
+    )
+    if not home:
+        return False
+    home_id = (home.get("team") or {}).get("id")
+    goals = [
+        d
+        for d in c.get("details") or []
+        if d.get("scoringPlay") and (d.get("team") or {}).get("id") == home_id
+    ]
+    return len(goals) >= 2
+
+
 # (league, output subdir, [(fixture name, predicate)])
 GROUPS: list[tuple[str, str, list[tuple[str, Predicate]]]] = [
     (
@@ -95,6 +122,17 @@ GROUPS: list[tuple[str, str, list[tuple[str, Predicate]]]] = [
                 ),
             ),
             ("full_time", _description("Full Time")),
+            # Coverage backfill (2026-07-15): red-card + home/multi-goal paths.
+            ("live_red_card", _soccer_live_red_card),
+            ("full_time_home_multi_goal", _soccer_home_multi_goal_final),
+            # Knockout-stage states observed in the corpus (wire support
+            # pending — extracted now so tests land with the model change).
+            ("overtime", _description("Overtime")),
+            ("shootout", _description("Shootout")),
+            ("extra_time_halftime", _description("Extra Time Halftime")),
+            ("end_of_regulation", _description("End of Regulation")),
+            ("final_after_extra_time", _description("Final Score - After Extra Time")),
+            ("final_after_penalties", _description("Final Score - After Penalties")),
         ],
     ),
     (

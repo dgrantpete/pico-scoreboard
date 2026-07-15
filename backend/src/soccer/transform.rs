@@ -367,6 +367,91 @@ mod tests {
     }
 
     #[test]
+    fn red_card_is_surfaced_as_last_event() {
+        // Real ARG-SUI knockout details, truncated to the moment just after
+        // the 72' red card so it is the latest surfaced event (later goals
+        // would win the max otherwise).
+        let mut p = live_parts(fixture("live_red_card"));
+        p.details.retain(|d| d.clock.value <= 4278.0);
+        let event = to_live(p).last_event.expect("red card present");
+        assert_eq!(event.kind, EventKind::RedCard);
+        assert_eq!(event.athlete, "B. Embolo");
+        assert_eq!(event.clock, "72'");
+        assert_eq!(event.team, Some(Side::Away));
+        assert_eq!(event.text, "Red Card - B. Embolo");
+    }
+
+    #[test]
+    fn overtime_live_parses_with_extended_clock() {
+        // Knockout extra time serves as in-state with description "Overtime".
+        // Today it degrades to a generic in-play (halftime=false, running
+        // clock); dedicated ET handling is a planned wire change — this test
+        // pins the current degraded-but-safe behavior.
+        let game = to_live(live_parts(fixture("live_red_card")));
+        assert_eq!(game.clock, "120'+4'");
+        assert!(!game.halftime);
+        assert_eq!(
+            (game.home.abbreviation.as_str(), game.home.score),
+            ("ARG", 3)
+        );
+        assert_eq!((game.away.abbreviation.as_str(), game.away.score), ("SUI", 1));
+        // Latest event is the 120'+1' goal, not the earlier red card.
+        let event = game.last_event.expect("late goal present");
+        assert_eq!(event.kind, EventKind::Goal);
+        assert_eq!(event.athlete, "L. Martínez");
+        assert_eq!(event.team, Some(Side::Home));
+    }
+
+    #[test]
+    fn home_side_multi_goal_scorers_are_ordered_and_separated() {
+        // Same match, post state ("Final Score - After Extra Time"): three
+        // home goals (one a header subtype — collapses to the name format)
+        // in clock order, and the away side's lone goal kept separate.
+        let event = fixture("full_time_home_multi_goal");
+        let id = event.id;
+        let Some(EspnCompetition::Final {
+            competitors,
+            details,
+        }) = event.competitions.into_iter().next()
+        else {
+            panic!("fixture must be a final competition");
+        };
+        let game = final_competition_to_game(id, competitors, details).unwrap();
+        assert_eq!(
+            (game.home.abbreviation.as_str(), game.home.score),
+            ("ARG", 3)
+        );
+        assert_eq!(
+            game.home.scorers,
+            "A. Mac Allister 10', J. Álvarez 112', L. Martínez 120'+1'"
+        );
+        assert_eq!(game.away.scorers, "D. Ndoye 67'");
+    }
+
+    #[test]
+    fn latest_commentary_picks_highest_sequence_and_skips_empty() {
+        let summary = |items: Vec<(u32, &str)>| RawSummary {
+            commentary: items
+                .into_iter()
+                .map(|(sequence, text)| super::super::types::EspnCommentaryItem {
+                    sequence,
+                    text: text.to_string(),
+                })
+                .collect(),
+        };
+
+        // Highest sequence wins regardless of order.
+        let c = latest_commentary(summary(vec![(3, "old"), (9, "newest"), (7, "mid")]))
+            .expect("commentary present");
+        assert_eq!((c.id.as_str(), c.text.as_str()), ("9", "newest"));
+
+        // An empty-text winner degrades to None (never flash a blank line)...
+        assert!(latest_commentary(summary(vec![(1, "text"), (5, "")])).is_none());
+        // ...and so does an empty feed — the no-commentary degradation path.
+        assert!(latest_commentary(summary(vec![])).is_none());
+    }
+
+    #[test]
     fn full_time_fixture_builds_final_with_scorers() {
         let event = fixture("full_time");
         let id = event.id;

@@ -1,0 +1,702 @@
+{
+  "id": "760512",
+  "uid": "s:600~l:606~e:760512",
+  "date": "2026-07-11T21:00Z",
+  "name": "England at Norway",
+  "shortName": "ENG @ NOR",
+  "season": {
+    "year": 2026,
+    "type": 13799,
+    "slug": "quarterfinals"
+  },
+  "competitions": [
+    {
+      "id": "760512",
+      "uid": "s:600~l:606~e:760512~c:760512",
+      "date": "2026-07-11T21:00Z",
+      "startDate": "2026-07-11T21:00Z",
+      "attendance": 64478,
+      "timeValid": true,
+      "recent": false,
+      "status": {
+        "clock": 7200.0,
+        "displayClock": "120'+2'",
+        "period": 4,
+        "type": {
+          "id": "45",
+          "name": "STATUS_FINAL_AET",
+          "state": "post",
+          "completed": true,
+          "description": "Final Score - After Extra Time",
+          "detail": "AET",
+          "shortDetail": "AET"
+        }
+      },
+      "venue": {
+        "id": "4643",
+        "fullName": "Hard Rock Stadium",
+        "address": {
+          "city": "Miami Gardens, Florida",
+          "country": "USA"
+        }
+      },
+      "format": {
+        "regulation": {
+          "periods": 2
+        }
+      },
+      "altGameNote": "FIFA World Cup, Quarterfinals",
+      "notes": [],
+      "geoBroadcasts": [
+        {
+          "type": {
+            "id": "1",
+            "shortName": "TV"
+          },
+          "market": {
+            "id": "1",
+            "type": "National"
+          },
+          "media": {
+            "shortName": "FOX"
+          },
+          "lang": "en",
+          "region": "us"
+        },
+        {
+          "type": {
+            "id": "1",
+            "shortName": "TV"
+          },
+          "market": {
+            "id": "1",
+            "type": "National"
+          },
+          "media": {
+            "shortName": "Tele"
+          },
+          "lang": "en",
+          "region": "us"
+        },
+        {
+          "type": {
+            "id": "4",
+            "shortName": "STREAMING"
+          },
+          "market": {
+            "id": "1",
+            "type": "National"
+          },
+          "media": {
+            "shortName": "FOX One"
+          },
+          "lang": "en",
+          "region": "us"
+        }
+      ],
+      "broadcasts": [
+        {
+          "market": "national",
+          "names": [
+            "FOX",
+            "Tele",
+            "FOX One"
+          ]
+        }
+      ],
+      "broadcast": "",
+      "competitors": [
+        {
+          "id": "464",
+          "uid": "s:600~t:464",
+          "type": "team",
+          "order": 0,
+          "homeAway": "home",
+          "winner": false,
+          "advance": false,
+          "form": "LWWLW",
+          "score": "1",
+          "team": {
+            "id": "464",
+            "uid": "s:600~t:464",
+            "abbreviation": "NOR",
+            "displayName": "Norway",
+            "shortDisplayName": "Norway",
+            "name": "Norway",
+            "location": "Norway",
+            "color": "C8102E",
+            "alternateColor": "C8102E",
+            "isActive": true,
+            "logo": "https://a.espncdn.com/i/teamlogos/countries/500/nor.png",
+            "links": [
+              {
+                "rel": [
+                  "clubhouse",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/soccer/team/_/id/464/norway",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/soccer/team/stats/_/id/464/norway",
+                "text": "Stats",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:600~t:464&section=stats",
+                "text": "Stats",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/soccer/team/fixtures/_/id/464/norway",
+                "text": "Fixtures",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:600~t:464&section=scores",
+                "text": "Fixtures",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              },
+              {
+                "rel": [
+                  "squad",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/soccer/team/squad/_/id/464/norway",
+                "text": "Squad",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              },
+              {
+                "rel": [
+                  "squad",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:600~t:464&section=squad",
+                "text": "Squad",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              }
+            ],
+            "venue": {
+              "id": "1392"
+            }
+          },
+          "statistics": [
+            {
+              "name": "appearances",
+              "abbreviation": "APP",
+              "displayValue": "0"
+            },
+            {
+              "name": "foulsCommitted",
+              "abbreviation": "FC",
+              "displayValue": "10"
+            },
+            {
+              "name": "wonCorners",
+              "abbreviation": "CW",
+              "displayValue": "7"
+            },
+            {
+              "name": "goalAssists",
+              "abbreviation": "A",
+              "displayValue": "1"
+            },
+            {
+              "name": "possessionPct",
+              "abbreviation": "PP",
+              "displayValue": "47.6"
+            },
+            {
+              "name": "shotAssists",
+              "abbreviation": "SHAST",
+              "displayValue": "11"
+            },
+            {
+              "name": "shotsOnTarget",
+              "abbreviation": "SOG",
+              "displayValue": "4"
+            },
+            {
+              "name": "totalGoals",
+              "abbreviation": "G",
+              "displayValue": "1"
+            },
+            {
+              "name": "totalShots",
+              "abbreviation": "SHOT",
+              "displayValue": "13"
+            }
+          ]
+        },
+        {
+          "id": "448",
+          "uid": "s:600~t:448",
+          "type": "team",
+          "order": 1,
+          "homeAway": "away",
+          "winner": true,
+          "advance": true,
+          "form": "WWWWD",
+          "score": "2",
+          "team": {
+            "id": "448",
+            "uid": "s:600~t:448",
+            "abbreviation": "ENG",
+            "displayName": "England",
+            "shortDisplayName": "England",
+            "name": "England",
+            "location": "England",
+            "color": "EA1F29",
+            "alternateColor": "FFFFFF",
+            "isActive": true,
+            "logo": "https://a.espncdn.com/i/teamlogos/countries/500/eng.png",
+            "links": [
+              {
+                "rel": [
+                  "clubhouse",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/soccer/team/_/id/448/england",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/soccer/team/stats/_/id/448/england",
+                "text": "Stats",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:600~t:448&section=stats",
+                "text": "Stats",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/soccer/team/fixtures/_/id/448/england",
+                "text": "Fixtures",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:600~t:448&section=scores",
+                "text": "Fixtures",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              },
+              {
+                "rel": [
+                  "squad",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/soccer/team/squad/_/id/448/england",
+                "text": "Squad",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              },
+              {
+                "rel": [
+                  "squad",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:600~t:448&section=squad",
+                "text": "Squad",
+                "isExternal": false,
+                "isPremium": false,
+                "isHidden": false
+              }
+            ],
+            "venue": {
+              "id": "6971"
+            }
+          },
+          "statistics": [
+            {
+              "name": "appearances",
+              "abbreviation": "APP",
+              "displayValue": "0"
+            },
+            {
+              "name": "foulsCommitted",
+              "abbreviation": "FC",
+              "displayValue": "8"
+            },
+            {
+              "name": "wonCorners",
+              "abbreviation": "CW",
+              "displayValue": "4"
+            },
+            {
+              "name": "goalAssists",
+              "abbreviation": "A",
+              "displayValue": "1"
+            },
+            {
+              "name": "possessionPct",
+              "abbreviation": "PP",
+              "displayValue": "52.4"
+            },
+            {
+              "name": "shotAssists",
+              "abbreviation": "SHAST",
+              "displayValue": "8"
+            },
+            {
+              "name": "shotsOnTarget",
+              "abbreviation": "SOG",
+              "displayValue": "8"
+            },
+            {
+              "name": "totalGoals",
+              "abbreviation": "G",
+              "displayValue": "2"
+            },
+            {
+              "name": "totalShots",
+              "abbreviation": "SHOT",
+              "displayValue": "14"
+            }
+          ]
+        }
+      ],
+      "details": [
+        {
+          "type": {
+            "id": "70",
+            "text": "Goal"
+          },
+          "clock": {
+            "value": 2101.0,
+            "displayValue": "36'"
+          },
+          "team": {
+            "id": "464"
+          },
+          "scoreValue": 1,
+          "scoringPlay": true,
+          "redCard": false,
+          "yellowCard": false,
+          "penaltyKick": false,
+          "ownGoal": false,
+          "shootout": false,
+          "athletesInvolved": [
+            {
+              "id": "313415",
+              "displayName": "Andreas Schjelderup",
+              "shortName": "A. Schjelderup",
+              "fullName": "Andreas Schjelderup",
+              "jersey": "21",
+              "team": {
+                "id": "464"
+              },
+              "links": [
+                {
+                  "rel": [
+                    "playercard",
+                    "desktop",
+                    "athlete"
+                  ],
+                  "href": "https://www.espn.com/soccer/player/_/id/313415/andreas-schjelderup",
+                  "isHidden": false
+                }
+              ],
+              "position": "LF"
+            }
+          ]
+        },
+        {
+          "type": {
+            "id": "70",
+            "text": "Goal"
+          },
+          "clock": {
+            "value": 2700.0,
+            "displayValue": "45'+2'"
+          },
+          "team": {
+            "id": "448"
+          },
+          "scoreValue": 1,
+          "scoringPlay": true,
+          "redCard": false,
+          "yellowCard": false,
+          "penaltyKick": false,
+          "ownGoal": false,
+          "shootout": false,
+          "athletesInvolved": [
+            {
+              "id": "291281",
+              "displayName": "Jude Bellingham",
+              "shortName": "J. Bellingham",
+              "fullName": "Jude Bellingham",
+              "jersey": "10",
+              "team": {
+                "id": "448"
+              },
+              "links": [
+                {
+                  "rel": [
+                    "playercard",
+                    "desktop",
+                    "athlete"
+                  ],
+                  "href": "https://www.espn.com/soccer/player/_/id/291281/jude-bellingham",
+                  "isHidden": false
+                }
+              ],
+              "position": "AM"
+            }
+          ]
+        },
+        {
+          "type": {
+            "id": "70",
+            "text": "Goal"
+          },
+          "clock": {
+            "value": 5554.0,
+            "displayValue": "93'"
+          },
+          "team": {
+            "id": "448"
+          },
+          "scoreValue": 1,
+          "scoringPlay": true,
+          "redCard": false,
+          "yellowCard": false,
+          "penaltyKick": false,
+          "ownGoal": false,
+          "shootout": false,
+          "athletesInvolved": [
+            {
+              "id": "291281",
+              "displayName": "Jude Bellingham",
+              "shortName": "J. Bellingham",
+              "fullName": "Jude Bellingham",
+              "jersey": "10",
+              "team": {
+                "id": "448"
+              },
+              "links": [
+                {
+                  "rel": [
+                    "playercard",
+                    "desktop",
+                    "athlete"
+                  ],
+                  "href": "https://www.espn.com/soccer/player/_/id/291281/jude-bellingham",
+                  "isHidden": false
+                }
+              ],
+              "position": "AM"
+            }
+          ]
+        },
+        {
+          "type": {
+            "id": "94",
+            "text": "Yellow Card"
+          },
+          "clock": {
+            "value": 6993.0,
+            "displayValue": "117'"
+          },
+          "team": {
+            "id": "464"
+          },
+          "scoreValue": 0,
+          "scoringPlay": false,
+          "redCard": false,
+          "yellowCard": true,
+          "penaltyKick": false,
+          "ownGoal": false,
+          "shootout": false,
+          "athletesInvolved": [
+            {
+              "id": "206173",
+              "displayName": "Kristoffer Ajer",
+              "shortName": "K. Ajer",
+              "fullName": "Kristoffer Ajer",
+              "jersey": "3",
+              "team": {
+                "id": "464"
+              },
+              "links": [
+                {
+                  "rel": [
+                    "playercard",
+                    "desktop",
+                    "athlete"
+                  ],
+                  "href": "https://www.espn.com/soccer/player/_/id/206173/kristoffer-ajer",
+                  "isHidden": false
+                }
+              ],
+              "position": "CD-R"
+            }
+          ]
+        }
+      ],
+      "headlines": [
+        {
+          "description": "Jude Bellingham scored in the third minute of extra time to lift England past Norway 2-1 and into the World Cup semifinals for the first time since 2018.",
+          "type": "Recap",
+          "shortLinkText": "Bellingham hits brace as England reach WCup semifinals"
+        }
+      ],
+      "odds": [
+        null
+      ],
+      "wasSuspended": false,
+      "playByPlayAvailable": true,
+      "playByPlayAthletes": true
+    }
+  ],
+  "status": {
+    "clock": 7200.0,
+    "displayClock": "120'+2'",
+    "period": 4,
+    "type": {
+      "id": "45",
+      "name": "STATUS_FINAL_AET",
+      "state": "post",
+      "completed": true,
+      "description": "Final Score - After Extra Time",
+      "detail": "AET",
+      "shortDetail": "AET"
+    }
+  },
+  "venue": {
+    "displayName": "Hard Rock Stadium"
+  },
+  "links": [
+    {
+      "language": "en-US",
+      "rel": [
+        "summary",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/soccer/match/_/gameId/760512/england-norway",
+      "text": "Summary",
+      "shortText": "Summary",
+      "isExternal": false,
+      "isPremium": false,
+      "isHidden": false
+    },
+    {
+      "language": "en-US",
+      "rel": [
+        "highlights",
+        "desktop"
+      ],
+      "href": "https://www.espn.com/soccer/video/_/gameId/760512",
+      "text": "Highlights",
+      "shortText": "Highlights",
+      "isExternal": false,
+      "isPremium": false
+    },
+    {
+      "language": "en-US",
+      "rel": [
+        "recap",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/soccer/report/_/gameId/760512",
+      "text": "Report",
+      "shortText": "Report",
+      "isExternal": false,
+      "isPremium": false,
+      "isHidden": false
+    },
+    {
+      "language": "en-US",
+      "rel": [
+        "stats",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/soccer/matchstats/_/gameId/760512",
+      "text": "Statistics",
+      "shortText": "Statistics",
+      "isExternal": false,
+      "isPremium": false,
+      "isHidden": false
+    }
+  ]
+}
