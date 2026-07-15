@@ -31,7 +31,9 @@ from scoreboard.fonts import rgb565, measure_text, fit_text, render_strip, splee
 from scoreboard import screen_geometry
 from scoreboard.mlb import LiveGame
 from scoreboard.nba import PHASE_END_OF_PERIOD, PHASE_HALFTIME, period_name
-from scoreboard.soccer import EVENT_GOAL, SIDE_AWAY, SIDE_HOME, base_minutes
+from scoreboard.soccer import (
+    EVENT_GOAL, HALF_ET_FIRST, SIDE_AWAY, SIDE_HOME, base_minutes,
+)
 
 
 # Minimum brightest-channel value for team colors. Teams whose primary is
@@ -1139,6 +1141,41 @@ def _final_ls_cell(run: int) -> str:
     return "%2d " % run
 
 
+def _build_linescore(fv, count: int, away_line, home_line) -> None:
+    """Build the final screen's per-period rows + pre-rendered strips.
+
+    Shared by every sport that shows a line score (MLB innings, NBA
+    quarters). Equal char counts guarantee lockstep scroll; they are equal
+    by construction, but an anomaly (e.g. a 3-digit run) logs and pads to
+    the widest rather than crash the display thread. Rows are pre-rendered
+    once here; Core 1 blits a window per frame instead of glyph-looping
+    ~90 chars (measured at ~41 ms/frame — the 9 FPS stutter).
+    """
+    header: list[str] = []
+    away_row: list[str] = []
+    home_row: list[str] = []
+    for i in range(count):
+        header.append("%2d " % (i + 1))
+        away_row.append(_final_ls_cell(away_line[i]) if i < len(away_line) else " X ")
+        home_row.append(_final_ls_cell(home_line[i]) if i < len(home_line) else " X ")
+    fv.ls_header = "".join(header)
+    fv.ls_away = "".join(away_row)
+    fv.ls_home = "".join(home_row)
+
+    n = len(fv.ls_header)
+    if not (len(fv.ls_away) == n and len(fv.ls_home) == n):
+        logger.error("[FINAL] linescore width mismatch h=%d a=%d o=%d" % (
+            len(fv.ls_header), len(fv.ls_away), len(fv.ls_home)))
+        n = max(len(fv.ls_header), len(fv.ls_away), len(fv.ls_home))
+        fv.ls_header += " " * (n - len(fv.ls_header))
+        fv.ls_away += " " * (n - len(fv.ls_away))
+        fv.ls_home += " " * (n - len(fv.ls_home))
+
+    fv.ls_header_strip = _LS_HEADER_POOL.render(fv.ls_header, spleen_5x8)
+    fv.ls_away_strip = _LS_AWAY_POOL.render(fv.ls_away, spleen_5x8)
+    fv.ls_home_strip = _LS_HOME_POOL.render(fv.ls_home, spleen_5x8)
+
+
 def set_final(game, home_logo, away_logo) -> None:
     """Publish a final screen from a parsed mlb.FinalGame.
 
@@ -1177,34 +1214,7 @@ def set_final(game, home_logo, away_logo) -> None:
     # forward, which may have been another sport's final.
     fv.total_label = 'R'
 
-    header: list[str] = []
-    away_row: list[str] = []
-    home_row: list[str] = []
-    for i in range(innings):
-        header.append("%2d " % (i + 1))
-        away_row.append(_final_ls_cell(away.line[i]) if i < len(away.line) else " X ")
-        home_row.append(_final_ls_cell(home.line[i]) if i < len(home.line) else " X ")
-    fv.ls_header = "".join(header)
-    fv.ls_away = "".join(away_row)
-    fv.ls_home = "".join(home_row)
-
-    # Equal char counts guarantee lockstep scroll. They are equal by
-    # construction; if some anomaly (e.g. a 3-digit run) breaks that, log and
-    # pad to the widest rather than crash the display thread.
-    n = len(fv.ls_header)
-    if not (len(fv.ls_away) == n and len(fv.ls_home) == n):
-        logger.error("[FINAL] linescore width mismatch h=%d a=%d o=%d" % (
-            len(fv.ls_header), len(fv.ls_away), len(fv.ls_home)))
-        n = max(len(fv.ls_header), len(fv.ls_away), len(fv.ls_home))
-        fv.ls_header += " " * (n - len(fv.ls_header))
-        fv.ls_away += " " * (n - len(fv.ls_away))
-        fv.ls_home += " " * (n - len(fv.ls_home))
-
-    # Pre-render the rows once; Core 1 blits a window per frame instead of
-    # glyph-looping ~90 chars (measured at ~41 ms/frame — the 9 FPS stutter).
-    fv.ls_header_strip = _LS_HEADER_POOL.render(fv.ls_header, spleen_5x8)
-    fv.ls_away_strip = _LS_AWAY_POOL.render(fv.ls_away, spleen_5x8)
-    fv.ls_home_strip = _LS_HOME_POOL.render(fv.ls_home, spleen_5x8)
+    _build_linescore(fv, innings, away.line, home.line)
 
     commit_state()
 
@@ -1257,7 +1267,7 @@ def set_soccer_live(game, home_logo, away_logo, prev_clock_s: int | None = None)
         sv.phase_text = ''
         sv.phase_long = ''
     else:
-        short, long_ = _SOCCER_PHASES[game.half if game.half < 3 else 3]
+        short, long_ = _SOCCER_PHASES[game.half if game.half < HALF_ET_FIRST else HALF_ET_FIRST]
         sv.phase_text = short
         sv.phase_long = long_
 
@@ -1405,20 +1415,7 @@ def set_nba_final(game, home_logo, away_logo) -> None:
         fv.final_text = "F/%dOT" % (periods - 4)
     fv.total_label = 'T'
 
-    header: list[str] = []
-    away_row: list[str] = []
-    home_row: list[str] = []
-    for i in range(periods):
-        header.append("%2d " % (i + 1))
-        away_row.append(_final_ls_cell(away.line[i]) if i < len(away.line) else " X ")
-        home_row.append(_final_ls_cell(home.line[i]) if i < len(home.line) else " X ")
-    fv.ls_header = "".join(header)
-    fv.ls_away = "".join(away_row)
-    fv.ls_home = "".join(home_row)
-
-    fv.ls_header_strip = _LS_HEADER_POOL.render(fv.ls_header, spleen_5x8)
-    fv.ls_away_strip = _LS_AWAY_POOL.render(fv.ls_away, spleen_5x8)
-    fv.ls_home_strip = _LS_HOME_POOL.render(fv.ls_home, spleen_5x8)
+    _build_linescore(fv, periods, away.line, home.line)
 
     commit_state()
 

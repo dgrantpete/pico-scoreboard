@@ -66,8 +66,19 @@ SIDE_NONE = 0
 SIDE_AWAY = 1
 SIDE_HOME = 2
 
+# Match period codes as served on the wire (ESPN's competition period):
+# regulation halves, extra-time halves, the shootout. Named-constant style
+# matches nba.PHASE_*. Dedicated break/shootout rendering is a pending wire
+# change; until then codes past HALF_SECOND render with extra-time stoppage
+# thresholds and the generic "ET" phase label.
+HALF_FIRST = 1
+HALF_SECOND = 2
+HALF_ET_FIRST = 3
+HALF_ET_SECOND = 4
+HALF_SHOOTOUT = 5
+
 # Stoppage threshold (minutes) per period: regulation halves end at 45/90,
-# extra-time periods at 105/120. Index by min(period, 4).
+# extra-time periods at 105/120. Index by min(period, HALF_ET_SECOND).
 _BASE_MINUTES = (45, 45, 90, 105, 120)
 
 # ESPN league slug -> display name shown on the pregame screen's info line.
@@ -83,7 +94,7 @@ LEAGUE_NAMES = {
 
 def base_minutes(half: int) -> int:
     """The current period's stoppage threshold in minutes."""
-    return _BASE_MINUTES[half if half < 4 else 4]
+    return _BASE_MINUTES[half if half < HALF_ET_SECOND else HALF_ET_SECOND]
 
 
 class LastEvent:
@@ -151,6 +162,11 @@ class LiveGame:
             away_score, home_score,
             away_primary, away_alternate, home_primary, home_alternate,
         ) = struct.unpack_from(_LIVE_FMT, buf, HDR_SIZE)
+
+        # Fail loud on codes outside the known period set (same policy as
+        # mlb's inning-half and nba's phase checks).
+        if not HALF_FIRST <= half <= HALF_SHOOTOUT:
+            raise DeserializeError("@3", f"invalid soccer period code: {half}")
 
         o = HDR_SIZE + _LIVE_SIZE  # 26
         game_id, o = read_str(buf, o, end, "game_id")
@@ -273,11 +289,13 @@ class FinalTeam:
     see BACKLOG).
     """
 
-    def __init__(self, abbreviation: str, score: int, colors: TeamColors,
+    def __init__(self, abbreviation: str, colors: TeamColors, score: int,
                  scorers: str) -> None:
+        # Param order (abbr, colors, score, extra) matches every other
+        # sport's *Team constructors.
         self.abbreviation = abbreviation
-        self.score = score
         self.colors = colors
+        self.score = score
         self.scorers = scorers
 
 
@@ -318,8 +336,8 @@ class FinalGame:
 
         return cls(
             game_id=game_id,
-            home=FinalTeam(home_abbr, home_score, TeamColors(home_primary, home_alternate), home_scorers),
-            away=FinalTeam(away_abbr, away_score, TeamColors(away_primary, away_alternate), away_scorers),
+            home=FinalTeam(home_abbr, TeamColors(home_primary, home_alternate), home_score, home_scorers),
+            away=FinalTeam(away_abbr, TeamColors(away_primary, away_alternate), away_score, away_scorers),
         )
 
 

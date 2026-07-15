@@ -605,7 +605,7 @@ def soccer_pregame(ctx: ScenarioContext) -> None:
 
 def _soccer_final_team(ctx, abbr, score, scorers):
     p, a = _SOCCER_TEAMS[abbr]
-    return ctx.soccer.FinalTeam(abbr, score, ctx.mlb.TeamColors(p, a), scorers)
+    return ctx.soccer.FinalTeam(abbr, ctx.mlb.TeamColors(p, a), score, scorers)
 
 
 def _publish_soccer_final(ctx, game):
