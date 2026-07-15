@@ -89,6 +89,7 @@ use espn::league::AnyLeague;
         soccer::SoccerFinalGame,
         soccer::SoccerTeam,
         soccer::SoccerFinalTeam,
+        soccer::SoccerFinalFlavor,
         soccer::LastEvent,
         soccer::EventKind,
         soccer::Commentary,

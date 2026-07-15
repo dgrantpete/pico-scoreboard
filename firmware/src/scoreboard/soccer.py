@@ -44,11 +44,12 @@ _LIVE_SIZE = struct.calcsize(_LIVE_FMT)  # 24
 _PRE_FMT = "<IIIII"
 _PRE_SIZE = struct.calcsize(_PRE_FMT)  # 20
 
-# Final fixed section (offset 2): away/home score u16, then color pairs.
-_FINAL_FMT = "<HHIIII"
-_FINAL_SIZE = struct.calcsize(_FINAL_FMT)  # 20
+# Final fixed section (offset 2): flavor u8, away/home score u16, then
+# color pairs.
+_FINAL_FMT = "<BHHIIII"
+_FINAL_SIZE = struct.calcsize(_FINAL_FMT)  # 21
 
-_FLAG_HALFTIME = 0x01
+_FLAG_BREAK = 0x01
 _FLAG_EVENT = 0x02
 _FLAG_EVENT_RED = 0x04
 _FLAG_EVENT_AWAY = 0x08
@@ -61,6 +62,11 @@ _FLAG_COMMENTARY = 0x20
 EVENT_GOAL = 0
 EVENT_RED_CARD = 1
 
+# Full-time flavor codes (wire final byte at offset 2): how the match ended.
+FT_REGULAR = 0
+FT_AET = 1
+FT_PENALTIES = 2
+
 # Event side codes.
 SIDE_NONE = 0
 SIDE_AWAY = 1
@@ -68,9 +74,8 @@ SIDE_HOME = 2
 
 # Match period codes as served on the wire (ESPN's competition period):
 # regulation halves, extra-time halves, the shootout. Named-constant style
-# matches nba.PHASE_*. Dedicated break/shootout rendering is a pending wire
-# change; until then codes past HALF_SECOND render with extra-time stoppage
-# thresholds and the generic "ET" phase label.
+# matches nba.PHASE_*. ET halves render with their stoppage thresholds and
+# the "ET" phase label; the shootout freezes the clock behind "PENS".
 HALF_FIRST = 1
 HALF_SECOND = 2
 HALF_ET_FIRST = 3
@@ -115,9 +120,11 @@ class LastEvent:
 class LiveGame:
     """Top-level live soccer snapshot (`/soccer/{league}/games/{id}`).
 
-    `clock_seconds` is elapsed match seconds at fetch time; `halftime` is the
-    backend's explicit interval flag (the clock alone cannot distinguish
-    halftime from first-half stoppage).
+    `clock_seconds` is elapsed match seconds at fetch time; `in_break` is the
+    backend's explicit interval flag — halftime, extra-time halftime, end of
+    regulation, or end of extra time (the clock alone cannot distinguish a
+    break from stoppage). During a shootout (half == HALF_SHOOTOUT) the
+    match clock is over and renders frozen.
     """
 
     wire_state = GAME_STATE_IN
@@ -127,7 +134,7 @@ class LiveGame:
         game_id: str,
         clock_seconds: int,
         half: int,
-        halftime: bool,
+        in_break: bool,
         home: TeamState,
         away: TeamState,
         last_event: LastEvent | None,
@@ -137,7 +144,7 @@ class LiveGame:
         self.game_id = game_id
         self.clock_seconds = clock_seconds
         self.half = half
-        self.halftime = halftime
+        self.in_break = in_break
         self.home = home
         self.away = away
         self.last_event = last_event
@@ -199,7 +206,7 @@ class LiveGame:
             game_id=game_id,
             clock_seconds=clock_seconds,
             half=half,
-            halftime=bool(flags & _FLAG_HALFTIME),
+            in_break=bool(flags & _FLAG_BREAK),
             home=TeamState(home_abbr, home_score, TeamColors(home_primary, home_alternate)),
             away=TeamState(away_abbr, away_score, TeamColors(away_primary, away_alternate)),
             last_event=last_event,
@@ -215,20 +222,21 @@ class PregameGame:
     weather_temp / weather_condition / start_epoch / away / home with
     wins-losses-pitcher), so the soccer pregame screen reuses the whole MLB
     pregame pipeline: `venue` carries the league display name ("MLS",
-    "PREMIER LEAGUE") as the cycling info line, and the fields soccer never
-    has (weather, records, probables) are permanently absent — the renderer
-    already omits absent fields (the pregame-sparse case).
+    "PREMIER LEAGUE"), the stadium name rides the weather-condition slot
+    (soccer has no weather; the cycle then reads league / venue / kickoff),
+    and the fields soccer never has (records, probables) stay absent — the
+    renderer already omits absent fields (the pregame-sparse case).
     """
 
     wire_state = GAME_STATE_PRE
 
     def __init__(self, game_id: str, start_epoch: int, league: str,
-                 home: PregameTeam, away: PregameTeam) -> None:
+                 venue: str, home: PregameTeam, away: PregameTeam) -> None:
         self.game_id = game_id
         self.start_epoch = start_epoch
         self.venue = league
         self.weather_temp = None
-        self.weather_condition = None
+        self.weather_condition = venue or None
         self.home = home
         self.away = away
 
@@ -256,6 +264,7 @@ class PregameGame:
         game_id, o = read_str(buf, o, end, "game_id")
         away_abbr, o = read_str(buf, o, end, "away abbreviation")
         home_abbr, o = read_str(buf, o, end, "home abbreviation")
+        venue, o = read_str(buf, o, end, "venue")
 
         if o != end:
             raise DeserializeError(f"@{o}", f"{end - o} unexpected trailing bytes")
@@ -264,6 +273,7 @@ class PregameGame:
             game_id=game_id,
             start_epoch=start_time,
             league=league,
+            venue=venue,
             home=pregame_team(home_abbr, TeamColors(home_primary, home_alternate)),
             away=pregame_team(away_abbr, TeamColors(away_primary, away_alternate)),
         )
@@ -304,10 +314,13 @@ class FinalGame:
 
     wire_state = GAME_STATE_POST
 
-    def __init__(self, game_id: str, home: FinalTeam, away: FinalTeam) -> None:
+    def __init__(self, game_id: str, home: FinalTeam, away: FinalTeam,
+                 flavor: int = FT_REGULAR) -> None:
         self.game_id = game_id
         self.home = home
         self.away = away
+        # FT_* code: regulation / after extra time / on penalties.
+        self.flavor = flavor
 
     @classmethod
     def from_struct(cls, buf) -> "FinalGame":
@@ -320,11 +333,15 @@ class FinalGame:
             )
 
         (
+            flavor,
             away_score, home_score,
             away_primary, away_alternate, home_primary, home_alternate,
         ) = struct.unpack_from(_FINAL_FMT, buf, HDR_SIZE)
 
-        o = HDR_SIZE + _FINAL_SIZE  # 22
+        if flavor > FT_PENALTIES:
+            raise DeserializeError("@2", f"invalid full-time flavor: {flavor}")
+
+        o = HDR_SIZE + _FINAL_SIZE  # 23
         game_id, o = read_str(buf, o, end, "game_id")
         away_abbr, o = read_str(buf, o, end, "away abbreviation")
         home_abbr, o = read_str(buf, o, end, "home abbreviation")
@@ -338,6 +355,7 @@ class FinalGame:
             game_id=game_id,
             home=FinalTeam(home_abbr, TeamColors(home_primary, home_alternate), home_score, home_scorers),
             away=FinalTeam(away_abbr, TeamColors(away_primary, away_alternate), away_score, away_scorers),
+            flavor=flavor,
         )
 
 

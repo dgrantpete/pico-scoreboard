@@ -135,11 +135,11 @@ def encode_soccer_live(
 
 def encode_soccer_pregame(
     *, start_time, away_pri, away_alt, home_pri, home_alt,
-    game_id, away_abbr, home_abbr,
+    game_id, away_abbr, home_abbr, venue,
 ) -> bytes:
     out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_PRE])
     out += struct.pack("<IIIII", start_time, away_pri, away_alt, home_pri, home_alt)
-    out += _str(game_id) + _str(away_abbr) + _str(home_abbr)
+    out += _str(game_id) + _str(away_abbr) + _str(home_abbr) + _str(venue)
     return bytes(out)
 
 
@@ -192,11 +192,12 @@ def encode_nba_final(
 
 
 def encode_soccer_final(
-    *, away_score, home_score, away_pri, away_alt, home_pri, home_alt,
+    *, flavor, away_score, home_score, away_pri, away_alt, home_pri, home_alt,
     game_id, away_abbr, home_abbr, away_scorers, home_scorers,
 ) -> bytes:
     out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_POST])
-    out += struct.pack("<HHIIII", away_score, home_score, away_pri, away_alt, home_pri, home_alt)
+    out += struct.pack("<BHHIIII", flavor, away_score, home_score,
+                       away_pri, away_alt, home_pri, home_alt)
     out += _str(game_id) + _str(away_abbr) + _str(home_abbr)
     out += _str(away_scorers) + _str(home_scorers)
     return bytes(out)
@@ -381,10 +382,11 @@ SOCCER_PREGAME = dict(
     start_time=1783647600,
     away_pri=0x004812, away_alt=0xEAE827, home_pri=0x5D9741, home_alt=0x005595,
     game_id="401800102", away_abbr="POR", home_abbr="SEA",
+    venue="Lumen Field",
 )
 
 SOCCER_FINAL = dict(
-    away_score=1, home_score=0,
+    flavor=0, away_score=1, home_score=0,
     away_pri=0xFF0000, away_alt=0xFFC400, home_pri=0x004812, home_alt=0xEAE827,
     game_id="401800103", away_abbr="ESP", home_abbr="POR",
     away_scorers="M. Merino 90'+1'", home_scorers="",
@@ -514,11 +516,11 @@ RUST_PIN_SOCCER_QUIET = bytes.fromhex(
 )
 RUST_PIN_SOCCER_PRE = bytes.fromhex(
     "0200704d506a1248000027e8ea0041975d0095550000093430313830303130"
-    "3203504f5203534541"
+    "3203504f52035345410b4c756d656e204669656c64"
 )
 RUST_PIN_SOCCER_FINAL = bytes.fromhex(
-    "0202010000000000ff0000c4ff001248000027e8ea0009343031383030313033034553"
-    "5003504f52104d2e204d6572696e6f203930272b312700"
+    "020200010000000000ff0000c4ff001248000027e8ea0009343031383030313033"
+    "0345535003504f52104d2e204d6572696e6f203930272b312700"
 )
 
 
@@ -588,8 +590,14 @@ def check_rust_pins() -> None:
 
     live = soccer.parse_game_detail(memoryview(RUST_PIN_SOCCER_LIVE), "MLS")
     assert live.last_event.name == "R. Lukaku"
+    ht = soccer.parse_game_detail(memoryview(RUST_PIN_SOCCER_HALFTIME), "MLS")
+    assert ht.in_break is True
+    pre = soccer.parse_game_detail(memoryview(RUST_PIN_SOCCER_PRE), "MLS")
+    assert pre.weather_condition == "Lumen Field"  # venue rides the weather slot
+    assert pre.venue == "MLS"                      # league keeps the venue slot
     ft = soccer.parse_game_detail(memoryview(RUST_PIN_SOCCER_FINAL), "MLS")
     assert ft.away.scorers == "M. Merino 90'+1'"
+    assert ft.flavor == soccer.FT_REGULAR
 
 
 # --- Round-trip checks ------------------------------------------------------
@@ -837,7 +845,7 @@ def check_soccer_live_full() -> None:
     assert game.game_id == "401800100"
     assert game.clock_seconds == 51 * 60
     assert game.half == 1
-    assert game.halftime is False
+    assert game.in_break is False
     assert game.away.abbreviation == "BEL"
     assert game.away.score == 2
     assert game.away.colors.primary == 0xE30613
@@ -869,7 +877,7 @@ def check_soccer_live_commentary() -> None:
 def check_soccer_live_halftime() -> None:
     game = soccer.parse_game_detail(memoryview(GOLDEN_SOCCER_LIVE_HALFTIME), "WORLD CUP")
     assert isinstance(game, soccer.LiveGame)
-    assert game.halftime is True
+    assert game.in_break is True
     assert game.last_event is not None
     assert game.last_event.side == soccer.SIDE_HOME
     assert game.last_event.name == "C. Pulisic"
@@ -896,7 +904,10 @@ def check_soccer_pregame() -> None:
     assert game.away.wins is None and game.away.losses is None
     assert game.away.pitcher == "POR"
     assert game.home.pitcher == "SEA"
-    assert game.weather_temp is None and game.weather_condition is None
+    # Venue rides the weather-condition slot (league / venue / kickoff
+    # cycle); soccer still has no temperature.
+    assert game.weather_temp is None
+    assert game.weather_condition == "Lumen Field"
     assert game.away.colors.primary == 0x004812
     assert game.home.colors.primary == 0x5D9741
 
@@ -930,6 +941,9 @@ def check_soccer_rejections() -> None:
     expect_error(GOLDEN_SOCCER_PREGAME[:15], "truncated soccer pregame fixed section")
     expect_error(GOLDEN_SOCCER_PREGAME + b"\x00", "trailing bytes after pregame")
     expect_error(GOLDEN_SOCCER_FINAL[:-1], "truncated inside scorers")
+    bad_flavor = bytearray(GOLDEN_SOCCER_FINAL)
+    bad_flavor[2] = 9
+    expect_error(bytes(bad_flavor), "invalid full-time flavor")
     expect_error(GOLDEN_SOCCER_FINAL + b"\x00", "trailing bytes after final")
 
 

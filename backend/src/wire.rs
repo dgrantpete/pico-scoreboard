@@ -107,7 +107,7 @@
 //! | off | type | field                                            |
 //! |-----|------|--------------------------------------------------|
 //! | 2   | u8   | flags (see below)                                |
-//! | 3   | u8   | half (1/2 regulation; ET periods pass through)   |
+//! | 3   | u8   | half — ESPN's raw period: regulation halves 1/2, extra-time halves 3/4, shootout 5 |
 //! | 4   | u16  | clock_seconds — elapsed match seconds, floor-minute convention (parsed from ESPN's displayClock; the firmware extrapolates forward from this anchor) |
 //! | 6   | u16  | away_score (u32 saturated to u16)                |
 //! | 8   | u16  | home_score                                       |
@@ -116,10 +116,11 @@
 //! | 18  | u32  | home_colors.primary                              |
 //! | 22  | u32  | home_colors.alternate                            |
 //!
-//! Flags: bit0 = halftime, bit1 = last event present, bit2 = event is a red
-//! card (else a goal), bit3 = event is the away side's, bit4 = home side's
-//! (neither set = unattributed), bit5 = commentary present. Bits 2-4 are
-//! meaningless unless bit1.
+//! Flags: bit0 = break (a non-playing interval — halftime, extra-time
+//! halftime, end of regulation, end of extra time; the clock is paused), bit1
+//! = last event present, bit2 = event is a red card (else a goal), bit3 =
+//! event is the away side's, bit4 = home side's (neither set = unattributed),
+//! bit5 = commentary present. Bits 2-4 are meaningless unless bit1.
 //!
 //! Strings from offset 26: `game_id`, `away.abbreviation`,
 //! `home.abbreviation`, then **iff** bit1: `event.clock` (display-shaped,
@@ -133,16 +134,17 @@
 //! Fixed 20-byte section at offset 2 (`<IIIII`): `start_time` (unix epoch
 //! seconds UTC), then away primary/alternate + home primary/alternate colors.
 //! Strings from offset 22: `game_id`, `away.abbreviation`,
-//! `home.abbreviation`. (The league's display name is firmware-side config —
-//! the device knows which league it polled.)
+//! `home.abbreviation`, `venue` (stadium `fullName`). (The league's display
+//! name is firmware-side config — the device knows which league it polled.)
 //!
 //! ## Soccer final (state = 2)
 //!
-//! Fixed 20-byte section at offset 2 (`<HHIIII`): `away_score` u16,
-//! `home_score` u16, then the four colors. Strings from offset 22:
-//! `game_id`, `away.abbreviation`, `home.abbreviation`, `away.scorers`,
-//! `home.scorers` (pre-formatted "M. Merino 90'+1', ..." lists, always
-//! present, empty when scoreless).
+//! Fixed 21-byte section at offset 2 (`<BHHIIII`): `flavor` u8 (0 = full time,
+//! 1 = after extra time, 2 = after penalties — how the match was decided),
+//! `away_score` u16, `home_score` u16, then the four colors. Strings from
+//! offset 23: `game_id`, `away.abbreviation`, `home.abbreviation`,
+//! `away.scorers`, `home.scorers` (pre-formatted "M. Merino 90'+1', ..." lists,
+//! always present, empty when scoreless).
 //!
 //! # NBA game detail (`GET /basketball/nba/games/{game_id}`)
 //!
@@ -203,7 +205,8 @@ use crate::mlb::{InningHalf, MlbFinalGame, MlbGame, MlbLiveGame, MlbPregameGame}
 use crate::nba::{LivePhase, NbaFinalGame, NbaGame, NbaLiveGame, NbaPregameGame};
 use crate::shared::game::GameListEntry;
 use crate::soccer::{
-    LastEvent, Side, SoccerFinalGame, SoccerGame, SoccerLiveGame, SoccerPregameGame,
+    LastEvent, Side, SoccerFinalFlavor, SoccerFinalGame, SoccerGame, SoccerLiveGame,
+    SoccerPregameGame,
 };
 
 pub const STRUCT_CONTENT_TYPE: &str = "application/x-scoreboard-struct";
@@ -394,7 +397,7 @@ fn write_final(out: &mut Vec<u8>, game: &MlbFinalGame) {
     push_str(out, &game.home.abbreviation);
 }
 
-const SOCCER_FLAG_HALFTIME: u8 = 0x01;
+const SOCCER_FLAG_BREAK: u8 = 0x01;
 const SOCCER_FLAG_EVENT: u8 = 0x02;
 const SOCCER_FLAG_EVENT_RED: u8 = 0x04;
 const SOCCER_FLAG_EVENT_AWAY: u8 = 0x08;
@@ -449,12 +452,21 @@ fn write_soccer_pregame(out: &mut Vec<u8>, game: &SoccerPregameGame) {
     push_str(out, &game.game_id);
     push_str(out, &game.away.abbreviation);
     push_str(out, &game.home.abbreviation);
+    push_str(out, &game.venue);
+}
+
+fn soccer_flavor_code(flavor: SoccerFinalFlavor) -> u8 {
+    match flavor {
+        SoccerFinalFlavor::FullTime => 0,
+        SoccerFinalFlavor::AfterExtraTime => 1,
+        SoccerFinalFlavor::AfterPenalties => 2,
+    }
 }
 
 fn write_soccer_live(out: &mut Vec<u8>, game: &SoccerLiveGame) {
     let mut flags = soccer_event_flags(&game.last_event);
-    if game.halftime {
-        flags |= SOCCER_FLAG_HALFTIME;
+    if game.on_break {
+        flags |= SOCCER_FLAG_BREAK;
     }
     if game.commentary.is_some() {
         flags |= SOCCER_FLAG_COMMENTARY;
@@ -482,6 +494,7 @@ fn write_soccer_live(out: &mut Vec<u8>, game: &SoccerLiveGame) {
 }
 
 fn write_soccer_final(out: &mut Vec<u8>, game: &SoccerFinalGame) {
+    out.push(soccer_flavor_code(game.flavor));
     out.extend_from_slice(&score_u16(game.away.score));
     out.extend_from_slice(&score_u16(game.home.score));
     out.extend_from_slice(&game.away.colors.primary.to_le_bytes());
@@ -864,7 +877,7 @@ mod tests {
             clock: "45'+1'".to_string(),
             clock_seconds: 51 * 60,
             half: 1,
-            halftime: false,
+            on_break: false,
             away: soccer_side("BEL", 2, 0xE30613, 0xFDDA25),
             home: soccer_side("USA", 1, 0x002868, 0xBF0A30),
             last_event: Some(LastEvent {
@@ -888,7 +901,7 @@ mod tests {
             clock: "45'+1'".to_string(),
             clock_seconds: 51 * 60,
             half: 1,
-            halftime: false,
+            on_break: false,
             away: soccer_side("BEL", 2, 0xE30613, 0xFDDA25),
             home: soccer_side("USA", 1, 0x002868, 0xBF0A30),
             last_event: Some(LastEvent {
@@ -918,7 +931,7 @@ mod tests {
             clock: "45'+6'".to_string(),
             clock_seconds: 51 * 60,
             half: 1,
-            halftime: true,
+            on_break: true,
             away: soccer_side("BEL", 2, 0xE30613, 0xFDDA25),
             home: soccer_side("USA", 2, 0x002868, 0xBF0A30),
             last_event: Some(LastEvent {
@@ -942,7 +955,7 @@ mod tests {
             clock: "87'".to_string(),
             clock_seconds: 87 * 60,
             half: 2,
-            halftime: false,
+            on_break: false,
             away: soccer_side("POR", 0, 0x004812, 0xEAE827),
             home: soccer_side("SEA", 0, 0x5D9741, 0x005595),
             last_event: None,
@@ -951,13 +964,14 @@ mod tests {
         assert_eq!(hex::encode(encode_soccer_game(&game)), GOLDEN_SOCCER_QUIET);
     }
 
-    const GOLDEN_SOCCER_PRE: &str = "0200704d506a1248000027e8ea0041975d00955500000934303138303031303203504f5203534541";
+    const GOLDEN_SOCCER_PRE: &str = "0200704d506a1248000027e8ea0041975d00955500000934303138303031303203504f52035345410b4c756d656e204669656c64";
 
     #[test]
     fn golden_soccer_pregame() {
         let game = SoccerGame::Pregame(SoccerPregameGame {
             game_id: "401800102".to_string(),
             start_time: 1_783_647_600,
+            venue: "Lumen Field".to_string(),
             away: SoccerTeam {
                 abbreviation: "POR".to_string(),
                 colors: TeamColors { primary: 0x004812, alternate: 0xEAE827 },
@@ -970,12 +984,12 @@ mod tests {
         assert_eq!(hex::encode(encode_soccer_game(&game)), GOLDEN_SOCCER_PRE);
     }
 
-    const GOLDEN_SOCCER_FINAL: &str = "0202010000000000ff0000c4ff001248000027e8ea00093430313830303130330345535003504f52104d2e204d6572696e6f203930272b312700";
+    const GOLDEN_SOCCER_FINAL: &str = "020200010000000000ff0000c4ff001248000027e8ea00093430313830303130330345535003504f52104d2e204d6572696e6f203930272b312700";
 
-    #[test]
-    fn golden_soccer_final_with_scorers() {
-        let game = SoccerGame::Final(SoccerFinalGame {
+    fn soccer_final_fixture(flavor: SoccerFinalFlavor) -> SoccerGame {
+        SoccerGame::Final(SoccerFinalGame {
             game_id: "401800103".to_string(),
+            flavor,
             away: SoccerFinalTeam {
                 abbreviation: "ESP".to_string(),
                 score: 1,
@@ -988,8 +1002,28 @@ mod tests {
                 colors: TeamColors { primary: 0x004812, alternate: 0xEAE827 },
                 scorers: String::new(),
             },
-        });
+        })
+    }
+
+    #[test]
+    fn golden_soccer_final_with_scorers() {
+        // Full-time flavor → leading flavor byte 0.
+        let game = soccer_final_fixture(SoccerFinalFlavor::FullTime);
         assert_eq!(hex::encode(encode_soccer_game(&game)), GOLDEN_SOCCER_FINAL);
+    }
+
+    #[test]
+    fn soccer_final_flavor_byte_encodes_variant() {
+        // The flavor byte sits at offset 2 (after version, state); everything
+        // after it is identical to the full-time golden.
+        let aet = encode_soccer_game(&soccer_final_fixture(SoccerFinalFlavor::AfterExtraTime));
+        let pens = encode_soccer_game(&soccer_final_fixture(SoccerFinalFlavor::AfterPenalties));
+        assert_eq!(aet[2], 1);
+        assert_eq!(pens[2], 2);
+        // Only byte 2 differs from the full-time encoding.
+        let full = encode_soccer_game(&soccer_final_fixture(SoccerFinalFlavor::FullTime));
+        assert_eq!(&aet[3..], &full[3..]);
+        assert_eq!(&pens[3..], &full[3..]);
     }
 
     // --- NBA goldens (shared verbatim with tools/wire_format_check.py) ---

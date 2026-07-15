@@ -487,13 +487,13 @@ def _soccer_logos(ctx, game):
 
 
 def _publish_soccer_live(ctx, *, away, home, away_score, home_score,
-                         clock_seconds, half, halftime=False, event=None):
+                         clock_seconds, half, in_break=False, event=None):
     soccer = ctx.soccer
     game = soccer.LiveGame(
         game_id="401700100",
         clock_seconds=clock_seconds,
         half=half,
-        halftime=halftime,
+        in_break=in_break,
         home=_soccer_state(ctx, home, home_score),
         away=_soccer_state(ctx, away, away_score),
         last_event=event,
@@ -557,7 +557,7 @@ def soccer_halftime(ctx: ScenarioContext) -> None:
     event = ctx.soccer.LastEvent(ctx.soccer.EVENT_GOAL, "45'+1'", "C. Pulisic", ctx.soccer.SIDE_HOME)
     _publish_soccer_live(
         ctx, away="BEL", home="USA", away_score=2, home_score=2,
-        clock_seconds=46 * 60, half=1, halftime=True, event=event,
+        clock_seconds=46 * 60, half=1, in_break=True, event=event,
     )
 
 
@@ -592,6 +592,7 @@ def soccer_pregame(ctx: ScenarioContext) -> None:
         game_id="401700101",
         start_epoch=_START_EPOCH,
         league="MLS",
+        venue="LUMEN FIELD",
         home=soccer.pregame_team("SEA", ctx.mlb.TeamColors(p_sea, a_sea)),
         away=soccer.pregame_team("POR", ctx.mlb.TeamColors(p_por, a_por)),
     )

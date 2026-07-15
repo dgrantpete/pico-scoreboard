@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::espn::types::{CompetitionState, EspnAthlete, EspnTeam, HomeAway};
+use crate::espn::types::{CompetitionState, EspnAthlete, EspnTeam, EspnVenue, HomeAway};
 use crate::shared::competitor::Competitor;
 use crate::shared::team::{TeamColors, TeamState};
 
@@ -21,6 +21,7 @@ pub(crate) struct EspnEvent {
 pub(crate) enum EspnCompetition {
     PreGame {
         competitors: [EspnCompetitor; 2],
+        venue_name: String,
     },
     Live {
         competitors: [EspnCompetitor; 2],
@@ -30,13 +31,16 @@ pub(crate) enum EspnCompetition {
         /// [`parse_display_clock`]) — the numeric `status.clock` caps at
         /// regulation during stoppage, so the string is the only source.
         clock_seconds: u16,
+        /// ESPN's raw competition period: regulation halves 1/2, extra-time
+        /// halves 3/4, shootout 5 (see the range warn in the DU).
         period: u8,
-        halftime: bool,
+        on_break: bool,
         details: Vec<EspnDetail>,
     },
     Final {
         competitors: [EspnCompetitor; 2],
         details: Vec<EspnDetail>,
+        flavor: SoccerFinalFlavor,
     },
 }
 
@@ -45,6 +49,8 @@ pub(crate) enum EspnCompetition {
 pub(crate) struct EspnCompetitionDto {
     competitors: Vec<EspnCompetitor>,
     status: EspnStatus,
+    /// Present in every sampled state, but only the pregame arm requires it.
+    venue: Option<EspnVenue>,
     #[serde(default)]
     details: Vec<EspnDetail>,
 }
@@ -58,30 +64,45 @@ impl TryFrom<EspnCompetitionDto> for EspnCompetition {
                 .map_err(|v: Vec<_>| format!("expected 2 competitors, got {}", v.len()))
         };
         match dto.status.r#type.state {
-            CompetitionState::Pre => Ok(Self::PreGame {
-                competitors: two_competitors(dto.competitors)?,
-            }),
+            CompetitionState::Pre => {
+                let venue_name = dto
+                    .venue
+                    .ok_or("pregame competition missing venue")?
+                    .full_name;
+                Ok(Self::PreGame {
+                    competitors: two_competitors(dto.competitors)?,
+                    venue_name,
+                })
+            }
             CompetitionState::In => {
                 let display_clock = dto
                     .status
                     .display_clock
                     .ok_or("live competition missing displayClock")?;
                 let clock_seconds = parse_display_clock(&display_clock, dto.status.clock);
+                let period = dto
+                    .status
+                    .period
+                    .ok_or("live competition missing period")?;
+                if !(1..=5).contains(&period) {
+                    tracing::warn!(
+                        period,
+                        "soccer live period outside the known 1..=5 set (regulation/extra-time/shootout) — passing through"
+                    );
+                }
                 Ok(Self::Live {
                     competitors: two_competitors(dto.competitors)?,
                     display_clock,
                     clock_seconds,
-                    period: dto
-                        .status
-                        .period
-                        .ok_or("live competition missing period")?,
-                    halftime: is_halftime(dto.status.r#type.description.as_deref()),
+                    period,
+                    on_break: is_break(dto.status.r#type.description.as_deref()),
                     details: dto.details,
                 })
             }
             CompetitionState::Post => Ok(Self::Final {
                 competitors: two_competitors(dto.competitors)?,
                 details: dto.details,
+                flavor: final_flavor(dto.status.r#type.description.as_deref()),
             }),
         }
     }
@@ -114,21 +135,49 @@ pub(crate) fn parse_display_clock(display_clock: &str, numeric_fallback: Option<
     }
 }
 
-/// Halftime is indistinguishable from first-half stoppage time by clock and
-/// period alone (both are period=1, clock "45'+N'"); the description is the
-/// only upstream signal. Unknown live descriptions — extra time and shootout
-/// phases have not been observed yet — degrade to in-play with a warning:
-/// the state itself is never guessed.
-fn is_halftime(description: Option<&str>) -> bool {
+/// Whether a live match is in a non-playing break — the clock is paused and
+/// meaningless. Clock and period alone cannot distinguish a break from active
+/// stoppage time (both read e.g. "45'+N'"), so the description is the only
+/// upstream signal.
+///
+/// Break descriptions (the full observed set): Halftime, Extra Time Halftime,
+/// End of Regulation (between second half and extra time), End of Extra Time
+/// (before penalties). Active-play descriptions: First Half, Second Half, In
+/// Progress, Overtime (extra time), Shootout. An unknown description degrades
+/// to active play with a warning — the state is never guessed.
+pub(crate) fn is_break(description: Option<&str>) -> bool {
     match description {
-        Some("Halftime") => true,
-        Some("First Half" | "Second Half" | "In Progress") | None => false,
+        Some("Halftime" | "Extra Time Halftime" | "End of Regulation" | "End of Extra Time") => {
+            true
+        }
+        Some("First Half" | "Second Half" | "In Progress" | "Overtime" | "Shootout") | None => {
+            false
+        }
         Some(other) => {
             tracing::warn!(
                 description = %other,
-                "unknown live soccer status description (extra time / shootout?) — treating as in-play"
+                "unknown live soccer status description — treating as active play"
             );
             false
+        }
+    }
+}
+
+/// Map a post-state `status.type.description` to how the match was decided, for
+/// the wire `flavor` byte. Observed post descriptions: "Full Time", "Final
+/// Score - After Extra Time", "Final Score - After Penalties". An unknown
+/// description degrades to full time with a warning.
+pub(crate) fn final_flavor(description: Option<&str>) -> SoccerFinalFlavor {
+    match description {
+        Some("Final Score - After Extra Time") => SoccerFinalFlavor::AfterExtraTime,
+        Some("Final Score - After Penalties") => SoccerFinalFlavor::AfterPenalties,
+        Some("Full Time") | None => SoccerFinalFlavor::FullTime,
+        Some(other) => {
+            tracing::warn!(
+                description = %other,
+                "unknown post-state soccer description — defaulting to full-time flavor"
+            );
+            SoccerFinalFlavor::FullTime
         }
     }
 }
@@ -232,12 +281,14 @@ pub enum SoccerGame {
     Final(SoccerFinalGame),
 }
 
-/// Pre-game snapshot: matchup and scheduled start.
+/// Pre-game snapshot: matchup, scheduled start, and venue.
 #[derive(Serialize, ToSchema)]
 pub struct SoccerPregameGame {
     pub game_id: String,
     /// Scheduled start, unix epoch seconds UTC (what the wire carries).
     pub start_time: u32,
+    /// Stadium name (ESPN `venue.fullName`); 100%-present in the corpus.
+    pub venue: String,
     pub home: SoccerTeam,
     pub away: SoccerTeam,
 }
@@ -251,11 +302,13 @@ pub struct SoccerLiveGame {
     /// Elapsed match seconds parsed from `clock` (floor minutes × 60);
     /// what the wire carries — the firmware extrapolates from it.
     pub clock_seconds: u16,
-    /// Regulation halves are 1 and 2; extra-time periods pass through as-is.
+    /// ESPN's raw competition period: regulation halves 1/2, extra-time halves
+    /// 3/4, shootout 5.
     pub half: u8,
-    /// True during the interval — the clock alone cannot distinguish
-    /// halftime from first-half stoppage time.
-    pub halftime: bool,
+    /// True during a non-playing break (halftime, extra-time halftime, end of
+    /// regulation, end of extra time) — the clock alone cannot distinguish a
+    /// break from active stoppage time.
+    pub on_break: bool,
     pub home: TeamState,
     pub away: TeamState,
     pub last_event: Option<LastEvent>,
@@ -266,12 +319,25 @@ pub struct SoccerLiveGame {
     pub commentary: Option<Commentary>,
 }
 
-/// Final snapshot: per-side scores and pre-formatted scorer lists.
+/// Final snapshot: per-side scores, pre-formatted scorer lists, and how the
+/// match was decided.
 #[derive(Serialize, ToSchema)]
 pub struct SoccerFinalGame {
     pub game_id: String,
+    /// Full time, after extra time, or on penalties — the wire `flavor` byte.
+    pub flavor: SoccerFinalFlavor,
     pub home: SoccerFinalTeam,
     pub away: SoccerFinalTeam,
+}
+
+/// How a finished match was decided. Carried as the final wire `flavor` byte
+/// (0/1/2); the firmware renders the "AET"/"pens" annotation from it.
+#[derive(Serialize, ToSchema, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum SoccerFinalFlavor {
+    FullTime,
+    AfterExtraTime,
+    AfterPenalties,
 }
 
 /// One commentary line; `id` is the ESPN sequence number as a string — the

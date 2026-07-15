@@ -6,7 +6,8 @@ use crate::shared::competitor::{
 
 use super::types::{
     Commentary, EspnCompetitor, EspnDetail, EventKind, LastEvent, RawSummary, Side,
-    SoccerFinalGame, SoccerFinalTeam, SoccerLiveGame, SoccerPregameGame, SoccerTeam,
+    SoccerFinalFlavor, SoccerFinalGame, SoccerFinalTeam, SoccerLiveGame, SoccerPregameGame,
+    SoccerTeam,
 };
 
 /// The latest commentary line of a summary payload (highest sequence).
@@ -109,7 +110,7 @@ pub(crate) fn live_competition_to_game(
     display_clock: String,
     clock_seconds: u16,
     period: u8,
-    halftime: bool,
+    on_break: bool,
     details: Vec<EspnDetail>,
     commentary: Option<Commentary>,
 ) -> Result<SoccerLiveGame, AppError> {
@@ -124,7 +125,7 @@ pub(crate) fn live_competition_to_game(
         clock: display_clock,
         clock_seconds,
         half: period,
-        halftime,
+        on_break,
         home,
         away,
         last_event,
@@ -132,10 +133,12 @@ pub(crate) fn live_competition_to_game(
     })
 }
 
-/// Transform a pre-game competition into a `SoccerPregameGame`.
+/// Transform a pre-game competition into a `SoccerPregameGame`. `venue_name`
+/// comes from the competition (`venue.fullName`).
 pub(crate) fn pregame_competition_to_game(
     event_id: String,
     date: &str,
+    venue_name: String,
     competitors: [EspnCompetitor; 2],
 ) -> Result<SoccerPregameGame, AppError> {
     let start_time = parse_start_time(date)?;
@@ -149,6 +152,7 @@ pub(crate) fn pregame_competition_to_game(
     Ok(SoccerPregameGame {
         game_id: event_id,
         start_time,
+        venue: venue_name,
         home: team(&home_c)?,
         away: team(&away_c)?,
     })
@@ -160,6 +164,7 @@ pub(crate) fn final_competition_to_game(
     event_id: String,
     competitors: [EspnCompetitor; 2],
     details: Vec<EspnDetail>,
+    flavor: SoccerFinalFlavor,
 ) -> Result<SoccerFinalGame, AppError> {
     let (home_c, away_c) = order_competitors(&event_id, competitors)?;
     let (home_id, away_id) = (home_c.team.id.clone(), away_c.team.id.clone());
@@ -173,6 +178,7 @@ pub(crate) fn final_competition_to_game(
     };
     Ok(SoccerFinalGame {
         game_id: event_id,
+        flavor,
         home: team(&home_c, Side::Home)?,
         away: team(&away_c, Side::Away)?,
     })
@@ -202,7 +208,7 @@ mod tests {
         display_clock: String,
         clock_seconds: u16,
         period: u8,
-        halftime: bool,
+        on_break: bool,
         details: Vec<EspnDetail>,
     }
 
@@ -213,7 +219,7 @@ mod tests {
             display_clock,
             clock_seconds,
             period,
-            halftime,
+            on_break,
             details,
         }) = event.competitions.into_iter().next()
         else {
@@ -225,7 +231,7 @@ mod tests {
             display_clock,
             clock_seconds,
             period,
-            halftime,
+            on_break,
             details,
         }
     }
@@ -237,11 +243,26 @@ mod tests {
             p.display_clock,
             p.clock_seconds,
             p.period,
-            p.halftime,
+            p.on_break,
             p.details,
             None,
         )
         .unwrap()
+    }
+
+    /// Destructure a final fixture's competition into its parts (with the
+    /// DU-derived `flavor`), then build the domain final.
+    fn to_final(event: EspnEvent) -> SoccerFinalGame {
+        let id = event.id;
+        let Some(EspnCompetition::Final {
+            competitors,
+            details,
+            flavor,
+        }) = event.competitions.into_iter().next()
+        else {
+            panic!("fixture must be a final competition");
+        };
+        final_competition_to_game(id, competitors, details, flavor).unwrap()
     }
 
     #[test]
@@ -261,7 +282,7 @@ mod tests {
         assert_eq!(game.clock, "45'+6'");
         assert_eq!(game.clock_seconds, 51 * 60);
         assert_eq!(game.half, 1);
-        assert!(!game.halftime);
+        assert!(!game.on_break);
         assert_eq!(
             (game.home.abbreviation.as_str(), game.home.score),
             ("USA", 1)
@@ -277,12 +298,12 @@ mod tests {
     fn halftime_is_distinguished_from_first_half_stoppage() {
         // Same clock ("45'+6'") and period (1) as the first_half fixture —
         // only status.type.description differs. This is the empirical reason
-        // Live carries the halftime bool.
+        // Live carries the break flag.
         let p = live_parts(fixture("halftime"));
         assert_eq!(p.display_clock, "45'+6'");
         assert_eq!(p.period, 1);
-        assert!(p.halftime);
-        assert!(to_live(p).halftime);
+        assert!(p.on_break);
+        assert!(to_live(p).on_break);
     }
 
     #[test]
@@ -304,14 +325,18 @@ mod tests {
         let event = fixture("pregame");
         let id = event.id;
         let date = event.date;
-        let Some(EspnCompetition::PreGame { competitors }) =
-            event.competitions.into_iter().next()
+        let Some(EspnCompetition::PreGame {
+            competitors,
+            venue_name,
+        }) = event.competitions.into_iter().next()
         else {
             panic!("fixture must be a pregame competition");
         };
-        let game = pregame_competition_to_game(id, &date, competitors).unwrap();
+        assert_eq!(venue_name, "Lumen Field");
+        let game = pregame_competition_to_game(id, &date, venue_name, competitors).unwrap();
         assert_eq!(date, "2026-07-07T00:00Z");
         assert_eq!(game.start_time, parse_start_time(&date).unwrap());
+        assert_eq!(game.venue, "Lumen Field");
         assert_eq!(game.home.abbreviation, "USA");
         assert_eq!(game.away.abbreviation, "BEL");
     }
@@ -333,13 +358,11 @@ mod tests {
 
     #[test]
     fn overtime_live_parses_with_extended_clock() {
-        // Knockout extra time serves as in-state with description "Overtime".
-        // Today it degrades to a generic in-play (halftime=false, running
-        // clock); dedicated ET handling is a planned wire change — this test
-        // pins the current degraded-but-safe behavior.
+        // Knockout extra time serves as in-state with description "Overtime":
+        // active play (not a break), running clock, period passed through.
         let game = to_live(live_parts(fixture("live_red_card")));
         assert_eq!(game.clock, "120'+4'");
-        assert!(!game.halftime);
+        assert!(!game.on_break);
         assert_eq!(
             (game.home.abbreviation.as_str(), game.home.score),
             ("ARG", 3)
@@ -357,16 +380,8 @@ mod tests {
         // Same match, post state ("Final Score - After Extra Time"): three
         // home goals (one a header subtype — collapses to the name format)
         // in clock order, and the away side's lone goal kept separate.
-        let event = fixture("full_time_home_multi_goal");
-        let id = event.id;
-        let Some(EspnCompetition::Final {
-            competitors,
-            details,
-        }) = event.competitions.into_iter().next()
-        else {
-            panic!("fixture must be a final competition");
-        };
-        let game = final_competition_to_game(id, competitors, details).unwrap();
+        let game = to_final(fixture("full_time_home_multi_goal"));
+        assert_eq!(game.flavor, SoccerFinalFlavor::AfterExtraTime);
         assert_eq!(
             (game.home.abbreviation.as_str(), game.home.score),
             ("ARG", 3)
@@ -403,16 +418,8 @@ mod tests {
 
     #[test]
     fn full_time_fixture_builds_final_with_scorers() {
-        let event = fixture("full_time");
-        let id = event.id;
-        let Some(EspnCompetition::Final {
-            competitors,
-            details,
-        }) = event.competitions.into_iter().next()
-        else {
-            panic!("fixture must be a final competition");
-        };
-        let game = final_competition_to_game(id, competitors, details).unwrap();
+        let game = to_final(fixture("full_time"));
+        assert_eq!(game.flavor, SoccerFinalFlavor::FullTime);
         assert_eq!(
             (game.home.abbreviation.as_str(), game.home.score),
             ("POR", 0)
@@ -424,5 +431,77 @@ mod tests {
         // Yellow cards are excluded; the lone goal formats as "name clock".
         assert_eq!(game.home.scorers, "");
         assert_eq!(game.away.scorers, "M. Merino 90'+1'");
+    }
+
+    // --- Phase H: knockout live states + final flavors (real corpus fixtures) ---
+
+    #[test]
+    fn extra_time_in_play_parses_as_active_play() {
+        // "Overtime" at period 4 (extra time), running clock, not a break.
+        let game = to_live(live_parts(fixture("overtime")));
+        assert_eq!(game.half, 4);
+        assert!(!game.on_break);
+        assert_eq!(game.clock, "120'+4'");
+    }
+
+    #[test]
+    fn shootout_parses_at_period_five_active() {
+        // "Shootout" is period 5; the match clock is frozen but it is not a
+        // break flag (the firmware renders the shootout by half == 5).
+        let game = to_live(live_parts(fixture("shootout")));
+        assert_eq!(game.half, 5);
+        assert!(!game.on_break);
+    }
+
+    #[test]
+    fn extra_time_halftime_is_a_break() {
+        // The interval between the two extra-time halves (period 3).
+        let game = to_live(live_parts(fixture("extra_time_halftime")));
+        assert_eq!(game.half, 3);
+        assert!(game.on_break);
+    }
+
+    #[test]
+    fn end_of_regulation_is_a_break() {
+        // The interval between second half and extra time (period 2).
+        let game = to_live(live_parts(fixture("end_of_regulation")));
+        assert_eq!(game.half, 2);
+        assert!(game.on_break);
+    }
+
+    #[test]
+    fn is_break_covers_the_full_observed_description_set() {
+        use super::super::types::is_break;
+        for d in ["Halftime", "Extra Time Halftime", "End of Regulation", "End of Extra Time"] {
+            assert!(is_break(Some(d)), "{d} should be a break");
+        }
+        for d in ["First Half", "Second Half", "In Progress", "Overtime", "Shootout"] {
+            assert!(!is_break(Some(d)), "{d} should be active play");
+        }
+        assert!(!is_break(None));
+        // Unknown degrades to active play (warn-and-render), never guessed.
+        assert!(!is_break(Some("Penalty Shootout Pending")));
+    }
+
+    #[test]
+    fn final_after_extra_time_sets_aet_flavor() {
+        let game = to_final(fixture("final_after_extra_time"));
+        assert_eq!(game.flavor, SoccerFinalFlavor::AfterExtraTime);
+        // Scorers still resolve from the same details path.
+        assert!(!game.home.scorers.is_empty() || !game.away.scorers.is_empty());
+    }
+
+    #[test]
+    fn final_after_penalties_sets_penalties_flavor() {
+        let game = to_final(fixture("final_after_penalties"));
+        assert_eq!(game.flavor, SoccerFinalFlavor::AfterPenalties);
+    }
+
+    #[test]
+    fn final_flavor_unknown_description_defaults_full_time() {
+        use super::super::types::final_flavor;
+        assert_eq!(final_flavor(Some("Full Time")), SoccerFinalFlavor::FullTime);
+        assert_eq!(final_flavor(None), SoccerFinalFlavor::FullTime);
+        assert_eq!(final_flavor(Some("Abandoned")), SoccerFinalFlavor::FullTime);
     }
 }

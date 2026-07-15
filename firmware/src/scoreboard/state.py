@@ -32,7 +32,8 @@ from scoreboard import screen_geometry
 from scoreboard.inning_half import BOTTOM, TOP
 from scoreboard.nba import PHASE_END_OF_PERIOD, PHASE_HALFTIME, period_name
 from scoreboard.soccer import (
-    EVENT_GOAL, HALF_ET_FIRST, SIDE_AWAY, SIDE_HOME, base_minutes,
+    EVENT_GOAL, FT_AET, FT_PENALTIES, HALF_ET_FIRST, HALF_SHOOTOUT,
+    SIDE_AWAY, SIDE_HOME, base_minutes,
 )
 
 
@@ -446,7 +447,7 @@ class SoccerLiveView:
     integer math (display._draw_soccer_clock). The clock therefore ticks
     between polls with zero Core 0 involvement — an event-loop stall (TLS
     reconnect, GC pause) can never freeze or jump it, and no per-second
-    commits churn the mailbox. `clock_running` is False at halftime; the
+    commits churn the mailbox. `clock_running` is False during breaks; the
     poller additionally clears it when the upstream value stops advancing
     between polls (stale-clock guard), so a paused match doesn't run away.
     """
@@ -459,7 +460,7 @@ class SoccerLiveView:
         self.clock_anchor_ms: int = 0   # time.ticks_ms() when anchored
         self.clock_running: bool = False
         self.base_min: int = 45         # stoppage threshold of current period
-        self.halftime: bool = False
+        self.in_break: bool = False
         self.phase_text: str = ''       # "1ST" / "2ND" / "ET" ('' at halftime)
         self.phase_long: str = ''       # "1ST HALF" / "2ND HALF" / "EXTRA TIME"
         # Last goal / red card, pre-built: "GOAL 90'+3'" over the scorer name.
@@ -476,7 +477,7 @@ class SoccerLiveView:
         self.clock_anchor_ms = other.clock_anchor_ms
         self.clock_running = other.clock_running
         self.base_min = other.base_min
-        self.halftime = other.halftime
+        self.in_break = other.in_break
         self.phase_text = other.phase_text
         self.phase_long = other.phase_long
         self.event_top = other.event_top
@@ -1144,6 +1145,10 @@ def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None,
 
     if game.weather_condition and game.weather_temp is not None:
         pv.weather_text = "%dF %s" % (game.weather_temp, game.weather_condition.upper())
+    elif game.weather_condition:
+        # Condition without a temperature: soccer rides its venue name on
+        # this slot (league / venue / kickoff cycle).
+        pv.weather_text = game.weather_condition.upper()
     else:
         pv.weather_text = ''
 
@@ -1282,7 +1287,8 @@ def set_final(game, home_logo, away_logo) -> None:
 
 # Phase strings per period, index min(half, 3): short form (variants A/C,
 # where the MLB inning ordinal sat) and spelled-out form (variant B).
-_SOCCER_PHASES = (("", ""), ("1ST", "1ST HALF"), ("2ND", "2ND HALF"), ("ET", "EXTRA TIME"))
+_SOCCER_PHASES = (("", ""), ("1ST", "1ST HALF"), ("2ND", "2ND HALF"),
+                  ("ET", "EXTRA TIME"), ("PENS", "SHOOTOUT"))
 
 
 # Inning ordinals, pre-formatted (index = inning number; 0 unused). The
@@ -1385,17 +1391,26 @@ def set_soccer_live(game, home_logo, away_logo, prev_clock_s: int | None = None)
     sv.clock_anchor_s = game.clock_seconds
     sv.clock_anchor_ms = time.ticks_ms()
     stale = prev_clock_s is not None and prev_clock_s == game.clock_seconds
-    sv.clock_running = not game.halftime and not stale
+    # The clock freezes during breaks, when upstream stalls, and once a
+    # shootout starts (the match clock is over; PENS carries the state).
+    sv.clock_running = (not game.in_break and not stale
+                        and game.half != HALF_SHOOTOUT)
     sv.base_min = base_minutes(game.half)
-    sv.halftime = game.halftime
+    sv.in_break = game.in_break
 
-    if game.halftime:
-        # The clock region renders "HT"; the phase slots stay empty so the
-        # state isn't announced twice.
+    if game.in_break:
+        # The clock region renders the break label; the phase slots stay
+        # empty so the state isn't announced twice.
         sv.phase_text = ''
         sv.phase_long = ''
     else:
-        short, long_ = _SOCCER_PHASES[game.half if game.half < HALF_ET_FIRST else HALF_ET_FIRST]
+        if game.half < HALF_ET_FIRST:
+            idx = game.half
+        elif game.half < HALF_SHOOTOUT:
+            idx = HALF_ET_FIRST
+        else:
+            idx = 4
+        short, long_ = _SOCCER_PHASES[idx]
         sv.phase_text = short
         sv.phase_long = long_
 
@@ -1447,7 +1462,12 @@ def set_soccer_final(game, home_logo, away_logo) -> None:
     fv.draw = home.score == away.score
     fv.away_color = _team_color_to_rgb565(away.colors.primary)
     fv.home_color = _team_color_to_rgb565(home.colors.primary)
-    fv.ft_text = 'FULL TIME'
+    if game.flavor == FT_AET:
+        fv.ft_text = 'AET'
+    elif game.flavor == FT_PENALTIES:
+        fv.ft_text = 'PENALTIES'
+    else:
+        fv.ft_text = 'FULL TIME'
 
     fv.scorers_away = away.scorers or ''
     fv.scorers_home = home.scorers or ''

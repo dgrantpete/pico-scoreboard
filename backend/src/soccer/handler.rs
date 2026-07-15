@@ -127,15 +127,19 @@ pub async fn get_game(
         .ok_or_else(|| AppError::GameNotFound(game_id.to_string()))?;
 
     let game = match first {
-        EspnCompetition::PreGame { competitors } => SoccerGame::Pregame(
-            pregame_competition_to_game(id, &date, competitors).map_err(|e| e.with_url(&url))?,
+        EspnCompetition::PreGame {
+            competitors,
+            venue_name,
+        } => SoccerGame::Pregame(
+            pregame_competition_to_game(id, &date, venue_name, competitors)
+                .map_err(|e| e.with_url(&url))?,
         ),
         EspnCompetition::Live {
             competitors,
             display_clock,
             clock_seconds,
             period,
-            halftime,
+            on_break,
             details,
         } => {
             let commentary = fetch_commentary(state, &league, &id).await;
@@ -146,7 +150,7 @@ pub async fn get_game(
                     display_clock,
                     clock_seconds,
                     period,
-                    halftime,
+                    on_break,
                     details,
                     commentary,
                 )
@@ -156,8 +160,10 @@ pub async fn get_game(
         EspnCompetition::Final {
             competitors,
             details,
+            flavor,
         } => SoccerGame::Final(
-            final_competition_to_game(id, competitors, details).map_err(|e| e.with_url(&url))?,
+            final_competition_to_game(id, competitors, details, flavor)
+                .map_err(|e| e.with_url(&url))?,
         ),
     };
 
