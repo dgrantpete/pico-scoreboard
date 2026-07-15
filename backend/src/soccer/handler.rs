@@ -1,14 +1,10 @@
-use std::sync::Arc;
-
 use axum::{
     Json,
-    extract::{Path, State},
     http::{HeaderMap, header},
     response::{IntoResponse, Response},
 };
 
 use crate::AppState;
-use crate::auth::ApiKey;
 use crate::error::{AppError, ErrorResponse};
 use crate::espn::league::{self, SoccerLeague};
 use crate::espn::types::{RawScoreboard, find_event, parse_events};
@@ -65,12 +61,10 @@ fn list_state(competition: &EspnCompetition) -> GameState {
     tag = "soccer"
 )]
 pub async fn list_games(
-    State(state): State<Arc<AppState>>,
-    _auth: ApiKey,
-    Path(league): Path<String>,
-    headers: HeaderMap,
+    state: &AppState,
+    league: SoccerLeague,
+    headers: &HeaderMap,
 ) -> Result<Response, AppError> {
-    let league = SoccerLeague::from_path(&league)?;
     let url = league::scoreboard_url(&state.config.espn, &league);
     let raw: RawScoreboard = state.espn_client.fetch_json_cached(&url).await?;
     // Serve whatever parsed: a transient ETag flap to a smaller set beats a 502.
@@ -91,7 +85,7 @@ pub async fn list_games(
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok());
 
-    Ok(games_response(entries, if_none_match, wants_struct(&headers)))
+    Ok(games_response(entries, if_none_match, wants_struct(headers)))
 }
 
 /// GET /soccer/{league}/games/{game_id} — state snapshot for one game.
@@ -112,16 +106,15 @@ pub async fn list_games(
     tag = "soccer"
 )]
 pub async fn get_game(
-    State(state): State<Arc<AppState>>,
-    _auth: ApiKey,
-    Path((league, game_id)): Path<(String, String)>,
-    headers: HeaderMap,
+    state: &AppState,
+    league: SoccerLeague,
+    game_id: &str,
+    headers: &HeaderMap,
 ) -> Result<Response, AppError> {
-    let league = SoccerLeague::from_path(&league)?;
     let url = league::scoreboard_url(&state.config.espn, &league);
     let raw: RawScoreboard = state.espn_client.fetch_json_cached(&url).await?;
     let (events, failed) = parse_events::<EspnEvent>(raw, &url);
-    let event = find_event(events, failed, &game_id, &url, |e| &e.id)?;
+    let event = find_event(events, failed, game_id, &url, |e| &e.id)?;
 
     let EspnEvent {
         id,
@@ -131,7 +124,7 @@ pub async fn get_game(
     let first = competitions
         .into_iter()
         .next()
-        .ok_or_else(|| AppError::GameNotFound(game_id.clone()))?;
+        .ok_or_else(|| AppError::GameNotFound(game_id.to_string()))?;
 
     let game = match first {
         EspnCompetition::PreGame { competitors } => SoccerGame::Pregame(
@@ -145,7 +138,7 @@ pub async fn get_game(
             halftime,
             details,
         } => {
-            let commentary = fetch_commentary(&state, &league, &id).await;
+            let commentary = fetch_commentary(state, &league, &id).await;
             SoccerGame::Live(
                 live_competition_to_game(
                     id,
@@ -168,7 +161,7 @@ pub async fn get_game(
         ),
     };
 
-    if wants_struct(&headers) {
+    if wants_struct(headers) {
         Ok((
             [
                 (header::CONTENT_TYPE, wire::STRUCT_CONTENT_TYPE),

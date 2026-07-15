@@ -1,4 +1,10 @@
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    extract::{Path, State},
+    http::HeaderMap,
+    response::Response,
+    routing::get,
+};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -19,8 +25,11 @@ pub mod soccer;
 pub mod team;
 pub mod wire;
 
+use auth::ApiKey;
 use config::AppConfig;
+use error::AppError;
 use espn::EspnClient;
+use espn::league::AnyLeague;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -211,15 +220,8 @@ pub async fn run() {
             "/{sport}/{league}/teams/{abbrev}/logo",
             get(team::get_team_logo),
         )
-        .route("/baseball/mlb/games", get(mlb::list_games))
-        .route("/baseball/mlb/games/{game_id}", get(mlb::get_game))
-        .route("/basketball/nba/games", get(nba::list_games))
-        .route("/basketball/nba/games/{game_id}", get(nba::get_game))
-        .route("/soccer/{league}/games", get(soccer::list_games))
-        .route(
-            "/soccer/{league}/games/{game_id}",
-            get(soccer::get_game),
-        )
+        .route("/{sport}/{league}/games", get(games_list))
+        .route("/{sport}/{league}/games/{game_id}", get(games_detail))
         .route("/app/manifest", get(app_update::get_app_manifest))
         .route("/app/image", get(app_update::get_app_image))
         .layer(cors)
@@ -233,6 +235,38 @@ pub async fn run() {
 
 async fn health() -> &'static str {
     "OK"
+}
+
+/// `GET /{sport}/{league}/games` — resolve the (sport, league) pair to a
+/// concrete league and defer to that sport's list handler. An unknown pair is
+/// the existing `InvalidLeague` 404. The concrete per-sport paths remain in the
+/// OpenAPI doc (see the `#[utoipa::path]` handlers); this is only the router.
+async fn games_list(
+    State(state): State<Arc<AppState>>,
+    _auth: ApiKey,
+    Path((sport, league)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    match AnyLeague::from_path(&sport, &league)? {
+        AnyLeague::Mlb => mlb::list_games(&state, &headers).await,
+        AnyLeague::Nba => nba::list_games(&state, &headers).await,
+        AnyLeague::Soccer(league) => soccer::list_games(&state, league, &headers).await,
+    }
+}
+
+/// `GET /{sport}/{league}/games/{game_id}` — same dispatch as [`games_list`]
+/// for the per-game detail.
+async fn games_detail(
+    State(state): State<Arc<AppState>>,
+    _auth: ApiKey,
+    Path((sport, league, game_id)): Path<(String, String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    match AnyLeague::from_path(&sport, &league)? {
+        AnyLeague::Mlb => mlb::get_game(&state, &game_id, &headers).await,
+        AnyLeague::Nba => nba::get_game(&state, &game_id, &headers).await,
+        AnyLeague::Soccer(league) => soccer::get_game(&state, league, &game_id, &headers).await,
+    }
 }
 
 #[cfg(test)]
@@ -260,5 +294,25 @@ mod tests {
             .filter_map(|arm| arm["allOf"][1]["properties"]["state"]["enum"][0].as_str())
             .collect();
         assert_eq!(states, ["pregame", "live", "final"]);
+    }
+
+    /// The generic games routes share the `/{sport}/{league}/...` prefix with
+    /// the logo route and sit beside the static `/health`, `/time`, `/app/*`
+    /// routes. matchit conflicts panic at registration, so build a router with
+    /// the same path shapes (dummy handlers) to prove they coexist — the router
+    /// in `run()` is otherwise never exercised by a unit test.
+    #[test]
+    fn generic_games_routes_register_without_conflict() {
+        async fn ok() -> &'static str {
+            "ok"
+        }
+        let _router: Router = Router::new()
+            .route("/health", get(ok))
+            .route("/time", get(ok))
+            .route("/{sport}/{league}/teams/{abbrev}/logo", get(ok))
+            .route("/{sport}/{league}/games", get(ok))
+            .route("/{sport}/{league}/games/{game_id}", get(ok))
+            .route("/app/manifest", get(ok))
+            .route("/app/image", get(ok));
     }
 }
