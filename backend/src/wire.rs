@@ -8,7 +8,7 @@
 //! Strings are `u8 length` + UTF-8 bytes, truncated at a char boundary if they
 //! exceed 255 bytes. No trailing bytes follow the last field.
 //!
-//! `WIRE_VERSION = 2`. State codes match [`crate::mlb::GameState::code`]:
+//! `WIRE_VERSION = 2`. State codes match [`crate::shared::game::GameState::code`]:
 //! `0 = pregame`, `1 = live`, `2 = final`.
 //!
 //! # Games list (`GET /baseball/mlb/games`)
@@ -143,9 +143,68 @@
 //! `game_id`, `away.abbreviation`, `home.abbreviation`, `away.scorers`,
 //! `home.scorers` (pre-formatted "M. Merino 90'+1', ..." lists, always
 //! present, empty when scoreless).
+//!
+//! # NBA game detail (`GET /basketball/nba/games/{game_id}`)
+//!
+//! Same 2-byte header (`u8 version = 2`, `u8 state`); the payload layout is
+//! sport-specific, like soccer's. Parsed by `firmware/src/scoreboard/nba.py`.
+//!
+//! ## NBA live (state = 1)
+//!
+//! Fixed 23-byte section at offset 2 (`struct.unpack_from('<BBBHHIIII', buf, 2)`):
+//!
+//! | off | type | field                                            |
+//! |-----|------|--------------------------------------------------|
+//! | 2   | u8   | flags (bit0 = last play present)                 |
+//! | 3   | u8   | period (quarter 1–4; overtime = 5+)              |
+//! | 4   | u8   | phase (0=in progress, 1=halftime, 2=end of period) |
+//! | 5   | u16  | away_score (u32 saturated to u16)                |
+//! | 7   | u16  | home_score                                       |
+//! | 9   | u32  | away_colors.primary (0x00RRGGBB)                 |
+//! | 13  | u32  | away_colors.alternate                            |
+//! | 17  | u32  | home_colors.primary                              |
+//! | 21  | u32  | home_colors.alternate                            |
+//!
+//! Strings from offset 25: `game_id`, `away.abbreviation`,
+//! `home.abbreviation`, `clock` (display-shaped: "10:08"; "53.0" under a
+//! minute; meaningless during breaks — render by `phase`; never
+//! extrapolated, the firmware re-renders it each poll), then **iff** bit0:
+//! `last_play.id` (change-detection key for the flash) and `last_play.text`.
+//!
+//! ## NBA pregame (state = 0)
+//!
+//! Fixed 29-byte section at offset 2 (`<BHHHHIIIII`):
+//!
+//! | off | type | field                                            |
+//! |-----|------|--------------------------------------------------|
+//! | 2   | u8   | flags (bit0 = away record, bit1 = home record)   |
+//! | 3   | u16  | away_wins  (0 if no record)                      |
+//! | 5   | u16  | away_losses                                      |
+//! | 7   | u16  | home_wins                                        |
+//! | 9   | u16  | home_losses                                      |
+//! | 11  | u32  | start_time (unix epoch, seconds, UTC)            |
+//! | 15  | u32  | away_colors.primary                              |
+//! | 19  | u32  | away_colors.alternate                            |
+//! | 23  | u32  | home_colors.primary                              |
+//! | 27  | u32  | home_colors.alternate                            |
+//!
+//! Strings from offset 31, in order: `game_id`, `away.abbreviation`,
+//! `home.abbreviation`, `venue`.
+//!
+//! ## NBA final (state = 2)
+//!
+//! Identical layout to the MLB final (`<BBBHHIIII`, 23 bytes at offset 2)
+//! with `periods_played` in place of `innings_played` and per-quarter points
+//! in the line scores (overtime extends both past 4). Then the away and home
+//! line-score bytes and strings: `game_id`, `away.abbreviation`,
+//! `home.abbreviation`.
 
-use crate::mlb::{FinalGame, GameListEntry, InningHalf, LiveGame, MlbGame, PregameGame};
-use crate::soccer::{LastEvent, Side, SoccerGame};
+use crate::mlb::{FinalGame, InningHalf, LiveGame, MlbGame, PregameGame};
+use crate::nba::{LivePhase, NbaFinalGame, NbaGame, NbaLiveGame, NbaPregameGame};
+use crate::shared::game::GameListEntry;
+use crate::soccer::{
+    LastEvent, Side, SoccerFinalGame, SoccerGame, SoccerLiveGame, SoccerPregameGame,
+};
 
 pub const STRUCT_CONTENT_TYPE: &str = "application/x-scoreboard-struct";
 pub const WIRE_VERSION: u8 = 2;
@@ -365,83 +424,190 @@ pub fn encode_soccer_game(game: &SoccerGame) -> Vec<u8> {
     let mut out = Vec::with_capacity(128);
     out.push(WIRE_VERSION);
     match game {
-        SoccerGame::Pregame {
-            game_id,
-            start_time,
-            home,
-            away,
-            ..
-        } => {
+        SoccerGame::Pregame(g) => {
             out.push(0);
-            out.extend_from_slice(&start_time.to_le_bytes());
-            out.extend_from_slice(&away.colors.primary.to_le_bytes());
-            out.extend_from_slice(&away.colors.alternate.to_le_bytes());
-            out.extend_from_slice(&home.colors.primary.to_le_bytes());
-            out.extend_from_slice(&home.colors.alternate.to_le_bytes());
-            push_str(&mut out, game_id);
-            push_str(&mut out, &away.abbreviation);
-            push_str(&mut out, &home.abbreviation);
+            write_soccer_pregame(&mut out, g);
         }
-        SoccerGame::Live {
-            game_id,
-            clock_seconds,
-            half,
-            halftime,
-            home,
-            away,
-            last_event,
-            commentary,
-            ..
-        } => {
+        SoccerGame::Live(g) => {
             out.push(1);
-            let mut flags = soccer_event_flags(last_event);
-            if *halftime {
-                flags |= SOCCER_FLAG_HALFTIME;
-            }
-            if commentary.is_some() {
-                flags |= SOCCER_FLAG_COMMENTARY;
-            }
-            out.push(flags);
-            out.push(*half);
-            out.extend_from_slice(&clock_seconds.to_le_bytes());
-            out.extend_from_slice(&score_u16(away.score));
-            out.extend_from_slice(&score_u16(home.score));
-            out.extend_from_slice(&away.colors.primary.to_le_bytes());
-            out.extend_from_slice(&away.colors.alternate.to_le_bytes());
-            out.extend_from_slice(&home.colors.primary.to_le_bytes());
-            out.extend_from_slice(&home.colors.alternate.to_le_bytes());
-            push_str(&mut out, game_id);
-            push_str(&mut out, &away.abbreviation);
-            push_str(&mut out, &home.abbreviation);
-            if let Some(ev) = last_event {
-                push_str(&mut out, &ev.clock);
-                push_str(&mut out, &ev.athlete);
-            }
-            if let Some(c) = commentary {
-                push_str(&mut out, &c.id);
-                push_str(&mut out, &c.text);
-            }
+            write_soccer_live(&mut out, g);
         }
-        SoccerGame::Final {
-            game_id,
-            home,
-            away,
-        } => {
+        SoccerGame::Final(g) => {
             out.push(2);
-            out.extend_from_slice(&score_u16(away.score));
-            out.extend_from_slice(&score_u16(home.score));
-            out.extend_from_slice(&away.colors.primary.to_le_bytes());
-            out.extend_from_slice(&away.colors.alternate.to_le_bytes());
-            out.extend_from_slice(&home.colors.primary.to_le_bytes());
-            out.extend_from_slice(&home.colors.alternate.to_le_bytes());
-            push_str(&mut out, game_id);
-            push_str(&mut out, &away.abbreviation);
-            push_str(&mut out, &home.abbreviation);
-            push_str(&mut out, &away.scorers);
-            push_str(&mut out, &home.scorers);
+            write_soccer_final(&mut out, g);
         }
     }
     out
+}
+
+fn write_soccer_pregame(out: &mut Vec<u8>, game: &SoccerPregameGame) {
+    out.extend_from_slice(&game.start_time.to_le_bytes());
+    out.extend_from_slice(&game.away.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.away.colors.alternate.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.alternate.to_le_bytes());
+    push_str(out, &game.game_id);
+    push_str(out, &game.away.abbreviation);
+    push_str(out, &game.home.abbreviation);
+}
+
+fn write_soccer_live(out: &mut Vec<u8>, game: &SoccerLiveGame) {
+    let mut flags = soccer_event_flags(&game.last_event);
+    if game.halftime {
+        flags |= SOCCER_FLAG_HALFTIME;
+    }
+    if game.commentary.is_some() {
+        flags |= SOCCER_FLAG_COMMENTARY;
+    }
+    out.push(flags);
+    out.push(game.half);
+    out.extend_from_slice(&game.clock_seconds.to_le_bytes());
+    out.extend_from_slice(&score_u16(game.away.score));
+    out.extend_from_slice(&score_u16(game.home.score));
+    out.extend_from_slice(&game.away.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.away.colors.alternate.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.alternate.to_le_bytes());
+    push_str(out, &game.game_id);
+    push_str(out, &game.away.abbreviation);
+    push_str(out, &game.home.abbreviation);
+    if let Some(ev) = &game.last_event {
+        push_str(out, &ev.clock);
+        push_str(out, &ev.athlete);
+    }
+    if let Some(c) = &game.commentary {
+        push_str(out, &c.id);
+        push_str(out, &c.text);
+    }
+}
+
+fn write_soccer_final(out: &mut Vec<u8>, game: &SoccerFinalGame) {
+    out.extend_from_slice(&score_u16(game.away.score));
+    out.extend_from_slice(&score_u16(game.home.score));
+    out.extend_from_slice(&game.away.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.away.colors.alternate.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.alternate.to_le_bytes());
+    push_str(out, &game.game_id);
+    push_str(out, &game.away.abbreviation);
+    push_str(out, &game.home.abbreviation);
+    push_str(out, &game.away.scorers);
+    push_str(out, &game.home.scorers);
+}
+
+const NBA_FLAG_LAST_PLAY: u8 = 0x01;
+
+const NBA_FLAG_AWAY_RECORD: u8 = 0x01;
+const NBA_FLAG_HOME_RECORD: u8 = 0x02;
+
+fn nba_phase_code(phase: LivePhase) -> u8 {
+    match phase {
+        LivePhase::InProgress => 0,
+        LivePhase::Halftime => 1,
+        LivePhase::EndOfPeriod => 2,
+    }
+}
+
+/// Encode one NBA game detail (see the "NBA game detail" spec above).
+pub fn encode_nba_game(game: &NbaGame) -> Vec<u8> {
+    let mut out = Vec::with_capacity(128);
+    out.push(WIRE_VERSION);
+    match game {
+        NbaGame::Pregame(g) => {
+            out.push(0);
+            write_nba_pregame(&mut out, g);
+        }
+        NbaGame::Live(g) => {
+            out.push(1);
+            write_nba_live(&mut out, g);
+        }
+        NbaGame::Final(g) => {
+            out.push(2);
+            write_nba_final(&mut out, g);
+        }
+    }
+    out
+}
+
+fn write_nba_pregame(out: &mut Vec<u8>, game: &NbaPregameGame) {
+    let mut flags = 0u8;
+    let (away_wins, away_losses) = match &game.away.record {
+        Some(r) => {
+            flags |= NBA_FLAG_AWAY_RECORD;
+            (r.wins, r.losses)
+        }
+        None => (0, 0),
+    };
+    let (home_wins, home_losses) = match &game.home.record {
+        Some(r) => {
+            flags |= NBA_FLAG_HOME_RECORD;
+            (r.wins, r.losses)
+        }
+        None => (0, 0),
+    };
+
+    out.push(flags);
+    out.extend_from_slice(&away_wins.to_le_bytes());
+    out.extend_from_slice(&away_losses.to_le_bytes());
+    out.extend_from_slice(&home_wins.to_le_bytes());
+    out.extend_from_slice(&home_losses.to_le_bytes());
+    out.extend_from_slice(&game.start_time.to_le_bytes());
+    out.extend_from_slice(&game.away.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.away.colors.alternate.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.alternate.to_le_bytes());
+
+    push_str(out, &game.game_id);
+    push_str(out, &game.away.abbreviation);
+    push_str(out, &game.home.abbreviation);
+    push_str(out, &game.venue);
+}
+
+fn write_nba_live(out: &mut Vec<u8>, game: &NbaLiveGame) {
+    out.push(if game.last_play.is_some() {
+        NBA_FLAG_LAST_PLAY
+    } else {
+        0
+    });
+    out.push(game.period);
+    out.push(nba_phase_code(game.phase));
+    out.extend_from_slice(&score_u16(game.away.score));
+    out.extend_from_slice(&score_u16(game.home.score));
+    out.extend_from_slice(&game.away.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.away.colors.alternate.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.alternate.to_le_bytes());
+
+    push_str(out, &game.game_id);
+    push_str(out, &game.away.abbreviation);
+    push_str(out, &game.home.abbreviation);
+    push_str(out, &game.clock);
+    if let Some(play) = &game.last_play {
+        push_str(out, &play.id);
+        push_str(out, &play.text);
+    }
+}
+
+fn write_nba_final(out: &mut Vec<u8>, game: &NbaFinalGame) {
+    let away_ls = line_score_bytes(&game.away.line_score);
+    let home_ls = line_score_bytes(&game.home.line_score);
+
+    out.push(game.periods_played);
+    out.push(away_ls.len() as u8);
+    out.push(home_ls.len() as u8);
+    out.extend_from_slice(&score_u16(game.away.score));
+    out.extend_from_slice(&score_u16(game.home.score));
+    out.extend_from_slice(&game.away.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.away.colors.alternate.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.alternate.to_le_bytes());
+
+    out.extend_from_slice(away_ls);
+    out.extend_from_slice(home_ls);
+
+    push_str(out, &game.game_id);
+    push_str(out, &game.away.abbreviation);
+    push_str(out, &game.home.abbreviation);
 }
 
 /// Encode the games list: version, count, then `u8 state` + id per entry.
@@ -465,9 +631,10 @@ pub fn encode_game_list(entries: &[GameListEntry]) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::mlb::{
-        AtBat, Bases, Count, FinalTeam, GameState, Inning, LastPlay, PregameTeam, Record, TeamColors,
-        TeamState, Weather,
+        AtBat, Bases, Count, FinalTeam, Inning, LastPlay, PregameTeam, TeamState, Weather,
     };
+    use crate::shared::game::{GameState, Record};
+    use crate::shared::team::TeamColors;
 
     fn team(abbrev: &str, score: u32, primary: u32, alternate: u32) -> TeamState {
         TeamState {
@@ -677,7 +844,9 @@ mod tests {
 
     // --- Soccer goldens (shared verbatim with tools/wire_format_check.py) ---
 
-    use crate::soccer::{EventKind, LastEvent, Side, SoccerFinalTeam, SoccerGame, SoccerTeam, SoccerTeamState};
+    use crate::soccer::{
+        EventKind, LastEvent, Side, SoccerFinalTeam, SoccerGame, SoccerTeam, SoccerTeamState,
+    };
 
     fn soccer_side(abbrev: &str, score: u32, primary: u32, alternate: u32) -> SoccerTeamState {
         SoccerTeamState {
@@ -691,7 +860,7 @@ mod tests {
 
     #[test]
     fn golden_soccer_live_with_away_goal() {
-        let game = SoccerGame::Live {
+        let game = SoccerGame::Live(SoccerLiveGame {
             game_id: "401800100".to_string(),
             clock: "45'+1'".to_string(),
             clock_seconds: 51 * 60,
@@ -707,7 +876,7 @@ mod tests {
                 team: Some(Side::Away),
             }),
             commentary: None,
-        };
+        });
         assert_eq!(hex::encode(encode_soccer_game(&game)), GOLDEN_SOCCER_LIVE);
     }
 
@@ -715,7 +884,7 @@ mod tests {
 
     #[test]
     fn golden_soccer_live_with_commentary() {
-        let game = SoccerGame::Live {
+        let game = SoccerGame::Live(SoccerLiveGame {
             game_id: "401800100".to_string(),
             clock: "45'+1'".to_string(),
             clock_seconds: 51 * 60,
@@ -734,7 +903,7 @@ mod tests {
                 id: "87".to_string(),
                 text: "Goal!  Belgium 2, USA 1. Romelu Lukaku right footed shot to the bottom left corner.".to_string(),
             }),
-        };
+        });
         assert_eq!(
             hex::encode(encode_soccer_game(&game)),
             GOLDEN_SOCCER_LIVE_COMMENTARY
@@ -745,7 +914,7 @@ mod tests {
 
     #[test]
     fn golden_soccer_halftime_with_home_goal() {
-        let game = SoccerGame::Live {
+        let game = SoccerGame::Live(SoccerLiveGame {
             game_id: "401800100".to_string(),
             clock: "45'+6'".to_string(),
             clock_seconds: 51 * 60,
@@ -761,7 +930,7 @@ mod tests {
                 team: Some(Side::Home),
             }),
             commentary: None,
-        };
+        });
         assert_eq!(hex::encode(encode_soccer_game(&game)), GOLDEN_SOCCER_HALFTIME);
     }
 
@@ -769,7 +938,7 @@ mod tests {
 
     #[test]
     fn golden_soccer_live_no_event() {
-        let game = SoccerGame::Live {
+        let game = SoccerGame::Live(SoccerLiveGame {
             game_id: "401800101".to_string(),
             clock: "87'".to_string(),
             clock_seconds: 87 * 60,
@@ -779,7 +948,7 @@ mod tests {
             home: soccer_side("SEA", 0, 0x5D9741, 0x005595),
             last_event: None,
             commentary: None,
-        };
+        });
         assert_eq!(hex::encode(encode_soccer_game(&game)), GOLDEN_SOCCER_QUIET);
     }
 
@@ -787,9 +956,8 @@ mod tests {
 
     #[test]
     fn golden_soccer_pregame() {
-        let game = SoccerGame::Pregame {
+        let game = SoccerGame::Pregame(SoccerPregameGame {
             game_id: "401800102".to_string(),
-            date: "2026-07-10T01:40Z".to_string(),
             start_time: 1_783_647_600,
             away: SoccerTeam {
                 abbreviation: "POR".to_string(),
@@ -799,7 +967,7 @@ mod tests {
                 abbreviation: "SEA".to_string(),
                 colors: TeamColors { primary: 0x5D9741, alternate: 0x005595 },
             },
-        };
+        });
         assert_eq!(hex::encode(encode_soccer_game(&game)), GOLDEN_SOCCER_PRE);
     }
 
@@ -807,7 +975,7 @@ mod tests {
 
     #[test]
     fn golden_soccer_final_with_scorers() {
-        let game = SoccerGame::Final {
+        let game = SoccerGame::Final(SoccerFinalGame {
             game_id: "401800103".to_string(),
             away: SoccerFinalTeam {
                 abbreviation: "ESP".to_string(),
@@ -821,8 +989,158 @@ mod tests {
                 colors: TeamColors { primary: 0x004812, alternate: 0xEAE827 },
                 scorers: String::new(),
             },
-        };
+        });
         assert_eq!(hex::encode(encode_soccer_game(&game)), GOLDEN_SOCCER_FINAL);
+    }
+
+    // --- NBA goldens (shared verbatim with tools/wire_format_check.py) ---
+
+    use crate::nba::{
+        NbaFinalTeam, NbaLastPlay, NbaTeam, NbaTeamState,
+    };
+    use crate::shared::game::Record as NbaRecord;
+
+    fn nba_side(abbrev: &str, score: u32, primary: u32, alternate: u32) -> NbaTeamState {
+        NbaTeamState {
+            abbreviation: abbrev.to_string(),
+            score,
+            colors: TeamColors { primary, alternate },
+        }
+    }
+
+    const GOLDEN_NBA_LIVE: &str = "02010103004b004d00c17a0000243bef0040220e0024c5fe0009343031383131303337034f4b430344454e04343a33370c3430313831313033373431312a5a656b65204e6e616a69206f7574206f6620626f756e6473206261642070617373207475726e6f766572";
+
+    #[test]
+    fn golden_nba_live_with_last_play() {
+        let game = NbaGame::Live(NbaLiveGame {
+            game_id: "401811037".to_string(),
+            period: 3,
+            clock: "4:37".to_string(),
+            phase: LivePhase::InProgress,
+            away: nba_side("OKC", 75, 0x007AC1, 0xEF3B24),
+            home: nba_side("DEN", 77, 0x0E2240, 0xFEC524),
+            last_play: Some(NbaLastPlay {
+                id: "401811037411".to_string(),
+                text: "Zeke Nnaji out of bounds bad pass turnover".to_string(),
+            }),
+        });
+        assert_eq!(hex::encode(encode_nba_game(&game)), GOLDEN_NBA_LIVE);
+    }
+
+    const GOLDEN_NBA_HALFTIME: &str = "020100020134004a00a9765d0012b1f5008e004e001ba0f90009343031383131303336034d454d045554414803302e30";
+
+    #[test]
+    fn golden_nba_halftime_no_last_play() {
+        // Break state: flags 0 (no last play), phase 1, clock reads "0.0".
+        let game = NbaGame::Live(NbaLiveGame {
+            game_id: "401811036".to_string(),
+            period: 2,
+            clock: "0.0".to_string(),
+            phase: LivePhase::Halftime,
+            away: nba_side("MEM", 52, 0x5D76A9, 0xF5B112),
+            home: nba_side("UTAH", 74, 0x4E008E, 0xF9A01B),
+            last_play: None,
+        });
+        assert_eq!(hex::encode(encode_nba_game(&game)), GOLDEN_NBA_HALFTIME);
+    }
+
+    fn nba_pregame_fixture() -> NbaPregameGame {
+        NbaPregameGame {
+            game_id: "401811040".to_string(),
+            start_time: 1_775_874_600,
+            venue: "crypto.com Arena".to_string(),
+            away: NbaTeam {
+                abbreviation: "PHX".to_string(),
+                colors: TeamColors {
+                    primary: 0x29127A,
+                    alternate: 0xE56020,
+                },
+                record: Some(NbaRecord {
+                    wins: 40,
+                    losses: 42,
+                }),
+            },
+            home: NbaTeam {
+                abbreviation: "LAL".to_string(),
+                colors: TeamColors {
+                    primary: 0x552583,
+                    alternate: 0xFDB927,
+                },
+                record: Some(NbaRecord {
+                    wins: 50,
+                    losses: 32,
+                }),
+            },
+        }
+    }
+
+    const GOLDEN_NBA_PRE: &str = "02000328002a003200200028b2d9697a1229002060e5008325550027b9fd000934303138313130343003504858034c414c1063727970746f2e636f6d204172656e61";
+
+    #[test]
+    fn golden_nba_pregame_all_flags() {
+        assert_eq!(
+            hex::encode(encode_nba_game(&NbaGame::Pregame(nba_pregame_fixture()))),
+            GOLDEN_NBA_PRE
+        );
+    }
+
+    const GOLDEN_NBA_PRE_NO_RECORDS: &str = "020000000000000000000028b2d9697a1229002060e5008325550027b9fd000934303138313130343003504858034c414c1063727970746f2e636f6d204172656e61";
+
+    #[test]
+    fn golden_nba_pregame_no_records() {
+        let mut game = nba_pregame_fixture();
+        game.away.record = None;
+        game.home.record = None;
+        assert_eq!(
+            hex::encode(encode_nba_game(&NbaGame::Pregame(game))),
+            GOLDEN_NBA_PRE_NO_RECORDS
+        );
+    }
+
+    fn nba_final_fixture() -> NbaFinalGame {
+        NbaFinalGame {
+            game_id: "401811026".to_string(),
+            periods_played: 4,
+            away: NbaFinalTeam {
+                abbreviation: "DET".to_string(),
+                score: 118,
+                colors: TeamColors {
+                    primary: 0x1D428A,
+                    alternate: 0xC8102E,
+                },
+                line_score: vec![30, 28, 30, 30],
+            },
+            home: NbaFinalTeam {
+                abbreviation: "CHA".to_string(),
+                score: 100,
+                colors: TeamColors {
+                    primary: 0x008CA8,
+                    alternate: 0x1D1160,
+                },
+                line_score: vec![25, 25, 25, 25],
+            },
+        }
+    }
+
+    const GOLDEN_NBA_FINAL: &str = "0202040404760064008a421d002e10c800a88c000060111d001e1c1e1e19191919093430313831313032360344455403434841";
+
+    #[test]
+    fn golden_nba_final_regulation() {
+        assert_eq!(
+            hex::encode(encode_nba_game(&NbaGame::Final(nba_final_fixture()))),
+            GOLDEN_NBA_FINAL
+        );
+    }
+
+    #[test]
+    fn nba_final_overtime_extends_line_scores() {
+        let mut game = nba_final_fixture();
+        game.periods_played = 5;
+        game.away.line_score.push(12);
+        game.home.line_score.push(10);
+        let bytes = encode_nba_game(&NbaGame::Final(game));
+        // periods_played, nA, nH sit at offsets 2..5 (after version, state).
+        assert_eq!(&bytes[2..5], &[5, 5, 5]);
     }
 
     #[test]

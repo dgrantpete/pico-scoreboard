@@ -9,6 +9,6 @@ mod types;
 
 pub use handler::{get_game, list_games};
 pub use types::{
-    Commentary, EventKind, LastEvent, Side, SoccerFinalTeam, SoccerGame, SoccerTeam,
-    SoccerTeamState,
+    Commentary, EventKind, LastEvent, Side, SoccerFinalGame, SoccerFinalTeam, SoccerGame,
+    SoccerLiveGame, SoccerPregameGame, SoccerTeam, SoccerTeamState,
 };

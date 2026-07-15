@@ -5,7 +5,7 @@ use axum::{
 };
 use sha1::{Digest, Sha1};
 
-use crate::mlb::GameListEntry;
+use crate::shared::game::GameListEntry;
 use crate::wire;
 
 /// First 16 hex chars of SHA-1 over the sorted, comma-joined cache tokens.

@@ -220,41 +220,51 @@ pub(crate) struct EspnCommentaryItem {
 #[derive(Serialize, ToSchema)]
 #[serde(tag = "state", rename_all = "lowercase")]
 pub enum SoccerGame {
-    Pregame {
-        game_id: String,
-        /// Scheduled start, ISO 8601 (ESPN `event.date`).
-        date: String,
-        /// Scheduled start, unix epoch seconds UTC (what the wire carries).
-        start_time: u32,
-        home: SoccerTeam,
-        away: SoccerTeam,
-    },
-    Live {
-        game_id: String,
-        /// Raw ESPN clock, display-shaped (e.g. "45'+6'", "90'+3'").
-        clock: String,
-        /// Elapsed match seconds parsed from `clock` (floor minutes × 60);
-        /// what the wire carries — the firmware extrapolates from it.
-        clock_seconds: u16,
-        /// Regulation halves are 1 and 2; extra-time periods pass through as-is.
-        half: u8,
-        /// True during the interval — the clock alone cannot distinguish
-        /// halftime from first-half stoppage time.
-        halftime: bool,
-        home: SoccerTeamState,
-        away: SoccerTeamState,
-        last_event: Option<LastEvent>,
-        /// Latest play-by-play commentary line (from the summary endpoint),
-        /// e.g. "Goal! Argentina 3, Egypt 2. Lionel Messi converts...".
-        /// Absent when the summary has no commentary or its fetch failed —
-        /// commentary is best-effort and never blocks the live payload.
-        commentary: Option<Commentary>,
-    },
-    Final {
-        game_id: String,
-        home: SoccerFinalTeam,
-        away: SoccerFinalTeam,
-    },
+    Pregame(SoccerPregameGame),
+    Live(SoccerLiveGame),
+    Final(SoccerFinalGame),
+}
+
+/// Pre-game snapshot: matchup and scheduled start.
+#[derive(Serialize, ToSchema)]
+pub struct SoccerPregameGame {
+    pub game_id: String,
+    /// Scheduled start, unix epoch seconds UTC (what the wire carries).
+    pub start_time: u32,
+    pub home: SoccerTeam,
+    pub away: SoccerTeam,
+}
+
+/// Live state snapshot for one soccer game, tailored for the Pico firmware.
+#[derive(Serialize, ToSchema)]
+pub struct SoccerLiveGame {
+    pub game_id: String,
+    /// Raw ESPN clock, display-shaped (e.g. "45'+6'", "90'+3'").
+    pub clock: String,
+    /// Elapsed match seconds parsed from `clock` (floor minutes × 60);
+    /// what the wire carries — the firmware extrapolates from it.
+    pub clock_seconds: u16,
+    /// Regulation halves are 1 and 2; extra-time periods pass through as-is.
+    pub half: u8,
+    /// True during the interval — the clock alone cannot distinguish
+    /// halftime from first-half stoppage time.
+    pub halftime: bool,
+    pub home: SoccerTeamState,
+    pub away: SoccerTeamState,
+    pub last_event: Option<LastEvent>,
+    /// Latest play-by-play commentary line (from the summary endpoint),
+    /// e.g. "Goal! Argentina 3, Egypt 2. Lionel Messi converts...".
+    /// Absent when the summary has no commentary or its fetch failed —
+    /// commentary is best-effort and never blocks the live payload.
+    pub commentary: Option<Commentary>,
+}
+
+/// Final snapshot: per-side scores and pre-formatted scorer lists.
+#[derive(Serialize, ToSchema)]
+pub struct SoccerFinalGame {
+    pub game_id: String,
+    pub home: SoccerFinalTeam,
+    pub away: SoccerFinalTeam,
 }
 
 /// One commentary line; `id` is the ESPN sequence number as a string — the

@@ -2,4 +2,5 @@
 //! shares. Sport-specific models stay in their sport's module.
 
 pub mod etag;
+pub mod game;
 pub mod team;

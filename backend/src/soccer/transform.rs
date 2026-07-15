@@ -1,10 +1,11 @@
 use crate::error::AppError;
-use crate::mlb::transform::parse_start_time;
+use crate::espn::types::parse_start_time;
 use crate::shared::team::{TeamColors, order_home_away, parse_hex_rgb};
 
 use super::types::{
     Commentary, EspnCompetitor, EspnDetail, EventKind, LastEvent, RawSummary, Side,
-    SoccerFinalTeam, SoccerGame, SoccerTeam, SoccerTeamState,
+    SoccerFinalGame, SoccerFinalTeam, SoccerLiveGame, SoccerPregameGame, SoccerTeam,
+    SoccerTeamState,
 };
 
 /// The latest commentary line of a summary payload (highest sequence).
@@ -134,7 +135,7 @@ fn scorers_for(details: &[EspnDetail], side: Side, home_id: &str, away_id: &str)
         .join(", ")
 }
 
-/// Transform a live competition into `SoccerGame::Live`. Callers must
+/// Transform a live competition into a `SoccerLiveGame`. Callers must
 /// pattern-match `EspnCompetition::Live` at the call site.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn live_competition_to_game(
@@ -146,7 +147,7 @@ pub(crate) fn live_competition_to_game(
     halftime: bool,
     details: Vec<EspnDetail>,
     commentary: Option<Commentary>,
-) -> Result<SoccerGame, AppError> {
+) -> Result<SoccerLiveGame, AppError> {
     let (home_c, away_c) = order_home_away(
         &event_id,
         competitors,
@@ -158,7 +159,7 @@ pub(crate) fn live_competition_to_game(
     let home = competitor_to_team_state(&home_c)?;
     let away = competitor_to_team_state(&away_c)?;
 
-    Ok(SoccerGame::Live {
+    Ok(SoccerLiveGame {
         game_id: event_id,
         clock: display_clock,
         clock_seconds,
@@ -171,13 +172,13 @@ pub(crate) fn live_competition_to_game(
     })
 }
 
-/// Transform a pre-game competition into `SoccerGame::Pregame`.
+/// Transform a pre-game competition into a `SoccerPregameGame`.
 pub(crate) fn pregame_competition_to_game(
     event_id: String,
-    date: String,
+    date: &str,
     competitors: [EspnCompetitor; 2],
-) -> Result<SoccerGame, AppError> {
-    let start_time = parse_start_time(&date)?;
+) -> Result<SoccerPregameGame, AppError> {
+    let start_time = parse_start_time(date)?;
     let (home_c, away_c) = order_home_away(
         &event_id,
         competitors,
@@ -190,22 +191,21 @@ pub(crate) fn pregame_competition_to_game(
             colors: competitor_colors(c)?,
         })
     };
-    Ok(SoccerGame::Pregame {
+    Ok(SoccerPregameGame {
         game_id: event_id,
-        date,
         start_time,
         home: team(&home_c)?,
         away: team(&away_c)?,
     })
 }
 
-/// Transform a finished competition into `SoccerGame::Final` with per-side
+/// Transform a finished competition into a `SoccerFinalGame` with per-side
 /// scores and pre-formatted scorer lists.
 pub(crate) fn final_competition_to_game(
     event_id: String,
     competitors: [EspnCompetitor; 2],
     details: Vec<EspnDetail>,
-) -> Result<SoccerGame, AppError> {
+) -> Result<SoccerFinalGame, AppError> {
     let (home_c, away_c) = order_home_away(
         &event_id,
         competitors,
@@ -221,7 +221,7 @@ pub(crate) fn final_competition_to_game(
             scorers: scorers_for(&details, side, &home_id, &away_id),
         })
     };
-    Ok(SoccerGame::Final {
+    Ok(SoccerFinalGame {
         game_id: event_id,
         home: team(&home_c, Side::Home)?,
         away: team(&away_c, Side::Away)?,
@@ -280,7 +280,7 @@ mod tests {
         }
     }
 
-    fn to_live(p: LiveParts) -> SoccerGame {
+    fn to_live(p: LiveParts) -> SoccerLiveGame {
         live_competition_to_game(
             p.id,
             p.competitors,
@@ -308,26 +308,19 @@ mod tests {
     #[test]
     fn first_half_transforms_with_stoppage_clock() {
         let game = to_live(live_parts(fixture("first_half")));
-        let SoccerGame::Live {
-            clock,
-            clock_seconds,
-            half,
-            halftime,
-            home,
-            away,
-            last_event,
-            ..
-        } = game
-        else {
-            panic!("expected live");
-        };
-        assert_eq!(clock, "45'+6'");
-        assert_eq!(clock_seconds, 51 * 60);
-        assert_eq!(half, 1);
-        assert!(!halftime);
-        assert_eq!((home.abbreviation.as_str(), home.score), ("USA", 1));
-        assert_eq!((away.abbreviation.as_str(), away.score), ("BEL", 2));
-        assert!(last_event.is_some());
+        assert_eq!(game.clock, "45'+6'");
+        assert_eq!(game.clock_seconds, 51 * 60);
+        assert_eq!(game.half, 1);
+        assert!(!game.halftime);
+        assert_eq!(
+            (game.home.abbreviation.as_str(), game.home.score),
+            ("USA", 1)
+        );
+        assert_eq!(
+            (game.away.abbreviation.as_str(), game.away.score),
+            ("BEL", 2)
+        );
+        assert!(game.last_event.is_some());
     }
 
     #[test]
@@ -339,27 +332,16 @@ mod tests {
         assert_eq!(p.display_clock, "45'+6'");
         assert_eq!(p.period, 1);
         assert!(p.halftime);
-        let game = to_live(p);
-        assert!(matches!(game, SoccerGame::Live { halftime: true, .. }));
+        assert!(to_live(p).halftime);
     }
 
     #[test]
     fn second_half_stoppage_surfaces_latest_goal() {
         let game = to_live(live_parts(fixture("second_half_stoppage")));
-        let SoccerGame::Live {
-            clock,
-            half,
-            away,
-            last_event,
-            ..
-        } = game
-        else {
-            panic!("expected live");
-        };
-        assert_eq!(clock, "90'+4'");
-        assert_eq!(half, 2);
-        assert_eq!(away.score, 4);
-        let event = last_event.expect("a goal was scored");
+        assert_eq!(game.clock, "90'+4'");
+        assert_eq!(game.half, 2);
+        assert_eq!(game.away.score, 4);
+        let event = game.last_event.expect("a goal was scored");
         assert_eq!(event.text, "Goal - R. Lukaku");
         assert_eq!(event.kind, EventKind::Goal);
         assert_eq!(event.athlete, "R. Lukaku");
@@ -377,21 +359,11 @@ mod tests {
         else {
             panic!("fixture must be a pregame competition");
         };
-        let game = pregame_competition_to_game(id, date, competitors).unwrap();
-        let SoccerGame::Pregame {
-            date,
-            start_time,
-            home,
-            away,
-            ..
-        } = game
-        else {
-            panic!("expected pregame");
-        };
+        let game = pregame_competition_to_game(id, &date, competitors).unwrap();
         assert_eq!(date, "2026-07-07T00:00Z");
-        assert_eq!(start_time, parse_start_time("2026-07-07T00:00Z").unwrap());
-        assert_eq!(home.abbreviation, "USA");
-        assert_eq!(away.abbreviation, "BEL");
+        assert_eq!(game.start_time, parse_start_time(&date).unwrap());
+        assert_eq!(game.home.abbreviation, "USA");
+        assert_eq!(game.away.abbreviation, "BEL");
     }
 
     #[test]
@@ -406,13 +378,16 @@ mod tests {
             panic!("fixture must be a final competition");
         };
         let game = final_competition_to_game(id, competitors, details).unwrap();
-        let SoccerGame::Final { home, away, .. } = game else {
-            panic!("expected final");
-        };
-        assert_eq!((home.abbreviation.as_str(), home.score), ("POR", 0));
-        assert_eq!((away.abbreviation.as_str(), away.score), ("ESP", 1));
+        assert_eq!(
+            (game.home.abbreviation.as_str(), game.home.score),
+            ("POR", 0)
+        );
+        assert_eq!(
+            (game.away.abbreviation.as_str(), game.away.score),
+            ("ESP", 1)
+        );
         // Yellow cards are excluded; the lone goal formats as "name clock".
-        assert_eq!(home.scorers, "");
-        assert_eq!(away.scorers, "M. Merino 90'+1'");
+        assert_eq!(game.home.scorers, "");
+        assert_eq!(game.away.scorers, "M. Merino 90'+1'");
     }
 }

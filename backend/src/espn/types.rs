@@ -2,6 +2,7 @@
 //! shell. Sport-specific composites (competitions, situations) live in each
 //! sport's module and are built from these leaves.
 
+use chrono::NaiveDateTime;
 use serde::Deserialize;
 
 use crate::error::AppError;
@@ -47,6 +48,8 @@ pub(crate) struct RawScoreboard {
 }
 
 /// Parse each event individually, skipping (and logging) unparseable ones.
+/// The warn carries the offending event's full JSON — that payload is the
+/// artifact needed to fix the sport's model when live data grows a new shape.
 ///
 /// Returns the parsed events and the number that failed. Callers that map
 /// "id not found" to 404 MUST treat a nonzero failure count as an upstream
@@ -59,7 +62,9 @@ pub(crate) fn parse_events<E: serde::de::DeserializeOwned>(
     let mut parsed = Vec::with_capacity(raw.events.len());
     let mut failed = 0usize;
     for (index, value) in raw.events.into_iter().enumerate() {
-        match serde_path_to_error::deserialize::<_, E>(value) {
+        // Deserialize from a reference so the value survives for the failure
+        // log; costs nothing on the success path.
+        match serde_path_to_error::deserialize::<_, E>(&value) {
             Ok(event) => parsed.push(event),
             Err(err) => {
                 failed += 1;
@@ -69,6 +74,7 @@ pub(crate) fn parse_events<E: serde::de::DeserializeOwned>(
                     event_index = index,
                     json_path = %json_path,
                     error = %err.into_inner(),
+                    payload = %value,
                     "skipping unparseable ESPN event"
                 );
             }
@@ -103,6 +109,27 @@ pub(crate) fn find_event<E>(
     }
 }
 
+/// Parse ESPN's `event.date` into a unix epoch (seconds, UTC).
+///
+/// The corpus is uniformly `%Y-%m-%dT%H:%MZ` (no seconds) in every sampled
+/// sport; a with-seconds variant is accepted as a fallback. The field is
+/// 100%-present, so a parse failure is a glitch, not an expected state —
+/// surfaced as `EspnDeserialize`.
+pub(crate) fn parse_start_time(date: &str) -> Result<u32, AppError> {
+    let parsed = NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%MZ")
+        .or_else(|_| NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%M:%SZ"));
+    let naive = parsed.map_err(|e| {
+        tracing::error!(raw_date = %date, error = %e, "ESPN event.date failed to parse");
+        AppError::EspnDeserialize {
+            url: String::new(),
+            json_path: "events[?].date".to_string(),
+            message: format!("invalid date '{date}': {e}"),
+        }
+    })?;
+    // ESPN dates are UTC; the epoch is non-negative for any real event.
+    Ok(naive.and_utc().timestamp().max(0) as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,6 +137,28 @@ mod tests {
     #[derive(Deserialize, Debug)]
     struct MinimalEvent {
         id: String,
+    }
+
+    #[test]
+    fn parse_start_time_reads_minute_precision_utc() {
+        // 2026-07-08T01:40Z == 1783474800 (verified against a UTC epoch table).
+        assert_eq!(parse_start_time("2026-07-08T01:40Z").unwrap(), 1_783_474_800);
+    }
+
+    #[test]
+    fn parse_start_time_accepts_seconds_fallback() {
+        assert_eq!(
+            parse_start_time("2026-07-08T01:40:30Z").unwrap(),
+            1_783_474_830
+        );
+    }
+
+    #[test]
+    fn parse_start_time_rejects_garbage() {
+        assert!(matches!(
+            parse_start_time("not-a-date"),
+            Err(AppError::EspnDeserialize { .. })
+        ));
     }
 
     fn raw(json: &str) -> RawScoreboard {

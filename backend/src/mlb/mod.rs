@@ -9,8 +9,6 @@ mod types;
 
 pub use handler::{get_game, list_games};
 pub use types::{
-    AtBat, Bases, Count, FinalGame, FinalTeam, GameListEntry, GameState, Inning, InningHalf,
-    LastPlay, LiveGame, MlbGame, PregameGame, PregameTeam, Record, TeamState, Weather,
+    AtBat, Bases, Count, FinalGame, FinalTeam, Inning, InningHalf, LastPlay, LiveGame, MlbGame,
+    PregameGame, PregameTeam, TeamState, Weather,
 };
-
-pub use crate::shared::team::TeamColors;

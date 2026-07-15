@@ -13,6 +13,7 @@ pub mod error;
 pub mod espn;
 pub mod logo;
 pub mod mlb;
+pub mod nba;
 pub mod shared;
 pub mod soccer;
 pub mod team;
@@ -34,6 +35,8 @@ use espn::EspnClient;
         team::get_team_logo,
         mlb::handler::list_games,
         mlb::handler::get_game,
+        nba::handler::list_games,
+        nba::handler::get_game,
         soccer::handler::list_games,
         soccer::handler::get_game,
         app_update::handler::get_app_manifest,
@@ -45,25 +48,37 @@ use espn::EspnClient;
         error::ErrorResponse,
         logo::LogoQuery,
         logo::OutputFormat,
+        shared::game::GameListEntry,
+        shared::game::GameState,
+        shared::game::Record,
+        shared::team::TeamColors,
         mlb::MlbGame,
         mlb::LiveGame,
         mlb::PregameGame,
         mlb::FinalGame,
         mlb::PregameTeam,
         mlb::FinalTeam,
-        mlb::Record,
         mlb::Weather,
-        mlb::GameListEntry,
-        mlb::GameState,
         mlb::TeamState,
-        mlb::TeamColors,
         mlb::Count,
         mlb::Bases,
         mlb::AtBat,
         mlb::LastPlay,
         mlb::Inning,
         mlb::InningHalf,
+        nba::NbaGame,
+        nba::NbaLiveGame,
+        nba::NbaPregameGame,
+        nba::NbaFinalGame,
+        nba::NbaTeam,
+        nba::NbaTeamState,
+        nba::NbaFinalTeam,
+        nba::NbaLastPlay,
+        nba::LivePhase,
         soccer::SoccerGame,
+        soccer::SoccerLiveGame,
+        soccer::SoccerPregameGame,
+        soccer::SoccerFinalGame,
         soccer::SoccerTeam,
         soccer::SoccerTeamState,
         soccer::SoccerFinalTeam,
@@ -77,6 +92,7 @@ use espn::EspnClient;
         (name = "clock", description = "Time and timezone endpoint"),
         (name = "team", description = "Team logo endpoint"),
         (name = "mlb", description = "MLB live game data (ESPN-backed)"),
+        (name = "nba", description = "NBA live game data (ESPN-backed)"),
         (name = "soccer", description = "Soccer live game data (ESPN-backed)"),
         (name = "app", description = "Device app OTA image + manifest"),
     )
@@ -199,6 +215,8 @@ pub async fn run() {
         )
         .route("/baseball/mlb/games", get(mlb::list_games))
         .route("/baseball/mlb/games/{game_id}", get(mlb::get_game))
+        .route("/basketball/nba/games", get(nba::list_games))
+        .route("/basketball/nba/games/{game_id}", get(nba::get_game))
         .route("/soccer/{league}/games", get(soccer::list_games))
         .route(
             "/soccer/{league}/games/{game_id}",

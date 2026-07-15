@@ -12,8 +12,8 @@ use crate::auth::ApiKey;
 use crate::error::{AppError, ErrorResponse};
 use crate::espn::league::{self, SoccerLeague};
 use crate::espn::types::{RawScoreboard, find_event, parse_events};
-use crate::mlb::{GameListEntry, GameState};
 use crate::shared::etag::{games_response, wants_struct};
+use crate::shared::game::{GameListEntry, GameState};
 use crate::wire;
 
 use super::transform::{
@@ -134,9 +134,9 @@ pub async fn get_game(
         .ok_or_else(|| AppError::GameNotFound(game_id.clone()))?;
 
     let game = match first {
-        EspnCompetition::PreGame { competitors } => {
-            pregame_competition_to_game(id, date, competitors).map_err(|e| e.with_url(&url))?
-        }
+        EspnCompetition::PreGame { competitors } => SoccerGame::Pregame(
+            pregame_competition_to_game(id, &date, competitors).map_err(|e| e.with_url(&url))?,
+        ),
         EspnCompetition::Live {
             competitors,
             display_clock,
@@ -146,22 +146,26 @@ pub async fn get_game(
             details,
         } => {
             let commentary = fetch_commentary(&state, &league, &id).await;
-            live_competition_to_game(
-                id,
-                competitors,
-                display_clock,
-                clock_seconds,
-                period,
-                halftime,
-                details,
-                commentary,
+            SoccerGame::Live(
+                live_competition_to_game(
+                    id,
+                    competitors,
+                    display_clock,
+                    clock_seconds,
+                    period,
+                    halftime,
+                    details,
+                    commentary,
+                )
+                .map_err(|e| e.with_url(&url))?,
             )
-            .map_err(|e| e.with_url(&url))?
         }
         EspnCompetition::Final {
             competitors,
             details,
-        } => final_competition_to_game(id, competitors, details).map_err(|e| e.with_url(&url))?,
+        } => SoccerGame::Final(
+            final_competition_to_game(id, competitors, details).map_err(|e| e.with_url(&url))?,
+        ),
     };
 
     if wants_struct(&headers) {

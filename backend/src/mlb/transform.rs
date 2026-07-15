@@ -1,12 +1,11 @@
-use chrono::NaiveDateTime;
-
 use crate::error::AppError;
-use crate::espn::types::EspnTeam;
+use crate::espn::types::{EspnTeam, parse_start_time};
+use crate::shared::game::Record;
 use crate::shared::team::{TeamColors, order_home_away, parse_hex_rgb};
 
 use super::types::{
     AtBat, Bases, Count, EspnCompetitor, EspnSituation, EspnWeather, FinalGame, FinalTeam, Inning,
-    InningHalf, LastPlay, LiveGame, PregameGame, PregameTeam, Record, TeamState, Weather,
+    InningHalf, LastPlay, LiveGame, PregameGame, PregameTeam, TeamState, Weather,
 };
 
 /// Parse the inning half from ESPN's `shortDetail` prefix.
@@ -31,26 +30,6 @@ pub(crate) fn parse_inning_half(short_detail: &str) -> Option<InningHalf> {
             None
         }
     }
-}
-
-/// Parse ESPN's `event.date` into a unix epoch (seconds, UTC).
-///
-/// The corpus is uniformly `%Y-%m-%dT%H:%MZ` (no seconds); a with-seconds
-/// variant is accepted as a fallback. The field is 100%-present, so a parse
-/// failure is a glitch, not an expected state — surfaced as `EspnDeserialize`.
-pub(crate) fn parse_start_time(date: &str) -> Result<u32, AppError> {
-    let parsed = NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%MZ")
-        .or_else(|_| NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%M:%SZ"));
-    let naive = parsed.map_err(|e| {
-        tracing::error!(raw_date = %date, error = %e, "ESPN event.date failed to parse");
-        AppError::EspnDeserialize {
-            url: String::new(),
-            json_path: "events[?].date".to_string(),
-            message: format!("invalid date '{date}': {e}"),
-        }
-    })?;
-    // ESPN dates are UTC; the epoch is non-negative for any real event.
-    Ok(naive.and_utc().timestamp().max(0) as u32)
 }
 
 /// Normalize ESPN's swap-prone weather block into a display-ready `Weather`.
@@ -126,24 +105,13 @@ fn linescore_runs(linescores: &[super::types::EspnLinescore]) -> Vec<u8> {
         .collect()
 }
 
-/// Parse a competitor's primary and alternate colors.
+/// Parse a competitor's primary and alternate colors. No log here: the
+/// returned `InvalidTeamColor` carries team + raw value, and every 5xx
+/// response is logged centrally (see `AppError::into_response`) — same
+/// contract as soccer's and NBA's `competitor_colors`.
 fn parse_team_colors(team: &EspnTeam) -> Result<TeamColors, AppError> {
-    let primary = parse_hex_rgb(&team.color, &team.abbreviation).inspect_err(|e| {
-        tracing::error!(
-            team = %team.abbreviation,
-            raw_color = %team.color,
-            error = ?e,
-            "ESPN primary team color failed to parse"
-        );
-    })?;
-    let alternate = parse_hex_rgb(&team.alternate_color, &team.abbreviation).inspect_err(|e| {
-        tracing::error!(
-            team = %team.abbreviation,
-            raw_color = %team.alternate_color,
-            error = ?e,
-            "ESPN alternate team color failed to parse"
-        );
-    })?;
+    let primary = parse_hex_rgb(&team.color, &team.abbreviation)?;
+    let alternate = parse_hex_rgb(&team.alternate_color, &team.abbreviation)?;
     Ok(TeamColors { primary, alternate })
 }
 
@@ -330,28 +298,6 @@ mod tests {
             panic!("fixture must be a pregame competition");
         };
         pregame_competition_to_game(id, &date, weather.as_ref(), venue_name, competitors).unwrap()
-    }
-
-    #[test]
-    fn parse_start_time_reads_minute_precision_utc() {
-        // 2026-07-08T01:40Z == 1783474800 (verified against a UTC epoch table).
-        assert_eq!(parse_start_time("2026-07-08T01:40Z").unwrap(), 1_783_474_800);
-    }
-
-    #[test]
-    fn parse_start_time_accepts_seconds_fallback() {
-        assert_eq!(
-            parse_start_time("2026-07-08T01:40:30Z").unwrap(),
-            1_783_474_830
-        );
-    }
-
-    #[test]
-    fn parse_start_time_rejects_garbage() {
-        assert!(matches!(
-            parse_start_time("not-a-date"),
-            Err(AppError::EspnDeserialize { .. })
-        ));
     }
 
     #[test]

@@ -13,13 +13,14 @@ use crate::error::{AppError, ErrorResponse};
 use crate::espn::league::{self, Mlb};
 use crate::espn::types::{RawScoreboard, find_event, parse_events};
 use crate::shared::etag::{games_response, wants_struct};
+use crate::shared::game::{GameListEntry, GameState};
 use crate::wire;
 
 use super::transform::{
     final_competition_to_game, live_competition_to_game, parse_inning_half,
     pregame_competition_to_game,
 };
-use super::types::{EspnCompetition, EspnEvent, GameListEntry, GameState, MlbGame};
+use super::types::{EspnCompetition, EspnEvent, MlbGame};
 
 fn scoreboard_url(state: &AppState) -> String {
     league::scoreboard_url(&state.config.espn, &Mlb)

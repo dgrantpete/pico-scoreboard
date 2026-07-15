@@ -155,6 +155,21 @@ impl IntoResponse for AppError {
             ),
         };
 
+        // Every 5xx response gets one structured log line HERE, so a
+        // failure's server-side visibility never depends on the producing
+        // code path remembering to log. Producer-side lines (the client's
+        // deserialize choke point, the transform parsers) add raw-value
+        // context on top; this is the floor. 4xx responses are normal flow
+        // (game rotation 404s every day) and stay quiet.
+        if status.is_server_error() {
+            tracing::error!(
+                status = status.as_u16(),
+                error = %error,
+                message = %message,
+                "serving error response"
+            );
+        }
+
         let body = ErrorResponse { error, message };
 
         (status, Json(body)).into_response()

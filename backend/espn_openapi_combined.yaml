@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
-  title: ESPN Scoreboard API (MLB + NBA)
-  description: Empirically-derived OpenAPI 3.1 spec for ESPN's MLB and NBA scoreboard endpoints. Each sport's Competition
-    schema is a discriminated union over status.type.state (pre/in/post). Schemas that are structurally identical between
-    the two sports are merged into shared components.
+  title: ESPN Scoreboard API (Mlb + Nba + FifaWorld)
+  description: Empirically-derived OpenAPI 3.1 spec for ESPN's scoreboard endpoints. Each sport's Competition schema is a
+    discriminated union over status.type.state (pre/in/post). Schemas structurally identical across every sport are merged
+    into shared components.
   version: 1.0.0
 servers:
 - url: https://site.api.espn.com/apis/site/v2
@@ -42,6 +42,23 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NbaScoreboardResponse'
+  /sports/soccer/fifa.world/scoreboard:
+    get:
+      summary: Get FIFA.WORLD scoreboard for a date
+      parameters:
+      - name: dates
+        in: query
+        description: Date in YYYYMMDD format
+        schema:
+          type: string
+          pattern: ^\d{8}$
+      responses:
+        '200':
+          description: Scoreboard response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FifaWorldScoreboardResponse'
 components:
   schemas:
     MlbScoreboardResponse:
@@ -332,16 +349,6 @@ components:
           - highTemperature
           - link
           - temperature
-      required:
-      - competitions
-      - date
-      - id
-      - links
-      - name
-      - season
-      - shortName
-      - status
-      - uid
     MlbCompetition:
       oneOf:
       - $ref: '#/components/schemas/MlbPreGameCompetition'
@@ -859,6 +866,13 @@ components:
                       - abbreviation
                       - displayValue
                       - name
+                  projections:
+                    type: object
+                    properties:
+                      $ref:
+                        type: string
+                    required:
+                    - $ref
                 required:
                 - abbreviation
                 - athlete
@@ -1063,6 +1077,8 @@ components:
                             type: string
                         required:
                         - href
+                      href:
+                        type: string
                     required:
                     - alert
                     - progressiveDownload
@@ -2288,6 +2304,8 @@ components:
                                     type: string
                                 required:
                                 - href
+                              href:
+                                type: string
                             required:
                             - alert
                             - progressiveDownload
@@ -2470,11 +2488,11 @@ components:
                         type: string
                       text:
                         type: string
-                      alternativeText:
+                      abbreviation:
                         type: string
                       type:
                         type: string
-                      abbreviation:
+                      alternativeText:
                         type: string
                     required:
                     - id
@@ -2652,6 +2670,13 @@ components:
                     - team
                   summary:
                     type: string
+                  projections:
+                    type: object
+                    properties:
+                      $ref:
+                        type: string
+                    required:
+                    - $ref
                 required:
                 - athlete
                 - period
@@ -2714,6 +2739,13 @@ components:
                     - team
                   summary:
                     type: string
+                  projections:
+                    type: object
+                    properties:
+                      $ref:
+                        type: string
+                    required:
+                    - $ref
                 required:
                 - athlete
                 - period
@@ -2786,6 +2818,13 @@ components:
                       type: integer
                     summary:
                       type: string
+                    projections:
+                      type: object
+                      properties:
+                        $ref:
+                          type: string
+                      required:
+                      - $ref
                   required:
                   - athlete
                   - batOrder
@@ -3048,8 +3087,6 @@ components:
               type: string
             name:
               type: string
-            displayName:
-              type: string
             priority:
               type: integer
             logos:
@@ -3066,6 +3103,8 @@ components:
                 required:
                 - href
                 - rel
+            displayName:
+              type: string
           required:
           - displayName
           - id
@@ -3259,8 +3298,6 @@ components:
                 type: integer
               homeAway:
                 type: string
-              winner:
-                type: boolean
               team:
                 type: object
                 properties:
@@ -3475,6 +3512,8 @@ components:
                   - name
                   - summary
                   - type
+              winner:
+                type: boolean
             required:
             - homeAway
             - id
@@ -5230,3 +5269,1510 @@ components:
             - type
         required:
         - status
+    FifaWorldScoreboardResponse:
+      type: object
+      properties:
+        leagues:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              uid:
+                type: string
+              name:
+                type: string
+              abbreviation:
+                type: string
+              midsizeName:
+                type: string
+              slug:
+                type: string
+              season:
+                type: object
+                properties:
+                  year:
+                    type: integer
+                  startDate:
+                    type: string
+                  endDate:
+                    type: string
+                  displayName:
+                    type: string
+                  type:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      type:
+                        type: integer
+                      name:
+                        type: string
+                      abbreviation:
+                        type: string
+                    required:
+                    - abbreviation
+                    - id
+                    - name
+                    - type
+                required:
+                - displayName
+                - endDate
+                - startDate
+                - type
+                - year
+              logos:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    href:
+                      type: string
+                    width:
+                      type: integer
+                    height:
+                      type: integer
+                    alt:
+                      type: string
+                    rel:
+                      type: array
+                      items:
+                        type: string
+                    lastUpdated:
+                      type: string
+                  required:
+                  - alt
+                  - height
+                  - href
+                  - lastUpdated
+                  - rel
+                  - width
+              calendarType:
+                type: string
+              calendarIsWhitelist:
+                type: boolean
+              calendarStartDate:
+                type: string
+              calendarEndDate:
+                type: string
+              calendar:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    label:
+                      type: string
+                    startDate:
+                      type: string
+                    endDate:
+                      type: string
+                    entries:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          label:
+                            type: string
+                          detail:
+                            type: string
+                          value:
+                            type: string
+                          startDate:
+                            type: string
+                          endDate:
+                            type: string
+                        required:
+                        - detail
+                        - endDate
+                        - label
+                        - startDate
+                        - value
+                  required:
+                  - endDate
+                  - entries
+                  - label
+                  - startDate
+            required:
+            - abbreviation
+            - calendar
+            - calendarEndDate
+            - calendarIsWhitelist
+            - calendarStartDate
+            - calendarType
+            - id
+            - logos
+            - midsizeName
+            - name
+            - season
+            - slug
+            - uid
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/FifaWorldEvent'
+        provider:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            priority:
+              type: integer
+            displayName:
+              type: string
+            logos:
+              type: array
+              items:
+                type: object
+                properties:
+                  href:
+                    type: string
+                  rel:
+                    type: array
+                    items:
+                      type: string
+                required:
+                - href
+                - rel
+          required:
+          - displayName
+          - id
+          - logos
+          - name
+          - priority
+      required:
+      - events
+      - leagues
+      - provider
+    FifaWorldEvent:
+      type: object
+      properties:
+        id:
+          type: string
+        uid:
+          type: string
+        date:
+          type: string
+        name:
+          type: string
+        shortName:
+          type: string
+        season:
+          type: object
+          properties:
+            year:
+              type: integer
+            type:
+              type: integer
+            slug:
+              type: string
+          required:
+          - slug
+          - type
+          - year
+        competitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/FifaWorldCompetition'
+        status:
+          type: object
+          properties:
+            clock:
+              type: number
+            displayClock:
+              type: string
+            period:
+              type: integer
+            type:
+              type: object
+              properties:
+                id:
+                  type: string
+                name:
+                  type: string
+                state:
+                  type: string
+                completed:
+                  type: boolean
+                description:
+                  type: string
+                detail:
+                  type: string
+                shortDetail:
+                  type: string
+              required:
+              - completed
+              - description
+              - detail
+              - id
+              - name
+              - shortDetail
+              - state
+          required:
+          - clock
+          - displayClock
+          - period
+          - type
+        venue:
+          type: object
+          properties:
+            displayName:
+              type: string
+          required:
+          - displayName
+        links:
+          type: array
+          items:
+            type: object
+            properties:
+              language:
+                type: string
+              rel:
+                type: array
+                items:
+                  type: string
+              href:
+                type: string
+              text:
+                type: string
+              shortText:
+                type: string
+              isExternal:
+                type: boolean
+              isPremium:
+                type: boolean
+              isHidden:
+                type: boolean
+            required:
+            - href
+            - isExternal
+            - isPremium
+            - language
+            - rel
+            - shortText
+            - text
+      required:
+      - competitions
+      - date
+      - id
+      - links
+      - name
+      - season
+      - shortName
+      - status
+      - uid
+      - venue
+    FifaWorldCompetition:
+      oneOf:
+      - $ref: '#/components/schemas/FifaWorldPreGameCompetition'
+      - $ref: '#/components/schemas/FifaWorldLiveCompetition'
+      - $ref: '#/components/schemas/FifaWorldFinalCompetition'
+    FifaWorldCompetitionBase:
+      type: object
+      properties: {}
+    FifaWorldPreGameCompetition:
+      allOf:
+      - $ref: '#/components/schemas/FifaWorldCompetitionBase'
+      - type: object
+        properties:
+          status:
+            type: object
+            properties:
+              type:
+                type: object
+                properties:
+                  state:
+                    const: pre
+                required:
+                - state
+            required:
+            - type
+        required:
+        - status
+    FifaWorldLiveCompetition:
+      allOf:
+      - $ref: '#/components/schemas/FifaWorldCompetitionBase'
+      - type: object
+        properties:
+          id: &id003
+            type: string
+          uid: &id004
+            type: string
+          date: &id005
+            type: string
+          startDate: &id006
+            type: string
+          attendance: &id007
+            type: integer
+          timeValid: &id008
+            type: boolean
+          recent: &id009
+            type: boolean
+          status:
+            type: object
+            properties:
+              clock:
+                type: number
+              displayClock:
+                type: string
+              period:
+                type: integer
+              type:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  state:
+                    const: in
+                  completed:
+                    type: boolean
+                  description:
+                    type: string
+                  detail:
+                    type: string
+                  shortDetail:
+                    type: string
+                required:
+                - completed
+                - description
+                - detail
+                - id
+                - name
+                - shortDetail
+                - state
+            required:
+            - clock
+            - displayClock
+            - period
+            - type
+          venue: &id010
+            type: object
+            properties:
+              id:
+                type: string
+              fullName:
+                type: string
+              address:
+                type: object
+                properties:
+                  city:
+                    type: string
+                  country:
+                    type: string
+                required:
+                - city
+                - country
+            required:
+            - address
+            - fullName
+            - id
+          format: &id011
+            type: object
+            properties:
+              regulation:
+                type: object
+                properties:
+                  periods:
+                    type: integer
+                required:
+                - periods
+            required:
+            - regulation
+          altGameNote: &id012
+            type: string
+          notes: &id013
+            type: array
+          geoBroadcasts: &id014
+            type: array
+            items:
+              type: object
+              properties:
+                type:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    shortName:
+                      type: string
+                  required:
+                  - id
+                  - shortName
+                market:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    type:
+                      type: string
+                  required:
+                  - id
+                  - type
+                media:
+                  type: object
+                  properties:
+                    shortName:
+                      type: string
+                  required:
+                  - shortName
+                lang:
+                  type: string
+                region:
+                  type: string
+              required:
+              - lang
+              - market
+              - media
+              - region
+              - type
+          broadcasts: &id015
+            type: array
+            items:
+              type: object
+              properties:
+                market:
+                  type: string
+                names:
+                  type: array
+                  items:
+                    type: string
+              required:
+              - market
+              - names
+          broadcast: &id016
+            type: string
+          competitors: &id017
+            type: array
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                uid:
+                  type: string
+                type:
+                  type: string
+                order:
+                  type: integer
+                homeAway:
+                  type: string
+                winner:
+                  type: boolean
+                advance:
+                  type: boolean
+                form:
+                  type: string
+                score:
+                  type: string
+                team:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    uid:
+                      type: string
+                    abbreviation:
+                      type: string
+                    displayName:
+                      type: string
+                    shortDisplayName:
+                      type: string
+                    name:
+                      type: string
+                    location:
+                      type: string
+                    color:
+                      type: string
+                    alternateColor:
+                      type: string
+                    isActive:
+                      type: boolean
+                    logo:
+                      type: string
+                    links:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          rel:
+                            type: array
+                            items:
+                              type: string
+                          href:
+                            type: string
+                          text:
+                            type: string
+                          isExternal:
+                            type: boolean
+                          isPremium:
+                            type: boolean
+                          isHidden:
+                            type: boolean
+                        required:
+                        - href
+                        - isExternal
+                        - isHidden
+                        - isPremium
+                        - rel
+                        - text
+                    venue:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                      required:
+                      - id
+                  required:
+                  - abbreviation
+                  - alternateColor
+                  - color
+                  - displayName
+                  - id
+                  - isActive
+                  - links
+                  - location
+                  - logo
+                  - name
+                  - shortDisplayName
+                  - uid
+                  - venue
+                statistics:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      abbreviation:
+                        type: string
+                      displayValue:
+                        type: string
+                    required:
+                    - abbreviation
+                    - displayValue
+                    - name
+              required:
+              - form
+              - homeAway
+              - id
+              - order
+              - score
+              - statistics
+              - team
+              - type
+              - uid
+              - winner
+          details: &id018
+            type: array
+            items:
+              type: object
+              properties:
+                type:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    text:
+                      type: string
+                  required:
+                  - id
+                  - text
+                clock:
+                  type: object
+                  properties:
+                    value:
+                      type: number
+                    displayValue:
+                      type: string
+                  required:
+                  - displayValue
+                  - value
+                team:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                  required:
+                  - id
+                scoreValue:
+                  type: integer
+                scoringPlay:
+                  type: boolean
+                redCard:
+                  type: boolean
+                yellowCard:
+                  type: boolean
+                penaltyKick:
+                  type: boolean
+                ownGoal:
+                  type: boolean
+                shootout:
+                  type: boolean
+                athletesInvolved:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      displayName:
+                        type: string
+                      shortName:
+                        type: string
+                      fullName:
+                        type: string
+                      jersey:
+                        type: string
+                      team:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                        required:
+                        - id
+                      links:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            rel:
+                              type: array
+                              items:
+                                type: string
+                            href:
+                              type: string
+                            isHidden:
+                              type: boolean
+                          required:
+                          - href
+                          - isHidden
+                          - rel
+                      position:
+                        type: string
+                    required:
+                    - displayName
+                    - fullName
+                    - id
+                    - jersey
+                    - links
+                    - position
+                    - shortName
+                    - team
+              required:
+              - athletesInvolved
+              - clock
+              - ownGoal
+              - penaltyKick
+              - redCard
+              - scoreValue
+              - scoringPlay
+              - shootout
+              - team
+              - type
+              - yellowCard
+          odds: &id019
+            type: array
+            items:
+              anyOf:
+              - type: 'null'
+              - type: object
+                properties:
+                  overUnder:
+                    type: number
+                  link:
+                    type: object
+                    properties:
+                      language:
+                        type: string
+                      rel:
+                        type: array
+                        items:
+                          type: string
+                      href:
+                        type: string
+                      text:
+                        type: string
+                      shortText:
+                        type: string
+                      isExternal:
+                        type: boolean
+                      isPremium:
+                        type: boolean
+                      isHidden:
+                        type: boolean
+                    required:
+                    - href
+                    - isExternal
+                    - isHidden
+                    - isPremium
+                    - language
+                    - rel
+                    - shortText
+                    - text
+                  provider:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      name:
+                        type: string
+                      priority:
+                        type: integer
+                      displayName:
+                        type: string
+                      logos:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            href:
+                              type: string
+                            rel:
+                              type: array
+                              items:
+                                type: string
+                          required:
+                          - href
+                          - rel
+                    required:
+                    - displayName
+                    - id
+                    - logos
+                    - name
+                    - priority
+                  drawOdds:
+                    type: object
+                    properties:
+                      moneyLine:
+                        type: integer
+                      link:
+                        type: object
+                        properties:
+                          language:
+                            type: string
+                          rel:
+                            type: array
+                            items:
+                              type: string
+                          href:
+                            type: string
+                          text:
+                            type: string
+                          shortText:
+                            type: string
+                          isExternal:
+                            type: boolean
+                          isPremium:
+                            type: boolean
+                          isHidden:
+                            type: boolean
+                        required:
+                        - href
+                        - isExternal
+                        - isHidden
+                        - isPremium
+                        - language
+                        - rel
+                        - shortText
+                        - text
+                    required:
+                    - link
+                    - moneyLine
+                  total:
+                    type: object
+                    properties:
+                      displayName:
+                        type: string
+                      shortDisplayName:
+                        type: string
+                      over:
+                        type: object
+                        properties:
+                          open:
+                            type: object
+                            properties:
+                              line:
+                                type: string
+                              odds:
+                                type: string
+                            required:
+                            - line
+                            - odds
+                          close:
+                            type: object
+                            properties:
+                              line:
+                                type: string
+                              odds:
+                                type: string
+                            required:
+                            - line
+                            - odds
+                          current:
+                            type: object
+                            properties:
+                              line:
+                                type: string
+                              odds:
+                                type: string
+                              link:
+                                type: object
+                                properties:
+                                  rel:
+                                    type: array
+                                    items:
+                                      type: string
+                                  href:
+                                    type: string
+                                  tracking:
+                                    type: object
+                                    properties:
+                                      campaign:
+                                        type: string
+                                      tags:
+                                        type: object
+                                        properties:
+                                          league:
+                                            type: string
+                                          sport:
+                                            type: string
+                                          gameId:
+                                            type: integer
+                                          betSide:
+                                            type: string
+                                          betType:
+                                            type: string
+                                          betDetails:
+                                            type: string
+                                        required:
+                                        - betDetails
+                                        - betSide
+                                        - betType
+                                        - gameId
+                                        - league
+                                        - sport
+                                    required:
+                                    - campaign
+                                    - tags
+                                required:
+                                - rel
+                                - tracking
+                            required:
+                            - line
+                            - link
+                            - odds
+                        required:
+                        - close
+                        - open
+                      under:
+                        type: object
+                        properties:
+                          open:
+                            type: object
+                            properties:
+                              line:
+                                type: string
+                              odds:
+                                type: string
+                            required:
+                            - line
+                            - odds
+                          close:
+                            type: object
+                            properties:
+                              line:
+                                type: string
+                              odds:
+                                type: string
+                            required:
+                            - line
+                            - odds
+                          current:
+                            type: object
+                            properties:
+                              line:
+                                type: string
+                              odds:
+                                type: string
+                              link:
+                                type: object
+                                properties:
+                                  rel:
+                                    type: array
+                                    items:
+                                      type: string
+                                  href:
+                                    type: string
+                                  tracking:
+                                    type: object
+                                    properties:
+                                      campaign:
+                                        type: string
+                                      tags:
+                                        type: object
+                                        properties:
+                                          league:
+                                            type: string
+                                          sport:
+                                            type: string
+                                          gameId:
+                                            type: integer
+                                          betSide:
+                                            type: string
+                                          betType:
+                                            type: string
+                                          betDetails:
+                                            type: string
+                                        required:
+                                        - betDetails
+                                        - betSide
+                                        - betType
+                                        - gameId
+                                        - league
+                                        - sport
+                                    required:
+                                    - campaign
+                                    - tags
+                                required:
+                                - rel
+                                - tracking
+                            required:
+                            - line
+                            - link
+                            - odds
+                        required:
+                        - close
+                        - open
+                    required:
+                    - displayName
+                    - over
+                    - shortDisplayName
+                    - under
+                  pointSpread:
+                    type: object
+                    properties:
+                      displayName:
+                        type: string
+                      shortDisplayName:
+                        type: string
+                      home:
+                        type: object
+                        properties:
+                          open:
+                            type: object
+                            properties:
+                              line:
+                                type: string
+                              odds:
+                                type: string
+                            required:
+                            - line
+                            - odds
+                          close:
+                            type: object
+                            properties:
+                              line:
+                                type: string
+                              odds:
+                                type: string
+                            required:
+                            - line
+                            - odds
+                          current:
+                            type: object
+                            properties:
+                              line:
+                                type: string
+                              odds:
+                                type: string
+                              link:
+                                type: object
+                                properties:
+                                  rel:
+                                    type: array
+                                    items:
+                                      type: string
+                                  href:
+                                    type: string
+                                  tracking:
+                                    type: object
+                                    properties:
+                                      campaign:
+                                        type: string
+                                      tags:
+                                        type: object
+                                        properties:
+                                          league:
+                                            type: string
+                                          sport:
+                                            type: string
+                                          gameId:
+                                            type: integer
+                                          betSide:
+                                            type: string
+                                          betType:
+                                            type: string
+                                          betDetails:
+                                            type: string
+                                        required:
+                                        - betDetails
+                                        - betSide
+                                        - betType
+                                        - gameId
+                                        - league
+                                        - sport
+                                    required:
+                                    - campaign
+                                    - tags
+                                required:
+                                - rel
+                                - tracking
+                            required:
+                            - line
+                            - link
+                            - odds
+                        required:
+                        - close
+                        - open
+                      away:
+                        type: object
+                        properties:
+                          open:
+                            type: object
+                            properties:
+                              line:
+                                type: string
+                              odds:
+                                type: string
+                            required:
+                            - line
+                            - odds
+                          close:
+                            type: object
+                            properties:
+                              line:
+                                type: string
+                              odds:
+                                type: string
+                            required:
+                            - line
+                            - odds
+                          current:
+                            type: object
+                            properties:
+                              line:
+                                type: string
+                              odds:
+                                type: string
+                              link:
+                                type: object
+                                properties:
+                                  rel:
+                                    type: array
+                                    items:
+                                      type: string
+                                  href:
+                                    type: string
+                                  tracking:
+                                    type: object
+                                    properties:
+                                      campaign:
+                                        type: string
+                                      tags:
+                                        type: object
+                                        properties:
+                                          league:
+                                            type: string
+                                          sport:
+                                            type: string
+                                          gameId:
+                                            type: integer
+                                          betSide:
+                                            type: string
+                                          betType:
+                                            type: string
+                                          betDetails:
+                                            type: string
+                                        required:
+                                        - betDetails
+                                        - betSide
+                                        - betType
+                                        - gameId
+                                        - league
+                                        - sport
+                                    required:
+                                    - campaign
+                                    - tags
+                                required:
+                                - rel
+                                - tracking
+                            required:
+                            - line
+                            - link
+                            - odds
+                        required:
+                        - close
+                        - open
+                    required:
+                    - away
+                    - displayName
+                    - home
+                    - shortDisplayName
+                  moneyline:
+                    type: object
+                    properties:
+                      displayName:
+                        type: string
+                      shortDisplayName:
+                        type: string
+                      home:
+                        type: object
+                        properties:
+                          open:
+                            type: object
+                            properties:
+                              odds:
+                                type: string
+                            required:
+                            - odds
+                          close:
+                            type: object
+                            properties:
+                              odds:
+                                type: string
+                            required:
+                            - odds
+                          current:
+                            type: object
+                            properties:
+                              odds:
+                                type: string
+                              link:
+                                type: object
+                                properties:
+                                  rel:
+                                    type: array
+                                    items:
+                                      type: string
+                                  href:
+                                    type: string
+                                  tracking:
+                                    type: object
+                                    properties:
+                                      campaign:
+                                        type: string
+                                      tags:
+                                        type: object
+                                        properties:
+                                          league:
+                                            type: string
+                                          sport:
+                                            type: string
+                                          gameId:
+                                            type: integer
+                                          betSide:
+                                            type: string
+                                          betType:
+                                            type: string
+                                        required:
+                                        - betSide
+                                        - betType
+                                        - gameId
+                                        - league
+                                        - sport
+                                    required:
+                                    - campaign
+                                    - tags
+                                required:
+                                - rel
+                                - tracking
+                            required:
+                            - link
+                            - odds
+                        required:
+                        - close
+                        - open
+                      away:
+                        type: object
+                        properties:
+                          open:
+                            type: object
+                            properties:
+                              odds:
+                                type: string
+                            required:
+                            - odds
+                          close:
+                            type: object
+                            properties:
+                              odds:
+                                type: string
+                            required:
+                            - odds
+                          current:
+                            type: object
+                            properties:
+                              odds:
+                                type: string
+                              link:
+                                type: object
+                                properties:
+                                  rel:
+                                    type: array
+                                    items:
+                                      type: string
+                                  href:
+                                    type: string
+                                  tracking:
+                                    type: object
+                                    properties:
+                                      campaign:
+                                        type: string
+                                      tags:
+                                        type: object
+                                        properties:
+                                          league:
+                                            type: string
+                                          sport:
+                                            type: string
+                                          gameId:
+                                            type: integer
+                                          betSide:
+                                            type: string
+                                          betType:
+                                            type: string
+                                        required:
+                                        - betSide
+                                        - betType
+                                        - gameId
+                                        - league
+                                        - sport
+                                    required:
+                                    - campaign
+                                    - tags
+                                required:
+                                - rel
+                                - tracking
+                            required:
+                            - link
+                            - odds
+                        required:
+                        - close
+                        - open
+                      draw:
+                        type: object
+                        properties:
+                          open:
+                            type: object
+                            properties:
+                              odds:
+                                type: string
+                            required:
+                            - odds
+                          close:
+                            type: object
+                            properties:
+                              odds:
+                                type: string
+                            required:
+                            - odds
+                          current:
+                            type: object
+                            properties:
+                              odds:
+                                type: string
+                              link:
+                                type: object
+                                properties:
+                                  rel:
+                                    type: array
+                                    items:
+                                      type: string
+                                  href:
+                                    type: string
+                                  tracking:
+                                    type: object
+                                    properties:
+                                      campaign:
+                                        type: string
+                                      tags:
+                                        type: object
+                                        properties:
+                                          league:
+                                            type: string
+                                          sport:
+                                            type: string
+                                          gameId:
+                                            type: integer
+                                          betSide:
+                                            type: string
+                                          betType:
+                                            type: string
+                                        required:
+                                        - betSide
+                                        - betType
+                                        - gameId
+                                        - league
+                                        - sport
+                                    required:
+                                    - campaign
+                                    - tags
+                                required:
+                                - href
+                                - rel
+                                - tracking
+                            required:
+                            - link
+                            - odds
+                        required:
+                        - close
+                        - open
+                    required:
+                    - away
+                    - displayName
+                    - draw
+                    - home
+                    - shortDisplayName
+                  details:
+                    type: string
+                required:
+                - details
+                - drawOdds
+                - link
+                - moneyline
+                - overUnder
+                - pointSpread
+                - provider
+                - total
+          wasSuspended: &id020
+            type: boolean
+          playByPlayAvailable: &id021
+            type: boolean
+          playByPlayAthletes: &id022
+            type: boolean
+        required:
+        - altGameNote
+        - attendance
+        - broadcast
+        - broadcasts
+        - competitors
+        - date
+        - details
+        - format
+        - geoBroadcasts
+        - id
+        - notes
+        - odds
+        - playByPlayAthletes
+        - playByPlayAvailable
+        - recent
+        - startDate
+        - status
+        - timeValid
+        - uid
+        - venue
+        - wasSuspended
+    FifaWorldFinalCompetition:
+      allOf:
+      - $ref: '#/components/schemas/FifaWorldCompetitionBase'
+      - type: object
+        properties:
+          headlines:
+            type: array
+            items:
+              type: object
+              properties:
+                description:
+                  type: string
+                type:
+                  type: string
+                shortLinkText:
+                  type: string
+              required:
+              - description
+              - shortLinkText
+              - type
+          id: *id003
+          uid: *id004
+          date: *id005
+          startDate: *id006
+          attendance: *id007
+          timeValid: *id008
+          recent: *id009
+          status:
+            type: object
+            properties:
+              clock:
+                type: number
+              displayClock:
+                type: string
+              period:
+                type: integer
+              type:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  state:
+                    const: post
+                  completed:
+                    type: boolean
+                  description:
+                    type: string
+                  detail:
+                    type: string
+                  shortDetail:
+                    type: string
+                required:
+                - completed
+                - description
+                - detail
+                - id
+                - name
+                - shortDetail
+                - state
+            required:
+            - clock
+            - displayClock
+            - period
+            - type
+          venue: *id010
+          format: *id011
+          altGameNote: *id012
+          notes: *id013
+          geoBroadcasts: *id014
+          broadcasts: *id015
+          broadcast: *id016
+          competitors: *id017
+          details: *id018
+          odds: *id019
+          wasSuspended: *id020
+          playByPlayAvailable: *id021
+          playByPlayAthletes: *id022
+        required:
+        - altGameNote
+        - attendance
+        - broadcast
+        - broadcasts
+        - competitors
+        - date
+        - details
+        - format
+        - geoBroadcasts
+        - id
+        - notes
+        - odds
+        - playByPlayAthletes
+        - playByPlayAvailable
+        - recent
+        - startDate
+        - status
+        - timeValid
+        - uid
+        - venue
+        - wasSuspended
