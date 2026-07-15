@@ -11,30 +11,35 @@
 >
 > Flashing: `python tools/build.py flash` reboots the device into safe mode
 > first (no Core 1 thread — mpremote hangs otherwise, micropython#13476).
+> Deploys as ROMFS by default (build.config.json `flash_release`); pass
+> `--dev` for a littlefs deploy — costs ~100 KB of heap (GC thrash), only
+> for quick iteration.
 > Manual escape hatch when the device is wedged: hold Button A (GPIO 10)
 > while power-cycling — the app skips startup and the REPL is free.
 
 ## Firmware
 
-2. **OTA follow-ups** — the core OTA shipped 2026-07-07. All drills have
-   now run on hardware (2026-07-07): end-to-end self-update, corrupt
-   `/ota_staging` discarded, and a real `ota.recover()` (the 512 KB
-   partition bump orphaned the old image; the device re-downloaded and
-   booted unattended). `/app_version` is in `/api/status` + settings UI.
-   Remaining:
+2. **OTA follow-ups** — the core OTA shipped 2026-07-07; the full drill
+   suite re-ran 2026-07-14 ahead of gifting devices: 3× end-to-end forced
+   update cycles (incl. on-demand via the new `POST /api/check-update`),
+   corrupt `/ota_staging` discarded, `/ota_dev` rollback guard (both the
+   endpoint and the +120s auto-check paths), and the new crash-loop
+   self-heal (`/boot_fails` ≥ 5 consecutive non-power-cycle boots →
+   forced `ota.recover()`; verified on console: download, apply, reset,
+   counter cleared at the healthy point). Failed checks now retry hourly
+   instead of daily. Remaining:
    - *littlefs files are outside OTA scope by design*: `main.py`,
      `ota.py`, `config.json` only update via USB flash. Fine while rare;
      if they start churning, consider having the ROMFS image carry
      canonical copies that early-boot syncs to littlefs (with version
      guard).
-   - *"Update available" indicator* in the settings UI (compare device
-     sha against the backend manifest from the browser).
+   - *"Update available" indicator + "Check for updates" button* in the
+     settings UI (`POST /api/check-update` returns
+     current/updating/dev_deploy/disabled/error; button should treat a
+     dropped response as "update probably started" and poll
+     `/api/status` — the device reboots mid-update by design).
    - Full firmware-image OTA still blocked upstream (RP2350 A/B needs QMI
      address-translation in MicroPython; track micropython#17544).
-   - *Safe-mode sentinel compat fallback*: `tools/build.py` still accepts
-     the fs-probe heuristic for devices whose deployed `main.py` predates
-     the `_SAFE_MODE` sentinel (2026-07-07); drop the fallback once every
-     device has been flashed at least once.
 4. **Captive portal reliability** — DNS task hardening landed; observe. If
    still flaky: add OS-probe-specific responses (Android `/generate_204`,
    Apple `hotspot-detect.html`, Windows `connecttest.txt`) before considering
@@ -56,6 +61,12 @@
     while rotation or league lock is engaged (small corner glyph?) is still
     open — right now nothing on screen says the board is locked after the
     toast fades.
+35. **Toast-dim golden** — the icon-toast frame dim + fade ladder
+    (2026-07-11) has two implementations of `display._dim_frame` (viper on
+    device, pure Python in the preview) that must stay mask-identical, and
+    no golden exercises a toast frame. Add a `live-toast-locked` golden to
+    pin the CPython half; the viper half needs one on-hardware eyeball.
+
 17. **Re-baseline heap behavior after `gc.threshold(48*1024)`** — the
     threshold landed 2026-07-07 (main.py; calibrated from the measured
     ~4 KB/s churn → collect every ~12 s). Watch a game-day session: free
@@ -124,6 +135,9 @@
     (landed in the board config 2026-07-06); the 60 s
     `connection_timeout` reaper must exempt WS (ping/pong keepalive
     instead).
+    (2026-07-11 note: an apparent "burst kills the listener" episode was
+    misdiagnosed — the real cause was the OTA rollback reboot, item 36.
+    A ~40-request status burst at 0.5 req/s was handled fine.)
 
 26. **Event-loop latency instrumentation** — to attribute the "device did
     not respond in time" stalls to specific work: a tiny Core 0 task
@@ -173,6 +187,102 @@ the soccer live frame.
     rotation with MLB on the same slate, long-press feel (800 ms
     threshold), spinner smoothness on the panel, and heap headroom with
     the per-league list polls + per-live-game summary fetches.
+
+36. ~~OTA rolls back unpublished local builds~~ — FIXED 2026-07-14 with
+    the `/ota_dev` marker: `build.py flash --release` compares the
+    deployed sha against the published manifest and writes (mismatch) or
+    removes (match) `/ota_dev`; dev/littlefs deploys always write it.
+    `ota.check_and_stage()` refuses to update while it exists;
+    `ota.recover()` clears it (a broken dev deploy heals to the published
+    app). Drilled on hardware both ways. `ota.enabled` is back to true.
+    Still open (folded into item 2's littlefs note): a compat guard for
+    the main.py↔ROMFS seam — don't publish images older than the fleet's
+    littlefs main.py expects.
+
+37. ~~Safe-mode request/sentinel reliability~~ — ROOT-CAUSED and FIXED
+    2026-07-12: `sys.exit()` from main.py is a FORCED EXIT to the rp2
+    port (`ports/rp2/main.c`: `PYEXEC_FORCED_EXIT` → soft reboot), which
+    re-runs main.py — so every safe-mode entry consumed its trigger,
+    "exited", soft-rebooted, and re-entered the app. Safe mode had never
+    once held; the fs-probe fallback (removed same night) was what let
+    flashes through historically. Both `sys.exit()` sites in main.py now
+    raise a non-SystemExit exception instead (halts to the REPL with the
+    `_SAFE_MODE` sentinel intact — the printed traceback is by design).
+    Verified on hardware: sentinel probe returned SAFE and a full
+    release flash ran through the sentinel path. Butt-covering drill for
+    a rainy day: `Button A` held now parks in safe mode instead of
+    soft-reset-looping (the "dark panel while held" symptom).
+
+38. **Early-boot display splash — exonerate or fix, then re-add** — the
+    `_early_display_show()` splash calls were removed from main.py's
+    safe-mode/OTA paths while it was suspected of hard-faulting; the
+    actual villain was item 37's soft-reset loop (each loop iteration
+    tore down the panel before the splash could show, so the splash may
+    be entirely innocent). If the boot splashes are still wanted: test
+    `_early_display_show()` from a REPL on hardware, and only ever call
+    it AFTER the safe-mode halt decision (the escape hatch must never
+    depend on display bring-up).
+
+39. **Play-flash stutter — RESOLVED, plus a characterized residual**
+    (2026-07-12, measured via the temporary `[MEMPROF]` display-thread
+    instrumentation and a local mock-ESPN + local-backend repro rig):
+    - FIXED: play/commentary text wider than the 640 px strip pool fell
+      back to the per-glyph draw path, blowing the 50 ms frame budget on
+      ~half of all frames (worst 170 ms, ~10 FPS effective — and since
+      scroll motion rides the frame rail, the text visibly scrolled at
+      half speed). Fix: `_PLAY_POOL` grown to 2048 px (≥ the wire
+      format's 255-char string cap, +5.5 KB heap) so no legal text can
+      overflow it, `fit_play_text()` at commit as the belt, and the
+      renderer's glyph-fallback branches deleted (strip is an
+      invariant). Full text now scrolls at full speed; A/B-benchmarked
+      in the mock rig with the same 172-char line: budget-blown frames
+      95-104 per 10 s (glyph) → 9-15 (strip) — indistinguishable from
+      short-text windows; slow frames 206-389/min → 0-31; full 20 FPS.
+    - RESIDUAL (open): a metronomic ~1.1/s frame overrun (~60-75 ms —
+      exactly one dropped frame per second), content-independent, and it
+      SURVIVES Core 0 death (measured on a bare Core-1 render loop with
+      asyncio dead). Prime suspect: cyw43/lwip ~1 Hz housekeeping vs the
+      heap lock that MEMPROF's per-frame gc.mem_alloc() walk also takes
+      — the profiler may amplify or partly cause it. Discriminators for
+      next session: sample mem_alloc every Nth frame (over should scale
+      down if the sampler collides), then MEM_PROFILE=False + a 50 ms
+      `slow` threshold; also try WiFi PM mode. Barely visible; decide
+      if it's worth chasing once the profiler comes back out.
+    - REMOVE when done: `MEM_PROFILE` + the `[MEMPROF]` sampler in
+      display.py's run_display_thread, and the mock rig notes (the mock
+      lives in the session scratchpad, nothing in-repo).
+
+## NBA (end-to-end wiring landed 2026-07-12; validation remaining)
+
+Landed 2026-07-12, both slices: inbound (`backend/src/nba/` types +
+transforms on the `status.type.state` DU, `LivePhase` from
+`status.type.description`, clock as display string only — a stop-clock
+can't be extrapolated; 7 live-captured fixtures + transform tests;
+combined spec promoted, genuinely mlb+nba+world-cup) and outbound
+(`nba/handler.rs` + `/basketball/nba/games[/{id}]` routes + OpenAPI
+entries; `wire.rs` NBA encodings + goldens, cross-checked by
+`wire_format_check.py`; firmware `nba.py` parser, `sports.nba.enabled`
+config (default off) + poller source + play-flash commit; `nba_live`
+screen (single design, soccer-A silhouette widened for 3-digit
+scores, HT/END accent breaks, sub-minute warning clock) and the final
+screen reused sport-agnostically (quarter columns, "T" totals,
+"F/OT"); preview scenarios + an `nba-live` golden; NBA toggle in the
+settings Sports card). Same change unified the outbound enum style
+(all sports now MLB-style newtype variants) and moved
+`Record`/`GameListEntry`/`GameState`/`parse_start_time` to
+`shared/`/`espn/`. NBA logos were already served by the generic route.
+
+41. **NBA corpus is playoff-only — validate on live games next
+    season** — the April 2026 corpus never showed overtime (max
+    `status.period` is 4). Types tolerate period ≥ 5 and growing line
+    scores (synthetic Rust test + `nba-overtime`/`nba-final-ot`
+    preview scenarios), and an unknown live description warns and
+    degrades to in-play. When games return (October): re-run
+    `schema`/`spec`/`validate --league nba`, regenerate fixtures,
+    check whether ESPN uses an OT-specific description that
+    `parse_live_phase` should map, and give the new screens the same
+    on-hardware shakedown soccer got (item 34) — rotation with other
+    sports, play-flash cadence, clock staleness across 30 s polls.
 
 ## Backend
 
