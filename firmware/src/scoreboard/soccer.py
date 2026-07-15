@@ -109,6 +109,8 @@ class LiveGame:
     halftime from first-half stoppage).
     """
 
+    wire_state = GAME_STATE_IN
+
     def __init__(
         self,
         game_id: str,
@@ -202,6 +204,8 @@ class PregameGame:
     already omits absent fields (the pregame-sparse case).
     """
 
+    wire_state = GAME_STATE_PRE
+
     def __init__(self, game_id: str, start_epoch: int, league: str,
                  home: PregameTeam, away: PregameTeam) -> None:
         self.game_id = game_id
@@ -279,6 +283,8 @@ class FinalTeam:
 
 class FinalGame:
     """Top-level full-time soccer snapshot."""
+
+    wire_state = GAME_STATE_POST
 
     def __init__(self, game_id: str, home: FinalTeam, away: FinalTeam) -> None:
         self.game_id = game_id

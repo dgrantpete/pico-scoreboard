@@ -77,19 +77,26 @@ def _friendly_error(e: Exception) -> tuple[str, str]:
 
 
 class LeagueSource:
-    """One pollable league: endpoint paths, parser, and identity strings.
+    """One pollable league: endpoint paths, parser, commits, and identity.
 
     `parse` is a synchronous callable over the shared response buffer (see
-    ScoreboardApiClient.get_game_state). `key` namespaces logo cache slots
-    and rotation identity across leagues — a soccer "POR" crest must never
-    collide with another league's "POR".
+    ScoreboardApiClient.get_game_state). `commit_live` / `commit_final` are
+    the sport's state-commit callables — module functions taking the poller
+    first (they need its cross-poll state), so the poll loop dispatches on
+    the source with no isinstance chain; pregame is sport-agnostic
+    (state.set_pregame) and needs no slot here. `key` namespaces logo cache
+    slots and rotation identity across leagues — a soccer "POR" crest must
+    never collide with another league's "POR".
     """
 
-    def __init__(self, key: str, tag: str, base_path: str, parse) -> None:
+    def __init__(self, key: str, tag: str, base_path: str, parse,
+                 commit_live, commit_final) -> None:
         self.key = key            # e.g. "baseball/mlb", "soccer/usa.1"
         self.tag = tag            # log tag, e.g. "MLB", "USA.1"
         self.base_path = base_path  # e.g. "/baseball/mlb", "/soccer/usa.1"
         self.parse = parse
+        self.commit_live = commit_live
+        self.commit_final = commit_final
 
     def list_path(self) -> str:
         return self.base_path + "/games"
@@ -104,12 +111,78 @@ class LeagueSource:
         return self.key + "/" + abbreviation
 
 
+def _flash_play(play, new_id: str, raw_text: str) -> bool:
+    """Stage the shared play-flash slot when `new_id` is new; True = commit.
+
+    One machinery for every sport's flash line (MLB play, NBA play, soccer
+    commentary): the write buffer's previous play.id is carried forward
+    after each commit, so comparing against it detects new lines with no
+    poller-local state. Game rotation also legitimately trips this (new
+    game, different ids) so viewers catch up on the newest line. Fit first:
+    text, display window, and strip must describe the same string, and the
+    strip must always exist (glyph fallback costs >50 ms/frame on long
+    lines — measured 2026-07-12).
+    """
+    if not new_id or new_id == play.id:
+        return False
+    text = fit_play_text(raw_text)
+    play.id = new_id
+    play.text = text
+    play.updated_ms = time.ticks_ms()
+    play.display_ms = play_text_display_ms(text)
+    play.strip = build_play_strip(text)
+    return True
+
+
+def _commit_mlb_live(poller, game_id: str, live, home_logo, away_logo) -> None:
+    state = get_write_state()
+    state.mode = 'game'
+    state.game.game_id = game_id
+    state.game.live = live
+    state.game.fetched_ms = time.ticks_ms()
+
+    _flash_play(state.game.play, live.last_play.id, live.last_play.text)
+
+    state.home_logo = home_logo
+    state.away_logo = away_logo
+    if poller._animation_reset:
+        state.animation_start_ms = time.ticks_ms()
+    commit_state()
+
+
+def _commit_soccer_live(poller, game_id: str, live, home_logo, away_logo) -> None:
+    # Stale-clock guard: hand the setter the previous poll's clock for
+    # the SAME game so local ticking stops when the upstream value stops
+    # advancing while claiming in-play (weather delay, stale feed).
+    prev = poller._prev_soccer_clock
+    prev_clock_s = prev[1] if prev is not None and prev[0] == game_id else None
+    set_soccer_live(live, home_logo, away_logo, prev_clock_s)
+    poller._prev_soccer_clock = (game_id, live.clock_seconds)
+
+    # Commentary rides the shared flash slot.
+    if _flash_play(get_write_state().game.play, live.comment_id, live.comment_text):
+        commit_state()
+
+
+def _commit_nba_live(poller, game_id: str, live, home_logo, away_logo) -> None:
+    set_nba_live(live, home_logo, away_logo)
+
+    # NBA's last play is optional (absent before the opening tip) — no play,
+    # no flash, and the shared play slot keeps its previous id so a play
+    # that reappears unchanged doesn't re-flash.
+    play = live.last_play
+    if play is not None and _flash_play(get_write_state().game.play, play.id, play.text):
+        commit_state()
+
+
 def mlb_source() -> LeagueSource:
-    return LeagueSource("baseball/mlb", "MLB", "/baseball/mlb", mlb.parse_game_detail)
+    return LeagueSource("baseball/mlb", "MLB", "/baseball/mlb",
+                        mlb.parse_game_detail, _commit_mlb_live, set_final)
 
 
 def nba_source() -> LeagueSource:
-    return LeagueSource("basketball/nba", "NBA", "/basketball/nba", nba.parse_game_detail)
+    return LeagueSource("basketball/nba", "NBA", "/basketball/nba",
+                        nba.parse_game_detail, _commit_nba_live, set_nba_final)
 
 
 def soccer_source(slug: str) -> LeagueSource:
@@ -118,17 +191,21 @@ def soccer_source(slug: str) -> LeagueSource:
     def parse(buf):
         return soccer.parse_game_detail(buf, league_name)
 
-    return LeagueSource("soccer/" + slug, slug.upper(), "/soccer/" + slug, parse)
+    return LeagueSource("soccer/" + slug, slug.upper(), "/soccer/" + slug,
+                        parse, _commit_soccer_live, set_soccer_final)
 
 
 def sources_from_config(config: Config) -> list:
     """The configured league sources: MLB, then NBA, then soccer leagues in
-    config order."""
+    config order. Adding a single-league sport = one row in the gate table
+    (+ its factory); multi-league sports expand like soccer."""
     sources = []
-    if config.mlb_enabled:
-        sources.append(mlb_source())
-    if config.nba_enabled:
-        sources.append(nba_source())
+    for enabled, factory in (
+        (config.mlb_enabled, mlb_source),
+        (config.nba_enabled, nba_source),
+    ):
+        if enabled:
+            sources.append(factory())
     for slug in config.soccer_leagues:
         sources.append(soccer_source(slug))
     return sources
@@ -467,107 +544,15 @@ class GamePoller:
             source.logo_path(detail.away.abbreviation),
         )
 
-        if isinstance(detail, mlb.LiveGame):
-            self._commit_mlb_live(game_id, detail, home_logo, away_logo)
-        elif isinstance(detail, soccer.LiveGame):
-            self._commit_soccer_live(game_id, detail, home_logo, away_logo)
-        elif isinstance(detail, nba.LiveGame):
-            self._commit_nba_live(detail, home_logo, away_logo)
-        elif isinstance(detail, (mlb.PregameGame, nba.PregameGame, soccer.PregameGame)):
+        # Dispatch on the model's wire state; the sport-specific commits come
+        # from the source. The else arm is the fail-loud guard for a state
+        # code no parser produces today.
+        ws = detail.wire_state
+        if ws == GAME_STATE_IN:
+            source.commit_live(self, game_id, detail, home_logo, away_logo)
+        elif ws == GAME_STATE_PRE:
             set_pregame(detail, home_logo, away_logo, self._utc_offset_s)
-        elif isinstance(detail, mlb.FinalGame):
-            set_final(detail, home_logo, away_logo)
-        elif isinstance(detail, nba.FinalGame):
-            set_nba_final(detail, home_logo, away_logo)
-        elif isinstance(detail, soccer.FinalGame):
-            set_soccer_final(detail, home_logo, away_logo)
+        elif ws == GAME_STATE_POST:
+            source.commit_final(detail, home_logo, away_logo)
         else:
-            # The parsers only ever return the types above; a new state
-            # would surface here rather than being silently dropped.
             raise DeserializeError("@1", f"unhandled game detail {type(detail).__name__}")
-
-    def _commit_soccer_live(self, game_id: str, live, home_logo, away_logo) -> None:
-        # Stale-clock guard: hand the setter the previous poll's clock for
-        # the SAME game so local ticking stops when the upstream value stops
-        # advancing while claiming in-play (weather delay, stale feed).
-        prev = self._prev_soccer_clock
-        prev_clock_s = prev[1] if prev is not None and prev[0] == game_id else None
-        set_soccer_live(live, home_logo, away_logo, prev_clock_s)
-        self._prev_soccer_clock = (game_id, live.clock_seconds)
-
-        # Commentary flash: same machinery as the MLB play flash — the shared
-        # play slot's id is carried forward across commits, so comparing
-        # against it detects new lines with no poller-local state. Rotation
-        # to a different match also trips it (fresh ids), surfacing the
-        # newest line of the incoming game.
-        new_id = live.comment_id
-        state = get_write_state()
-        play = state.game.play
-        if new_id and new_id != play.id:
-            # Fit first: text, display window, and strip must describe the
-            # same string, and the strip must always exist (glyph fallback
-            # costs >50 ms/frame on long lines).
-            text = fit_play_text(live.comment_text)
-            play.id = new_id
-            play.text = text
-            play.updated_ms = time.ticks_ms()
-            play.display_ms = play_text_display_ms(text)
-            play.strip = build_play_strip(text)
-            commit_state()
-
-    def _commit_nba_live(self, live, home_logo, away_logo) -> None:
-        set_nba_live(live, home_logo, away_logo)
-
-        # Play flash: same machinery as the MLB play flash, but NBA's last
-        # play is optional (absent before the opening tip) — no play, no
-        # flash, and the shared play slot keeps its previous id so a play
-        # that reappears unchanged doesn't re-flash.
-        play = live.last_play
-        if play is None:
-            return
-        state = get_write_state()
-        ps = state.game.play
-        if play.id != ps.id:
-            # Fit first: text, display window, and strip must describe the
-            # same string, and the strip must always exist (glyph fallback
-            # costs >50 ms/frame on long lines).
-            text = fit_play_text(play.text)
-            ps.id = play.id
-            ps.text = text
-            ps.updated_ms = time.ticks_ms()
-            ps.display_ms = play_text_display_ms(text)
-            ps.strip = build_play_strip(text)
-            commit_state()
-
-    def _commit_mlb_live(self, game_id: str, live, home_logo, away_logo) -> None:
-        state = get_write_state()
-        state.mode = 'game'
-        state.game.game_id = game_id
-        state.game.live = live
-        state.game.fetched_ms = time.ticks_ms()
-
-        # Most-recent play flash: the display thread briefly surfaces the play
-        # text whenever the id changes. The write buffer's previous play.id is
-        # carried forward after each commit, so this comparison is against the
-        # last committed value — no poller-local state needed. Game rotation
-        # also legitimately trips this (new game, different ids) so viewers
-        # can catch up on the newest play.
-        new_play_id = live.last_play.id
-        if new_play_id != state.game.play.id:
-            # Fit first: text, display window, and strip must describe the
-            # same string, and the strip must always exist (glyph fallback
-            # costs >50 ms/frame on long lines — measured 2026-07-12).
-            text = fit_play_text(live.last_play.text)
-            state.game.play.id = new_play_id
-            state.game.play.text = text
-            state.game.play.updated_ms = time.ticks_ms()
-            # Window sized to the text: one full scroll cycle, measured here
-            # on Core 0 so the display thread never measures text.
-            state.game.play.display_ms = play_text_display_ms(text)
-            state.game.play.strip = build_play_strip(text)
-
-        state.home_logo = home_logo
-        state.away_logo = away_logo
-        if self._animation_reset:
-            state.animation_start_ms = time.ticks_ms()
-        commit_state()

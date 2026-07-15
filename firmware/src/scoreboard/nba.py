@@ -22,6 +22,9 @@ import struct
 
 from .wire import (
     DeserializeError,
+    GAME_STATE_IN,
+    GAME_STATE_POST,
+    GAME_STATE_PRE,
     HDR_SIZE,
     LastPlay,
     PregameTeam,
@@ -75,6 +78,8 @@ class LiveGame:
     extrapolated; `phase` is a PHASE_* code (the clock reads "0.0" or a
     reset "12:00" during breaks, so the phase is the only render signal).
     """
+
+    wire_state = GAME_STATE_IN
 
     def __init__(
         self,
@@ -149,6 +154,8 @@ class PregameGame:
     never has (weather, probables) are permanently absent — the renderer
     already omits absent fields.
     """
+
+    wire_state = GAME_STATE_PRE
 
     def __init__(self, game_id: str, start_epoch: int, venue: str,
                  home: PregameTeam, away: PregameTeam) -> None:
@@ -228,6 +235,8 @@ class FinalTeam:
 
 class FinalGame:
     """Top-level final NBA snapshot."""
+
+    wire_state = GAME_STATE_POST
 
     def __init__(self, game_id: str, periods_played: int, home: FinalTeam,
                  away: FinalTeam) -> None:

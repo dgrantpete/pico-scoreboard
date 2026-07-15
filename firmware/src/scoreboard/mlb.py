@@ -127,6 +127,8 @@ class FinalTeam:
 class LiveGame:
     """Top-level live MLB game snapshot returned by `/baseball/mlb/games/{id}`."""
 
+    wire_state = GAME_STATE_IN
+
     def __init__(
         self,
         game_id: str,
@@ -202,6 +204,8 @@ class LiveGame:
 
 class PregameGame:
     """Top-level pregame MLB snapshot returned by `/baseball/mlb/games/{id}`."""
+
+    wire_state = GAME_STATE_PRE
 
     def __init__(
         self,
@@ -288,6 +292,8 @@ class PregameGame:
 
 class FinalGame:
     """Top-level final MLB snapshot returned by `/baseball/mlb/games/{id}`."""
+
+    wire_state = GAME_STATE_POST
 
     def __init__(
         self,
