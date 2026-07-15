@@ -93,9 +93,10 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     and document the pattern in `button.py` if anything surprising shows up.
 13. **Persistent lock indicator** — the lock/unlock icon toasts landed
     2026-07-09 (transient, centered), but a *persistent* subtle indicator
-    while rotation or league lock is engaged (small corner glyph?) is still
-    open — right now nothing on screen says the board is locked after the
-    toast fades.
+    while rotation lock or the league filter (menu-applied, 2026-07-15) is
+    engaged (small corner glyph?) is still open — right now nothing on
+    screen says the board is locked/filtered after the toast fades or the
+    menu closes.
 35. **Toast-dim golden** — the icon-toast frame dim + fade ladder
     (2026-07-11) has two implementations of `display._dim_frame` (viper on
     device, pure Python in the preview) that must stay mask-identical, and
@@ -212,8 +213,10 @@ the soccer live frame.
     its `LeagueSource` list once at startup; the frontend raises the
     existing reboot dialog). If reboots annoy: rebuild sources inside
     `GamePoller._refresh_lists` when the config-derived key list changes
-    (reset per-source caches/etags, drop a vanished league lock, rebuild
-    rotation).
+    (reset per-source caches/etags, prune vanished keys from the league
+    filter — `_build_rotation` already self-heals a fully-vanished filter —
+    and rebuild rotation; MenuController shares the boot-static `sources`
+    list, so a rebuild must reach it too).
 
 34. **Soccer + UX on-hardware shakedown** — first live match day with a
     real device: the extrapolated clock across 30 s polls (drift should

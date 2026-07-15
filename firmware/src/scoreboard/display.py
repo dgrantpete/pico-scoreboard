@@ -8,6 +8,12 @@ and the Core 1 display thread.
 Render functions are pure readers: every string they draw was pre-built on
 Core 0 when the state changed (see scoreboard/state.py), so the render loop
 does no per-frame text formatting.
+
+Core 1 mutation contract: everything the display thread may write is
+enumerated in the contract block above `class LoopState` (cross-frame state
+in exactly one loop-local object, registered write-before-read scratch, the
+draw targets, and ThreadHealth.frame_seq). Read that block before adding ANY
+mutable value to this file's render path.
 """
 
 import gc
@@ -87,6 +93,18 @@ DISPLAY_HEIGHT = 64
 # Core 1 frame budget: 20 FPS. Scroll speeds must evenly divide 1000/FRAME_MS
 # (see screen_geometry's scroll-speed note).
 FRAME_MS = 50
+
+# --- League menu geometry (matches the approved mockups) ---
+# 5 list rows of 10px (y 0..49), separator hline at 51, DONE footer 53..63.
+# Checkbox 7x7 at x=2; label Regions in Regions.menu_rows; highlight bar and
+# scrollbar split the right edge (bar owns the last 2 columns).
+_MENU_ROW_H = 10
+_MENU_VISIBLE_ROWS = 5
+_MENU_SEP_Y = 51
+_MENU_DONE_Y = 53
+_MENU_CHECKBOX_X = 2
+_MENU_HILIGHT_W = 126   # highlight bar stops before the scrollbar columns
+_MENU_BAR_X = 126       # 2px scrollbar track at x 126..127, y 0..49
 
 # TEMPORARY (2026-07-11 GC/stutter investigation — remove when done): sample
 # gc.mem_alloc() once per display tick and log a [MEMPROF] window summary to
@@ -293,6 +311,18 @@ class Regions:
         self.error_line_2 = Region(display, 0, 44, DISPLAY_WIDTH, 8)
         self.error_line_3 = Region(display, 0, 54, DISPLAY_WIDTH, 8)
 
+        # --- League menu (full-screen take-over; see render_menu) ---
+        # Label windows: x=13 (clear of the 7x7 checkbox at x=2) through
+        # x=124 (the 2px scrollbar owns 126..127; 125 is breathing room)
+        # = 112 px, one per visible 10px row.
+        # NOTE: "PREMIER LEAGUE" is 14 unscii_8 glyphs = exactly 112 px —
+        # zero margin. Shrinking this window makes the longest real league
+        # label start marqueeing.
+        self.menu_rows = tuple(
+            Region(display, 13, row * 10 + 1, 112, 8)
+            for row in range(_MENU_VISIBLE_ROWS)
+        )
+
         # --- Pregame / final / soccer screens ---
         # Built from the active screen_geometry variant tables (name ->
         # Region). Scalar entries (DIVIDER_X, SEPARATOR_Y) are read straight
@@ -413,36 +443,38 @@ _BASE_MARKER_DEFAULT_1 = base_marker_sprite.palette.pixel(1, 0)  # ball body
 _BASE_MARKER_DEFAULT_2 = base_marker_sprite.palette.pixel(2, 0)  # highlight
 _BASE_MARKER_DEFAULT_3 = base_marker_sprite.palette.pixel(3, 0)  # edge shade
 
-# [packed RGB888 key, ball565, highlight565, shade565]; key -1 = empty.
-# Mutated in place — the batting team changes at most once per half-inning,
-# so steady-state frames are allocation-free.
-_base_pal = [-1, 0, 0, 0]
+# [ball565, highlight565, shade565] — SCRATCH (see scratch_buffers()): fully
+# rewritten by _base_marker_colors before every read. Deliberately NOT a
+# cross-frame memo: the old packed-key memoization made this the one piece of
+# cross-frame state living outside LoopState, and it saved only ~30 integer
+# ops per frame. Recomputing keeps Core 1's cross-frame state in exactly one
+# audited place.
+_base_pal = [0, 0, 0]
 
 
 def _base_marker_colors(packed: int) -> list:
     """Base-marker palette derived from the batting team's primary color,
-    memoized on the packed RGB888. Relationships match the original gold
-    sprite: highlight = 7/8 blend toward white, edge shade = 7/8 of the
-    ball color. Integer math only (see pulse() on float churn)."""
+    written fresh into the _base_pal scratch on EVERY call (write-before-read
+    scratch contract — never carry values between calls). Relationships match
+    the original gold sprite: highlight = 7/8 blend toward white, edge shade =
+    7/8 of the ball color. Integer math only (see pulse() on float churn)."""
     c = _base_pal
-    if c[0] != packed:
-        r = (packed >> 16) & 0xFF
-        g = (packed >> 8) & 0xFF
-        b = packed & 0xFF
-        # Same brightening policy as _team_color_to_rgb565 (state.py), but we
-        # need the brightened RGB888 channels here to derive the shades.
-        m = r if r >= g and r >= b else (g if g >= b else b)
-        if m < 128:
-            if m == 0:
-                r = g = b = 128
-            else:
-                r = r * 128 // m
-                g = g * 128 // m
-                b = b * 128 // m
-        c[0] = packed
-        c[1] = rgb565(r, g, b)
-        c[2] = rgb565(r + ((255 - r) * 7 >> 3), g + ((255 - g) * 7 >> 3), b + ((255 - b) * 7 >> 3))
-        c[3] = rgb565(r * 7 >> 3, g * 7 >> 3, b * 7 >> 3)
+    r = (packed >> 16) & 0xFF
+    g = (packed >> 8) & 0xFF
+    b = packed & 0xFF
+    # Same brightening policy as _team_color_to_rgb565 (state.py), but we
+    # need the brightened RGB888 channels here to derive the shades.
+    m = r if r >= g and r >= b else (g if g >= b else b)
+    if m < 128:
+        if m == 0:
+            r = g = b = 128
+        else:
+            r = r * 128 // m
+            g = g * 128 // m
+            b = b * 128 // m
+    c[0] = rgb565(r, g, b)
+    c[1] = rgb565(r + ((255 - r) * 7 >> 3), g + ((255 - g) * 7 >> 3), b + ((255 - b) * 7 >> 3))
+    c[2] = rgb565(r * 7 >> 3, g * 7 >> 3, b * 7 >> 3)
     return c
 
 
@@ -452,9 +484,9 @@ def _draw_base_markers(display: Hub75Display, bases, packed: int) -> None:
     pal = base_marker_sprite.palette
     if packed >= 0:
         c = _base_marker_colors(packed)
-        pal.pixel(1, 0, c[1])
-        pal.pixel(2, 0, c[2])
-        pal.pixel(3, 0, c[3])
+        pal.pixel(1, 0, c[0])
+        pal.pixel(2, 0, c[1])
+        pal.pixel(3, 0, c[2])
     try:
         if bases.first:
             display.blit(base_marker_sprite.data, first_base_loc.X, first_base_loc.Y, base_marker_sprite.KEY, pal)  # type: ignore
@@ -989,10 +1021,12 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
 # _cycle_phase writes into this preallocated slot list instead of returning
 # a fresh tuple — it runs per frame in the pregame renderers, and the old
 # tuple return was the one allocation its "allocation-free" docstring missed.
+# SCRATCH (see scratch_buffers()): every slot is written before every read;
+# it must never carry values between calls.
 _CYCLE_OUT = [0, 0, 0]
 
 
-def _cycle_phase(ends: list, elapsed_ms: int) -> tuple:
+def _cycle_phase(ends: list, elapsed_ms: int) -> list:
     """Locate the active phase in a cumulative-dwell list.
 
     Fills and returns _CYCLE_OUT as [index, phase_start_ms, position_ms] where position is `elapsed`
@@ -1005,10 +1039,18 @@ def _cycle_phase(ends: list, elapsed_ms: int) -> tuple:
     start = 0
     for i in range(len(ends)):
         if pos < ends[i]:
-            _CYCLE_OUT[0] = i; _CYCLE_OUT[1] = start; _CYCLE_OUT[2] = pos
-        return _CYCLE_OUT
+            _CYCLE_OUT[0] = i
+            _CYCLE_OUT[1] = start
+            _CYCLE_OUT[2] = pos
+            return _CYCLE_OUT
         start = ends[i]
-    return len(ends) - 1, start, pos
+    # Unreachable — pos = elapsed % total is always < ends[-1] — but kept
+    # total so a malformed dwell table degrades to the last phase instead
+    # of returning stale scratch.
+    _CYCLE_OUT[0] = len(ends) - 1
+    _CYCLE_OUT[1] = start
+    _CYCLE_OUT[2] = pos
+    return _CYCLE_OUT
 
 
 def _text_or_strip(writer, region, text, strip, align, elapsed, color, pause, pxs):
@@ -1471,11 +1513,63 @@ def render_soccer_final(display: Hub75Display, writer: FontWriter, regions: Regi
     _render_toast_overlay(display, state, now_ms)
 
 
+def render_menu(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int) -> None:
+    """Full-screen league-select menu (see MenuView in state.py).
+
+    Pure function of (latched menu view, now_ms): every label was
+    pre-rendered to a strip and every layout value (visible window, scroll
+    thumb) pre-computed on Core 0 by MenuController. The highlighted row's
+    marquee rides the WALL rail — elapsed derived statelessly from
+    `menu.updated_ms` (toast-lifetime pattern) — so the menu adds zero
+    cross-frame state to Core 1 (see the mutation contract above LoopState).
+    Non-highlighted rows draw at scroll offset 0 and clip in their Region:
+    the approved "truncate unless highlighted" behavior.
+    """
+    menu = state.menu
+    color = colors.primary
+    elapsed = time.ticks_diff(now_ms, menu.updated_ms)
+
+    display.fill(BLACK)
+    for i in range(len(menu.row_strips)):
+        y = i * _MENU_ROW_H
+        sel = i == menu.highlight
+        if sel:
+            display.fill_rect(0, y, _MENU_HILIGHT_W, _MENU_ROW_H, color)
+        fg = BLACK if sel else color
+        display.rect(_MENU_CHECKBOX_X, y + 1, 7, 7, fg)
+        if menu.row_checked[i]:
+            display.fill_rect(_MENU_CHECKBOX_X + 2, y + 3, 3, 3, fg)
+        strip = menu.row_strips[i]
+        if strip is not None:
+            writer.draw_strip(regions.menu_rows[i], strip, ALIGN_LEFT,
+                              elapsed if sel else 0, fg)
+
+    if menu.thumb_y >= 0:
+        display.fill_rect(_MENU_BAR_X, 0, 2, _MENU_SEP_Y - 1, DIM_GRAY)
+        display.fill_rect(_MENU_BAR_X, menu.thumb_y, 2, menu.thumb_h, color)
+
+    display.hline(0, _MENU_SEP_Y, DISPLAY_WIDTH, DIM_GRAY)
+    done_sel = menu.highlight == -1
+    if done_sel:
+        display.fill_rect(0, _MENU_DONE_Y, DISPLAY_WIDTH,
+                          DISPLAY_HEIGHT - _MENU_DONE_Y, color)
+    # 4 static glyphs/frame — negligible next to the strip blits, and
+    # allocation-free like every FontWriter path.
+    writer.aligned_text("DONE", 0, _MENU_DONE_Y + 2, DISPLAY_WIDTH,
+                        ALIGN_CENTER, BLACK if done_sel else color,
+                        color if done_sel else BLACK, unscii_8)
+
+
 def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int, play_elapsed_ms: int) -> None:
     """
     Render a frame based on current display state.
 
     Pure function of its time inputs — nothing here queries the clock.
+
+    The league menu preempts the mode dispatch entirely: while
+    `state.menu.active` the menu IS the frame (rotation, poll commits, and
+    toasts continue underneath, invisible — toast draws live inside the
+    bypassed mode renderers, so suppression is structural, not special-cased).
 
     Two time rails (rule: a stall STRETCHES motion but CONSUMES waiting):
     - `now_ms` (wall rail): event windows and durations — toast lifetime,
@@ -1492,6 +1586,9 @@ def render_frame(display: Hub75Display, writer: FontWriter, regions: Regions, st
     more than dwell exactness. Low-stakes modes (startup/setup/no_games)
     keep the wall rail.
     """
+    if state.menu.active:
+        render_menu(display, writer, regions, state, colors, now_ms)
+        return
     renderer = _RENDERERS.get(state.mode)
     if renderer is None:
         render_idle(display, writer, regions, colors)
@@ -1528,6 +1625,157 @@ _RENDERERS = {
 _STATIC_MODES = ('idle', 'no_games', 'error', 'startup', 'updating')
 
 
+# =============================================================================
+# Core 1 mutation contract
+# =============================================================================
+#
+# Everything Core 1 may write, enumerated. If a change doesn't fit one of
+# these four buckets, it does not belong on the render path:
+#
+#   1. LoopState — ALL cross-frame state: any value whose meaning survives
+#      from one frame to the next (pacing, the frame rail and its epoch
+#      latches, the render-skip memo, telemetry counters). Exactly one
+#      instance, local to run_display_thread, NEVER passed into render_frame
+#      or anything below it. Audit rule: the name `ls` must not appear below
+#      render_frame in this file — renderers structurally CANNOT touch
+#      cross-frame state because the reference does not exist in their scope.
+#   2. Registered scratch (scratch_buffers() / SCRATCH_PALETTE_ENTRIES) —
+#      preallocated buffers the draw stack may mutate under the
+#      write-before-read contract: every slot read must have been written
+#      earlier in the SAME draw call. tools/preview poisons all registered
+#      scratch with sentinels before every rendered frame, so a violation
+#      (scratch silently promoted to cross-frame state) renders garbage and
+#      fails the golden tests deterministically. New scratch MUST be added
+#      to the registry, or it escapes that tripwire.
+#   3. Draw targets — the display framebuffer and its Region views. They are
+#      the product; every renderer fully redraws what it owns, so nothing in
+#      them carries meaning into the next frame.
+#   4. ThreadHealth.frame_seq — the single deliberately cross-core counter
+#      (watchdog liveness). It stays on ThreadHealth rather than LoopState
+#      BECAUSE it is cross-core: LoopState's safety argument is thread
+#      confinement, and a Core-0-readable field would force memory-model
+#      reasoning onto the whole object.
+#
+# Special case: base_marker_sprite.palette is tinted in place and restored in
+# a `finally` (_draw_base_markers). Its steady-state gold entries are
+# immutable config that must survive across frames, so it is NOT scratch and
+# NOT poisonable — the restore is what keeps it contract-clean.
+#
+# The system's other two mutation domains belong to Core 0: the
+# TripleBufferedState mailbox (state.py — Core 0 writes, Core 1 latches a
+# read-only snapshot once per frame) and the LogoPool slots (written only by
+# the poller task; Core 1 blits whatever slots the latched state references).
+#
+# Violation examples — all real failure shapes, and how to do it properly:
+#   - A module-level memo updated from a renderer ("cache the derived
+#     palette between frames"): cross-frame state outside LoopState.
+#     Recompute per frame, or derive it on Core 0 in a state setter.
+#   - Scratch read before write ("it still holds last frame's value"):
+#     exactly the _cycle_phase early-return bug this contract came from.
+#     Write every slot you read, every call; the poisoning catches you if
+#     you don't.
+#   - Threading LoopState (or a field of it) into a render function: breaks
+#     the reachability guarantee. Pass plain values (as render_frame does
+#     with the elapsed rails), never the bag.
+#   - Formatting or allocating on Core 1 ("just one f-string"): GC pauses on
+#     the render thread. Strings and marquee strips are pre-built on Core 0
+#     (see state.py setters and fonts.render_strip).
+
+
+class LoopState:
+    """The ONLY home for Core 1 cross-frame state (contract above).
+
+    One instance per display-thread lifetime, created at the top of
+    run_display_thread and shared with nothing: not with Core 0, not with
+    the render stack. tools/preview instantiates this same class, so the
+    golden tests exercise the exact latch arithmetic the firmware runs.
+
+    Fields are time-base and bookkeeping ONLY. Content (strings, strips,
+    colors, layout) always comes from the latched mailbox buffer each
+    frame — a content field on this class is a contract violation.
+    """
+
+    def __init__(self, now_ms: int, mem_alloc: int = 0) -> None:
+        # --- Pacing: each iteration targets deadline + FRAME_MS ---
+        self.deadline = now_ms
+
+        # --- Frame rail + epoch latches ---
+        # The rail advances exactly FRAME_MS per loop tick, so motion derived
+        # from it holds position through a stalled frame instead of jumping
+        # (the wall clock keeps running through a GC pause; this one
+        # doesn't). Core 0's epoch stamps (animation_start_ms,
+        # play.updated_ms) are in the ticks domain and are never subtracted
+        # against this rail directly — advance_and_latch translates an epoch
+        # CHANGE into "frame-rail time zero".
+        self.anim_ms = 0
+        self.view_stamp = -1
+        self.view_epoch = 0
+        self.play_stamp = -1
+        self.play_epoch = 0
+        self.view_elapsed = 0
+        self.play_elapsed = 0
+
+        # --- Render-skip memo (static screens skip unchanged redraws) ---
+        self.last_rendered_seq = -1
+        self.last_frame_had_toast = False
+
+        # --- Frame-health telemetry (reported every 60 s at DEBUG) ---
+        self.hb_prev_ms = now_ms
+        self.hb_frames = 0
+        self.hb_slow = 0
+        self.hb_worst = 0
+        self.hb_last_report = now_ms
+
+        # --- [MEMPROF] window state (see MEM_PROFILE) ---
+        self.mp_prev = mem_alloc
+        self.mp_churn = 0
+        self.mp_gcs = 0
+        self.mp_worst_d = 0
+        self.mp_freed = 0
+        self.mp_maxdrop = 0
+        self.mp_over = 0
+        self.mp_report_ms = now_ms
+
+    def advance_and_latch(self, state) -> None:
+        """Advance the frame rail one FRAME_MS and re-latch epochs on change.
+
+        Afterwards view_elapsed / play_elapsed hold the frame-rail elapsed
+        values render_frame expects. Shared with tools/preview's render
+        loop — never duplicate this arithmetic elsewhere.
+        """
+        self.anim_ms += FRAME_MS
+        if state.animation_start_ms != self.view_stamp:
+            self.view_stamp = state.animation_start_ms
+            self.view_epoch = self.anim_ms
+        if state.play.updated_ms != self.play_stamp:
+            self.play_stamp = state.play.updated_ms
+            self.play_epoch = self.anim_ms
+        self.view_elapsed = self.anim_ms - self.view_epoch
+        self.play_elapsed = self.anim_ms - self.play_epoch
+
+
+def scratch_buffers(writer: FontWriter) -> tuple:
+    """Every whole-buffer scratch object on the Core 1 render path.
+
+    Contract (bucket 2 above): each is fully written before every read
+    within a single draw call. tools/preview fills these with sentinels
+    before every frame; anything relying on a leftover value breaks the
+    golden tests. Add new scratch here, or it escapes the tripwire.
+    """
+    return (_base_pal, _CYCLE_OUT) + writer.scratch_buffers()
+
+
+# Palette ENTRIES rewritten in place before every blit that reads them, as
+# (palette FrameBuffer, first entry, count). Entry 0 of each is the immutable
+# transparency KEY — config, not scratch — hence entry-level registration
+# rather than whole-buffer poisoning.
+SCRATCH_PALETTE_ENTRIES = (
+    (toast_spinner_sprite.palette, 1, 12),     # trail, all 12 rewritten per draw
+    (toast_lock_closed_sprite.palette, 1, 1),  # tint, rewritten per draw
+    (toast_lock_open_sprite.palette, 1, 1),    # tint, rewritten per draw
+)
+
+
 def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regions, health: ThreadHealth) -> None:
     """
     Main entry point for Core 1 display thread.
@@ -1543,6 +1791,12 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
     text blits from pre-rendered strips, and scores use the cached-digit
     integer() path.
 
+    ALL cross-frame state — pacing, frame rail, epoch latches, skip memo,
+    telemetry — lives on ONE LoopState instance local to this function (see
+    the Core 1 mutation contract above LoopState). The loop body binds only
+    within-iteration temporaries; anything that must outlive an iteration
+    goes on `ls`, and `ls` never crosses into the render stack.
+
     Pacing is deadline-based: each iteration targets `now + FRAME_MS`, and
     the sleep absorbs however long the frame took — so the cadence is a
     constant 20 FPS instead of "20 FPS minus render time" (the old
@@ -1557,130 +1811,98 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
 
     logger.debug("[DISPLAY] thread starting: core=1 rate=20fps")
 
-    last_rendered_seq = -1
-    last_frame_had_toast = False
-
-    # Frame-health telemetry, reported every 60 s at DEBUG level: total
-    # frames, frames whose period overran FRAME_MS by >40% (a stutter the
-    # eye can catch), and the worst period. This is how the 9 FPS scroll
-    # regression was found — cheap enough to keep.
-    _hb_prev_ms = time.ticks_ms()
-    _hb_frames = 0
-    _hb_slow = 0
-    _hb_worst = 0
-    _hb_last_report = _hb_prev_ms
-
-    # Frame rail: advances exactly FRAME_MS per loop tick, so motion derived
-    # from it holds position through a stalled frame instead of jumping (the
-    # wall clock keeps running through a GC pause; this clock doesn't).
-    # Core 0's epoch stamps (animation_start_ms, play.updated_ms) are in the
-    # ticks domain, so they are never subtracted against this rail directly —
-    # the latches below translate an epoch CHANGE into "frame-rail time zero".
-    anim_ms = 0
-    view_epoch_stamp = -1
-    view_epoch_anim = 0
-    play_epoch_stamp = -1
-    play_epoch_anim = 0
-
-    deadline = time.ticks_ms()
-
-    # [MEMPROF] window state (see MEM_PROFILE). Per-tick mem_alloc deltas:
-    # positive = bytes allocated since last tick (render + whatever Core 0
-    # did meanwhile); negative = a collection ran. `over` counts EVERY tick
-    # that blew the 50 ms budget (health's `slow` only counts >70 ms), so
-    # visible stutters and GC events can be correlated directly.
-    _mp_prev = gc.mem_alloc() if MEM_PROFILE else 0
-    _mp_churn = 0
-    _mp_gcs = 0
-    _mp_worst_d = 0
-    _mp_freed = 0
-    _mp_maxdrop = 0
-    _mp_over = 0
-    _mp_report_ms = time.ticks_ms()
+    # ALL cross-frame state lives on this one object — see the Core 1
+    # mutation contract above LoopState. Nothing else in this loop body may
+    # outlive an iteration (plain temporaries within one tick are fine), and
+    # `ls` is never passed to render_frame or anything below it.
+    # [MEMPROF] note: per-tick mem_alloc deltas — positive = bytes allocated
+    # since last tick (render + whatever Core 0 did meanwhile); negative = a
+    # collection ran. `mp_over` counts EVERY tick that blew the 50 ms budget
+    # (health's `slow` only counts >70 ms), so visible stutters and GC
+    # events can be correlated directly. Frame-health telemetry is how the
+    # 9 FPS scroll regression was found — cheap enough to keep.
+    ls = LoopState(time.ticks_ms(), gc.mem_alloc() if MEM_PROFILE else 0)
 
     while True:
         # Heartbeat for the watchdog feeder: per tick, not per render.
         health.frame_seq = (health.frame_seq + 1) & 0x3FFFFFF
 
-        deadline = time.ticks_add(deadline, FRAME_MS)
+        ls.deadline = time.ticks_add(ls.deadline, FRAME_MS)
 
         try:
             now_ms = time.ticks_ms()
 
             if MEM_PROFILE:
                 _mp_now = gc.mem_alloc()
-                _mp_d = _mp_now - _mp_prev
-                _mp_prev = _mp_now
+                _mp_d = _mp_now - ls.mp_prev
+                ls.mp_prev = _mp_now
                 if _mp_d >= 0:
-                    _mp_churn += _mp_d
-                    if _mp_d > _mp_worst_d:
-                        _mp_worst_d = _mp_d
+                    ls.mp_churn += _mp_d
+                    if _mp_d > ls.mp_worst_d:
+                        ls.mp_worst_d = _mp_d
                 else:
                     # mem_alloc dropped: a real collection (drop ~= all
                     # garbage since the last one) or a C-level explicit
                     # free (network buffers etc., typically small). Track
                     # sizes so the two are distinguishable in the report.
-                    _mp_gcs += 1
-                    _mp_freed -= _mp_d
-                    if -_mp_d > _mp_maxdrop:
-                        _mp_maxdrop = -_mp_d
+                    ls.mp_gcs += 1
+                    ls.mp_freed -= _mp_d
+                    if -_mp_d > ls.mp_maxdrop:
+                        ls.mp_maxdrop = -_mp_d
 
-            _hb_period = time.ticks_diff(now_ms, _hb_prev_ms)
-            _hb_prev_ms = now_ms
-            _hb_frames += 1
-            if _hb_period > _hb_worst:
-                _hb_worst = _hb_period
+            _hb_period = time.ticks_diff(now_ms, ls.hb_prev_ms)
+            ls.hb_prev_ms = now_ms
+            ls.hb_frames += 1
+            if _hb_period > ls.hb_worst:
+                ls.hb_worst = _hb_period
             if _hb_period > FRAME_MS + (FRAME_MS * 2) // 5:
-                _hb_slow += 1
+                ls.hb_slow += 1
 
             # Latch the latest committed state for this frame.
             state, seq = acquire_display_state()
 
             # Advance the frame rail and re-latch epochs on change.
-            anim_ms += FRAME_MS
-            if state.animation_start_ms != view_epoch_stamp:
-                view_epoch_stamp = state.animation_start_ms
-                view_epoch_anim = anim_ms
-            if state.play.updated_ms != play_epoch_stamp:
-                play_epoch_stamp = state.play.updated_ms
-                play_epoch_anim = anim_ms
+            ls.advance_and_latch(state)
 
             # "Active" includes the overlay's fade-out tail so static modes
             # keep rendering until the dim has fully eased back out.
             toast_active = (_toast_active(state, now_ms)
                             or _toast_overlay_fading(state, now_ms))
-            skip = (seq == last_rendered_seq
+            skip = (seq == ls.last_rendered_seq
                     and state.mode in _STATIC_MODES
                     and not toast_active
-                    and not last_frame_had_toast)
+                    and not ls.last_frame_had_toast
+                    # The menu take-over animates (marquee) regardless of
+                    # the underlying mode — never skip while it's up.
+                    and not state.menu.active)
 
             if not skip:
                 render_frame(display, writer, regions, state, state.ui_colors, now_ms,
-                             anim_ms - view_epoch_anim, anim_ms - play_epoch_anim)
+                             ls.view_elapsed, ls.play_elapsed)
                 display.show()
-                last_rendered_seq = seq
-                last_frame_had_toast = toast_active
+                ls.last_rendered_seq = seq
+                ls.last_frame_had_toast = toast_active
 
-            if time.ticks_diff(now_ms, _hb_last_report) >= 60_000:
+            if time.ticks_diff(now_ms, ls.hb_last_report) >= 60_000:
                 if logger.level >= DEBUG:
                     logger.debug(
                         "[DISPLAY] health: frames=%d slow=%d worst=%dms"
-                        % (_hb_frames, _hb_slow, _hb_worst)
+                        % (ls.hb_frames, ls.hb_slow, ls.hb_worst)
                     )
-                _hb_frames = _hb_slow = _hb_worst = 0
-                _hb_last_report = now_ms
+                ls.hb_frames = ls.hb_slow = ls.hb_worst = 0
+                ls.hb_last_report = now_ms
 
-            if MEM_PROFILE and time.ticks_diff(now_ms, _mp_report_ms) >= 10_000:
+            if MEM_PROFILE and time.ticks_diff(now_ms, ls.mp_report_ms) >= 10_000:
                 _mp_play = state.play
                 if logger.level >= DEBUG:
                     logger.debug(
                         "[MEMPROF] churn=%dB/s gc=%d freed=%dB maxdrop=%dB worstd=%dB over=%d mode=%s play=%d strip=%d"
-                        % (_mp_churn // 10, _mp_gcs, _mp_freed, _mp_maxdrop,
-                           _mp_worst_d, _mp_over, state.mode, len(_mp_play.text),
+                        % (ls.mp_churn // 10, ls.mp_gcs, ls.mp_freed, ls.mp_maxdrop,
+                           ls.mp_worst_d, ls.mp_over, state.mode, len(_mp_play.text),
                            0 if _mp_play.strip is None else 1)
                     )
-                _mp_churn = _mp_gcs = _mp_worst_d = _mp_freed = _mp_maxdrop = _mp_over = 0
-                _mp_report_ms = now_ms
+                ls.mp_churn = ls.mp_gcs = ls.mp_worst_d = ls.mp_freed = ls.mp_maxdrop = ls.mp_over = 0
+                ls.mp_report_ms = now_ms
 
         except Exception as e:
             # Guarded: this path can repeat every frame while erroring, so
@@ -1689,11 +1911,11 @@ def run_display_thread(display: Hub75Display, writer: FontWriter, regions: Regio
                 logger.error(f"[DISPLAY] thread error: {e}")
 
         # Deadline pacing: sleep whatever remains of this frame's budget.
-        remaining = time.ticks_diff(deadline, time.ticks_ms())
+        remaining = time.ticks_diff(ls.deadline, time.ticks_ms())
         if remaining > 0:
             time.sleep_ms(remaining)
         else:
             # Overran the budget (e.g. a GC pause): re-anchor instead of
             # bursting frames to catch up.
-            _mp_over += 1
-            deadline = time.ticks_ms()
+            ls.mp_over += 1
+            ls.deadline = time.ticks_ms()

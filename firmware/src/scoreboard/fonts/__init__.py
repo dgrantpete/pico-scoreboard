@@ -170,6 +170,14 @@ class FontWriter:
         # Avoids allocation during rendering - max 5 digits for scores
         self._int_digits: list = [0, 0, 0, 0, 0]
 
+    def scratch_buffers(self) -> tuple:
+        """This writer's write-before-read scratch, for the Core 1 mutation
+        contract's registry (display.scratch_buffers) and the preview's
+        between-frame poisoning. Every render method writes both palette
+        entries — and integer() every digit slot it reads — on every call,
+        so a sentinel left by the poisoner can never reach the panel."""
+        return (self._palette_buf, self._int_digits)
+
     def clock(self, seconds: int, x: int, y: int, width: int, align: int,
               color: int, bgcolor: int = 0, font=None) -> int:
         """

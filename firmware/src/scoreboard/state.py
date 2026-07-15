@@ -309,6 +309,51 @@ class ToastState:
         self.pulse_ms = other.pulse_ms
 
 
+class MenuView:
+    """League-select menu overlay (B-hold). Fully pre-built on Core 0 by
+    set_menu; Core 1 draws it as a full-screen take-over and holds NOTHING
+    across frames for it.
+
+    Publishes only the VISIBLE window (<= 5 rows) of the controller's full
+    item list: `row_strips` are pre-rendered 1-bit blit tuples (built once
+    per menu-open by the controller — see scoreboard/menu.py), `row_checked`
+    the parallel checkbox flags, `highlight` the visible-row index of the
+    cursor (-1 = the DONE footer), and `thumb_y`/`thumb_h` the pre-computed
+    scrollbar thumb (-1 = no scrollbar). Even scroll geometry is computed on
+    Core 0 so the renderer is pure blits and rects.
+
+    Marquee timing rides the WALL rail: `updated_ms` is restamped only when
+    the menu opens or the highlighted item changes (checkbox toggles keep
+    the stamp, so toggling never jerks an in-progress scroll), and Core 1
+    derives elapsed statelessly as ticks_diff(now_ms, updated_ms) — the
+    toast-lifetime pattern. Deliberately NOT a frame-rail epoch: that would
+    add a latch pair to LoopState, and the menu is low-stakes motion (see
+    the two-rail rule in display.render_frame).
+
+    Lists are replaced wholesale on every publish — never mutated in place —
+    so the reference hand-off across the triple buffers is safe
+    (PregameView precedent).
+    """
+
+    def __init__(self) -> None:
+        self.active: bool = False
+        self.updated_ms: int = 0     # marquee stamp (ticks); 0 = never
+        self.row_strips: list = []   # visible rows' blit tuples
+        self.row_checked: list = []  # parallel checkbox flags
+        self.highlight: int = -1     # visible-row index; -1 = DONE
+        self.thumb_y: int = -1       # scrollbar thumb top; -1 = no scrollbar
+        self.thumb_h: int = 0
+
+    def copy_from(self, other: "MenuView") -> None:
+        self.active = other.active
+        self.updated_ms = other.updated_ms
+        self.row_strips = other.row_strips
+        self.row_checked = other.row_checked
+        self.highlight = other.highlight
+        self.thumb_y = other.thumb_y
+        self.thumb_h = other.thumb_h
+
+
 class PregameView:
     """Pre-built pregame screen data. Every string and color is finished on
     Core 0 by set_pregame; Core 1 only reads and draws.
@@ -589,6 +634,7 @@ class StateBuffer:
         self.soccer_final: SoccerFinalView = SoccerFinalView()
         self.nba_live: NbaLiveView = NbaLiveView()
         self.toast: ToastState = ToastState()
+        self.menu: MenuView = MenuView()
         self.home_logo: framebuf.FrameBuffer | None = None
         self.away_logo: framebuf.FrameBuffer | None = None
 
@@ -609,6 +655,7 @@ class StateBuffer:
         self.soccer_final.copy_from(other.soccer_final)
         self.nba_live.copy_from(other.nba_live)
         self.toast.copy_from(other.toast)
+        self.menu.copy_from(other.menu)
         self.home_logo = other.home_logo
         self.away_logo = other.away_logo
 
@@ -969,6 +1016,55 @@ def pulse_toast() -> None:
     """
     state = get_write_state()
     state.toast.pulse_ms = time.ticks_ms()
+    commit_state()
+
+
+def set_menu(row_strips: list, row_checked: list, highlight: int,
+             thumb_y: int, thumb_h: int) -> None:
+    """Publish the league menu's visible window (opens the menu if closed).
+
+    Called by MenuController (Core 0) on open and on every button event.
+    `row_strips`/`row_checked` MUST be freshly-built lists (wholesale
+    replacement — mutating a previously published list would hand Core 1 a
+    torn view). The marquee stamp restamps only when the highlighted ITEM
+    changes — a different visible index, a different strip object under the
+    same index (window scrolled), or (re)opening — so checkbox toggles never
+    restart an in-progress scroll.
+    """
+    state = get_write_state()
+    m = state.menu
+    prev_strip = (
+        m.row_strips[m.highlight]
+        if m.active and 0 <= m.highlight < len(m.row_strips) else None
+    )
+    new_strip = (
+        row_strips[highlight] if 0 <= highlight < len(row_strips) else None
+    )
+    if not m.active or highlight != m.highlight or new_strip is not prev_strip:
+        m.updated_ms = time.ticks_ms()
+    m.active = True
+    m.row_strips = row_strips
+    m.row_checked = row_checked
+    m.highlight = highlight
+    m.thumb_y = thumb_y
+    m.thumb_h = thumb_h
+    commit_state()
+
+
+def clear_menu() -> None:
+    """Close the league menu (no-op if closed). The underlying mode — which
+    kept committing beneath the take-over — shows again next frame."""
+    state = get_write_state()
+    m = state.menu
+    if not m.active:
+        return
+    m.active = False
+    m.updated_ms = 0
+    m.row_strips = []
+    m.row_checked = []
+    m.highlight = -1
+    m.thumb_y = -1
+    m.thumb_h = 0
     commit_state()
 
 

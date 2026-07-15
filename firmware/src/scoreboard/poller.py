@@ -16,8 +16,11 @@ order, backend (chronological) order within a league. The whole merged slate
 being empty is the only thing that shows `no_games`.
 
 Button input hooks (called from the Core 0 input task, same asyncio loop):
-- skip():        advance to the next game immediately, waking the poll loop.
-- toggle_lock(): freeze/unfreeze game rotation (polling continues).
+- skip():              advance to the next game immediately, waking the poll loop.
+- skip_league():       jump to the next league's games in the rotation.
+- toggle_lock():       freeze/unfreeze game rotation (polling continues).
+- set_league_filter(): restrict rotation to a set of league keys (applied by
+  the on-device league menu; None = all leagues).
 
 Everything here — the poll loop, both button hooks, and the skip state
 machine — runs on Core 0's single asyncio loop. The skip flags are therefore
@@ -90,11 +93,12 @@ class LeagueSource:
     never collide with another league's "POR".
     """
 
-    def __init__(self, key: str, sport: str, tag: str, base_path: str, parse,
-                 commit_live, commit_final) -> None:
+    def __init__(self, key: str, sport: str, tag: str, display_name: str,
+                 base_path: str, parse, commit_live, commit_final) -> None:
         self.key = key            # e.g. "baseball/mlb", "soccer/usa.1"
         self.sport = sport        # 'mlb' / 'nba' / 'soccer' — variant scoping
         self.tag = tag            # log tag, e.g. "MLB", "USA.1"
+        self.display_name = display_name  # user-facing, e.g. "PREMIER LEAGUE"
         self.base_path = base_path  # e.g. "/baseball/mlb", "/soccer/usa.1"
         self.parse = parse
         self.commit_live = commit_live
@@ -171,12 +175,12 @@ def _commit_nba_live(poller, game_id: str, live, home_logo, away_logo) -> None:
 
 
 def mlb_source() -> LeagueSource:
-    return LeagueSource("baseball/mlb", "mlb", "MLB", "/baseball/mlb",
+    return LeagueSource("baseball/mlb", "mlb", "MLB", "MLB", "/baseball/mlb",
                         mlb.parse_game_detail, _commit_mlb_live, set_final)
 
 
 def nba_source() -> LeagueSource:
-    return LeagueSource("basketball/nba", "nba", "NBA", "/basketball/nba",
+    return LeagueSource("basketball/nba", "nba", "NBA", "NBA", "/basketball/nba",
                         nba.parse_game_detail, _commit_nba_live, set_nba_final)
 
 
@@ -186,8 +190,9 @@ def soccer_source(slug: str) -> LeagueSource:
     def parse(buf):
         return soccer.parse_game_detail(buf, league_name)
 
-    return LeagueSource("soccer/" + slug, "soccer", slug.upper(), "/soccer/" + slug,
-                        parse, _commit_soccer_live, set_soccer_final)
+    return LeagueSource("soccer/" + slug, "soccer", slug.upper(), league_name,
+                        "/soccer/" + slug, parse, _commit_soccer_live,
+                        set_soccer_final)
 
 
 def sources_from_config(config: Config) -> list:
@@ -232,9 +237,11 @@ class GamePoller:
         self._consecutive_failures: int = 0
         self._first_failure_ms: int = 0
         self._locked: bool = False
-        # League lock: rotation restricted to one source (by key, so a
-        # config-driven source rebuild can't misdirect it). None = all.
-        self._league_lock_key: str | None = None
+        # League filter: rotation restricted to these source keys (keys, not
+        # indices, so a config-driven source rebuild can't misdirect it).
+        # None = all leagues. Session-only — resets on reboot by design; the
+        # persisted config owns which leagues are polled at all.
+        self._filter_keys: set | None = None
         self._skip_requested: bool = False
         self._skip_league_requested: bool = False
         # True only for the duration of the tick that consumed a skip request.
@@ -288,22 +295,37 @@ class GamePoller:
         set_toast(kind=TOAST_LOCK if self._locked else TOAST_UNLOCK)
         logger.debug(f"[POLL] rotation lock: {self._locked}")
 
-    def toggle_league_lock(self) -> None:
-        """Toggle league-only rotation (button long-press): games cycle
-        within the current game's league instead of moving on to the next.
-        Feedback is a text toast naming the league ("MLS ONLY")."""
-        if self._league_lock_key is not None:
-            self._league_lock_key = None
-            set_toast("ALL LEAGUES")
-        else:
-            if not self._rotation:
-                pulse_toast()
-                return
-            source = self._sources[self._rotation[self._current_index][0]]
-            self._league_lock_key = source.key
-            set_toast(f"{source.tag} ONLY")
+    @property
+    def league_filter(self) -> set | None:
+        """The active league filter as a set of source keys; None = all."""
+        return self._filter_keys
+
+    def set_league_filter(self, keys) -> None:
+        """Restrict rotation to the leagues in `keys` (an iterable of source
+        keys). None — or a superset of every configured source — clears the
+        filter. Applied by the league menu on close; no toast, the menu
+        itself was the confirmation.
+
+        The rotation lock is independent and survives a filter change. If
+        the locked game's league gets filtered out, _build_rotation resets
+        the index and the board moves to a filtered-in game despite the
+        lock — the user just excluded that league on purpose.
+        """
+        if keys is not None:
+            keys = set(keys)
+            for source in self._sources:
+                if source.key not in keys:
+                    break
+            else:
+                keys = None
+        if keys == self._filter_keys:
+            return
+        self._filter_keys = keys
         self._build_rotation()
-        logger.debug(f"[POLL] league lock: {self._league_lock_key}")
+        # Wake the poll loop so the board moves off a filtered-out game
+        # within one tick instead of waiting out the poll interval.
+        self._wake.set()
+        logger.debug(f"[POLL] league filter: {keys}")
 
     async def run(self) -> None:
         while True:
@@ -424,14 +446,14 @@ class GamePoller:
             f"slate={total} rotation={len(self._rotation)}"
         )
 
-    def _slate_rotation(self, only_source: int | None) -> list:
+    def _slate_rotation(self, allowed: set | None) -> list:
         """Live-first rotation over the merged slate, optionally restricted
-        to one source index."""
+        to a set of source indices."""
         live: list[tuple[int, str]] = []
         finals: list[tuple[int, str]] = []
         pregames: list[tuple[int, str]] = []
         for i in range(len(self._sources)):
-            if only_source is not None and i != only_source:
+            if allowed is not None and i not in allowed:
                 continue
             for st, gid in self._source_games[i]:
                 if st == GAME_STATE_IN:
@@ -447,31 +469,32 @@ class GamePoller:
 
         Live games (if any, across all leagues) rotate alone; otherwise
         finals rotate first, then pregames — leagues in configured order,
-        backend order within a league. A league lock restricts the rotation
-        to that source; a locked league whose slate empties falls back to
-        the full rotation (the lock is kept — its games may return) rather
-        than blanking the board. To avoid a mid-view jump when an unrelated
-        game flips state, the currently-shown (source, id) keeps its
-        position in the new rotation if still present, else the index
-        resets to 0.
+        backend order within a league. The league filter restricts the
+        rotation to its sources; a filter whose whole slate empties falls
+        back to the full rotation (the filter is kept — its games may
+        return) rather than blanking the board. To avoid a mid-view jump
+        when an unrelated game flips state, the currently-shown
+        (source, id) keeps its position in the new rotation if still
+        present, else the index resets to 0.
         """
         current = (
             self._rotation[self._current_index] if self._rotation else None
         )
 
-        lock_idx: int | None = None
-        if self._league_lock_key is not None:
+        allowed: set | None = None
+        if self._filter_keys is not None:
+            allowed = set()
             for i in range(len(self._sources)):
-                if self._sources[i].key == self._league_lock_key:
-                    lock_idx = i
-                    break
-            if lock_idx is None:
-                # The locked league left the configured sources.
-                self._league_lock_key = None
+                if self._sources[i].key in self._filter_keys:
+                    allowed.add(i)
+            if not allowed:
+                # Every filtered league left the configured sources.
+                self._filter_keys = None
+                allowed = None
 
-        rotation = self._slate_rotation(lock_idx)
-        if not rotation and lock_idx is not None:
-            logger.debug("[POLL] league-locked slate empty; falling back to all leagues")
+        rotation = self._slate_rotation(allowed)
+        if not rotation and allowed is not None:
+            logger.debug("[POLL] filtered slate empty; falling back to all leagues")
             rotation = self._slate_rotation(None)
 
         self._rotation = rotation
@@ -484,9 +507,9 @@ class GamePoller:
             self._current_index = 0
 
     async def _rotate(self, now: int, next_league: bool = False) -> None:
-        if next_league and self._league_lock_key is not None:
-            # A league skip is an explicit "move on" — it escapes the lock.
-            self._league_lock_key = None
+        # A league skip stays WITHIN the league filter: the filter is a
+        # deliberate multi-select (unlike the old one-league lock, which a
+        # skip escaped), so A-hold cycles to the next filtered-in league.
         await self._refresh_lists(initial=False)
         n = len(self._rotation)
         if n:

@@ -213,6 +213,7 @@ try:
     from microdot import Microdot, Request, Response, send_file
     from scoreboard import Config, ScoreboardApiClient
     from scoreboard.poller import GamePoller, sources_from_config
+    from scoreboard.menu import MenuController
     from scoreboard.state import (
         set_startup_step, finish_startup, set_display_driver, get_write_state,
         set_mode, set_updating_progress, set_updating_countdown, ThreadHealth,
@@ -1060,24 +1061,27 @@ class _PressTracker:
             self._press_ms = None  # consumed: the release won't fire short
 
 
-async def button_input_loop(poller: GamePoller, btn_skip: Button, btn_lock: Button) -> None:
+async def button_input_loop(controller, btn_skip: Button, btn_lock: Button) -> None:
     """
-    Poll both buttons and dispatch press edges to the poller.
+    Poll both buttons and dispatch press edges through the MenuController.
 
-    Button A (skip): short = next game, long = next league.
-    Button B (lock): short = freeze rotation on this game, long = restrict
-    rotation to this game's league.
+    The controller routes by menu state (scoreboard/menu.py). Menu closed:
+    A short = next game, A long = next league, B short = rotation lock,
+    B long = open the league menu. Menu open: A short = move the cursor,
+    B short = toggle / DONE, B long = apply + close; the 10s inactivity
+    timeout (checked here, same 50ms cadence) also applies + closes.
 
     The 50ms poll period is well inside the 4-event FIFO's tolerance.
     """
     trackers = (
-        _PressTracker(btn_skip, "button A", poller.skip, poller.skip_league),
-        _PressTracker(btn_lock, "button B", poller.toggle_lock, poller.toggle_league_lock),
+        _PressTracker(btn_skip, "button A", controller.a_short, controller.a_long),
+        _PressTracker(btn_lock, "button B", controller.b_short, controller.b_long),
     )
 
     while True:
         for tracker in trackers:
             tracker.poll()
+        controller.check_timeout()
         await asyncio.sleep_ms(50)
 
 
@@ -1150,10 +1154,12 @@ async def main(regions: Regions, driver: Hub75Driver, health: ThreadHealth, ligh
             # OTA app-update checks need the network; station mode only
             asyncio.create_task(ota_check_task(config))
 
-            # Physical buttons drive the poller (skip / rotation lock)
+            # Physical buttons drive the poller (skip / rotation lock) and
+            # the league menu, routed through one controller.
             btn_skip, btn_lock = init_buttons()
             if btn_skip is not None and btn_lock is not None:
-                asyncio.create_task(button_input_loop(poller, btn_skip, btn_lock))
+                controller = MenuController(poller, sources)
+                asyncio.create_task(button_input_loop(controller, btn_skip, btn_lock))
 
     # The app reached an interactive state (idle rotation or setup portal):
     # this boot was not a crash, so the crash-loop counter starts over.

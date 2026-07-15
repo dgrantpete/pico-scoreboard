@@ -70,6 +70,18 @@ class ScenarioContext:
         st.away_logo = None
         st.toast.text = ""
         st.toast.updated_ms = 0
+        # The league menu is a full-screen take-over: stale menu state would
+        # swallow EVERY later scenario in this cached process (gallery and
+        # golden test both reuse one ScenarioContext), so clearing it here is
+        # mandatory, not hygiene.
+        menu = st.menu
+        menu.active = False
+        menu.updated_ms = 0
+        menu.row_strips = []
+        menu.row_checked = []
+        menu.highlight = -1
+        menu.thumb_y = -1
+        menu.thumb_h = 0
         st.error.title = ""
         st.error.lines = []
         game = st.mlb_live
@@ -818,6 +830,80 @@ def critical_red_tint(ctx: ScenarioContext) -> None:
         play_text="Foul ball.",
     )
     _publish_live(ctx, live)
+
+
+# --- League-select menu (B-hold take-over) -----------------------------------
+# Scenarios hand-build the visible window exactly the way MenuController
+# does (strips via the real render_strip, thumb math mirrored) and publish
+# through the real set_menu, over a live game underneath — proving the menu
+# preempts the mode renderer in render_frame.
+
+_MENU_LEAGUES = ("MLB", "NBA", "MLS", "PREMIER LEAGUE", "LIGA MX", "WORLD CUP")
+_MENU_CHECKED = (True, False, True, True, False, True)
+
+
+def _menu_strip(ctx: ScenarioContext, label: str):
+    fonts = ctx.fonts
+    cap = ((fonts.measure_text(label, fonts.unscii_8) + 7) // 8) * 8
+    return fonts.render_strip(bytearray(cap), cap, label, fonts.unscii_8)
+
+
+def _publish_menu(ctx: ScenarioContext, labels, checked, cursor, scroll) -> None:
+    """Mirror MenuController._publish: visible window + scrollbar thumb."""
+    n = len(labels)
+    end = min(scroll + 5, n)
+    strips = [_menu_strip(ctx, labels[i]) for i in range(scroll, end)]
+    window_checked = [checked[i] for i in range(scroll, end)]
+    highlight = cursor - scroll if cursor < n else -1
+    if n > 5:
+        thumb_h = max(4, 50 * 5 // n)
+        thumb_y = (50 - thumb_h) * scroll // (n - 5)
+    else:
+        thumb_y, thumb_h = -1, 0
+    ctx.state.set_menu(strips, window_checked, highlight, thumb_y, thumb_h)
+
+
+def _menu_backdrop(ctx: ScenarioContext) -> None:
+    """A live game the menu must fully cover."""
+    live = _live_game(
+        ctx.mlb, away="LAD", home="SF", inning_num=3, half=ctx.mlb.TOP,
+        balls=2, strikes=1, outs=1, bases=(True, False, False),
+        away_score=1, home_score=0,
+        at_bat=ctx.mlb.AtBat("L. Webb", "F. Freeman"),
+        play_text="Strike 1.",
+    )
+    _publish_live(ctx, live)
+
+
+@scenario("menu-top", compatible_variants={"default"})
+def menu_top(ctx: ScenarioContext) -> None:
+    _menu_backdrop(ctx)
+    _publish_menu(ctx, _MENU_LEAGUES, list(_MENU_CHECKED), cursor=0, scroll=0)
+
+
+@scenario("menu-scrolled", compatible_variants={"default"})
+def menu_scrolled(ctx: ScenarioContext) -> None:
+    # Cursor on the last league: window scrolled by one, thumb at the bottom.
+    _menu_backdrop(ctx)
+    _publish_menu(ctx, _MENU_LEAGUES, list(_MENU_CHECKED), cursor=5, scroll=1)
+
+
+@scenario("menu-done", compatible_variants={"default"})
+def menu_done(ctx: ScenarioContext) -> None:
+    _menu_backdrop(ctx)
+    _publish_menu(ctx, _MENU_LEAGUES, list(_MENU_CHECKED), cursor=6, scroll=1)
+
+
+@scenario("menu-marquee", duration_ms=9000, compatible_variants={"default"})
+def menu_marquee(ctx: ScenarioContext) -> None:
+    # Fabricated overlong labels (>112 px window — no real league name
+    # overflows today): the highlighted one marquees on the wall rail while
+    # the unhighlighted overlong row beneath it stays clipped, proving
+    # non-highlighted rows truncate instead of scrolling.
+    labels = ("CHAMPIONS LEAGUE", "EUROPA CONFERENCE", "MLB", "NBA", "MLS")
+    checked = [True, True, False, True, True]
+    _menu_backdrop(ctx)
+    _publish_menu(ctx, labels, checked, cursor=0, scroll=0)
 
 
 # Back-reference each function to its Scenario so a setup can tune duration.
