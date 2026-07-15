@@ -120,7 +120,7 @@ class LastEvent:
 class LiveGame:
     """Top-level live soccer snapshot (`/soccer/{league}/games/{id}`).
 
-    `clock_seconds` is elapsed match seconds at fetch time; `in_break` is the
+    `clock_seconds` is elapsed match seconds at fetch time; `on_break` is the
     backend's explicit interval flag — halftime, extra-time halftime, end of
     regulation, or end of extra time (the clock alone cannot distinguish a
     break from stoppage). During a shootout (half == HALF_SHOOTOUT) the
@@ -134,7 +134,7 @@ class LiveGame:
         game_id: str,
         clock_seconds: int,
         half: int,
-        in_break: bool,
+        on_break: bool,
         home: TeamState,
         away: TeamState,
         last_event: LastEvent | None,
@@ -144,7 +144,7 @@ class LiveGame:
         self.game_id = game_id
         self.clock_seconds = clock_seconds
         self.half = half
-        self.in_break = in_break
+        self.on_break = on_break
         self.home = home
         self.away = away
         self.last_event = last_event
@@ -206,7 +206,7 @@ class LiveGame:
             game_id=game_id,
             clock_seconds=clock_seconds,
             half=half,
-            in_break=bool(flags & _FLAG_BREAK),
+            on_break=bool(flags & _FLAG_BREAK),
             home=TeamState(home_abbr, home_score, TeamColors(home_primary, home_alternate)),
             away=TeamState(away_abbr, away_score, TeamColors(away_primary, away_alternate)),
             last_event=last_event,

@@ -460,7 +460,7 @@ class SoccerLiveView:
         self.clock_anchor_ms: int = 0   # time.ticks_ms() when anchored
         self.clock_running: bool = False
         self.base_min: int = 45         # stoppage threshold of current period
-        self.in_break: bool = False
+        self.on_break: bool = False
         self.phase_text: str = ''       # "1ST" / "2ND" / "ET" ('' at halftime)
         self.phase_long: str = ''       # "1ST HALF" / "2ND HALF" / "EXTRA TIME"
         # Last goal / red card, pre-built: "GOAL 90'+3'" over the scorer name.
@@ -477,7 +477,7 @@ class SoccerLiveView:
         self.clock_anchor_ms = other.clock_anchor_ms
         self.clock_running = other.clock_running
         self.base_min = other.base_min
-        self.in_break = other.in_break
+        self.on_break = other.on_break
         self.phase_text = other.phase_text
         self.phase_long = other.phase_long
         self.event_top = other.event_top
@@ -1393,12 +1393,12 @@ def set_soccer_live(game, home_logo, away_logo, prev_clock_s: int | None = None)
     stale = prev_clock_s is not None and prev_clock_s == game.clock_seconds
     # The clock freezes during breaks, when upstream stalls, and once a
     # shootout starts (the match clock is over; PENS carries the state).
-    sv.clock_running = (not game.in_break and not stale
+    sv.clock_running = (not game.on_break and not stale
                         and game.half != HALF_SHOOTOUT)
     sv.base_min = base_minutes(game.half)
-    sv.in_break = game.in_break
+    sv.on_break = game.on_break
 
-    if game.in_break:
+    if game.on_break:
         # The clock region renders the break label; the phase slots stay
         # empty so the state isn't announced twice.
         sv.phase_text = ''

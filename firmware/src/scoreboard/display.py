@@ -1240,7 +1240,7 @@ def _draw_soccer_clock(display: Hub75Display, writer: FontWriter, rect: tuple,
     x, y, w, _h = rect
     normal = colors.clock_normal
 
-    if sv.in_break:
+    if sv.on_break:
         # Classic halftime reads "HT"; later breaks (ET halftime, end of
         # regulation/extra time) read "BREAK" — base_min disambiguates.
         label = "HT" if sv.base_min == 45 else "BREAK"

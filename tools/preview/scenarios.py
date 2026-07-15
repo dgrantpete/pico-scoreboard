@@ -487,13 +487,13 @@ def _soccer_logos(ctx, game):
 
 
 def _publish_soccer_live(ctx, *, away, home, away_score, home_score,
-                         clock_seconds, half, in_break=False, event=None):
+                         clock_seconds, half, on_break=False, event=None):
     soccer = ctx.soccer
     game = soccer.LiveGame(
         game_id="401700100",
         clock_seconds=clock_seconds,
         half=half,
-        in_break=in_break,
+        on_break=on_break,
         home=_soccer_state(ctx, home, home_score),
         away=_soccer_state(ctx, away, away_score),
         last_event=event,
@@ -557,7 +557,7 @@ def soccer_halftime(ctx: ScenarioContext) -> None:
     event = ctx.soccer.LastEvent(ctx.soccer.EVENT_GOAL, "45'+1'", "C. Pulisic", ctx.soccer.SIDE_HOME)
     _publish_soccer_live(
         ctx, away="BEL", home="USA", away_score=2, home_score=2,
-        clock_seconds=46 * 60, half=1, in_break=True, event=event,
+        clock_seconds=46 * 60, half=1, on_break=True, event=event,
     )
 
 

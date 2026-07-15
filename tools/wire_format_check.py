@@ -591,7 +591,7 @@ def check_rust_pins() -> None:
     live = soccer.parse_game_detail(memoryview(RUST_PIN_SOCCER_LIVE), "MLS")
     assert live.last_event.name == "R. Lukaku"
     ht = soccer.parse_game_detail(memoryview(RUST_PIN_SOCCER_HALFTIME), "MLS")
-    assert ht.in_break is True
+    assert ht.on_break is True
     pre = soccer.parse_game_detail(memoryview(RUST_PIN_SOCCER_PRE), "MLS")
     assert pre.weather_condition == "Lumen Field"  # venue rides the weather slot
     assert pre.venue == "MLS"                      # league keeps the venue slot
@@ -845,7 +845,7 @@ def check_soccer_live_full() -> None:
     assert game.game_id == "401800100"
     assert game.clock_seconds == 51 * 60
     assert game.half == 1
-    assert game.in_break is False
+    assert game.on_break is False
     assert game.away.abbreviation == "BEL"
     assert game.away.score == 2
     assert game.away.colors.primary == 0xE30613
@@ -877,7 +877,7 @@ def check_soccer_live_commentary() -> None:
 def check_soccer_live_halftime() -> None:
     game = soccer.parse_game_detail(memoryview(GOLDEN_SOCCER_LIVE_HALFTIME), "WORLD CUP")
     assert isinstance(game, soccer.LiveGame)
-    assert game.in_break is True
+    assert game.on_break is True
     assert game.last_event is not None
     assert game.last_event.side == soccer.SIDE_HOME
     assert game.last_event.name == "C. Pulisic"

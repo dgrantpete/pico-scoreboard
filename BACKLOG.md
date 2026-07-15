@@ -17,6 +17,43 @@
 > Manual escape hatch when the device is wedged: hold Button A (GPIO 10)
 > while power-cycling — the app skips startup and the REPL is free.
 
+## Cross-sport consistency overhaul follow-ups (2026-07-15)
+
+The overhaul itself landed (backend Mlb prefix + shared helpers + generic
+/{sport}/{league}/games routes; firmware wire.py split, table-driven poller,
+mlb_live naming + Core-0 pre-build, per-sport variant keys; soccer venue +
+knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
+
+50. **mlb_live frame-health A/B** — the Core-1 pre-build shipped with
+    device-REPL microbenchmarks (per-glyph 2-59 ms/frame vs strip blits
+    0.3-0.7 ms; dark-color conversion 98 us + 64 B garbage per call) but
+    the on-device before/after in `mlb_live` mode needs a live daytime MLB
+    game. Baseline: worst=70 ms; post-ship soccer-mode windows 68-80 ms /
+    slow 0-9 (GC-driven, unchanged renderers). Watch `[DISPLAY] health`
+    during the next MLB slate.
+51. **WNBA as the 4th sport** — 9,420-body corpus already collected and
+    modeled (schema/presence/spec/discover under data/espn/generated/,
+    incl. a pooled nba+wnba discover for contract comparison). The
+    conventions from the overhaul are exactly what it lands on: registry
+    rows in poller/SportsCard, its own module pair, variant keys.
+52. **League display names are triplicated** — frontend SportsCard,
+    firmware soccer.LEAGUE_NAMES, backend espn/league.rs (casing already
+    drifts: "Premier League" vs "PREMIER LEAGUE"). Single source or
+    codegen.
+53. **Soccer `attendance`** — 100%-present in the corpus for every state;
+    add to the wire only when a screen design wants it.
+54. **tools/espn optimizations** (from the pipeline audit):
+    - Staleness stamp: corpus fingerprint (max epoch + distinct count per
+      league) written into every generated artifact; `validate`/`spec`
+      warn when the DB has newer bodies. The committed artifacts were 9
+      days stale when the soccer knockout gap surfaced.
+    - Incremental inference: memoize per-body-hash contributions so
+      schema/discover stop re-inflating the full ~10 GB corpus every run
+      (discover currently makes two full passes).
+    - Idle-league row bloat: ~49% of `responses` rows are off-season
+      empty-scoreboard duplicates; store only transitions (or prune) and
+      index `responses(source)`.
+
 ## Firmware
 
 2. **OTA follow-ups** — the core OTA shipped 2026-07-07; the full drill
@@ -33,11 +70,9 @@
      if they start churning, consider having the ROMFS image carry
      canonical copies that early-boot syncs to littlefs (with version
      guard).
-   - *"Update available" indicator + "Check for updates" button* in the
-     settings UI (`POST /api/check-update` returns
-     current/updating/dev_deploy/disabled/error; button should treat a
-     dropped response as "update probably started" and poll
-     `/api/status` — the device reboots mid-update by design).
+   - ~~"Check for updates" button~~ — SHIPPED 2026-07-14 (StatusCard:
+     button + up-to-date/installing/updated states; dropped responses
+     treated as "probably updating" with a status poll).
    - Full firmware-image OTA still blocked upstream (RP2350 A/B needs QMI
      address-translation in MicroPython; track micropython#17544).
 4. **Captive portal reliability** — DNS task hardening landed; observe. If
