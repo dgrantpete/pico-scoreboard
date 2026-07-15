@@ -1,11 +1,16 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::espn::types::{CompetitionState, EspnTeam, HomeAway};
+use crate::espn::types::{
+    CompetitionState, EspnAthlete, EspnLastPlay, EspnLinescore, EspnRecord, EspnTeam, EspnVenue,
+    HomeAway,
+};
+use crate::shared::competitor::Competitor;
 use crate::shared::game::Record;
-use crate::shared::team::TeamColors;
+use crate::shared::team::{TeamColors, TeamState};
 
-// (shared inbound leaves re-used here: CompetitionState, EspnTeam, HomeAway)
+// (shared inbound leaves re-used here: CompetitionState, EspnTeam, HomeAway,
+// EspnVenue, EspnRecord, EspnLinescore, EspnLastPlay, EspnAthlete)
 
 // ---------- ESPN inbound types ----------
 
@@ -107,12 +112,6 @@ impl TryFrom<EspnCompetitionDto> for EspnCompetition {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct EspnVenue {
-    pub(crate) full_name: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct EspnStatus {
     pub(crate) r#type: EspnStatusType,
     pub(crate) period: u8,
@@ -143,22 +142,21 @@ pub(crate) struct EspnCompetitor {
     pub(crate) linescores: Vec<EspnLinescore>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct EspnRecord {
-    pub(crate) r#type: String,
-    pub(crate) summary: String,
+impl Competitor for EspnCompetitor {
+    fn home_away(&self) -> HomeAway {
+        self.home_away
+    }
+    fn team(&self) -> &EspnTeam {
+        &self.team
+    }
+    fn score(&self) -> &str {
+        &self.score
+    }
 }
 
 #[derive(Deserialize)]
 pub(crate) struct EspnProbable {
     pub(crate) athlete: EspnAthlete,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct EspnLinescore {
-    pub(crate) value: f64,
-    pub(crate) period: u8,
 }
 
 #[derive(Deserialize)]
@@ -178,18 +176,6 @@ pub(crate) struct EspnSituation {
 #[derive(Deserialize)]
 pub(crate) struct EspnPlayer {
     pub(crate) athlete: EspnAthlete,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct EspnAthlete {
-    pub(crate) short_name: String,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct EspnLastPlay {
-    pub(crate) id: String,
-    pub(crate) text: String,
 }
 
 // ---------- Outbound domain model ----------
@@ -265,21 +251,13 @@ pub struct MlbFinalTeam {
 pub struct MlbLiveGame {
     pub game_id: String,
     pub inning: MlbInning,
-    pub home: MlbTeamState,
-    pub away: MlbTeamState,
+    pub home: TeamState,
+    pub away: TeamState,
     pub count: MlbCount,
     pub bases: MlbBases,
     /// Absent between innings or before an at-bat starts.
     pub at_bat: Option<MlbAtBat>,
     pub last_play: MlbLastPlay,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct MlbTeamState {
-    /// Team abbreviation, e.g. "BOS" — firmware uses this to fetch the logo.
-    pub abbreviation: String,
-    pub score: u32,
-    pub colors: TeamColors,
 }
 
 #[derive(Serialize, ToSchema)]

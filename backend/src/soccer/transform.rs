@@ -1,11 +1,12 @@
 use crate::error::AppError;
 use crate::espn::types::parse_start_time;
-use crate::shared::team::{TeamColors, order_home_away, parse_hex_rgb};
+use crate::shared::competitor::{
+    competitor_colors, competitor_to_team_state, order_competitors, parse_score,
+};
 
 use super::types::{
     Commentary, EspnCompetitor, EspnDetail, EventKind, LastEvent, RawSummary, Side,
     SoccerFinalGame, SoccerFinalTeam, SoccerLiveGame, SoccerPregameGame, SoccerTeam,
-    SoccerTeamState,
 };
 
 /// The latest commentary line of a summary payload (highest sequence).
@@ -19,42 +20,6 @@ pub(crate) fn latest_commentary(summary: RawSummary) -> Option<Commentary> {
             id: item.sequence.to_string(),
             text: item.text,
         })
-}
-
-/// Parse a competitor's colors, shared by the pre, live, and final builders.
-fn competitor_colors(c: &EspnCompetitor) -> Result<TeamColors, AppError> {
-    let primary = parse_hex_rgb(&c.team.color, &c.team.abbreviation)?;
-    let alternate = parse_hex_rgb(&c.team.alternate_color, &c.team.abbreviation)?;
-    Ok(TeamColors { primary, alternate })
-}
-
-fn parse_score(c: &EspnCompetitor) -> Result<u32, AppError> {
-    c.score.parse::<u32>().map_err(|e| {
-        let json_path = format!(
-            "events[?].competitions[0].competitors[{}].score",
-            c.team.abbreviation
-        );
-        tracing::error!(
-            json_path = %json_path,
-            team = %c.team.abbreviation,
-            raw_score = %c.score,
-            error = %e,
-            "ESPN competitor score failed to parse as u32"
-        );
-        AppError::EspnDeserialize {
-            url: String::new(),
-            json_path,
-            message: format!("invalid score '{}': {}", c.score, e),
-        }
-    })
-}
-
-fn competitor_to_team_state(c: &EspnCompetitor) -> Result<SoccerTeamState, AppError> {
-    Ok(SoccerTeamState {
-        abbreviation: c.team.abbreviation.clone(),
-        score: parse_score(c)?,
-        colors: competitor_colors(c)?,
-    })
 }
 
 fn detail_side(d: &EspnDetail, home_team_id: &str, away_team_id: &str) -> Option<Side> {
@@ -148,12 +113,7 @@ pub(crate) fn live_competition_to_game(
     details: Vec<EspnDetail>,
     commentary: Option<Commentary>,
 ) -> Result<SoccerLiveGame, AppError> {
-    let (home_c, away_c) = order_home_away(
-        &event_id,
-        competitors,
-        |c| c.home_away,
-        |c| c.team.abbreviation.as_str(),
-    )?;
+    let (home_c, away_c) = order_competitors(&event_id, competitors)?;
 
     let last_event = last_event(&details, &home_c.team.id, &away_c.team.id);
     let home = competitor_to_team_state(&home_c)?;
@@ -179,12 +139,7 @@ pub(crate) fn pregame_competition_to_game(
     competitors: [EspnCompetitor; 2],
 ) -> Result<SoccerPregameGame, AppError> {
     let start_time = parse_start_time(date)?;
-    let (home_c, away_c) = order_home_away(
-        &event_id,
-        competitors,
-        |c| c.home_away,
-        |c| c.team.abbreviation.as_str(),
-    )?;
+    let (home_c, away_c) = order_competitors(&event_id, competitors)?;
     let team = |c: &EspnCompetitor| -> Result<SoccerTeam, AppError> {
         Ok(SoccerTeam {
             abbreviation: c.team.abbreviation.clone(),
@@ -206,12 +161,7 @@ pub(crate) fn final_competition_to_game(
     competitors: [EspnCompetitor; 2],
     details: Vec<EspnDetail>,
 ) -> Result<SoccerFinalGame, AppError> {
-    let (home_c, away_c) = order_home_away(
-        &event_id,
-        competitors,
-        |c| c.home_away,
-        |c| c.team.abbreviation.as_str(),
-    )?;
+    let (home_c, away_c) = order_competitors(&event_id, competitors)?;
     let (home_id, away_id) = (home_c.team.id.clone(), away_c.team.id.clone());
     let team = |c: &EspnCompetitor, side: Side| -> Result<SoccerFinalTeam, AppError> {
         Ok(SoccerFinalTeam {

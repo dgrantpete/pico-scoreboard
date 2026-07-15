@@ -22,9 +22,9 @@ impl EspnLeague for Mlb {
     }
 }
 
-/// Nba has no game endpoints yet; it exists so the generic logo route covers
-/// basketball (resolution is payload-driven off the scoreboard, so any league
-/// in this registry gets logos for free).
+/// NBA league marker. Backs both the basketball games endpoints and the
+/// generic logo route (logo resolution is payload-driven off the scoreboard,
+/// so any league in this registry gets logos for free).
 pub struct Nba;
 
 impl EspnLeague for Nba {

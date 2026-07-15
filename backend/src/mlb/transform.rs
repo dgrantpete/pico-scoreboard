@@ -1,12 +1,14 @@
 use crate::error::AppError;
-use crate::espn::types::{EspnTeam, parse_start_time};
-use crate::shared::game::Record;
-use crate::shared::team::{TeamColors, order_home_away, parse_hex_rgb};
+use crate::espn::types::parse_start_time;
+use crate::shared::competitor::{
+    competitor_colors, competitor_to_team_state, linescore_bytes, order_competitors, parse_record,
+    parse_score,
+};
 
 use super::types::{
     EspnCompetitor, EspnSituation, EspnWeather, InningHalf, MlbAtBat, MlbBases, MlbCount,
     MlbFinalGame, MlbFinalTeam, MlbInning, MlbLastPlay, MlbLiveGame, MlbPregameGame, MlbPregameTeam,
-    MlbTeamState, MlbWeather,
+    MlbWeather,
 };
 
 /// Parse the inning half from ESPN's `shortDetail` prefix.
@@ -69,97 +71,6 @@ pub(crate) fn normalize_weather(weather: &EspnWeather) -> Option<MlbWeather> {
     }
 }
 
-/// Parse the overall win-loss record from a competitor's records list.
-///
-/// The `type=="total"` entry carries the season record as "47-42"
-/// (`abbreviation` varies — "Game", "Total" — so it is not matched on). A
-/// missing or malformed entry yields `None` (the field is decorative).
-pub(crate) fn parse_record(records: &[super::types::EspnRecord]) -> Option<Record> {
-    let summary = records.iter().find(|r| r.r#type == "total")?;
-    let parsed = summary
-        .summary
-        .split_once('-')
-        .and_then(|(w, l)| Some((w.parse::<u16>().ok()?, l.parse::<u16>().ok()?)));
-    match parsed {
-        Some((wins, losses)) => Some(Record { wins, losses }),
-        None => {
-            tracing::warn!(
-                summary = %summary.summary,
-                "ESPN total record not in 'W-L' form — dropping record"
-            );
-            None
-        }
-    }
-}
-
-/// Runs per inning for one team, ordered by inning and clamped to `u8`.
-///
-/// ESPN sends floats (`value`); a single inning never scores past 255, so the
-/// clamp only guards against corrupt data. Missing innings (a short home line
-/// after a walk-off) simply produce a shorter vector.
-fn linescore_runs(linescores: &[super::types::EspnLinescore]) -> Vec<u8> {
-    let mut ordered: Vec<&super::types::EspnLinescore> = linescores.iter().collect();
-    ordered.sort_by_key(|l| l.period);
-    ordered
-        .into_iter()
-        .map(|l| l.value.clamp(0.0, u8::MAX as f64) as u8)
-        .collect()
-}
-
-/// Parse a competitor's primary and alternate colors. No log here: the
-/// returned `InvalidTeamColor` carries team + raw value, and every 5xx
-/// response is logged centrally (see `AppError::into_response`) — same
-/// contract as soccer's and NBA's `competitor_colors`.
-fn parse_team_colors(team: &EspnTeam) -> Result<TeamColors, AppError> {
-    let primary = parse_hex_rgb(&team.color, &team.abbreviation)?;
-    let alternate = parse_hex_rgb(&team.alternate_color, &team.abbreviation)?;
-    Ok(TeamColors { primary, alternate })
-}
-
-/// Parse a competitor's score string into a `u32`.
-fn parse_score(c: &EspnCompetitor) -> Result<u32, AppError> {
-    c.score.parse::<u32>().map_err(|e| {
-        let json_path = format!(
-            "events[?].competitions[0].competitors[{}].score",
-            c.team.abbreviation
-        );
-        tracing::error!(
-            json_path = %json_path,
-            team = %c.team.abbreviation,
-            raw_score = %c.score,
-            error = %e,
-            "ESPN competitor score failed to parse as u32"
-        );
-        AppError::EspnDeserialize {
-            url: String::new(),
-            json_path,
-            message: format!("invalid score '{}': {}", c.score, e),
-        }
-    })
-}
-
-/// Build a live `MlbTeamState` from an ESPN competitor (score + colors).
-fn competitor_to_team_state(c: &EspnCompetitor) -> Result<MlbTeamState, AppError> {
-    Ok(MlbTeamState {
-        abbreviation: c.team.abbreviation.clone(),
-        score: parse_score(c)?,
-        colors: parse_team_colors(&c.team)?,
-    })
-}
-
-/// Order two competitors into (home, away).
-fn order_competitors(
-    event_id: &str,
-    competitors: [EspnCompetitor; 2],
-) -> Result<(EspnCompetitor, EspnCompetitor), AppError> {
-    order_home_away(
-        event_id,
-        competitors,
-        |c| c.home_away,
-        |c| c.team.abbreviation.as_str(),
-    )
-}
-
 /// Transform a pre-game competition into an `MlbPregameGame`. `date` and `weather`
 /// come from the event level; `venue_name` from the competition.
 pub(crate) fn pregame_competition_to_game(
@@ -175,7 +86,7 @@ pub(crate) fn pregame_competition_to_game(
     let team = |c: &EspnCompetitor| -> Result<MlbPregameTeam, AppError> {
         Ok(MlbPregameTeam {
             abbreviation: c.team.abbreviation.clone(),
-            colors: parse_team_colors(&c.team)?,
+            colors: competitor_colors(c)?,
             record: parse_record(&c.records),
             probable_pitcher: c.probables.first().map(|p| p.athlete.short_name.clone()),
         })
@@ -203,8 +114,8 @@ pub(crate) fn final_competition_to_game(
         Ok(MlbFinalTeam {
             abbreviation: c.team.abbreviation.clone(),
             score: parse_score(c)?,
-            colors: parse_team_colors(&c.team)?,
-            line_score: linescore_runs(&c.linescores),
+            colors: competitor_colors(c)?,
+            line_score: linescore_bytes(&c.linescores),
         })
     };
 
@@ -304,11 +215,11 @@ mod tests {
     #[test]
     fn parse_record_reads_total_entry() {
         let records = vec![
-            super::super::types::EspnRecord {
+            crate::espn::types::EspnRecord {
                 r#type: "home".to_string(),
                 summary: "23-23".to_string(),
             },
-            super::super::types::EspnRecord {
+            crate::espn::types::EspnRecord {
                 r#type: "total".to_string(),
                 summary: "47-42".to_string(),
             },
@@ -320,7 +231,7 @@ mod tests {
     #[test]
     fn parse_record_absent_or_malformed_is_none() {
         assert!(parse_record(&[]).is_none());
-        let bad = vec![super::super::types::EspnRecord {
+        let bad = vec![crate::espn::types::EspnRecord {
             r#type: "total".to_string(),
             summary: "TBD".to_string(),
         }];

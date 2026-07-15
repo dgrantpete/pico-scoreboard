@@ -632,13 +632,13 @@ mod tests {
     use super::*;
     use crate::mlb::{
         MlbAtBat, MlbBases, MlbCount, MlbFinalTeam, MlbInning, MlbLastPlay, MlbPregameTeam,
-        MlbTeamState, MlbWeather,
+        MlbWeather,
     };
     use crate::shared::game::{GameState, Record};
-    use crate::shared::team::TeamColors;
+    use crate::shared::team::{TeamColors, TeamState};
 
-    fn team(abbrev: &str, score: u32, primary: u32, alternate: u32) -> MlbTeamState {
-        MlbTeamState {
+    fn team(abbrev: &str, score: u32, primary: u32, alternate: u32) -> TeamState {
+        TeamState {
             abbreviation: abbrev.to_string(),
             score,
             colors: TeamColors { primary, alternate },
@@ -845,12 +845,10 @@ mod tests {
 
     // --- Soccer goldens (shared verbatim with tools/wire_format_check.py) ---
 
-    use crate::soccer::{
-        EventKind, LastEvent, Side, SoccerFinalTeam, SoccerGame, SoccerTeam, SoccerTeamState,
-    };
+    use crate::soccer::{EventKind, LastEvent, Side, SoccerFinalTeam, SoccerGame, SoccerTeam};
 
-    fn soccer_side(abbrev: &str, score: u32, primary: u32, alternate: u32) -> SoccerTeamState {
-        SoccerTeamState {
+    fn soccer_side(abbrev: &str, score: u32, primary: u32, alternate: u32) -> TeamState {
+        TeamState {
             abbreviation: abbrev.to_string(),
             score,
             colors: TeamColors { primary, alternate },
@@ -996,13 +994,11 @@ mod tests {
 
     // --- NBA goldens (shared verbatim with tools/wire_format_check.py) ---
 
-    use crate::nba::{
-        NbaFinalTeam, NbaLastPlay, NbaTeam, NbaTeamState,
-    };
+    use crate::nba::{NbaFinalTeam, NbaLastPlay, NbaTeam};
     use crate::shared::game::Record as NbaRecord;
 
-    fn nba_side(abbrev: &str, score: u32, primary: u32, alternate: u32) -> NbaTeamState {
-        NbaTeamState {
+    fn nba_side(abbrev: &str, score: u32, primary: u32, alternate: u32) -> TeamState {
+        TeamState {
             abbreviation: abbrev.to_string(),
             score,
             colors: TeamColors { primary, alternate },

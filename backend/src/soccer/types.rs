@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::espn::types::{CompetitionState, EspnTeam, HomeAway};
-use crate::shared::team::TeamColors;
+use crate::espn::types::{CompetitionState, EspnAthlete, EspnTeam, HomeAway};
+use crate::shared::competitor::Competitor;
+use crate::shared::team::{TeamColors, TeamState};
 
 // ---------- ESPN inbound types ----------
 
@@ -158,6 +159,18 @@ pub(crate) struct EspnCompetitor {
     pub(crate) team: EspnTeam,
 }
 
+impl Competitor for EspnCompetitor {
+    fn home_away(&self) -> HomeAway {
+        self.home_away
+    }
+    fn team(&self) -> &EspnTeam {
+        &self.team
+    }
+    fn score(&self) -> &str {
+        &self.score
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EspnDetail {
@@ -169,7 +182,7 @@ pub(crate) struct EspnDetail {
     #[serde(default)]
     pub(crate) red_card: bool,
     #[serde(default)]
-    pub(crate) athletes_involved: Vec<EspnDetailAthlete>,
+    pub(crate) athletes_involved: Vec<EspnAthlete>,
 }
 
 #[derive(Deserialize)]
@@ -187,12 +200,6 @@ pub(crate) struct EspnDetailClock {
 #[derive(Deserialize)]
 pub(crate) struct EspnDetailTeam {
     pub(crate) id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct EspnDetailAthlete {
-    pub(crate) short_name: String,
 }
 
 /// The summary endpoint (`/{sport}/{league}/summary?event=`), reduced to the
@@ -249,8 +256,8 @@ pub struct SoccerLiveGame {
     /// True during the interval — the clock alone cannot distinguish
     /// halftime from first-half stoppage time.
     pub halftime: bool,
-    pub home: SoccerTeamState,
-    pub away: SoccerTeamState,
+    pub home: TeamState,
+    pub away: TeamState,
     pub last_event: Option<LastEvent>,
     /// Latest play-by-play commentary line (from the summary endpoint),
     /// e.g. "Goal! Argentina 3, Egypt 2. Lionel Messi converts...".
@@ -279,13 +286,6 @@ pub struct Commentary {
 pub struct SoccerTeam {
     /// Team abbreviation, e.g. "POR" — key for `/{sport}/{league}/teams/{abbrev}/logo`.
     pub abbreviation: String,
-    pub colors: TeamColors,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct SoccerTeamState {
-    pub abbreviation: String,
-    pub score: u32,
     pub colors: TeamColors,
 }
 

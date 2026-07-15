@@ -37,6 +37,45 @@ pub(crate) struct EspnTeam {
     pub(crate) alternate_color: String,
 }
 
+/// A competition's venue. Only the pregame arm requires it (that is where the
+/// firmware shows it), but the block is present in every sampled state.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EspnVenue {
+    pub(crate) full_name: String,
+}
+
+/// One record entry from a competitor's `records` list. The `type=="total"`
+/// entry carries the overall season W-L (see [`crate::shared::competitor::parse_record`]).
+#[derive(Deserialize)]
+pub(crate) struct EspnRecord {
+    pub(crate) r#type: String,
+    pub(crate) summary: String,
+}
+
+/// One per-period line-score cell (runs for MLB, points for NBA).
+#[derive(Deserialize)]
+pub(crate) struct EspnLinescore {
+    pub(crate) value: f64,
+    pub(crate) period: u8,
+}
+
+/// The most recent play — MLB carries it inside the live situation, NBA at the
+/// competition level. `id` is the firmware's change-detection key for its flash.
+#[derive(Deserialize)]
+pub(crate) struct EspnLastPlay {
+    pub(crate) id: String,
+    pub(crate) text: String,
+}
+
+/// An athlete reference reduced to the short display name (probable pitcher,
+/// at-bat player, soccer scorer).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EspnAthlete {
+    pub(crate) short_name: String,
+}
+
 /// Outer scoreboard shell, deliberately lenient: events are held as raw JSON
 /// and parsed individually by `parse_events`. ESPN has been observed serving
 /// a 200 scoreboard whose events were all empty objects — a strict

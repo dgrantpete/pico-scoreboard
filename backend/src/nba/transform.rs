@@ -1,99 +1,14 @@
 use crate::error::AppError;
-use crate::espn::types::parse_start_time;
-use crate::shared::game::Record;
-use crate::shared::team::{TeamColors, order_home_away, parse_hex_rgb};
-
-use super::types::{
-    EspnCompetitor, EspnLastPlay, EspnLinescore, EspnRecord, LivePhase, NbaFinalGame, NbaFinalTeam,
-    NbaLastPlay, NbaLiveGame, NbaPregameGame, NbaTeam, NbaTeamState,
+use crate::espn::types::{EspnLastPlay, parse_start_time};
+use crate::shared::competitor::{
+    competitor_colors, competitor_to_team_state, linescore_bytes, order_competitors, parse_record,
+    parse_score,
 };
 
-/// Parse a competitor's colors, shared by the pre, live, and final builders.
-fn competitor_colors(c: &EspnCompetitor) -> Result<TeamColors, AppError> {
-    let primary = parse_hex_rgb(&c.team.color, &c.team.abbreviation)?;
-    let alternate = parse_hex_rgb(&c.team.alternate_color, &c.team.abbreviation)?;
-    Ok(TeamColors { primary, alternate })
-}
-
-fn parse_score(c: &EspnCompetitor) -> Result<u32, AppError> {
-    c.score.parse::<u32>().map_err(|e| {
-        let json_path = format!(
-            "events[?].competitions[0].competitors[{}].score",
-            c.team.abbreviation
-        );
-        tracing::error!(
-            json_path = %json_path,
-            team = %c.team.abbreviation,
-            raw_score = %c.score,
-            error = %e,
-            "ESPN competitor score failed to parse as u32"
-        );
-        AppError::EspnDeserialize {
-            url: String::new(),
-            json_path,
-            message: format!("invalid score '{}': {}", c.score, e),
-        }
-    })
-}
-
-/// Parse the overall win-loss record from a competitor's records list.
-///
-/// The `type=="total"` entry carries the season record as "51-29"
-/// (`abbreviation` varies, so it is not matched on). A missing or malformed
-/// entry yields `None` (the field is decorative).
-pub(crate) fn parse_record(records: &[EspnRecord]) -> Option<Record> {
-    let summary = records.iter().find(|r| r.r#type == "total")?;
-    let parsed = summary
-        .summary
-        .split_once('-')
-        .and_then(|(w, l)| Some((w.parse::<u16>().ok()?, l.parse::<u16>().ok()?)));
-    match parsed {
-        Some((wins, losses)) => Some(Record { wins, losses }),
-        None => {
-            tracing::warn!(
-                summary = %summary.summary,
-                "ESPN total record not in 'W-L' form — dropping record"
-            );
-            None
-        }
-    }
-}
-
-/// Points per quarter for one team, ordered by quarter and clamped to `u8`.
-///
-/// ESPN sends floats (`value`); a single quarter never scores past 255, so
-/// the clamp only guards against corrupt data. Overtime periods simply
-/// produce a longer vector.
-fn linescore_points(linescores: &[EspnLinescore]) -> Vec<u8> {
-    let mut ordered: Vec<&EspnLinescore> = linescores.iter().collect();
-    ordered.sort_by_key(|l| l.period);
-    ordered
-        .into_iter()
-        .map(|l| l.value.clamp(0.0, u8::MAX as f64) as u8)
-        .collect()
-}
-
-/// Build a live `NbaTeamState` from an ESPN competitor (score + colors).
-fn competitor_to_team_state(c: &EspnCompetitor) -> Result<NbaTeamState, AppError> {
-    Ok(NbaTeamState {
-        abbreviation: c.team.abbreviation.clone(),
-        score: parse_score(c)?,
-        colors: competitor_colors(c)?,
-    })
-}
-
-/// Order two competitors into (home, away).
-fn order_competitors(
-    event_id: &str,
-    competitors: [EspnCompetitor; 2],
-) -> Result<(EspnCompetitor, EspnCompetitor), AppError> {
-    order_home_away(
-        event_id,
-        competitors,
-        |c| c.home_away,
-        |c| c.team.abbreviation.as_str(),
-    )
-}
+use super::types::{
+    EspnCompetitor, LivePhase, NbaFinalGame, NbaFinalTeam, NbaLastPlay, NbaLiveGame,
+    NbaPregameGame, NbaTeam,
+};
 
 /// Transform a pre-game competition into an `NbaPregameGame`. `date` comes
 /// from the event level; `venue_name` from the competition.
@@ -164,7 +79,7 @@ pub(crate) fn final_competition_to_game(
             abbreviation: c.team.abbreviation.clone(),
             score: parse_score(c)?,
             colors: competitor_colors(c)?,
-            line_score: linescore_points(&c.linescores),
+            line_score: linescore_bytes(&c.linescores),
         })
     };
 
@@ -180,6 +95,7 @@ pub(crate) fn final_competition_to_game(
 mod tests {
     use super::super::types::{EspnCompetition, EspnEvent, parse_live_phase};
     use super::*;
+    use crate::espn::types::EspnRecord;
 
     /// Real live-captured NBA fixtures (see tools/extract_fixtures.py), from
     /// the April 2026 end-of-season/playoff collection.

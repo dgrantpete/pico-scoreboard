@@ -11,6 +11,17 @@ pub struct TeamColors {
     pub alternate: u32,
 }
 
+/// A live team's display state: identity, current score, and colors. Shared
+/// verbatim by every sport's live payload (built via
+/// [`crate::shared::competitor::competitor_to_team_state`]).
+#[derive(Serialize, ToSchema)]
+pub struct TeamState {
+    /// Team abbreviation, e.g. "BOS" — firmware uses this to fetch the logo.
+    pub abbreviation: String,
+    pub score: u32,
+    pub colors: TeamColors,
+}
+
 /// Parse an ESPN team color hex string (with optional leading '#') into a
 /// packed RGB888 `u32` (`0x00RRGGBB`). The team abbreviation is used purely
 /// to give the returned error context for logs and the client response.

@@ -10,5 +10,5 @@ mod types;
 pub use handler::{get_game, list_games};
 pub use types::{
     LivePhase, NbaFinalGame, NbaFinalTeam, NbaGame, NbaLastPlay, NbaLiveGame, NbaPregameGame,
-    NbaTeam, NbaTeamState,
+    NbaTeam,
 };

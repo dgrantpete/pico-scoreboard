@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::espn::types::{CompetitionState, EspnTeam, HomeAway};
+use crate::espn::types::{
+    CompetitionState, EspnLastPlay, EspnLinescore, EspnRecord, EspnTeam, EspnVenue, HomeAway,
+};
+use crate::shared::competitor::Competitor;
 use crate::shared::game::Record;
-use crate::shared::team::TeamColors;
+use crate::shared::team::{TeamColors, TeamState};
 
 // ---------- ESPN inbound types ----------
 
@@ -111,12 +114,6 @@ pub(crate) fn parse_live_phase(description: Option<&str>) -> LivePhase {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct EspnVenue {
-    pub(crate) full_name: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct EspnStatus {
     pub(crate) r#type: EspnStatusType,
     pub(crate) period: u8,
@@ -144,16 +141,16 @@ pub(crate) struct EspnCompetitor {
     pub(crate) linescores: Vec<EspnLinescore>,
 }
 
-#[derive(Deserialize)]
-pub(crate) struct EspnRecord {
-    pub(crate) r#type: String,
-    pub(crate) summary: String,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct EspnLinescore {
-    pub(crate) value: f64,
-    pub(crate) period: u8,
+impl Competitor for EspnCompetitor {
+    fn home_away(&self) -> HomeAway {
+        self.home_away
+    }
+    fn team(&self) -> &EspnTeam {
+        &self.team
+    }
+    fn score(&self) -> &str {
+        &self.score
+    }
 }
 
 /// 100%-present in live payloads, but observed as an empty `{}` before the
@@ -163,12 +160,6 @@ pub(crate) struct EspnLinescore {
 pub(crate) struct EspnSituation {
     #[serde(default)]
     pub(crate) last_play: Option<EspnLastPlay>,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct EspnLastPlay {
-    pub(crate) id: String,
-    pub(crate) text: String,
 }
 
 // ---------- Outbound domain model ----------
@@ -221,18 +212,10 @@ pub struct NbaLiveGame {
     /// and must not be extrapolated.
     pub clock: String,
     pub phase: LivePhase,
-    pub home: NbaTeamState,
-    pub away: NbaTeamState,
+    pub home: TeamState,
+    pub away: TeamState,
     /// Absent before the opening tip.
     pub last_play: Option<NbaLastPlay>,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct NbaTeamState {
-    /// Team abbreviation, e.g. "LAL" — firmware uses this to fetch the logo.
-    pub abbreviation: String,
-    pub score: u32,
-    pub colors: TeamColors,
 }
 
 /// The live sub-state: breaks render without a meaningful clock.
