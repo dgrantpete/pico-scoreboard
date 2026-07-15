@@ -29,7 +29,7 @@ from scoreboard.config import Config
 import scoreboard.logger as logger
 from scoreboard.fonts import rgb565, measure_text, fit_text, render_strip, spleen_5x8, unscii_8, unscii_16
 from scoreboard import screen_geometry
-from scoreboard.mlb import LiveGame
+from scoreboard.inning_half import BOTTOM, TOP
 from scoreboard.nba import PHASE_END_OF_PERIOD, PHASE_HALFTIME, period_name
 from scoreboard.soccer import (
     EVENT_GOAL, HALF_ET_FIRST, SIDE_AWAY, SIDE_HOME, base_minutes,
@@ -209,23 +209,58 @@ class PlayState:
 
 
 class MlbLiveView:
-    """Current MLB live game for the display thread to read. Plain data.
+    """Pre-built MLB live screen. Every string, strip, and rgb565 color is
+    finished on Core 0 by set_mlb_live; Core 1 only reads and draws — same
+    contract as SoccerLiveView/NbaLiveView. (Benchmarked 2026-07-15: the
+    per-frame formatting this replaces cost 2-59 ms/frame on the per-glyph
+    path vs 0.3-0.7 ms strip blits, plus 64 B/frame float garbage per dark
+    team color conversion.)
 
-    Still carries the raw parsed LiveGame (render_game formats per frame);
-    the commit-time pre-build every other live view already does is a
-    planned follow-up (set_mlb_live), after which this holds only finished
-    strings/strips/colors like SoccerLiveView/NbaLiveView.
+    `half` is the inning-half singleton (sprite/branch selection);
+    `pitch_color`/`bat_color` are half-resolved rgb565 ints, -1 meaning
+    "between halves — render dim". `bases` is the immutable parsed value
+    object (three bools; nothing to pre-build).
     """
 
     def __init__(self) -> None:
         self.game_id: str = ''
-        self.live: LiveGame | None = None
         self.fetched_ms: int = 0
+        self.half = None
+        self.inning_text: str = ''
+        self.away_score: int = 0
+        self.home_score: int = 0
+        self.balls: int = 0
+        self.strikes: int = 0
+        self.outs: int = 0
+        self.bases = None
+        self.batting_packed: int = -1   # RGB888 of the batting side, -1 = none
+        self.pitch_color: int = -1      # rgb565, -1 = between halves (dim)
+        self.bat_color: int = -1
+        self.has_at_bat: bool = False
+        self.pitcher_text: str = ''
+        self.batter_text: str = ''
+        self.pitcher_strip = None
+        self.batter_strip = None
 
     def copy_from(self, other: "MlbLiveView") -> None:
         self.game_id = other.game_id
-        self.live = other.live
         self.fetched_ms = other.fetched_ms
+        self.half = other.half
+        self.inning_text = other.inning_text
+        self.away_score = other.away_score
+        self.home_score = other.home_score
+        self.balls = other.balls
+        self.strikes = other.strikes
+        self.outs = other.outs
+        self.bases = other.bases
+        self.batting_packed = other.batting_packed
+        self.pitch_color = other.pitch_color
+        self.bat_color = other.bat_color
+        self.has_at_bat = other.has_at_bat
+        self.pitcher_text = other.pitcher_text
+        self.batter_text = other.batter_text
+        self.pitcher_strip = other.pitcher_strip
+        self.batter_strip = other.batter_strip
 
 
 # Toast kinds: text renders in the bottom strip; the icon kinds render as a
@@ -990,6 +1025,8 @@ _HOME_PITCHER_POOL = _StripPool(128, 8)
 # the old 640 px; blit cost per frame is unchanged (clipped to the region).
 _PLAY_POOL = _StripPool(2048, 16)
 _EVENT_NAME_POOL = _StripPool(128, 8)    # soccer scorer short name (16 unscii_8 chars)
+_AT_BAT_PITCHER_POOL = _StripPool(128, 8)  # mlb live at-bat names (25 spleen chars)
+_AT_BAT_BATTER_POOL = _StripPool(128, 8)
 _SCORERS_AWAY_POOL = _StripPool(320, 8)  # soccer full-time scorer lists
 _SCORERS_HOME_POOL = _StripPool(320, 8)
 
@@ -1246,6 +1283,77 @@ def set_final(game, home_logo, away_logo) -> None:
 # Phase strings per period, index min(half, 3): short form (variants A/C,
 # where the MLB inning ordinal sat) and spelled-out form (variant B).
 _SOCCER_PHASES = (("", ""), ("1ST", "1ST HALF"), ("2ND", "2ND HALF"), ("ET", "EXTRA TIME"))
+
+
+# Inning ordinals, pre-formatted (index = inning number; 0 unused). The
+# str(n) fallback beyond 30 allocates once at commit, never per frame.
+_ORDINALS = (
+    "", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th",
+    "10th", "11th", "12th", "13th", "14th", "15th", "16th", "17th", "18th", "19th", "20th",
+    "21st", "22nd", "23rd", "24th", "25th", "26th", "27th", "28th", "29th", "30th",
+)
+
+
+def set_mlb_live(game, home_logo, away_logo) -> None:
+    """Publish the MLB live screen from a parsed LiveGame.
+
+    Pre-builds the inning ordinal, half-resolved pitcher/batter rgb565
+    colors, and at-bat name strips (pool-rendered; None on overflow falls
+    back to the renderer's per-glyph path). The animation clock restarts
+    only when the displayed view identity (mode + game_id) changes — the
+    same rule every other setter follows (this replaced the poller's
+    rotation-driven _animation_reset flag).
+    """
+    state = get_write_state()
+    view_changed = state.mode != 'mlb_live' or state.mlb_live.game_id != game.game_id
+    state.mode = 'mlb_live'
+    if view_changed:
+        state.animation_start_ms = time.ticks_ms()
+    state.away_logo = away_logo
+    state.home_logo = home_logo
+
+    v = state.mlb_live
+    v.game_id = game.game_id
+    v.fetched_ms = time.ticks_ms()
+
+    half = game.inning.half
+    v.half = half
+    n = game.inning.number
+    v.inning_text = _ORDINALS[n] if n < len(_ORDINALS) else str(n)
+    v.away_score = game.away.score
+    v.home_score = game.home.score
+    v.balls = game.count.balls
+    v.strikes = game.count.strikes
+    v.outs = game.count.outs
+    v.bases = game.bases
+
+    if half is TOP:
+        v.batting_packed = game.away.colors.primary
+        v.pitch_color = _team_color_to_rgb565(game.home.colors.primary)
+        v.bat_color = _team_color_to_rgb565(game.away.colors.primary)
+    elif half is BOTTOM:
+        v.batting_packed = game.home.colors.primary
+        v.pitch_color = _team_color_to_rgb565(game.away.colors.primary)
+        v.bat_color = _team_color_to_rgb565(game.home.colors.primary)
+    else:
+        v.batting_packed = -1
+        v.pitch_color = -1
+        v.bat_color = -1
+
+    at_bat = game.at_bat
+    v.has_at_bat = at_bat is not None
+    if at_bat is not None:
+        v.pitcher_text = at_bat.pitcher
+        v.batter_text = at_bat.batter
+        v.pitcher_strip = _AT_BAT_PITCHER_POOL.render(at_bat.pitcher, spleen_5x8)
+        v.batter_strip = _AT_BAT_BATTER_POOL.render(at_bat.batter, spleen_5x8)
+    else:
+        v.pitcher_text = ''
+        v.batter_text = ''
+        v.pitcher_strip = None
+        v.batter_strip = None
+
+    commit_state()
 
 
 def set_soccer_live(game, home_logo, away_logo, prev_clock_s: int | None = None) -> None:

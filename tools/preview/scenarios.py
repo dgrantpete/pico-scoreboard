@@ -74,7 +74,6 @@ class ScenarioContext:
         st.error.lines = []
         game = st.mlb_live
         game.game_id = ""
-        game.live = None
         game.fetched_ms = self.clock.now
         play = st.play
         play.id = ""
@@ -114,17 +113,14 @@ def _live_game(mlb, *, away, home, inning_num, half, balls, strikes, outs,
 
 
 def _publish_live(ctx: ScenarioContext, live, play_text=None, play_id=None):
-    """Set mode=game with `live` published + logos; optionally arm a play flash."""
-    st = ctx.state.get_write_state()
-    st.mode = "mlb_live"
-    st.animation_start_ms = ctx.clock.now
-    st.mlb_live.game_id = live.game_id
-    st.mlb_live.live = live
-    st.mlb_live.fetched_ms = ctx.clock.now
+    """Publish `live` through the REAL set_mlb_live; optionally arm a play flash."""
     ap, aa = _TEAMS[live.away.abbreviation]
     hp, ha = _TEAMS[live.home.abbreviation]
-    st.away_logo = ctx.logos.get(live.away.abbreviation, ap, aa)
-    st.home_logo = ctx.logos.get(live.home.abbreviation, hp, ha)
+    away_logo = ctx.logos.get(live.away.abbreviation, ap, aa)
+    home_logo = ctx.logos.get(live.home.abbreviation, hp, ha)
+    ctx.state.set_mlb_live(live, home_logo, away_logo)
+    st = ctx.state.get_write_state()
+    st.animation_start_ms = ctx.clock.now
     if play_text is not None:
         # Mirror the poller's commit: fit first (text, window, and strip
         # must agree), then pre-render the strip so previews exercise the

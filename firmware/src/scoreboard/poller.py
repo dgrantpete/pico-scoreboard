@@ -49,6 +49,7 @@ from .state import (
     set_toast,
     set_pregame,
     set_final,
+    set_mlb_live,
     set_soccer_live,
     set_soccer_final,
     set_nba_live,
@@ -136,19 +137,12 @@ def _flash_play(play, new_id: str, raw_text: str) -> bool:
 
 
 def _commit_mlb_live(poller, game_id: str, live, home_logo, away_logo) -> None:
-    state = get_write_state()
-    state.mode = 'mlb_live'
-    state.mlb_live.game_id = game_id
-    state.mlb_live.live = live
-    state.mlb_live.fetched_ms = time.ticks_ms()
+    set_mlb_live(live, home_logo, away_logo)
 
-    _flash_play(state.play, live.last_play.id, live.last_play.text)
-
-    state.home_logo = home_logo
-    state.away_logo = away_logo
-    if poller._animation_reset:
-        state.animation_start_ms = time.ticks_ms()
-    commit_state()
+    # MLB always carries a current play; the shared flash slot handles
+    # change detection.
+    if _flash_play(get_write_state().play, live.last_play.id, live.last_play.text):
+        commit_state()
 
 
 def _commit_soccer_live(poller, game_id: str, live, home_logo, away_logo) -> None:
@@ -237,7 +231,6 @@ class GamePoller:
         self._last_rotation_ms: int | None = None
         self._consecutive_failures: int = 0
         self._first_failure_ms: int = 0
-        self._animation_reset: bool = True
         self._locked: bool = False
         # League lock: rotation restricted to one source (by key, so a
         # config-driven source rebuild can't misdirect it). None = all.
@@ -367,19 +360,17 @@ class GamePoller:
                 >= self._config.game_rotation_seconds * 1000
             )
 
+            # (Animation restamps are owned by the state setters' shared
+            # view-identity rule — mode + game_id changed — so rotation
+            # needs no poller-side flag.)
             if self._last_rotation_ms is None:
                 await self._refresh_lists(initial=True)
                 self._current_index = 0
                 self._last_rotation_ms = now
-                self._animation_reset = True
             elif skip_league:
                 await self._rotate(now, next_league=True)
-                self._animation_reset = True
             elif skip or (rotation_due and not self._locked):
                 await self._rotate(now)
-                self._animation_reset = True
-            else:
-                self._animation_reset = False
 
             if not self._rotation:
                 # Only a truly empty merged slate reaches here (a non-empty

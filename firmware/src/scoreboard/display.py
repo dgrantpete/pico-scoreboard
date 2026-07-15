@@ -171,12 +171,6 @@ CRITICAL_PULSE_V_RANGE = 64
 CRITICAL_PULSE_S_MAX = 80
 
 
-_ORDINALS = (
-    "", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th",
-    "10th", "11th", "12th", "13th", "14th", "15th", "16th", "17th", "18th", "19th", "20th",
-    "21st", "22nd", "23rd", "24th", "25th", "26th", "27th", "28th", "29th", "30th",
-)
-
 # Single source of truth for the play-flash font: play_text_display_ms must
 # measure with exactly the font render_game draws with, or the computed
 # window won't match the actual scroll.
@@ -887,8 +881,8 @@ def _render_toast_overlay(display: Hub75Display, state: StateBuffer, now_ms: int
 def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int, play_elapsed_ms: int) -> None:
     display.fill(BLACK)
 
-    live = state.mlb_live.live
-    if live is None:
+    mlv = state.mlb_live
+    if not mlv.game_id:
         render_idle(display, writer, regions, colors)
         _render_toast(writer, regions, state, now_ms)
         _render_toast_overlay(display, state, now_ms)
@@ -910,14 +904,8 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
 
     # Base markers take the batting team's color (top: away bats, bottom:
     # home bats); transition halves keep the default gold.
-    half = live.inning.half
-    if half is TOP:
-        batting_packed = live.away.colors.primary
-    elif half is BOTTOM:
-        batting_packed = live.home.colors.primary
-    else:
-        batting_packed = -1
-    _draw_base_markers(display, live.bases, batting_packed)
+    half = mlv.half
+    _draw_base_markers(display, mlv.bases, mlv.batting_packed)
 
     if state.away_logo is not None:
         display.blit(state.away_logo, away_logo_loc.X, away_logo_loc.Y)
@@ -931,9 +919,9 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
 
     # --- Count dots ---
 
-    balls_critical = live.count.balls == 3
-    strikes_critical = live.count.strikes == 2
-    outs_critical = live.count.outs == 2
+    balls_critical = mlv.balls == 3
+    strikes_critical = mlv.strikes == 2
+    outs_critical = mlv.outs == 2
 
     if balls_critical or strikes_critical or outs_critical:
         p = pulse(view_elapsed_ms)
@@ -943,32 +931,24 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
     else:
         pulsed = None
 
-    _draw_count_dots(display, ball_values_loc, live.count.balls, pulsed if balls_critical else None)
-    _draw_count_dots(display, strike_values_loc, live.count.strikes, pulsed if strikes_critical else None)
-    _draw_count_dots(display, out_values_loc, live.count.outs, pulsed if outs_critical else None)
+    _draw_count_dots(display, ball_values_loc, mlv.balls, pulsed if balls_critical else None)
+    _draw_count_dots(display, strike_values_loc, mlv.strikes, pulsed if strikes_critical else None)
+    _draw_count_dots(display, out_values_loc, mlv.outs, pulsed if outs_critical else None)
 
     # --- Text ---
     # Scores stay on the zero-alloc integer() path.
-    writer.integer(live.away.score, away_score_loc.X, away_score_loc.Y, away_score_loc.WIDTH, ALIGN_CENTER, WHITE, font=unscii_16)
-    writer.integer(live.home.score, home_score_loc.X, home_score_loc.Y, home_score_loc.WIDTH, ALIGN_CENTER, WHITE, font=unscii_16)
+    writer.integer(mlv.away_score, away_score_loc.X, away_score_loc.Y, away_score_loc.WIDTH, ALIGN_CENTER, WHITE, font=unscii_16)
+    writer.integer(mlv.home_score, home_score_loc.X, home_score_loc.Y, home_score_loc.WIDTH, ALIGN_CENTER, WHITE, font=unscii_16)
 
-    inning_num = live.inning.number
-    inning_text = _ORDINALS[inning_num] if inning_num < len(_ORDINALS) else str(inning_num)
-    writer.draw(regions.inning, inning_text, unscii_8, ALIGN_CENTER, 0, WHITE)
+    writer.draw(regions.inning, mlv.inning_text, unscii_8, ALIGN_CENTER, 0, WHITE)
 
     writer.draw(regions.ball_label, "B", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
     writer.draw(regions.strike_label, "S", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
     writer.draw(regions.out_label, "O", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
 
-    if half is TOP:
-        pitch_color = _team_color_to_rgb565(live.home.colors.primary)
-        bat_color = _team_color_to_rgb565(live.away.colors.primary)
-    elif half is BOTTOM:
-        pitch_color = _team_color_to_rgb565(live.away.colors.primary)
-        bat_color = _team_color_to_rgb565(live.home.colors.primary)
-    else:
-        pitch_color = DIM_GRAY
-        bat_color = DIM_GRAY
+    # Colors were half-resolved to rgb565 at commit; -1 = between halves.
+    pitch_color = mlv.pitch_color if mlv.pitch_color >= 0 else DIM_GRAY
+    bat_color = mlv.bat_color if mlv.bat_color >= 0 else DIM_GRAY
 
     # Bottom strip priority: toast (button feedback) > play flash > pitcher/batter.
     if not _render_toast(writer, regions, state, now_ms):
@@ -989,11 +969,16 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
                 pixels_per_second=screen_geometry.GAME_SCROLL_PX_PER_SEC,
             )
         else:
-            at_bat = live.at_bat
-            if at_bat is not None:
+            if mlv.has_at_bat:
                 elapsed_ms = view_elapsed_ms
-                writer.draw(regions.pitcher_name, at_bat.pitcher, spleen_5x8, ALIGN_CENTER, elapsed_ms, pitch_color)
-                writer.draw(regions.batter_name, at_bat.batter, spleen_5x8, ALIGN_CENTER, elapsed_ms, bat_color)
+                _text_or_strip(writer, regions.pitcher_name, mlv.pitcher_text,
+                               mlv.pitcher_strip, ALIGN_CENTER, elapsed_ms, pitch_color,
+                               PLAY_TEXT_SCROLL_PAUSE_MS,
+                               screen_geometry.GAME_SCROLL_PX_PER_SEC)
+                _text_or_strip(writer, regions.batter_name, mlv.batter_text,
+                               mlv.batter_strip, ALIGN_CENTER, elapsed_ms, bat_color,
+                               PLAY_TEXT_SCROLL_PAUSE_MS,
+                               screen_geometry.GAME_SCROLL_PX_PER_SEC)
 
             writer.draw(regions.pitcher_label, "PIT", unscii_8, ALIGN_LEFT, 0, pitch_color)
             writer.draw(regions.batter_label, "BAT", unscii_8, ALIGN_LEFT, 0, bat_color)
@@ -1001,10 +986,16 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
     _render_toast_overlay(display, state, now_ms)
 
 
+# _cycle_phase writes into this preallocated slot list instead of returning
+# a fresh tuple — it runs per frame in the pregame renderers, and the old
+# tuple return was the one allocation its "allocation-free" docstring missed.
+_CYCLE_OUT = [0, 0, 0]
+
+
 def _cycle_phase(ends: list, elapsed_ms: int) -> tuple:
     """Locate the active phase in a cumulative-dwell list.
 
-    Returns (index, phase_start_ms, position_ms) where position is `elapsed`
+    Fills and returns _CYCLE_OUT as [index, phase_start_ms, position_ms] where position is `elapsed`
     wrapped into one full cycle and phase_start is the cumulative dwell before
     the active phase. Allocation-free scan over the (<=3-entry) list; callers
     pass `position - phase_start` to writer.draw as the per-phase scroll clock.
@@ -1014,7 +1005,8 @@ def _cycle_phase(ends: list, elapsed_ms: int) -> tuple:
     start = 0
     for i in range(len(ends)):
         if pos < ends[i]:
-            return i, start, pos
+            _CYCLE_OUT[0] = i; _CYCLE_OUT[1] = start; _CYCLE_OUT[2] = pos
+        return _CYCLE_OUT
         start = ends[i]
     return len(ends) - 1, start, pos
 
