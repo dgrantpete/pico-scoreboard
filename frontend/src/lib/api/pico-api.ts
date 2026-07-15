@@ -1,4 +1,11 @@
-import type { Config, ConfigUpdate, LogEntry, NetworkStatus, RebootResponse } from './types';
+import type {
+	CheckUpdateResponse,
+	Config,
+	ConfigUpdate,
+	LogEntry,
+	NetworkStatus,
+	RebootResponse
+} from './types';
 
 // Every request gets a finite timeout: the device can silently drop
 // connections (tiny lwip socket pool, reboots, WiFi drops) and a hung fetch
@@ -123,6 +130,20 @@ export const picoApi = {
 			options?.signal
 		);
 		return handleResponse<NetworkStatus>(response);
+	},
+
+	/**
+	 * POST /api/check-update - On-demand OTA check.
+	 * The device fetches the backend manifest synchronously (a few seconds),
+	 * hence the generous timeout. On 'updating' the device starts a blocking
+	 * download shortly after responding and then reboots — callers should
+	 * poll getStatus() until app_version changes. A timeout or dropped
+	 * response can ALSO mean an update started (the download freezes the
+	 * device's event loop), so treat those as "possibly updating", not error.
+	 */
+	async checkUpdate(signal?: AbortSignal): Promise<CheckUpdateResponse> {
+		const response = await apiFetch('/api/check-update', { method: 'POST' }, 25000, signal);
+		return handleResponse<CheckUpdateResponse>(response);
 	},
 
 	/**

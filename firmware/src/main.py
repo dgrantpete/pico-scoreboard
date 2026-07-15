@@ -148,7 +148,61 @@ import ota
 # from ROMFS is running or imported and Core 1 hasn't started, so rewriting
 # the partition cannot erase code mid-execution. This is the ONLY place a
 # staged image is committed (see firmware/src/ota.py for the full lifecycle).
+# NOTE: the "UPDATING" splash that lived here shares the safe-mode splash's
+# early-boot hard fault (BACKLOG 38) — a fault at this point would reset
+# mid-OTA-window. Keep this path splash-free until that's debugged.
 ota.apply_staged()
+
+# --- Crash-loop self-heal -----------------------------------------------------
+# ota.recover() only triggers on ImportError; an app image that imports but
+# crashes before main() settles would otherwise crash-loop forever with no
+# OTA escape (friends' devices have no USB). Count consecutive boots that
+# (a) were not a power-cycle (crash resets report as WDT on RP2) and
+# (b) never reached the healthy point in main() that clears the counter;
+# at the limit, force a full OTA re-download of the published app.
+# Best-effort: a failure in the counter itself must never block a boot.
+_BOOT_FAILS_FILE = '/boot_fails'
+_BOOT_FAIL_LIMIT = 5
+_boot_fails = 0
+
+
+def _clear_boot_fails() -> None:
+    """Called from main() once the app reaches a healthy state."""
+    global _boot_fails
+    if _boot_fails:
+        _boot_fails = 0
+        try:
+            os.remove(_BOOT_FAILS_FILE)
+        except OSError:
+            pass
+
+
+try:
+    if machine.reset_cause() == machine.PWRON_RESET:
+        # A human power-cycled us: whatever happened before, it wasn't a
+        # crash loop we can heal. Start the count over.
+        try:
+            os.remove(_BOOT_FAILS_FILE)
+        except OSError:
+            pass
+    else:
+        try:
+            with open(_BOOT_FAILS_FILE) as _f:
+                _boot_fails = int(_f.read())
+        except (OSError, ValueError):
+            _boot_fails = 0
+        _boot_fails += 1
+        with open(_BOOT_FAILS_FILE, 'w') as _f:
+            _f.write(str(_boot_fails))
+        if _boot_fails >= _BOOT_FAIL_LIMIT:
+            print('[BOOT] %d consecutive failed boots; forcing OTA recovery'
+                  % _boot_fails)
+            os.remove(_BOOT_FAILS_FILE)
+            _boot_fails = 0
+            ota.recover()  # loops until healed + reset; returns if impossible
+except Exception as _e:
+    print('[BOOT] boot-fail counter error:', _e)
+# ------------------------------------------------------------------------------
 
 # --- App imports: the app may live in ROMFS (release deploys) ----------------
 # A corrupt or missing ROMFS (e.g. power loss mid-OTA-write) must never brick
@@ -159,7 +213,10 @@ try:
     from microdot import Microdot, Request, Response, send_file
     from scoreboard import Config, ScoreboardApiClient
     from scoreboard.poller import GamePoller, sources_from_config
-    from scoreboard.state import set_startup_step, finish_startup, set_display_driver, get_write_state, ThreadHealth
+    from scoreboard.state import (
+        set_startup_step, finish_startup, set_display_driver, get_write_state,
+        set_mode, set_updating_progress, set_updating_countdown, ThreadHealth,
+    )
     from scoreboard.dns import run_dns_server
     from scoreboard.api_routes import create_api
     from scoreboard.display import init_display, run_display_thread, Regions, LogoPool
@@ -196,6 +253,50 @@ APP_VERSION: str | None = ota.current_version()
 
 app: Microdot = Microdot()
 config: Config = Config()
+
+# --- On-demand OTA check ------------------------------------------------------
+# The ROMFS app's POST /api/check-update calls request_ota_check() through the
+# `app.request_ota_check` attribute — an attribute seam so the two sides can
+# version independently: an old ROMFS app never calls it, and a new ROMFS app
+# on an old main.py sees it absent and answers 'unsupported'.
+_ota_check_event = asyncio.Event()
+_ota_task_started = False
+
+
+async def _kick_ota_check() -> None:
+    """Signal the OTA task after a short grace period. Setting the event
+    directly from the request handler wakes the task on the very next
+    scheduler tick — and its synchronous download then freezes the loop
+    before microdot has flushed the HTTP response (observed as a client
+    timeout, 2026-07-14). Two seconds lets the response out first."""
+    await asyncio.sleep(2)
+    _ota_check_event.set()
+
+
+def request_ota_check() -> dict:
+    """Probe the backend manifest now; kick ota_check_task if an update exists.
+
+    Synchronous by design: the manifest fetch blocks the asyncio loop ~1-2 s.
+    The download/reboot lifecycle stays single-owner in ota_check_task — this
+    only signals it, so a concurrent daily check can't double-stage.
+    """
+    if not config.ota_enabled:
+        return {'status': 'disabled'}
+    if ota.dev_marker():
+        return {'status': 'dev_deploy'}
+    if not _ota_task_started:
+        return {'status': 'no_network'}
+    try:
+        manifest = ota.fetch_manifest(config.api_url, config.api_key)
+    except Exception as e:
+        return {'status': 'error', 'message': f'{type(e).__name__}: {e}'}
+    if manifest['sha256'] == ota.current_version():
+        return {'status': 'current', 'version': manifest['sha256']}
+    asyncio.create_task(_kick_ota_check())
+    return {'status': 'updating', 'version': manifest['sha256']}
+
+
+app.request_ota_check = request_ota_check
 
 
 def _find_index() -> str | None:
@@ -735,29 +836,75 @@ async def log_flush_task() -> None:
 
 
 async def ota_check_task(cfg: Config) -> None:
-    """Daily OTA check: stage a new app image if the backend has one, then
-    reboot — the partition rewrite itself only ever happens at early boot
-    (see ota.py). The download is synchronous and blocks Core 0 for ~10s;
-    Core 1 keeps rendering, and the watchdog is hand-fed via the tick.
+    """OTA check loop: daily when healthy, hourly after a failed check, and
+    immediately when request_ota_check() signals _ota_check_event. Stages a
+    new app image if the backend has one, then reboots — the partition
+    rewrite itself only ever happens at early boot (see ota.py). The
+    download is synchronous and blocks Core 0 for ~10s; Core 1 keeps
+    rendering, and the watchdog is hand-fed via the tick.
+
+    Once a download starts, the screen switches to the 'updating' mode
+    (progress bar, then a restart countdown). The countdown deliberately
+    uses blocking time.sleep: with no await between the first 'updating'
+    commit and machine.reset(), the poller can never repaint the screen.
     """
+    global _ota_task_started
+    _ota_task_started = True
+
     def wdt_tick():
         if _wdt is not None:
             _wdt.feed()
 
-    await asyncio.sleep(120)  # let boot traffic settle first
+    # Let boot traffic settle first; an on-demand request skips the wait.
+    try:
+        await asyncio.wait_for(_ota_check_event.wait(), 120)
+    except asyncio.TimeoutError:
+        pass
+
     while True:
+        _ota_check_event.clear()
+        delay = 24 * 3600
         if cfg.ota_enabled:
+            prev_mode = None
+            last_pct = -1
+
+            def on_progress(done: int, total: int, sha: str) -> None:
+                # Commit only on percent changes (~100 commits per image, vs
+                # one per 4 KB chunk). Lazy mode entry: the daily "already
+                # current" manifest check never touches the screen.
+                nonlocal prev_mode, last_pct
+                pct = done * 100 // total if total else 0
+                if pct == last_pct:
+                    return
+                if prev_mode is None:
+                    prev_mode = get_write_state().mode
+                last_pct = pct
+                set_updating_progress(pct, sha[:7])
+
             try:
-                if ota.check_and_stage(cfg.api_url, cfg.api_key, tick=wdt_tick):
+                if ota.check_and_stage(cfg.api_url, cfg.api_key, tick=wdt_tick, progress=on_progress):
                     logger.error("[OTA] update staged; rebooting to apply")
                     logger.flush_to_flash()
-                    await asyncio.sleep(1)
+                    for n in range(5, 0, -1):
+                        set_updating_countdown(n)
+                        wdt_tick()
+                        time.sleep(1)
                     machine.reset()
                 else:
-                    logger.debug("[OTA] app is current")
+                    logger.debug("[OTA] dev deploy marker; check skipped"
+                                 if ota.dev_marker() else "[OTA] app is current")
             except Exception as e:
                 logger.error(f"[OTA] check failed: {type(e).__name__}: {e}")
-        await asyncio.sleep(24 * 3600)
+                if prev_mode is not None:
+                    # Failed mid-download: put the previous screen back
+                    # (carry-forward kept its content); the poller repaints
+                    # within a poll interval as backup.
+                    set_mode(prev_mode)
+                delay = 3600  # transient failure: retry sooner than daily
+        try:
+            await asyncio.wait_for(_ota_check_event.wait(), delay)
+        except asyncio.TimeoutError:
+            pass
 
 
 class LightSensor:
@@ -1007,6 +1154,10 @@ async def main(regions: Regions, driver: Hub75Driver, health: ThreadHealth, ligh
             btn_skip, btn_lock = init_buttons()
             if btn_skip is not None and btn_lock is not None:
                 asyncio.create_task(button_input_loop(poller, btn_skip, btn_lock))
+
+    # The app reached an interactive state (idle rotation or setup portal):
+    # this boot was not a crash, so the crash-loop counter starts over.
+    _clear_boot_fails()
 
     # Arm the hardware watchdog once the (blocking, slow) network phase is
     # behind us — from here on, everything is cooperative tasks the feeder

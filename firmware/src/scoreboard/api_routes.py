@@ -104,6 +104,22 @@ def create_api(config: Config, get_network_status: "Callable[[], dict]") -> Micr
         except OSError:
             return {'error': 'not_found', 'message': 'No previous-boot log on flash'}, 404
 
+    @api.post('/check-update')
+    async def check_update(request: Request) -> dict | tuple:
+        """On-demand OTA check. Compares the device's app sha against the
+        backend manifest; when they differ, the OTA task downloads and
+        applies it (the device shows progress and restarts). The actual
+        logic lives in main.py's request_ota_check (littlefs) — reached via
+        the app attribute so this route degrades to 'unsupported' on a
+        main.py that predates it."""
+        check = getattr(request.app, 'request_ota_check', None)
+        if check is None:
+            return {'status': 'unsupported',
+                    'message': 'main.py predates on-demand checks; reflash over USB'}, 501
+        result = check()
+        logger.debug(f"[OTA] on-demand check: {result.get('status')}")
+        return result
+
     @api.post('/reboot')
     async def reboot(request: Request) -> dict:
         """Trigger a device restart after a brief delay."""

@@ -329,6 +329,54 @@ def build_romfs_image(source_dir: Path) -> tuple[Path, str]:
     return image_path, sha
 
 
+_OTA_DEV_WRITE = "f=open('/ota_dev','w'); f.close()"
+_OTA_DEV_REMOVE = "import os\ntry:\n os.remove('/ota_dev')\nexcept OSError:\n pass"
+
+
+def _sync_ota_dev_marker(source_dir: Path, image_sha: str, port: str = None):
+    """Align the device's /ota_dev marker with the published manifest.
+
+    A release flash of an image whose sha isn't the published one would be
+    rolled back by the next OTA check — with littlefs main.py/ota.py staying
+    new while the ROMFS app goes old, which has crashed boot before
+    (2026-07-11). Mismatch -> write /ota_dev (ota.py skips checks while it
+    exists), match -> remove it, manifest unreachable -> leave it unchanged
+    and say so.
+    """
+    import urllib.request
+
+    try:
+        cfg = json.loads((source_dir / 'config.json').read_text())
+        api_url = cfg['api']['url'].rstrip('/')
+        api_key = cfg['api']['key']
+    except (OSError, KeyError, ValueError) as e:
+        print(f"  WARNING: no api url/key in deployed config.json ({e});")
+        print("  cannot verify the published manifest — /ota_dev left unchanged.")
+        return
+
+    try:
+        req = urllib.request.Request(api_url + '/app/manifest',
+                                     headers={'X-Api-Key': api_key})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            published = json.loads(resp.read())['sha256']
+    except Exception as e:
+        print(f"  WARNING: could not fetch published manifest ({e});")
+        print("  /ota_dev left unchanged — verify OTA state manually.")
+        return
+
+    if published == image_sha:
+        _mpremote(['exec', _OTA_DEV_REMOVE], port, timeout=30, quiet=True)
+        print("  Deployed sha matches the published manifest; OTA checks active.")
+    else:
+        _mpremote(['exec', _OTA_DEV_WRITE], port, timeout=30, quiet=True)
+        print(f"  WARNING: deployed sha {image_sha[:12]} != published manifest "
+              f"{published[:12]}.")
+        print("  Wrote /ota_dev — the device will SKIP OTA checks (a check would")
+        print("  roll this build back). To publish this exact build and re-arm OTA:")
+        print("    python tools/build.py publish-app --no-build --deploy")
+        print("    python tools/build.py flash --no-build --release   (clears /ota_dev)")
+
+
 def flash_device(source_dir: Path, port: str = None, repl: bool = False, release: bool = False):
     """Flash files to Pico using mpremote.
 
@@ -395,6 +443,10 @@ def flash_device(source_dir: Path, port: str = None, repl: bool = False, release
                   port, timeout=30, quiet=True)
         _mpremote(['rm', ':ota_staging'], port, timeout=30, quiet=True)
         _mpremote(['rm', ':ota_pending'], port, timeout=30, quiet=True)
+
+        # OTA rollback guard: suspend or re-arm the daily check depending on
+        # whether this exact image is what the backend serves.
+        _sync_ota_dev_marker(source_dir, image_sha, port)
     else:
         copy = _mpremote(['cp', '-r', f'{source_dir.as_posix()}/.', ':'], port, timeout=600)
         if copy is None or copy.returncode != 0:
@@ -402,6 +454,13 @@ def flash_device(source_dir: Path, port: str = None, repl: bool = False, release
                 "mpremote copy failed or hung. Use the Button A fallback above, "
                 "then re-run: python tools/build.py flash --no-build"
             )
+
+        # Dev deploys always run unpublished code (littlefs shadows ROMFS);
+        # suspend OTA checks so the daily check can't rewrite ROMFS and
+        # reboot underneath the shadowed app.
+        _mpremote(['exec', _OTA_DEV_WRITE], port, timeout=30, quiet=True)
+        print("Wrote /ota_dev (dev deploy): OTA checks suspended until a "
+              "release flash matches the published manifest.")
 
     # Hard reset into the (new) firmware; the /update flag was consumed at
     # the safe-mode boot, so this boot starts the app normally.

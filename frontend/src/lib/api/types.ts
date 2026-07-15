@@ -149,6 +149,14 @@ export interface RebootResponse {
 	message: string;
 }
 
+// POST /api/check-update response. 'updating' means the device is about to
+// download and restart; every other status is terminal for this check.
+export interface CheckUpdateResponse {
+	status: 'current' | 'updating' | 'disabled' | 'dev_deploy' | 'no_network' | 'error';
+	version?: string | null;
+	message?: string;
+}
+
 export interface Color {
 	r: number;
 	g: number;
