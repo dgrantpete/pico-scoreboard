@@ -69,9 +69,9 @@ def gen_spinner() -> Image.Image:
 
 def _lock_body(img: Image.Image) -> None:
     _rect(img, 0, LOCK_BODY_TOP, 13, 21, WHITE)
-    # Keyhole punched back out to transparent: 2x2 head over a 2x3 stem.
-    _rect(img, 6, 14, 7, 15, (0, 0, 0, 0))
-    _rect(img, 6, 17, 7, 19, (0, 0, 0, 0))
+    # Keyhole punched back out to transparent: one plain 2x6 rectangle (the
+    # old head-gap-stem shape read as a stray horizontal line at panel size).
+    _rect(img, 6, 14, 7, 19, (0, 0, 0, 0))
 
 
 def gen_lock(is_open: bool) -> Image.Image:
