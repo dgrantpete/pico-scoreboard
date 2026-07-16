@@ -39,7 +39,10 @@ _VISIBLE_ROWS = 5     # display's _MENU_VISIBLE_ROWS; window height in items
 _TIMEOUT_MS = 10_000  # inactivity -> apply + close (same as DONE)
 
 # Scrollbar thumb geometry, pre-computed here so Core 1 draws two rects
-# verbatim. Must mirror display.py's menu track: y 0..(_TRACK_H-1).
+# verbatim. Must mirror display.py's menu track: y runs _TRACK_Y0 ..
+# _TRACK_Y0 + _TRACK_H - 1 (the 1px screen-edge inset — see the menu
+# geometry block in display.py).
+_TRACK_Y0 = 1
 _TRACK_H = 50
 _MIN_THUMB_H = 4
 
@@ -177,7 +180,9 @@ class MenuController:
             thumb_h = _TRACK_H * _VISIBLE_ROWS // n
             if thumb_h < _MIN_THUMB_H:
                 thumb_h = _MIN_THUMB_H
-            thumb_y = (_TRACK_H - thumb_h) * self._scroll // (n - _VISIBLE_ROWS)
+            thumb_y = _TRACK_Y0 + (
+                (_TRACK_H - thumb_h) * self._scroll // (n - _VISIBLE_ROWS)
+            )
         else:
             thumb_y = -1
             thumb_h = 0

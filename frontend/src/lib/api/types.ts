@@ -25,12 +25,9 @@ export type GammaConfig =
 // Display configuration
 // Screen layout variant letters, keyed per sport × screen (see firmware
 // scoreboard/screen_geometry.py tables). Applied live on save — no reboot.
-// Screens with a single design (soccer final, NBA live) gain a key here
-// only once a second design exists.
+// Screens with a single design (pregame — "Big time" locked in 2026-07-15 —
+// soccer final, NBA live) gain a key here only once a second design exists.
 export interface VariantsConfig {
-	mlb_pregame: string;
-	nba_pregame: string;
-	soccer_pregame: string;
 	mlb_final: string;
 	nba_final: string;
 	soccer_live: string;

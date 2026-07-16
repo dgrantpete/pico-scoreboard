@@ -88,11 +88,10 @@ register(Variant("default"))
 # Screen-geometry variants: flip the active table for every sport sharing
 # that screen (partial merges into screen_geometry._ACTIVE). The renderer is
 # the normal render_frame (it dispatches by mode); scenarios opt in via
-# compatible_variants so pregame variants only pair with pregame scenarios etc.
+# compatible_variants so final variants only pair with final scenarios etc.
+# (Pregame has no variants since 2026-07-15 — "Big time" is the one design.)
 _SG = "scoreboard.screen_geometry"
 for _letter in ("A", "B", "C"):
-    register(Variant(f"pregame-{_letter}", overrides={_SG: {"_ACTIVE": {
-        "mlb_pregame": _letter, "nba_pregame": _letter, "soccer_pregame": _letter}}}))
     register(Variant(f"final-{_letter}", overrides={_SG: {"_ACTIVE": {
         "mlb_final": _letter, "nba_final": _letter}}}))
     register(Variant(f"soccer-{_letter}", overrides={_SG: {"_ACTIVE": {

@@ -106,40 +106,12 @@ def set_show_dividers(enabled) -> bool:
 # PREGAME variant tables (away above home, matching the live game screen)
 # =============================================================================
 
+# Locked in 2026-07-15 (owner review): "Big time" is THE pregame design for
+# every sport — the old A "Cycling ledger" and B "All at once" variants are
+# deleted, not dormant. First-pitch/kickoff time always visible in unscii_16
+# top-right (alternating with a "WED JUL 16" date when the game isn't today);
+# one cycling line venue<->weather; pitchers in team colors below.
 _PREGAME = {
-    # A "Cycling ledger": logos + stacked W/L on the left, one cycling
-    # info line (venue / first pitch / weather) over static pitchers on the
-    # right, split by a full-height vline.
-    "A": {
-        "LOGO_AWAY": (0, 4, 24, 24),
-        "LOGO_HOME": (0, 36, 24, 24),
-        "REC_AWAY_WINS": (26, 8, 19, 8),
-        "REC_AWAY_LOSSES": (26, 17, 19, 8),
-        "REC_HOME_WINS": (26, 40, 19, 8),
-        "REC_HOME_LOSSES": (26, 49, 19, 8),
-        "DIVIDER_X": 45,               # vline, full height
-        "INFO_LABEL": (48, 4, 80, 8),  # spleen, dim
-        "INFO_VALUE": (48, 15, 80, 16),  # unscii_16 (time) or spleen (scroll)
-        "SEPARATOR_Y": 41,             # hline under the info block, x>=48
-        "PITCHER_AWAY": (48, 45, 80, 8),
-        "PITCHER_HOME": (48, 54, 80, 8),
-    },
-    # B "All at once": horizontal records beside the logos; venue / time /
-    # weather all visible stacked on the right; one pitcher line alternating
-    # away<->home every few seconds.
-    "B": {
-        "LOGO_AWAY": (0, 4, 24, 24),
-        "LOGO_HOME": (0, 36, 24, 24),
-        "REC_AWAY": (26, 12, 30, 8),
-        "REC_HOME": (26, 44, 30, 8),
-        "DIVIDER_X": 57,               # vline, full height
-        "INFO_VENUE": (59, 3, 69, 8),
-        "INFO_TIME": (59, 18, 69, 8),
-        "INFO_WEATHER": (59, 33, 69, 8),
-        "PITCHER_LINE": (59, 50, 69, 8),  # alternates away/home
-    },
-    # C "Big time": first-pitch time always visible in unscii_16 top-right;
-    # one cycling line venue<->weather; pitchers as A.
     "C": {
         "LOGO_AWAY": (0, 4, 24, 24),
         "LOGO_HOME": (0, 36, 24, 24),
@@ -148,7 +120,7 @@ _PREGAME = {
         "REC_HOME_WINS": (26, 40, 19, 8),
         "REC_HOME_LOSSES": (26, 49, 19, 8),
         "DIVIDER_X": 45,
-        "INFO_TIME": (48, 2, 80, 16),   # unscii_16 centered, always shown
+        "INFO_TIME": (48, 2, 80, 16),   # unscii_16 centered ("WED JUL 16" = 10 glyphs = exactly 80 px)
         "INFO_CYCLE": (48, 24, 80, 8),  # spleen, venue<->weather
         "SEPARATOR_Y": 41,
         "PITCHER_AWAY": (48, 45, 80, 8),
@@ -325,9 +297,10 @@ _SOCCER_FINAL = {
 
 
 # Variant registry: config key -> {letter: slot table}. Shared references
-# on purpose (see module docstring); _CONFIGURABLE lists the keys the
-# settings UI exposes (>1 design exists). Defaults per the 2026-07-07
-# gallery review: pregame "Big time" (C), final "Line-score forward" (C).
+# on purpose (see module docstring). Single-design screens (pregame since
+# 2026-07-15, soccer_final, nba_live) have one-entry tables and no settings
+# UI row. Final default per the 2026-07-07 gallery review: "Line-score
+# forward" (C).
 _TABLES = {
     "mlb_pregame": _PREGAME,
     "nba_pregame": _PREGAME,
@@ -383,16 +356,10 @@ def geometry_for(key: str) -> dict:
 
 
 def pregame_value_width(key: str) -> int:
-    """Width (px) of the cycling info value region for `key`'s active table.
+    """Width (px) of the cycling info line region for `key`'s active table.
 
     state.set_pregame sizes each info phase's scroll dwell against this, so the
     pre-computed per-phase dwell matches the region the renderer actually
-    scrolls the text in. B has no cycling value; its venue row width is a
-    reasonable stand-in (its info lines are pre-built the same way).
+    scrolls the text in.
     """
-    g = geometry_for(key)
-    if "INFO_VALUE" in g:
-        return g["INFO_VALUE"][2]
-    if "INFO_CYCLE" in g:
-        return g["INFO_CYCLE"][2]
-    return g["INFO_VENUE"][2]
+    return geometry_for(key)["INFO_CYCLE"][2]

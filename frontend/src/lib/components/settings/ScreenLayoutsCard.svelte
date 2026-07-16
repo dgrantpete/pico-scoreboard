@@ -7,11 +7,8 @@
 	// independently. Applied live on save, so layouts can be compared on the
 	// panel quickly. The option lists are shared while the sports still ship
 	// the same designs; they fork alongside the firmware tables.
-	const PREGAME_OPTIONS = [
-		{ value: "A", label: "A — Cycling ledger" },
-		{ value: "B", label: "B — All at once" },
-		{ value: "C", label: "C — Big time" },
-	];
+	// Pregame has no row: the "Big time" design was locked in for every
+	// sport on 2026-07-15 and the other pregame variants were deleted.
 	const FINAL_OPTIONS = [
 		{ value: "A", label: "A — Marquee + boxscore" },
 		{ value: "B", label: "B — Stacked ledger" },
@@ -24,34 +21,16 @@
 		options: { value: string; label: string }[];
 	}[] = [
 		{
-			key: "mlb_pregame",
-			label: "MLB Pregame",
-			hint: "Upcoming-game screen for baseball",
-			options: PREGAME_OPTIONS,
-		},
-		{
 			key: "mlb_final",
 			label: "MLB Final",
 			hint: "Baseball final screen with the line score",
 			options: FINAL_OPTIONS,
 		},
 		{
-			key: "nba_pregame",
-			label: "NBA Pregame",
-			hint: "Upcoming-game screen for basketball",
-			options: PREGAME_OPTIONS,
-		},
-		{
 			key: "nba_final",
 			label: "NBA Final",
 			hint: "Basketball final screen with the quarter line score",
 			options: FINAL_OPTIONS,
-		},
-		{
-			key: "soccer_pregame",
-			label: "Soccer Pregame",
-			hint: "Upcoming-match screen for soccer",
-			options: PREGAME_OPTIONS,
 		},
 		{
 			key: "soccer_live",

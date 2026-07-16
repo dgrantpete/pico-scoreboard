@@ -42,6 +42,30 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     codegen.
 53. **Soccer `attendance`** — 100%-present in the corpus for every state;
     add to the wire only when a screen design wants it.
+56. **1px edge-gap migration for the game screens** — owner rule (2026-07-15):
+    nothing draws in row 0, row 63, col 0, or col 127 (the panel has
+    unreliable edge pixels — garbage-colored LEDs surfaced at one edge).
+    The league menu complies; the game/pregame/final layouts still touch
+    the edges (e.g. logos at x=0, pregame INFO_TIME ends at col 127, final
+    line-score bands). Inset the geometry tables + Regions when touching
+    each screen next.
+
+55. **CONDITIONAL — time-sync one-shot failure** (only act if it recurs):
+    all displayed times/dates vanished once (2026-07-15) for a full uptime
+    after a webapp-triggered restart, then cleared on the next reboot.
+    Structural suspect: `_sync_time_from_backend` (main.py) runs once per
+    boot with a 15 s timeout and NO retry — any transient (DNS settling
+    right after re-association, Fly cold start) returns None and the
+    poller then omits local times for the entire uptime by design. The one
+    archived boot log was inconclusive (`time_sync_ok=True` visible, but
+    rotation timing made boot attribution ambiguous), so cause is NOT
+    confirmed. If it recurs: reboot rotates the evidence into
+    `GET /api/logs/previous` — grep `[TIME]` for the failure exception
+    (TimeoutError = slow backend; OSError errno = DNS race; http= = backend).
+    Planned fix when confirmed: retry-with-backoff task until a sync
+    lands + `poller.set_utc_offset()` so a late sync restores times
+    mid-uptime.
+
 54. **tools/espn optimizations** (from the pipeline audit):
     - Staleness stamp: corpus fingerprint (max epoch + distinct count per
       league) written into every generated artifact; `validate`/`spec`

@@ -358,12 +358,12 @@ class PregameView:
     """Pre-built pregame screen data. Every string and color is finished on
     Core 0 by set_pregame; Core 1 only reads and draws.
 
-    Cycling info (variant A/C) is expressed as parallel lists walked by the
-    renderer with pure modular arithmetic (no per-frame allocation): `cycle_*`
-    covers venue/first-pitch/weather (variant A), `alt_*` covers
-    venue<->weather only (variant C, which shows the time statically). Lists
-    are replaced wholesale by Core 0 -- never mutated in place -- so the
-    reference hand-off is safe (ErrorState.lines precedent).
+    One design ("Big time", locked in 2026-07-15): big first-pitch time —
+    alternating with `date_text` when the game's local day isn't today —
+    over one cycling info line. The cycle (`alt_*`) is parallel lists walked
+    by the renderer with pure modular arithmetic (no per-frame allocation).
+    Lists are replaced wholesale by Core 0 -- never mutated in place -- so
+    the reference hand-off is safe (ErrorState.lines precedent).
     """
 
     def __init__(self) -> None:
@@ -375,11 +375,11 @@ class PregameView:
         self.away_losses: str = ''
         self.home_wins: str = ''
         self.home_losses: str = ''
-        self.away_record: str = ''   # horizontal "41-28" form (variant B)
-        self.home_record: str = ''
-        # Raw info lines (empty == absent; time empty when utc offset unknown).
+        # Raw info lines (empty == absent; time and date empty when utc
+        # offset unknown; date also empty when the game is today).
         self.venue_text: str = ''
         self.time_text: str = ''
+        self.date_text: str = ''     # "WED JUL 16" — big slot alternation
         self.weather_text: str = ''
         # Probable pitchers (empty == not advertised).
         self.away_pitcher: str = ''
@@ -387,18 +387,11 @@ class PregameView:
         # Pre-brightened team colors (RGB565).
         self.away_color: int = 0xFFFF
         self.home_color: int = 0xFFFF
-        # Cycle A: venue / first pitch / weather.
-        self.cycle_labels: list[str] = []
-        self.cycle_texts: list[str] = []
-        self.cycle_big: list[bool] = []   # True -> unscii_16 centered (no scroll)
-        self.cycle_ends: list[int] = []   # cumulative dwell (ms); [-1] = full cycle
-        # Cycle C: venue <-> weather only (time shown statically).
+        # Info cycle: venue <-> weather (time/date own the big slot).
         self.alt_texts: list[str] = []
-        self.alt_ends: list[int] = []
-        # Pre-rendered strips parallel to cycle_texts / alt_texts (None for
-        # big-font phases, which never scroll), plus named strips for the
-        # non-cycling variant-B slots and the two pitcher lines.
-        self.cycle_strips: list = []
+        self.alt_ends: list[int] = []   # cumulative dwell (ms); [-1] = full cycle
+        # Pre-rendered strips parallel to alt_texts, plus the two pitcher
+        # lines (big-slot strings never scroll — no strips needed).
         self.alt_strips: list = []
         self.venue_strip = None
         self.weather_strip = None
@@ -414,27 +407,21 @@ class PregameView:
         self.away_losses = other.away_losses
         self.home_wins = other.home_wins
         self.home_losses = other.home_losses
-        self.away_record = other.away_record
-        self.home_record = other.home_record
         self.venue_text = other.venue_text
         self.time_text = other.time_text
+        self.date_text = other.date_text
         self.weather_text = other.weather_text
         self.away_pitcher = other.away_pitcher
         self.home_pitcher = other.home_pitcher
         self.away_color = other.away_color
         self.home_color = other.home_color
-        self.cycle_labels = other.cycle_labels
-        self.cycle_texts = other.cycle_texts
-        self.cycle_big = other.cycle_big
-        self.cycle_ends = other.cycle_ends
         self.alt_texts = other.alt_texts
-        self.cycle_strips = other.cycle_strips
+        self.alt_ends = other.alt_ends
         self.alt_strips = other.alt_strips
         self.venue_strip = other.venue_strip
         self.weather_strip = other.weather_strip
         self.away_pitcher_strip = other.away_pitcher_strip
         self.home_pitcher_strip = other.home_pitcher_strip
-        self.alt_ends = other.alt_ends
         self.variant_key = other.variant_key
 
 
@@ -1161,31 +1148,32 @@ def _pregame_phase_dwell(text_w: int, width: int) -> int:
 
 
 def _build_pregame_cycle(entries: list, width: int) -> tuple:
-    """Build parallel (labels, texts, bigs, ends, strips) lists for the cycle.
+    """Build parallel (texts, ends, strips) lists for the info cycle.
 
-    `entries` is a list of (label, text, big, strip); empty-text entries are
-    skipped. `ends` are cumulative dwell ms so the renderer can locate the
-    active phase with `elapsed % ends[-1]`. Big phases (unscii_16, centered)
-    never scroll at these widths, so their dwell floors at
-    PREGAME_INFO_DWELL_MS and their strip slot is None.
+    `entries` is a list of (text, strip); empty-text entries are skipped.
+    `ends` are cumulative dwell ms so the renderer can locate the active
+    phase with `elapsed % ends[-1]`.
     """
-    labels: list[str] = []
     texts: list[str] = []
-    bigs: list[bool] = []
     ends: list[int] = []
     strips: list = []
     running = 0
-    for label, text, big, strip in entries:
+    for text, strip in entries:
         if not text:
             continue
-        labels.append(label)
         texts.append(text)
-        bigs.append(big)
         strips.append(strip)
-        text_w = 0 if big else measure_text(text, spleen_5x8)
-        running += _pregame_phase_dwell(text_w, width)
+        running += _pregame_phase_dwell(measure_text(text, spleen_5x8), width)
         ends.append(running)
-    return labels, texts, bigs, ends, strips
+    return texts, ends, strips
+
+
+# Weekday/month abbreviations for the pregame date line ("WED JUL 16").
+# Indexed straight off time.gmtime(): tm[6] weekday (0 = Monday) and tm[1]
+# month (1-12; slot 0 unused).
+_WDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+_MONTHS = ("", "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+           "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
 
 
 def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None,
@@ -1194,8 +1182,14 @@ def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None,
 
     Pre-builds record strings, local first-pitch time ("7:05 PM"; omitted
     entirely when utc_offset_s is None -- a wrong-timezone time is worse than
-    none), weather ("72F PARTLY CLOUDY"), the cycling info phase lists, and
-    pre-brightened team colors. Logos are stored into the shared logo slots.
+    none), the alternation date ("WED JUL 16", only when the game's local
+    day isn't today's local day), weather ("72F PARTLY CLOUDY"), the cycling
+    info phase lists, and pre-brightened team colors. Logos are stored into
+    the shared logo slots.
+
+    The date self-heals across midnight: this setter re-runs on every poll
+    of the game, so a tomorrow-game becomes a today-game (date phase
+    disappears) within one poll interval of the local day rolling over.
 
     The animation clock is restarted only when the displayed view identity
     (mode + game_id) changes -- a standing re-poll of the same pregame keeps
@@ -1222,8 +1216,6 @@ def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None,
     pv.away_losses = str(away.losses) if away.losses is not None else ''
     pv.home_wins = str(home.wins) if home.wins is not None else ''
     pv.home_losses = str(home.losses) if home.losses is not None else ''
-    pv.away_record = ("%d-%d" % (away.wins, away.losses)) if away.wins is not None and away.losses is not None else ''
-    pv.home_record = ("%d-%d" % (home.wins, home.losses)) if home.wins is not None and home.losses is not None else ''
 
     pv.venue_text = game.venue or ''
 
@@ -1236,8 +1228,17 @@ def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None,
         if h12 == 0:
             h12 = 12
         pv.time_text = "%d:%02d %s" % (h12, minute, ampm)
+        # Date phase only when the game's LOCAL day isn't today's local day
+        # (RTC is UTC; same additive-offset trick as the time above). At 10
+        # glyphs max ("WED JUL 16") this always fits the 80px big slot.
+        today = time.gmtime(time.time() + utc_offset_s)
+        if (tm[0], tm[1], tm[2]) != (today[0], today[1], today[2]):
+            pv.date_text = "%s %s %d" % (_WDAYS[tm[6]], _MONTHS[tm[1]], tm[2])
+        else:
+            pv.date_text = ''
     else:
         pv.time_text = ''
+        pv.date_text = ''
 
     if game.weather_condition and game.weather_temp is not None:
         pv.weather_text = "%dF %s" % (game.weather_temp, game.weather_condition.upper())
@@ -1254,9 +1255,8 @@ def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None,
     pv.away_color = _team_color_to_rgb565(away.colors.primary)
     pv.home_color = _team_color_to_rgb565(home.colors.primary)
 
-    # Strips for the spleen text slots (big-font phases never scroll and keep
-    # the glyph path — None placeholder). Venue/weather tuples are shared by
-    # the A-cycle and C-alt lists (same pool render, referenced twice).
+    # Strips for the spleen text slots (the big time/date slot never scrolls
+    # and keeps the glyph path).
     venue_strip = _VENUE_POOL.render(pv.venue_text, spleen_5x8) if pv.venue_text else None
     weather_strip = _WEATHER_POOL.render(pv.weather_text, spleen_5x8) if pv.weather_text else None
     pv.venue_strip = venue_strip
@@ -1269,21 +1269,9 @@ def set_pregame(game, home_logo, away_logo, utc_offset_s: int | None,
     )
 
     width = screen_geometry.pregame_value_width(state.pregame.variant_key)
-    labels, texts, bigs, ends, strips = _build_pregame_cycle(
-        [("VENUE", pv.venue_text, False, venue_strip),
-         ("1ST PITCH", pv.time_text, True, None),
-         ("WEATHER", pv.weather_text, False, weather_strip)],
-        width,
-    )
-    pv.cycle_labels = labels
-    pv.cycle_texts = texts
-    pv.cycle_big = bigs
-    pv.cycle_ends = ends
-    pv.cycle_strips = strips
-
-    _, alt_texts, _, alt_ends, alt_strips = _build_pregame_cycle(
-        [("VENUE", pv.venue_text, False, venue_strip),
-         ("WEATHER", pv.weather_text, False, weather_strip)],
+    alt_texts, alt_ends, alt_strips = _build_pregame_cycle(
+        [(pv.venue_text, venue_strip),
+         (pv.weather_text, weather_strip)],
         width,
     )
     pv.alt_texts = alt_texts

@@ -45,9 +45,10 @@ _DEFAULTS = {
         "blanking_time_ns": 0,
         # Screen layout variants (see scoreboard/screen_geometry.py tables).
         # Applied live on config save — flip these from the settings page to
-        # compare layouts on the panel without a reboot.
+        # compare layouts on the panel without a reboot. Single-design
+        # screens (pregame since 2026-07-15) carry no key; stale keys in a
+        # stored config are ignored by screen_geometry.set_variants.
         "variants": {
-            "mlb_pregame": "C", "nba_pregame": "C", "soccer_pregame": "C",
             "mlb_final": "C", "nba_final": "C",
             "soccer_live": "A",
         },

@@ -321,7 +321,6 @@ def live_no_atbat(ctx: ScenarioContext) -> None:
 # Pregame screens
 # =============================================================================
 
-_PREGAME_VARIANTS = {"pregame-A", "pregame-B", "pregame-C"}
 _FINAL_VARIANTS = {"final-A", "final-B", "final-C"}
 _RED_TINT_VARIANTS = {"red-tint-0", "red-tint-48", "red-tint-80", "red-tint-128"}
 
@@ -340,17 +339,21 @@ def _publish_pregame(ctx, game, utc_offset_s):
     ctx.state.set_pregame(game, home_logo, away_logo, utc_offset_s)
 
 
-# Start epoch chosen with the offset below so the local first pitch reads
-# "7:05 PM" (gmtime(83100 - 14400) == 1970-01-01 19:05:00Z).
+# Offset-None scenarios keep a fixed epoch (unused — no time/date renders);
+# scenarios that DO render the clock derive start_epoch from the real wall
+# clock, because set_pregame compares the game's local day against today's
+# (shim time.time() falls through to the host clock). Rendered time text
+# therefore varies run to run — cosmetic only, and pregame has no goldens.
 _START_EPOCH = 83100
 _UTC_OFFSET_EDT = -4 * 3600
 
 
-@scenario("pregame-full", duration_ms=12000, compatible_variants=_PREGAME_VARIANTS | {"no-dividers"})
+@scenario("pregame-full", duration_ms=12000, compatible_variants={"default", "no-dividers"})
 def pregame_full(ctx: ScenarioContext) -> None:
+    import time as _wall
     game = ctx.mlb.PregameGame(
         game_id="401570100",
-        start_epoch=_START_EPOCH,
+        start_epoch=int(_wall.time()) + 2 * 3600,   # today: no date phase
         venue="Oriole Park at Camden Yards",
         weather_temp=72,
         weather_condition="Partly Cloudy",
@@ -360,7 +363,25 @@ def pregame_full(ctx: ScenarioContext) -> None:
     _publish_pregame(ctx, game, _UTC_OFFSET_EDT)
 
 
-@scenario("pregame-sparse", duration_ms=8000, compatible_variants=_PREGAME_VARIANTS)
+@scenario("pregame-tomorrow", duration_ms=16000, compatible_variants={"default"})
+def pregame_tomorrow(ctx: ScenarioContext) -> None:
+    # Game 2 days out: the big slot alternates "WED JUL 16" <-> "7:05 PM"
+    # (one PREGAME_INFO_DWELL_MS each, date first) while venue<->weather
+    # cycle underneath. 16s = two full alternation periods.
+    import time as _wall
+    game = ctx.mlb.PregameGame(
+        game_id="401570103",
+        start_epoch=int(_wall.time()) + 48 * 3600,
+        venue="Oriole Park at Camden Yards",
+        weather_temp=75,
+        weather_condition="Clear",
+        away=_pregame_team(ctx.mlb, "BOS", 47, 42, "K. Gausman"),
+        home=_pregame_team(ctx.mlb, "NYY", 53, 38, "G. Cole"),
+    )
+    _publish_pregame(ctx, game, _UTC_OFFSET_EDT)
+
+
+@scenario("pregame-sparse", duration_ms=8000, compatible_variants={"default"})
 def pregame_sparse(ctx: ScenarioContext) -> None:
     # No weather, no records, no local time (utc offset unknown).
     game = ctx.mlb.PregameGame(
@@ -375,10 +396,10 @@ def pregame_sparse(ctx: ScenarioContext) -> None:
     _publish_pregame(ctx, game, None)
 
 
-@scenario("pregame-no-time", duration_ms=9000, compatible_variants=_PREGAME_VARIANTS)
+@scenario("pregame-no-time", duration_ms=9000, compatible_variants={"default"})
 def pregame_no_time(ctx: ScenarioContext) -> None:
-    # Full data but the time phase is omitted (offset None) -- the cycle drops
-    # to venue<->weather; the "Big time" variant shows no clock.
+    # Full data but the offset is unknown -- no clock and no date; the
+    # cycle line still runs venue<->weather.
     game = ctx.mlb.PregameGame(
         game_id="401570102",
         start_epoch=_START_EPOCH,
@@ -597,12 +618,13 @@ def soccer_pregame(ctx: ScenarioContext) -> None:
     # Reuses the whole MLB pregame pipeline: the league name rides the venue
     # slot, and soccer's permanently-absent fields (records, weather,
     # probables) render exactly like the pregame-sparse case.
+    import time as _wall
     soccer = ctx.soccer
     p_sea, a_sea = _SOCCER_TEAMS["SEA"]
     p_por, a_por = _SOCCER_TEAMS["POR"]
     game = soccer.PregameGame(
         game_id="401700101",
-        start_epoch=_START_EPOCH,
+        start_epoch=int(_wall.time()) + 2 * 3600,   # today: no date phase
         league="MLS",
         venue="LUMEN FIELD",
         home=soccer.pregame_team("SEA", ctx.mlb.TeamColors(p_sea, a_sea)),
@@ -753,16 +775,17 @@ def _nba_final_team(ctx, abbr, score, line):
     return ctx.nba.FinalTeam(abbr, ctx.mlb.TeamColors(p, a), score, bytes(line))
 
 
-@scenario("nba-pregame", duration_ms=10000, compatible_variants=_PREGAME_VARIANTS)
+@scenario("nba-pregame", duration_ms=10000, compatible_variants={"default"})
 def nba_pregame(ctx: ScenarioContext) -> None:
     # Reuses the whole MLB pregame pipeline: real venue and records; the
     # fields basketball never has (weather, probables) stay absent.
+    import time as _wall
     nba = ctx.nba
     p_lal, a_lal = _NBA_TEAMS["LAL"]
     p_phx, a_phx = _NBA_TEAMS["PHX"]
     game = nba.PregameGame(
         game_id="401811040",
-        start_epoch=_START_EPOCH,
+        start_epoch=int(_wall.time()) + 2 * 3600,   # today: no date phase
         venue="crypto.com Arena",
         home=ctx.mlb.PregameTeam("LAL", ctx.mlb.TeamColors(p_lal, a_lal), 50, 32, None),
         away=ctx.mlb.PregameTeam("PHX", ctx.mlb.TeamColors(p_phx, a_phx), 40, 42, None),
@@ -849,7 +872,8 @@ def _menu_strip(ctx: ScenarioContext, label: str):
 
 
 def _publish_menu(ctx: ScenarioContext, labels, checked, cursor, scroll) -> None:
-    """Mirror MenuController._publish: visible window + scrollbar thumb."""
+    """Mirror MenuController._publish: visible window + scrollbar thumb
+    (track origin at y=1 — the 1px screen-edge inset)."""
     n = len(labels)
     end = min(scroll + 5, n)
     strips = [_menu_strip(ctx, labels[i]) for i in range(scroll, end)]
@@ -857,7 +881,7 @@ def _publish_menu(ctx: ScenarioContext, labels, checked, cursor, scroll) -> None
     highlight = cursor - scroll if cursor < n else -1
     if n > 5:
         thumb_h = max(4, 50 * 5 // n)
-        thumb_y = (50 - thumb_h) * scroll // (n - 5)
+        thumb_y = 1 + (50 - thumb_h) * scroll // (n - 5)
     else:
         thumb_y, thumb_h = -1, 0
     ctx.state.set_menu(strips, window_checked, highlight, thumb_y, thumb_h)

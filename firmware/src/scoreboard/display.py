@@ -95,16 +95,20 @@ DISPLAY_HEIGHT = 64
 FRAME_MS = 50
 
 # --- League menu geometry (matches the approved mockups) ---
-# 5 list rows of 10px (y 0..49), separator hline at 51, DONE footer 53..63.
+# Inset 1px from every panel edge (owner rule 2026-07-15: edge pixels are
+# unreliable on this panel — draw nothing in row 0, row 63, col 0, col 127).
+# 5 list rows of 10px (y 1..50), separator hline at 52, DONE footer 54..62.
 # Checkbox 7x7 at x=2; label Regions in Regions.menu_rows; highlight bar and
-# scrollbar split the right edge (bar owns the last 2 columns).
+# scrollbar split the right side inside the inset.
+_MENU_TOP = 1           # first list row's top edge (the 1px inset)
 _MENU_ROW_H = 10
 _MENU_VISIBLE_ROWS = 5
-_MENU_SEP_Y = 51
-_MENU_DONE_Y = 53
+_MENU_SEP_Y = 52
+_MENU_DONE_Y = 54       # footer band 54..62; row 63 stays dark
 _MENU_CHECKBOX_X = 2
-_MENU_HILIGHT_W = 126   # highlight bar stops before the scrollbar columns
-_MENU_BAR_X = 126       # 2px scrollbar track at x 126..127, y 0..49
+_MENU_HILIGHT_X = 1
+_MENU_HILIGHT_W = 124   # highlight bar x 1..124, stops before the scrollbar
+_MENU_BAR_X = 125       # 2px scrollbar track at x 125..126, y 1..50
 
 # TEMPORARY (2026-07-11 GC/stutter investigation — remove when done): sample
 # gc.mem_alloc() once per display tick and log a [MEMPROF] window summary to
@@ -312,14 +316,14 @@ class Regions:
         self.error_line_3 = Region(display, 0, 54, DISPLAY_WIDTH, 8)
 
         # --- League menu (full-screen take-over; see render_menu) ---
-        # Label windows: x=13 (clear of the 7x7 checkbox at x=2) through
-        # x=124 (the 2px scrollbar owns 126..127; 125 is breathing room)
-        # = 112 px, one per visible 10px row.
+        # Label windows: x=12 (clear of the 7x7 checkbox at x=2) through
+        # x=123 (the 2px scrollbar owns 125..126 inside the 1px edge inset;
+        # 124 is breathing room) = 112 px, one per visible 10px row.
         # NOTE: "PREMIER LEAGUE" is 14 unscii_8 glyphs = exactly 112 px —
         # zero margin. Shrinking this window makes the longest real league
         # label start marqueeing.
         self.menu_rows = tuple(
-            Region(display, 13, row * 10 + 1, 112, 8)
+            Region(display, 12, _MENU_TOP + row * 10 + 1, 112, 8)
             for row in range(_MENU_VISIBLE_ROWS)
         )
 
@@ -1067,17 +1071,19 @@ def _text_or_strip(writer, region, text, strip, align, elapsed, color, pause, px
 
 
 def render_pregame(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int) -> None:
-    """Render the pregame screen for the active screen_geometry variant.
+    """Render the pregame screen (single "Big time" design, all sports).
 
-    Logos identify the teams (no abbreviations). Records sit beside the logos;
-    the right column carries venue / first-pitch / weather (cycling in A/C,
-    all-visible in B) over the probable pitchers in team colors.
+    Logos identify the teams (no abbreviations); stacked W/L records beside
+    them. The right column: the big first-pitch/kickoff time — alternating
+    with the pre-built "WED JUL 16" date whenever the game isn't today — over
+    one cycling venue<->weather line and the probable pitchers in team
+    colors. The date/time alternation rides the same frame-rail dwell
+    arithmetic as every other pregame phase (pure function of elapsed).
     """
     display.fill(BLACK)
 
     pv = state.pregame
     geo = screen_geometry.geometry_for(pv.variant_key)
-    variant = screen_geometry.active_variant(pv.variant_key)
     R = regions.variant[pv.variant_key]
     elapsed = view_elapsed_ms  # frame rail: motion holds, never jumps
 
@@ -1095,74 +1101,43 @@ def render_pregame(display: Hub75Display, writer: FontWriter, regions: Regions, 
             sep_x = geo["DIVIDER_X"] + 1 if "DIVIDER_X" in geo else 0
             display.hline(sep_x, geo["SEPARATOR_Y"], DISPLAY_WIDTH - sep_x, DIM_GRAY)
 
-    # --- Records ---
-    if "REC_AWAY_WINS" in R:            # stacked wins-over-losses (A, C)
-        if pv.away_wins:
-            writer.draw(R["REC_AWAY_WINS"], pv.away_wins, spleen_5x8, ALIGN_CENTER, 0, WHITE)
-            writer.draw(R["REC_AWAY_LOSSES"], pv.away_losses, spleen_5x8, ALIGN_CENTER, 0, DIM_GRAY)
-        if pv.home_wins:
-            writer.draw(R["REC_HOME_WINS"], pv.home_wins, spleen_5x8, ALIGN_CENTER, 0, WHITE)
-            writer.draw(R["REC_HOME_LOSSES"], pv.home_losses, spleen_5x8, ALIGN_CENTER, 0, DIM_GRAY)
-    if "REC_AWAY" in R:                 # horizontal "41-28" (B)
-        if pv.away_record:
-            writer.draw(R["REC_AWAY"], pv.away_record, spleen_5x8, ALIGN_LEFT, 0, WHITE)
-        if pv.home_record:
-            writer.draw(R["REC_HOME"], pv.home_record, spleen_5x8, ALIGN_LEFT, 0, WHITE)
+    # --- Records (stacked wins-over-losses) ---
+    if pv.away_wins:
+        writer.draw(R["REC_AWAY_WINS"], pv.away_wins, spleen_5x8, ALIGN_CENTER, 0, WHITE)
+        writer.draw(R["REC_AWAY_LOSSES"], pv.away_losses, spleen_5x8, ALIGN_CENTER, 0, DIM_GRAY)
+    if pv.home_wins:
+        writer.draw(R["REC_HOME_WINS"], pv.home_wins, spleen_5x8, ALIGN_CENTER, 0, WHITE)
+        writer.draw(R["REC_HOME_LOSSES"], pv.home_losses, spleen_5x8, ALIGN_CENTER, 0, DIM_GRAY)
 
     pause = screen_geometry.PREGAME_SCROLL_PAUSE_MS
     pxs = screen_geometry.PREGAME_SCROLL_PX_PER_SEC
 
-    # --- Cycling / stacked info ---
-    if variant == "A":
-        ends = pv.cycle_ends
-        if ends:
-            i, pstart, pos = _cycle_phase(ends, elapsed)
-            writer.draw(R["INFO_LABEL"], pv.cycle_labels[i], spleen_5x8, ALIGN_LEFT, 0, DIM_GRAY)
-            if pv.cycle_big[i]:
-                writer.draw(R["INFO_VALUE"], pv.cycle_texts[i], unscii_16, ALIGN_CENTER, 0, WHITE)
-            else:
-                    _text_or_strip(writer, R["INFO_VALUE"], pv.cycle_texts[i], pv.cycle_strips[i],
-                               ALIGN_LEFT, pos - pstart, WHITE, pause, pxs)
-    elif variant == "B":
-        if pv.venue_text:
-            _text_or_strip(writer, R["INFO_VENUE"], pv.venue_text, pv.venue_strip,
-                          ALIGN_LEFT, elapsed, WHITE, pause, pxs)
-        if pv.time_text:
-            writer.draw(R["INFO_TIME"], pv.time_text, spleen_5x8, ALIGN_LEFT, 0, WHITE)
-        if pv.weather_text:
-            _text_or_strip(writer, R["INFO_WEATHER"], pv.weather_text, pv.weather_strip,
-                          ALIGN_LEFT, elapsed, WHITE, pause, pxs)
-    elif variant == "C":
-        if pv.time_text:
-            writer.draw(R["INFO_TIME"], pv.time_text, unscii_16, ALIGN_CENTER, 0, WHITE)
-        ends = pv.alt_ends
-        if ends:
-            i, pstart, pos = _cycle_phase(ends, elapsed)
-            _text_or_strip(writer, R["INFO_CYCLE"], pv.alt_texts[i], pv.alt_strips[i],
-                          ALIGN_LEFT, pos - pstart, WHITE, pause, pxs)
+    # --- Big time / date slot ---
+    if pv.time_text:
+        if pv.date_text and (
+            elapsed // screen_geometry.PREGAME_INFO_DWELL_MS
+        ) % 2 == 0:
+            # Not today: lead with the date (the surprising fact), then the
+            # time, alternating one dwell each.
+            big = pv.date_text
+        else:
+            big = pv.time_text
+        writer.draw(R["INFO_TIME"], big, unscii_16, ALIGN_CENTER, 0, WHITE)
 
-    # --- Pitchers ---
-    if "PITCHER_AWAY" in R:             # static, per-team (A, C)
-        if pv.away_pitcher:
-            _text_or_strip(writer, R["PITCHER_AWAY"], pv.away_pitcher, pv.away_pitcher_strip,
-                          ALIGN_LEFT, elapsed, pv.away_color, pause, pxs)
-        if pv.home_pitcher:
-            _text_or_strip(writer, R["PITCHER_HOME"], pv.home_pitcher, pv.home_pitcher_strip,
-                          ALIGN_LEFT, elapsed, pv.home_color, pause, pxs)
-    if "PITCHER_LINE" in R:             # alternating away<->home (B)
-        if pv.away_pitcher and pv.home_pitcher:
-            if (elapsed // screen_geometry.PREGAME_INFO_DWELL_MS) % 2 == 0:
-                _text_or_strip(writer, R["PITCHER_LINE"], pv.away_pitcher, pv.away_pitcher_strip,
-                              ALIGN_CENTER, elapsed, pv.away_color, pause, pxs)
-            else:
-                _text_or_strip(writer, R["PITCHER_LINE"], pv.home_pitcher, pv.home_pitcher_strip,
-                              ALIGN_CENTER, elapsed, pv.home_color, pause, pxs)
-        elif pv.away_pitcher:
-            _text_or_strip(writer, R["PITCHER_LINE"], pv.away_pitcher, pv.away_pitcher_strip,
-                          ALIGN_CENTER, elapsed, pv.away_color, pause, pxs)
-        elif pv.home_pitcher:
-            _text_or_strip(writer, R["PITCHER_LINE"], pv.home_pitcher, pv.home_pitcher_strip,
-                          ALIGN_CENTER, elapsed, pv.home_color, pause, pxs)
+    # --- Cycling info line (venue <-> weather) ---
+    ends = pv.alt_ends
+    if ends:
+        i, pstart, pos = _cycle_phase(ends, elapsed)
+        _text_or_strip(writer, R["INFO_CYCLE"], pv.alt_texts[i], pv.alt_strips[i],
+                      ALIGN_LEFT, pos - pstart, WHITE, pause, pxs)
+
+    # --- Pitchers (static, per-team colors) ---
+    if pv.away_pitcher:
+        _text_or_strip(writer, R["PITCHER_AWAY"], pv.away_pitcher, pv.away_pitcher_strip,
+                      ALIGN_LEFT, elapsed, pv.away_color, pause, pxs)
+    if pv.home_pitcher:
+        _text_or_strip(writer, R["PITCHER_HOME"], pv.home_pitcher, pv.home_pitcher_strip,
+                      ALIGN_LEFT, elapsed, pv.home_color, pause, pxs)
 
     _render_toast(writer, regions, state, now_ms)
     _render_toast_overlay(display, state, now_ms)
@@ -1531,10 +1506,11 @@ def render_menu(display: Hub75Display, writer: FontWriter, regions: Regions, sta
 
     display.fill(BLACK)
     for i in range(len(menu.row_strips)):
-        y = i * _MENU_ROW_H
+        y = _MENU_TOP + i * _MENU_ROW_H
         sel = i == menu.highlight
         if sel:
-            display.fill_rect(0, y, _MENU_HILIGHT_W, _MENU_ROW_H, color)
+            display.fill_rect(_MENU_HILIGHT_X, y, _MENU_HILIGHT_W,
+                              _MENU_ROW_H, color)
         fg = BLACK if sel else color
         display.rect(_MENU_CHECKBOX_X, y + 1, 7, 7, fg)
         if menu.row_checked[i]:
@@ -1545,17 +1521,18 @@ def render_menu(display: Hub75Display, writer: FontWriter, regions: Regions, sta
                               elapsed if sel else 0, fg)
 
     if menu.thumb_y >= 0:
-        display.fill_rect(_MENU_BAR_X, 0, 2, _MENU_SEP_Y - 1, DIM_GRAY)
+        display.fill_rect(_MENU_BAR_X, _MENU_TOP, 2,
+                          _MENU_SEP_Y - _MENU_TOP - 1, DIM_GRAY)
         display.fill_rect(_MENU_BAR_X, menu.thumb_y, 2, menu.thumb_h, color)
 
-    display.hline(0, _MENU_SEP_Y, DISPLAY_WIDTH, DIM_GRAY)
+    display.hline(1, _MENU_SEP_Y, DISPLAY_WIDTH - 2, DIM_GRAY)
     done_sel = menu.highlight == -1
     if done_sel:
-        display.fill_rect(0, _MENU_DONE_Y, DISPLAY_WIDTH,
-                          DISPLAY_HEIGHT - _MENU_DONE_Y, color)
+        display.fill_rect(1, _MENU_DONE_Y, DISPLAY_WIDTH - 2,
+                          DISPLAY_HEIGHT - 1 - _MENU_DONE_Y, color)
     # 4 static glyphs/frame — negligible next to the strip blits, and
     # allocation-free like every FontWriter path.
-    writer.aligned_text("DONE", 0, _MENU_DONE_Y + 2, DISPLAY_WIDTH,
+    writer.aligned_text("DONE", 0, _MENU_DONE_Y + 1, DISPLAY_WIDTH,
                         ALIGN_CENTER, BLACK if done_sel else color,
                         color if done_sel else BLACK, unscii_8)
 
