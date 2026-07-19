@@ -41,25 +41,11 @@ from scoreboard.layout import base_marker as base_marker_sprite
 from scoreboard.layout import dot as dot_sprite
 from scoreboard.layout import inning_top as inning_top_sprite
 from scoreboard.layout import inning_bottom as inning_bottom_sprite
+from scoreboard.layout import football_field as football_field_sprite
+from scoreboard.layout import football_ball as football_ball_sprite
 from scoreboard.layout import first_base as first_base_loc
 from scoreboard.layout import second_base as second_base_loc
 from scoreboard.layout import third_base as third_base_loc
-from scoreboard.layout import away_logo as away_logo_loc
-from scoreboard.layout import home_logo as home_logo_loc
-from scoreboard.layout import away_score as away_score_loc
-from scoreboard.layout import home_score as home_score_loc
-from scoreboard.layout import inning as inning_loc
-from scoreboard.layout import ball_label as ball_label_loc
-from scoreboard.layout import ball_values as ball_values_loc
-from scoreboard.layout import strike_label as strike_label_loc
-from scoreboard.layout import strike_values as strike_values_loc
-from scoreboard.layout import out_label as out_label_loc
-from scoreboard.layout import out_values as out_values_loc
-from scoreboard.layout import pitcher_label as pitcher_label_loc
-from scoreboard.layout import pitcher_name as pitcher_name_loc
-from scoreboard.layout import batter_label as batter_label_loc
-from scoreboard.layout import batter_name as batter_name_loc
-from scoreboard.layout import play_text as play_text_loc
 from scoreboard.layout import toast_spinner as toast_spinner_sprite
 from scoreboard.layout import toast_lock_closed as toast_lock_closed_sprite
 from scoreboard.layout import toast_lock_open as toast_lock_open_sprite
@@ -71,7 +57,7 @@ DIM_GRAY = rgb565(96, 96, 96)
 
 # _team_color_to_rgb565 / _TEAM_COLOR_MIN_CHANNEL live in scoreboard.state so
 # Core 0 setters can pre-brighten team colors without importing display;
-# render_game imports the helper (above) for its per-frame use.
+# render_mlb_live imports the helper (above) for its per-frame use.
 
 
 def pulse(now_ms: int, period_ms: int = 1000) -> int:
@@ -194,7 +180,7 @@ CRITICAL_PULSE_S_MAX = 80
 
 
 # Single source of truth for the play-flash font: play_text_display_ms must
-# measure with exactly the font render_game draws with, or the computed
+# measure with exactly the font the live renderers draw with, or the computed
 # window won't match the actual scroll.
 PLAY_TEXT_FONT = unscii_16
 
@@ -209,7 +195,7 @@ def play_text_display_ms(text: str) -> int:
     stored in PlayState so Core 1 never measures text.
     """
     text_w = measure_text(text, PLAY_TEXT_FONT)
-    max_scroll = text_w - play_text_loc.WIDTH
+    max_scroll = text_w - screen_geometry.PLAY_TEXT[2]
     scroll_ms = (max_scroll * 1000) // screen_geometry.GAME_SCROLL_PX_PER_SEC if max_scroll > 0 else 0
     # Mirrors calculate_scroll_offset's cycle: pause + scroll + pause.
     return PLAY_TEXT_SCROLL_PAUSE_MS + scroll_ms + PLAY_TEXT_SCROLL_PAUSE_MS
@@ -270,16 +256,12 @@ class Regions:
         # Stored so update_for_qr() can rebuild setup regions against the same display.
         self._display = display
 
-        # --- Game screen ---
-        self.inning = Region(display, inning_loc.X, inning_loc.Y, inning_loc.WIDTH, inning_loc.HEIGHT)
-        self.ball_label = Region(display, ball_label_loc.X, ball_label_loc.Y, ball_label_loc.WIDTH, ball_label_loc.HEIGHT)
-        self.strike_label = Region(display, strike_label_loc.X, strike_label_loc.Y, strike_label_loc.WIDTH, strike_label_loc.HEIGHT)
-        self.out_label = Region(display, out_label_loc.X, out_label_loc.Y, out_label_loc.WIDTH, out_label_loc.HEIGHT)
-        self.pitcher_label = Region(display, pitcher_label_loc.X, pitcher_label_loc.Y, pitcher_label_loc.WIDTH, pitcher_label_loc.HEIGHT)
-        self.batter_label = Region(display, batter_label_loc.X, batter_label_loc.Y, batter_label_loc.WIDTH, batter_label_loc.HEIGHT)
-        self.pitcher_name = Region(display, pitcher_name_loc.X, pitcher_name_loc.Y, pitcher_name_loc.WIDTH, pitcher_name_loc.HEIGHT)
-        self.batter_name = Region(display, batter_name_loc.X, batter_name_loc.Y, batter_name_loc.WIDTH, batter_name_loc.HEIGHT)
-        self.play_text = Region(display, play_text_loc.X, play_text_loc.Y, play_text_loc.WIDTH, play_text_loc.HEIGHT)
+        # --- Shared play-flash strip (all live screens) ---
+        # The MLB text slots that used to live here are now built from the
+        # mlb_live variant table (see rebuild_variant_regions); only the
+        # sport-neutral flash strip stays fixed, sourced from a code constant.
+        pt = screen_geometry.PLAY_TEXT
+        self.play_text = Region(display, pt[0], pt[1], pt[2], pt[3])
 
         # --- Startup screen ---
         self.startup_title = Region(display, 0, 4, DISPLAY_WIDTH, 16)
@@ -415,8 +397,8 @@ class Regions:
         self.setup_line_54 = Region(display, left_pad, 54, width_for(54, 8), 8)
 
 
-def _draw_count_dots(display: Hub75Display, slice_mod: object, filled_count: int, filled_color: int | None = None) -> None:
-    n_dots = (slice_mod.WIDTH + 1) // (dot_sprite.WIDTH + 1)  # type: ignore[attr-defined]
+def _draw_count_dots(display: Hub75Display, x: int, y: int, width: int, filled_count: int, filled_color: int | None = None) -> None:
+    n_dots = (width + 1) // (dot_sprite.WIDTH + 1)  # type: ignore[attr-defined]
     default_outline = dot_sprite.palette.pixel(1, 0)
     default_fill = dot_sprite.palette.pixel(2, 0)
     # When `filled_color` is provided, every dot's outline tracks it (so the
@@ -429,8 +411,8 @@ def _draw_count_dots(display: Hub75Display, slice_mod: object, filled_count: int
             dot_sprite.palette.pixel(2, 0, active if i < filled_count else default_fill)
             display.blit(
                 dot_sprite.data,
-                slice_mod.X + i * (dot_sprite.WIDTH + 1),  # type: ignore[attr-defined]
-                slice_mod.Y,  # type: ignore[attr-defined]
+                x + i * (dot_sprite.WIDTH + 1),  # type: ignore[attr-defined]
+                y,
                 dot_sprite.KEY,
                 dot_sprite.palette  # type: ignore
             )
@@ -674,7 +656,8 @@ def render_startup(display: Hub75Display, writer: FontWriter, regions: Regions, 
     draw_progress_bar(display, bar_x, 24, bar_width, 8, progress, colors)
 
     if startup.attempts_total > 0:
-        _draw_count_dots(display, _startup_dots_loc, startup.attempt)
+        _draw_count_dots(display, _startup_dots_loc.X, _startup_dots_loc.Y,
+                         _startup_dots_loc.WIDTH, startup.attempt)
 
     writer.draw(regions.startup_step, startup.step_text, spleen_5x8, ALIGN_LEFT, 0, colors.secondary)
     writer.draw(regions.startup_operation, startup.operation, spleen_5x8, ALIGN_CENTER, 0, colors.primary)
@@ -914,7 +897,7 @@ def _render_toast_overlay(display: Hub75Display, state: StateBuffer, now_ms: int
         _draw_lock(display, color, toast.kind == TOAST_UNLOCK)
 
 
-def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int, play_elapsed_ms: int) -> None:
+def render_mlb_live(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int, play_elapsed_ms: int) -> None:
     display.fill(BLACK)
 
     mlv = state.mlb_live
@@ -924,15 +907,14 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
         _render_toast_overlay(display, state, now_ms)
         return
 
+    geo = screen_geometry.geometry_for('mlb_live')
+    R = regions.variant['mlb_live']
+
     # --- Dividers (shared style with the pregame/final screens) ---
     if screen_geometry.SHOW_DIVIDERS:
-        display.vline(screen_geometry.LIVE_DIVIDER_X, 0, DISPLAY_HEIGHT, DIM_GRAY)
-        display.hline(
-            screen_geometry.LIVE_DIVIDER_X + 1,
-            screen_geometry.LIVE_SEPARATOR_Y,
-            DISPLAY_WIDTH - screen_geometry.LIVE_DIVIDER_X - 1,
-            DIM_GRAY,
-        )
+        display.vline(geo["DIVIDER_X"], 0, DISPLAY_HEIGHT, DIM_GRAY)
+        display.hline(geo["DIVIDER_X"] + 1, geo["SEPARATOR_Y"],
+                      DISPLAY_WIDTH - geo["DIVIDER_X"] - 1, DIM_GRAY)
 
     # --- Sprites ---
 
@@ -944,9 +926,9 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
     _draw_base_markers(display, mlv.bases, mlv.batting_packed)
 
     if state.away_logo is not None:
-        display.blit(state.away_logo, away_logo_loc.X, away_logo_loc.Y)
+        display.blit(state.away_logo, geo["LOGO_AWAY"][0], geo["LOGO_AWAY"][1])
     if state.home_logo is not None:
-        display.blit(state.home_logo, home_logo_loc.X, home_logo_loc.Y)
+        display.blit(state.home_logo, geo["LOGO_HOME"][0], geo["LOGO_HOME"][1])
 
     if half is TOP:
         display.blit(inning_top_sprite.data, inning_top_sprite.X, inning_top_sprite.Y, inning_top_sprite.KEY, inning_top_sprite.palette)  # type: ignore
@@ -967,20 +949,25 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
     else:
         pulsed = None
 
-    _draw_count_dots(display, ball_values_loc, mlv.balls, pulsed if balls_critical else None)
-    _draw_count_dots(display, strike_values_loc, mlv.strikes, pulsed if strikes_critical else None)
-    _draw_count_dots(display, out_values_loc, mlv.outs, pulsed if outs_critical else None)
+    bd = geo["BALL_DOTS"]
+    _draw_count_dots(display, bd[0], bd[1], bd[2], mlv.balls, pulsed if balls_critical else None)
+    sd = geo["STRIKE_DOTS"]
+    _draw_count_dots(display, sd[0], sd[1], sd[2], mlv.strikes, pulsed if strikes_critical else None)
+    od = geo["OUT_DOTS"]
+    _draw_count_dots(display, od[0], od[1], od[2], mlv.outs, pulsed if outs_critical else None)
 
     # --- Text ---
     # Scores stay on the zero-alloc integer() path.
-    writer.integer(mlv.away_score, away_score_loc.X, away_score_loc.Y, away_score_loc.WIDTH, ALIGN_CENTER, WHITE, font=unscii_16)
-    writer.integer(mlv.home_score, home_score_loc.X, home_score_loc.Y, home_score_loc.WIDTH, ALIGN_CENTER, WHITE, font=unscii_16)
+    sa = geo["SCORE_AWAY"]
+    writer.integer(mlv.away_score, sa[0], sa[1], sa[2], ALIGN_CENTER, WHITE, font=unscii_16)
+    sh = geo["SCORE_HOME"]
+    writer.integer(mlv.home_score, sh[0], sh[1], sh[2], ALIGN_CENTER, WHITE, font=unscii_16)
 
-    writer.draw(regions.inning, mlv.inning_text, unscii_8, ALIGN_CENTER, 0, WHITE)
+    writer.draw(R["INNING"], mlv.inning_text, unscii_8, ALIGN_CENTER, 0, WHITE)
 
-    writer.draw(regions.ball_label, "B", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
-    writer.draw(regions.strike_label, "S", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
-    writer.draw(regions.out_label, "O", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
+    writer.draw(R["BALL_LABEL"], "B", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
+    writer.draw(R["STRIKE_LABEL"], "S", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
+    writer.draw(R["OUT_LABEL"], "O", unscii_8, ALIGN_LEFT, 0, DIM_GRAY)
 
     # Colors were half-resolved to rgb565 at commit; -1 = between halves.
     pitch_color = mlv.pitch_color if mlv.pitch_color >= 0 else DIM_GRAY
@@ -1007,17 +994,17 @@ def render_game(display: Hub75Display, writer: FontWriter, regions: Regions, sta
         else:
             if mlv.has_at_bat:
                 elapsed_ms = view_elapsed_ms
-                _text_or_strip(writer, regions.pitcher_name, mlv.pitcher_text,
+                _text_or_strip(writer, R["PITCHER_NAME"], mlv.pitcher_text,
                                mlv.pitcher_strip, ALIGN_CENTER, elapsed_ms, pitch_color,
                                PLAY_TEXT_SCROLL_PAUSE_MS,
                                screen_geometry.GAME_SCROLL_PX_PER_SEC)
-                _text_or_strip(writer, regions.batter_name, mlv.batter_text,
+                _text_or_strip(writer, R["BATTER_NAME"], mlv.batter_text,
                                mlv.batter_strip, ALIGN_CENTER, elapsed_ms, bat_color,
                                PLAY_TEXT_SCROLL_PAUSE_MS,
                                screen_geometry.GAME_SCROLL_PX_PER_SEC)
 
-            writer.draw(regions.pitcher_label, "PIT", unscii_8, ALIGN_LEFT, 0, pitch_color)
-            writer.draw(regions.batter_label, "BAT", unscii_8, ALIGN_LEFT, 0, bat_color)
+            writer.draw(R["PITCHER_LABEL"], "PIT", unscii_8, ALIGN_LEFT, 0, pitch_color)
+            writer.draw(R["BATTER_LABEL"], "BAT", unscii_8, ALIGN_LEFT, 0, bat_color)
 
     _render_toast_overlay(display, state, now_ms)
 
@@ -1341,7 +1328,7 @@ def render_soccer_live(display: Hub75Display, writer: FontWriter, regions: Regio
         play_window_ms = time.ticks_diff(now_ms, play.updated_ms)
         show_play = bool(play.text) and play.updated_ms != 0 and play_window_ms < play.display_ms
         if show_play:
-            # No glyph fallback — see render_game (strip is an invariant).
+            # No glyph fallback — see render_mlb_live (strip is an invariant).
             writer.draw_strip(
                 regions.play_text, play.strip,
                 ALIGN_LEFT, play_elapsed_ms, WHITE,
@@ -1422,13 +1409,176 @@ def render_nba_live(display: Hub75Display, writer: FontWriter, regions: Regions,
         play = state.play
         play_window_ms = time.ticks_diff(now_ms, play.updated_ms)
         if bool(play.text) and play.updated_ms != 0 and play_window_ms < play.display_ms:
-            # No glyph fallback — see render_game (strip is an invariant).
+            # No glyph fallback — see render_mlb_live (strip is an invariant).
             writer.draw_strip(
                 regions.play_text, play.strip,
                 ALIGN_LEFT, play_elapsed_ms, WHITE,
                 pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
                 pixels_per_second=screen_geometry.GAME_SCROLL_PX_PER_SEC,
             )
+
+    _render_toast_overlay(display, state, now_ms)
+
+
+# =============================================================================
+# Football live screen
+# =============================================================================
+
+# The field sprite's endzone blocks ship as pure-red (away) / pure-blue
+# (home) placeholder colors; their palette indices are discovered at import
+# by value because compile_layout assigns indices in first-seen order, which
+# an art edit can reorder. GS4 palettes cap at 16 entries and out-of-range
+# pixel() reads return None on the device and the preview shim alike, so the
+# bounded scan is safe. A missing placeholder means the art drifted — raise
+# here at import (Core 0), never mid-render.
+_EZ_AWAY_PLACEHOLDER = rgb565(255, 0, 0)
+_EZ_HOME_PLACEHOLDER = rgb565(0, 0, 255)
+
+
+def _football_palette_index(color: int, what: str) -> int:
+    for i in range(16):
+        if football_field_sprite.palette.pixel(i, 0) == color:
+            return i
+    raise ValueError("football field palette: missing " + what + " placeholder")
+
+
+_EZ_AWAY_IDX = _football_palette_index(_EZ_AWAY_PLACEHOLDER, "away endzone")
+_EZ_HOME_IDX = _football_palette_index(_EZ_HOME_PLACEHOLDER, "home endzone")
+
+_FOOTBALL_FIELD_TOP_Y = football_field_sprite.Y                                        # 52
+_FOOTBALL_FIELD_BOTTOM_Y = football_field_sprite.Y + football_field_sprite.HEIGHT - 1  # 62
+_FOOTBALL_BALL_Y = football_field_sprite.Y - football_ball_sprite.HEIGHT - 2           # 45
+_FOOTBALL_BALL_HALF_W = football_ball_sprite.WIDTH // 2
+_FOOTBALL_LOS_COLOR = rgb565(0, 0, 140)   # scrimmage navy (pre-rewrite palette)
+_FOOTBALL_FD_COLOR = rgb565(255, 255, 0)  # first-down yellow
+
+
+def _draw_football_arrow(display: Hub75Display, x: int, y: int, right: bool, color: int) -> None:
+    """3x5 solid triangle pointing left or right, top-left corner at (x, y)."""
+    for i in range(3):
+        col_x = x + i if right else x + 2 - i
+        display.vline(col_x, y + i, 5 - 2 * i, color)
+
+
+def _draw_timeout_bars(display: Hub75Display, x: int, y: int, remaining: int, color: int) -> None:
+    """Three 6x1 bars with 1px gaps: team color while held, DIM_GRAY once
+    spent (bars empty left-to-right as timeouts are burned)."""
+    for i in range(3):
+        display.hline(x + i * 7, y, 6, color if i < remaining else DIM_GRAY)
+
+
+def _draw_football_field(display: Hub75Display, fb) -> None:
+    """Blit the field with endzones tinted to the team colors, then the
+    precomputed scrimmage / first-down perspective lines, the ball riding
+    the scrimmage line's top end, and the attack-direction arrow. All
+    endpoints come from FootballLiveView (Core 0 projects; Core 1 only
+    draws segments). The palette tint restores in a `finally` — the
+    base-marker pattern; see the mutation contract's special case.
+    """
+    pal = football_field_sprite.palette
+    pal.pixel(_EZ_AWAY_IDX, 0, fb.away_color)
+    pal.pixel(_EZ_HOME_IDX, 0, fb.home_color)
+    try:
+        display.blit(football_field_sprite.data, football_field_sprite.X,
+                     football_field_sprite.Y, football_field_sprite.KEY, pal)  # type: ignore
+    finally:
+        pal.pixel(_EZ_AWAY_IDX, 0, _EZ_AWAY_PLACEHOLDER)
+        pal.pixel(_EZ_HOME_IDX, 0, _EZ_HOME_PLACEHOLDER)
+
+    if not fb.has_ball:
+        return
+
+    # 2px-wide perspective lines; first-down yellow wins where they meet.
+    for dx in range(2):
+        display.line(fb.los_x + dx, _FOOTBALL_FIELD_BOTTOM_Y,
+                     fb.los_top_x + dx, _FOOTBALL_FIELD_TOP_Y, _FOOTBALL_LOS_COLOR)
+    if fb.fd_x >= 0:
+        for dx in range(2):
+            display.line(fb.fd_x + dx, _FOOTBALL_FIELD_BOTTOM_Y,
+                         fb.fd_top_x + dx, _FOOTBALL_FIELD_TOP_Y, _FOOTBALL_FD_COLOR)
+
+    display.blit(football_ball_sprite.data, fb.los_top_x - _FOOTBALL_BALL_HALF_W,
+                 _FOOTBALL_BALL_Y, football_ball_sprite.KEY, football_ball_sprite.palette)  # type: ignore
+    if fb.dir_right:
+        _draw_football_arrow(display, fb.los_top_x + _FOOTBALL_BALL_HALF_W + 3,
+                             _FOOTBALL_BALL_Y, True, _FOOTBALL_LOS_COLOR)
+    else:
+        _draw_football_arrow(display, fb.los_top_x - _FOOTBALL_BALL_HALF_W - 5,
+                             _FOOTBALL_BALL_Y, False, _FOOTBALL_LOS_COLOR)
+
+
+def render_football_live(display: Hub75Display, writer: FontWriter, regions: Regions, state: StateBuffer, colors: UiColors, now_ms: int, view_elapsed_ms: int, play_elapsed_ms: int) -> None:
+    """Render the live football screen (single design, broadcast corners).
+
+    Logos in the top corners over timeout bars and scores; quarter chip +
+    poll-time clock across the top center (a display string, never
+    extrapolated — see FootballLiveView); down & distance mid-screen with
+    the possession arrow beside it, both in the warning color inside the
+    red zone; the perspective field strip along the bottom with
+    team-tinted endzones, scrimmage and first-down lines, and the ball at
+    the scrimmage line. Bottom-zone priority: toast > play flash (shared
+    strip, overlays the field zone) > field.
+    """
+    display.fill(BLACK)
+
+    fb = state.football_live
+    geo = screen_geometry.geometry_for('football_live')
+    R = regions.variant['football_live']
+
+    # --- Corner stacks: logos, timeout bars, scores ---
+    if state.away_logo is not None:
+        display.blit(state.away_logo, geo["LOGO_AWAY"][0], geo["LOGO_AWAY"][1])
+    if state.home_logo is not None:
+        display.blit(state.home_logo, geo["LOGO_HOME"][0], geo["LOGO_HOME"][1])
+
+    to_y = geo["TIMEOUT_Y"]
+    if fb.away_timeouts >= 0:
+        _draw_timeout_bars(display, geo["TIMEOUT_AWAY_X"], to_y, fb.away_timeouts, fb.away_color)
+    if fb.home_timeouts >= 0:
+        _draw_timeout_bars(display, geo["TIMEOUT_HOME_X"], to_y, fb.home_timeouts, fb.home_color)
+
+    sa = geo["SCORE_AWAY"]
+    writer.integer(fb.away_score, sa[0], sa[1], sa[2], ALIGN_CENTER, WHITE, font=unscii_16)
+    sh = geo["SCORE_HOME"]
+    writer.integer(fb.home_score, sh[0], sh[1], sh[2], ALIGN_CENTER, WHITE, font=unscii_16)
+
+    # --- Period chip + clock (NBA conventions) ---
+    if fb.phase_text:
+        writer.draw(R["PHASE"], fb.phase_text, unscii_8, ALIGN_CENTER, 0, WHITE)
+
+    if fb.clock_accent:
+        clock_col = colors.accent
+    elif fb.clock_low:
+        clock_col = colors.clock_warning
+    else:
+        clock_col = colors.clock_normal
+    ck = geo["CLOCK"]
+    writer.aligned_text(fb.clock_text, ck[0], ck[1], ck[2], ALIGN_CENTER, clock_col, font=_CLOCK_FONT)
+
+    # --- Down & distance + possession arrow ---
+    if fb.situation_text:
+        sit_col = colors.clock_warning if fb.red_zone else WHITE
+        writer.draw(R["SITUATION"], fb.situation_text, spleen_5x8, ALIGN_CENTER, 0, sit_col)
+        if fb.sit_arrow_x >= 0:
+            arrow_col = sit_col if fb.red_zone else (
+                fb.home_color if fb.sit_arrow_right else fb.away_color)
+            _draw_football_arrow(display, fb.sit_arrow_x, geo["SITUATION"][1] + 1,
+                                 fb.sit_arrow_right, arrow_col)
+
+    # --- Bottom zone: toast > play flash > field strip ---
+    if not _render_toast(writer, regions, state, now_ms):
+        play = state.play
+        play_window_ms = time.ticks_diff(now_ms, play.updated_ms)
+        if bool(play.text) and play.updated_ms != 0 and play_window_ms < play.display_ms:
+            # No glyph fallback — see render_mlb_live (strip is an invariant).
+            writer.draw_strip(
+                regions.play_text, play.strip,
+                ALIGN_LEFT, play_elapsed_ms, WHITE,
+                pause_ms=PLAY_TEXT_SCROLL_PAUSE_MS,
+                pixels_per_second=screen_geometry.GAME_SCROLL_PX_PER_SEC,
+            )
+        else:
+            _draw_football_field(display, fb)
 
     _render_toast_overlay(display, state, now_ms)
 
@@ -1583,12 +1733,13 @@ _RENDERERS = {
     'setup': lambda d, w, r, s, c, now, view, play: render_setup(d, w, r, s, c, now),
     'error': lambda d, w, r, s, c, now, view, play: render_error(d, w, r, s, c),
     'updating': lambda d, w, r, s, c, now, view, play: render_updating(d, w, r, s, c),
-    'mlb_live': render_game,
+    'mlb_live': render_mlb_live,
     'pregame': lambda d, w, r, s, c, now, view, play: render_pregame(d, w, r, s, c, now, view),
     'final': lambda d, w, r, s, c, now, view, play: render_final(d, w, r, s, c, now, view),
     'soccer_live': render_soccer_live,
     'soccer_final': lambda d, w, r, s, c, now, view, play: render_soccer_final(d, w, r, s, c, now, view),
     'nba_live': render_nba_live,
+    'football_live': render_football_live,
 }
 
 
@@ -1597,8 +1748,9 @@ _RENDERERS = {
 # =============================================================================
 
 # Modes with no time-driven animation: re-rendering is only needed when a new
-# commit lands (or a toast is fading out). 'mlb_live' and 'setup' animate every
-# frame (scrolling text, pulsing count dots) and always redraw.
+# commit lands (or a toast is fading out). Modes not listed here — the game
+# screens and 'setup' — animate every frame (scrolls, pulses, clocks) and
+# always redraw.
 _STATIC_MODES = ('idle', 'no_games', 'error', 'startup', 'updating')
 
 
@@ -1633,10 +1785,12 @@ _STATIC_MODES = ('idle', 'no_games', 'error', 'startup', 'updating')
 #      confinement, and a Core-0-readable field would force memory-model
 #      reasoning onto the whole object.
 #
-# Special case: base_marker_sprite.palette is tinted in place and restored in
-# a `finally` (_draw_base_markers). Its steady-state gold entries are
-# immutable config that must survive across frames, so it is NOT scratch and
-# NOT poisonable — the restore is what keeps it contract-clean.
+# Special case: base_marker_sprite.palette and football_field_sprite.palette
+# are tinted in place and restored in a `finally` (_draw_base_markers,
+# _draw_football_field). Their steady-state entries (gold markers, endzone
+# placeholders) are immutable config that must survive across frames, so
+# they are NOT scratch and NOT poisonable — the restore is what keeps them
+# contract-clean.
 #
 # The system's other two mutation domains belong to Core 0: the
 # TripleBufferedState mailbox (state.py — Core 0 writes, Core 1 latches a

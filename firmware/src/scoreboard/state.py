@@ -30,6 +30,7 @@ import scoreboard.logger as logger
 from scoreboard.fonts import rgb565, measure_text, fit_text, render_strip, spleen_5x8, unscii_8, unscii_16
 from scoreboard import screen_geometry
 from scoreboard.inning_half import BOTTOM, TOP
+from scoreboard import football
 from scoreboard.nba import PHASE_END_OF_PERIOD, PHASE_HALFTIME, period_name
 from scoreboard.soccer import (
     EVENT_GOAL, FT_AET, FT_PENALTIES, HALF_ET_FIRST, HALF_SHOOTOUT,
@@ -43,8 +44,8 @@ from scoreboard.soccer import (
 # Preserves hue for chromatic colors; near-neutrals move toward bright gray.
 #
 # Lives here (not display.py) so Core 0 state setters can pre-brighten team
-# colors at commit time without importing display; display.render_game imports
-# _team_color_to_rgb565 from this module for its per-frame use.
+# colors at commit time without importing display; the live renderers import
+# _team_color_to_rgb565 from this module for their per-frame use.
 _TEAM_COLOR_MIN_CHANNEL = 128
 
 
@@ -428,7 +429,8 @@ class PregameView:
 class FinalView:
     """Pre-built final screen data. Line-score rows are equal-char-count
     strings (3 chars per inning column) so the three rows measure identically
-    and scroll in lockstep with zero extra mechanism (see set_final)."""
+    and scroll in lockstep with zero extra mechanism (see
+    _set_linescore_final)."""
 
     def __init__(self) -> None:
         # Identity of the game on screen: gates the line-score scroll restart
@@ -580,6 +582,65 @@ class NbaLiveView:
         self.clock_low = other.clock_low
 
 
+class FootballLiveView:
+    """Pre-built live football screen data.
+
+    The clock follows the NBA convention (see NbaLiveView): a display
+    string re-drawn until the next poll, with "HT" / "END" break accents —
+    never extrapolated. Everything spatial about the field strip is
+    precomputed here on Core 0: the yardline→pixel map, both perspective
+    line endpoints (scrimmage + first down), and the possession arrow x.
+    The renderer only draws stored segments; it never projects.
+    `away_timeouts` / `home_timeouts` of -1 mean unknown (bars undrawn).
+    """
+
+    def __init__(self) -> None:
+        self.game_id: str = ''
+        self.away_score: int = 0
+        self.home_score: int = 0
+        self.phase_text: str = ''       # "Q3" / "OT" / "2OT" ('' at halftime)
+        self.clock_text: str = ''       # "10:42", or "HT" / "END"
+        self.clock_accent: bool = False  # break state: draw in accent color
+        self.clock_low: bool = False     # sub-minute Q2/Q4/OT: warning color
+        self.situation_text: str = ''    # "3RD & 7" / "1ST & GOAL" ('' = none)
+        self.red_zone: bool = False      # situation renders in warning color
+        self.sit_arrow_x: int = -1       # possession triangle x (-1 = hidden)
+        self.sit_arrow_right: bool = False
+        self.away_timeouts: int = -1     # 0..3, -1 = unknown
+        self.home_timeouts: int = -1
+        self.away_color: int = 0xFFFF    # pre-brightened: endzone/bars/arrow
+        self.home_color: int = 0xFFFF
+        self.has_ball: bool = False      # situation present: ball + lines drawn
+        self.los_x: int = 0              # scrimmage line, field-bottom x
+        self.los_top_x: int = 0          # ... projected to the field's top row
+        self.fd_x: int = -1              # first-down line (-1 = none)
+        self.fd_top_x: int = 0
+        self.dir_right: bool = False     # attack direction (arrow beside ball)
+
+    def copy_from(self, other: "FootballLiveView") -> None:
+        self.game_id = other.game_id
+        self.away_score = other.away_score
+        self.home_score = other.home_score
+        self.phase_text = other.phase_text
+        self.clock_text = other.clock_text
+        self.clock_accent = other.clock_accent
+        self.clock_low = other.clock_low
+        self.situation_text = other.situation_text
+        self.red_zone = other.red_zone
+        self.sit_arrow_x = other.sit_arrow_x
+        self.sit_arrow_right = other.sit_arrow_right
+        self.away_timeouts = other.away_timeouts
+        self.home_timeouts = other.home_timeouts
+        self.away_color = other.away_color
+        self.home_color = other.home_color
+        self.has_ball = other.has_ball
+        self.los_x = other.los_x
+        self.los_top_x = other.los_top_x
+        self.fd_x = other.fd_x
+        self.fd_top_x = other.fd_top_x
+        self.dir_right = other.dir_right
+
+
 class UiColors:
     """Pre-computed UI colors (RGB565), set by Core 0."""
 
@@ -620,6 +681,7 @@ class StateBuffer:
         self.soccer_live: SoccerLiveView = SoccerLiveView()
         self.soccer_final: SoccerFinalView = SoccerFinalView()
         self.nba_live: NbaLiveView = NbaLiveView()
+        self.football_live: FootballLiveView = FootballLiveView()
         self.toast: ToastState = ToastState()
         self.menu: MenuView = MenuView()
         self.home_logo: framebuf.FrameBuffer | None = None
@@ -641,6 +703,7 @@ class StateBuffer:
         self.soccer_live.copy_from(other.soccer_live)
         self.soccer_final.copy_from(other.soccer_final)
         self.nba_live.copy_from(other.nba_live)
+        self.football_live.copy_from(other.football_live)
         self.toast.copy_from(other.toast)
         self.menu.copy_from(other.menu)
         self.home_logo = other.home_logo
@@ -1321,19 +1384,35 @@ def _build_linescore(fv, count: int, away_line, home_line) -> None:
     fv.ls_home_strip = _LS_HOME_POOL.render(fv.ls_home, spleen_5x8)
 
 
-def set_final(game, home_logo, away_logo) -> None:
-    """Publish a final screen from a parsed mlb.FinalGame.
+def _ot_final_text(periods: int) -> str:
+    """FINAL / F/OT / F/2OT... for the linescore sports whose regulation is
+    4 periods (NBA + football). Baseball never calls this — extra innings use
+    the "F/%d" inning-count form instead."""
+    if periods <= 4:
+        return "FINAL"
+    if periods == 5:
+        return "F/OT"
+    return "F/%dOT" % (periods - 4)
+
+
+def _set_linescore_final(game, home_logo, away_logo,
+                         variant_key, total_label, periods, final_text) -> None:
+    """Publish a linescore final screen (MLB / NBA / football share this).
 
     Line-score rows (header / away / home) are built as equal-char-count
-    strings -- 3 chars per inning column -- so the three rows measure
-    identically in the fixed-width font and scroll in lockstep. A team with
-    fewer entries than innings_played gets " X " for missing trailing columns
-    (walk-off convention). Team colors are pre-brightened.
+    strings -- 3 chars per column -- so the three rows measure identically in
+    the fixed-width font and scroll in lockstep. A team with fewer entries
+    than `periods` gets " X " for missing trailing columns (walk-off
+    convention). Team colors are pre-brightened.
 
     The line-score scroll is restarted only when the displayed view identity
     (mode + game_id) changes, so a standing re-poll of the same final keeps the
     scroll in progress (same rule as set_pregame / the live screen). The rows
     themselves are rebuilt every call so a late score correction still lands.
+
+    Each sport's facts stay at the call boundary: `variant_key` (which final
+    table to draw), `total_label` ('R' vs 'T'), `periods` (innings vs quarters,
+    which also names the source attribute), and the pre-derived `final_text`.
     """
     state = get_write_state()
     view_changed = state.mode != 'final' or state.final.game_id != game.game_id
@@ -1344,25 +1423,31 @@ def set_final(game, home_logo, away_logo) -> None:
     state.home_logo = home_logo
     fv = state.final
     fv.game_id = game.game_id
-    fv.variant_key = 'mlb_final'
+    fv.variant_key = variant_key
 
     away = game.away
     home = game.home
-    innings = game.innings_played
 
     fv.away_score = away.score
     fv.home_score = home.score
     fv.home_won = home.score > away.score
     fv.away_color = _team_color_to_rgb565(away.colors.primary)
     fv.home_color = _team_color_to_rgb565(home.colors.primary)
-    fv.final_text = ("F/%d" % innings) if innings > 9 else "FINAL"
+    fv.final_text = final_text
     # Stamped every call: the write buffer carries the previous commit
     # forward, which may have been another sport's final.
-    fv.total_label = 'R'
+    fv.total_label = total_label
 
-    _build_linescore(fv, innings, away.line, home.line)
+    _build_linescore(fv, periods, away.line, home.line)
 
     commit_state()
+
+
+def set_mlb_final(game, home_logo, away_logo) -> None:
+    """Publish a final screen from a parsed mlb.FinalGame."""
+    n = game.innings_played
+    _set_linescore_final(game, home_logo, away_logo, 'mlb_final', 'R', n,
+                         ("F/%d" % n) if n > 9 else "FINAL")
 
 
 # =============================================================================
@@ -1524,9 +1609,9 @@ def set_soccer_live(game, home_logo, away_logo, prev_clock_s: int | None = None)
 def set_soccer_final(game, home_logo, away_logo) -> None:
     """Publish a full-time soccer screen from a parsed soccer.FinalGame.
 
-    Winner emphasis mirrors set_final (winner in team color, loser DIM), but
-    soccer draws are real: a level score colors both teams. Scorer lines are
-    pre-rendered into strips for the Core 1 scroll fast path.
+    Winner emphasis mirrors the linescore finals (winner in team color, loser
+    DIM), but soccer draws are real: a level score colors both teams. Scorer
+    lines are pre-rendered into strips for the Core 1 scroll fast path.
     """
     state = get_write_state()
     view_changed = state.mode != 'soccer_final' or state.soccer_final.game_id != game.game_id
@@ -1615,42 +1700,151 @@ def set_nba_live(game, home_logo, away_logo) -> None:
 def set_nba_final(game, home_logo, away_logo) -> None:
     """Publish a final NBA screen from a parsed nba.FinalGame.
 
-    Reuses the (sport-agnostic) final screen wholesale: mode 'final', the
+    Reuses the (sport-agnostic) linescore final wholesale: mode 'final', the
     same FinalView, geometry, and renderer as MLB — quarters in the header
     columns instead of innings, "T" over the pinned totals instead of "R",
     and "F/OT" ("F/2OT", ...) when overtime was played.
     """
+    n = game.periods_played
+    _set_linescore_final(game, home_logo, away_logo, 'nba_final', 'T', n,
+                         _ot_final_text(n))
+
+
+# =============================================================================
+# Football screen setters (Core 0 string + field-pixel pre-build)
+# =============================================================================
+
+_FOOTBALL_DOWNS = ('', '1ST', '2ND', '3RD', '4TH')
+
+
+def _football_top_x(x: int) -> int:
+    """Project a field-bottom x to the field's top row toward the vanishing
+    point (integer round-half-away form of the sprite's perspective; the
+    constants live beside the football table in screen_geometry)."""
+    d = screen_geometry.FOOTBALL_VP_X - x
+    num = screen_geometry.FOOTBALL_PERSP_NUM
+    den = screen_geometry.FOOTBALL_PERSP_DEN
+    if d >= 0:
+        return x + (d * num + den // 2) // den
+    return x - ((-d) * num + den // 2) // den
+
+
+def set_football_live(game, home_logo, away_logo) -> None:
+    """Publish a live football screen from a parsed football.LiveGame.
+
+    Phase/clock mapping follows set_nba_live verbatim (display-string
+    clock, accent "HT"/"END" during breaks, warning color for a sub-minute
+    clock in the periods that can end a half). The drive situation is
+    pre-built into the "3RD & 7" line ("& GOAL" when the first-down target
+    is the goal line), the possession arrow x beside it, and the field
+    strip's pixel geometry: yardlines map 1 px/yard from
+    FOOTBALL_FIELD_YARD0_X and both perspective line endpoints are
+    projected here, so Core 1 only draws precomputed segments.
+
+    Yardline convention (excavated from the pre-rewrite implementation;
+    re-validate on live games — see BACKLOG): ESPN's `yard_line` is
+    possession-relative, the away drive advances left→right, home mirrors.
+    """
     state = get_write_state()
-    view_changed = state.mode != 'final' or state.final.game_id != game.game_id
-    state.mode = 'final'
+    view_changed = state.mode != 'football_live' or state.football_live.game_id != game.game_id
+    state.mode = 'football_live'
     if view_changed:
         state.animation_start_ms = time.ticks_ms()
     state.away_logo = away_logo
     state.home_logo = home_logo
-    fv = state.final
-    fv.game_id = game.game_id
-    fv.variant_key = 'nba_final'
+    fb = state.football_live
+    fb.game_id = game.game_id
 
-    away = game.away
-    home = game.home
-    periods = game.periods_played
+    fb.away_score = game.away.score
+    fb.home_score = game.home.score
 
-    fv.away_score = away.score
-    fv.home_score = home.score
-    fv.home_won = home.score > away.score
-    fv.away_color = _team_color_to_rgb565(away.colors.primary)
-    fv.home_color = _team_color_to_rgb565(home.colors.primary)
-    if periods <= 4:
-        fv.final_text = "FINAL"
-    elif periods == 5:
-        fv.final_text = "F/OT"
+    if game.phase == football.PHASE_HALFTIME:
+        # The clock slot renders "HT"; the period chip stays empty so the
+        # state isn't announced twice (soccer/NBA halftime convention).
+        fb.phase_text = ''
+        fb.clock_text = 'HT'
+        fb.clock_accent = True
+        fb.clock_low = False
+    elif game.phase == football.PHASE_END_OF_PERIOD:
+        fb.phase_text = football.period_name(game.period)
+        fb.clock_text = 'END'
+        fb.clock_accent = True
+        fb.clock_low = False
     else:
-        fv.final_text = "F/%dOT" % (periods - 4)
-    fv.total_label = 'T'
+        fb.phase_text = football.period_name(game.period)
+        fb.clock_text = game.clock
+        fb.clock_accent = False
+        # Crunch time only where the clock can end a half: Q2, Q4, OT. The
+        # ':'-less form is NBA's sub-minute shape, kept as a belt in case
+        # ESPN ever emits it for football.
+        half_end = game.period == 2 or game.period >= 4
+        sub_min = game.clock.startswith('0:') or (game.clock != '' and ':' not in game.clock)
+        fb.clock_low = half_end and sub_min
 
-    _build_linescore(fv, periods, away.line, home.line)
+    fb.away_color = _team_color_to_rgb565(game.away.colors.primary)
+    fb.home_color = _team_color_to_rgb565(game.home.colors.primary)
+
+    fb.away_timeouts = game.away_timeouts if game.away_timeouts is not None else -1
+    fb.home_timeouts = game.home_timeouts if game.home_timeouts is not None else -1
+
+    if game.possession != football.SIDE_NONE:
+        goal_to_go = game.yard_line + game.distance >= 100
+        fb.situation_text = (_FOOTBALL_DOWNS[game.down] + " & "
+                             + ("GOAL" if goal_to_go else str(game.distance)))
+        fb.red_zone = game.red_zone
+
+        s = screen_geometry.geometry_for('football_live')["SITUATION"]
+        text_w = measure_text(fb.situation_text, spleen_5x8)
+        text_x = s[0] + (s[2] - text_w) // 2
+        if game.possession == football.SIDE_HOME:
+            fb.sit_arrow_x = text_x + text_w + 3
+            fb.sit_arrow_right = True
+        else:
+            fb.sit_arrow_x = text_x - 6
+            fb.sit_arrow_right = False
+
+        if game.possession == football.SIDE_AWAY:
+            abs_ball = game.yard_line
+            abs_fd = min(game.yard_line + game.distance, 100)
+            fb.dir_right = True
+        else:
+            abs_ball = 100 - game.yard_line
+            abs_fd = max(100 - (game.yard_line + game.distance), 0)
+            fb.dir_right = False
+        x0 = screen_geometry.FOOTBALL_FIELD_YARD0_X
+        x_max = screen_geometry.FOOTBALL_FIELD_LOS_MAX_X
+        los = min(x0 + abs_ball, x_max)
+        fd = min(x0 + abs_fd, x_max)
+        fb.has_ball = True
+        fb.los_x = los
+        fb.los_top_x = _football_top_x(los)
+        fb.fd_x = fd
+        fb.fd_top_x = _football_top_x(fd)
+    else:
+        fb.situation_text = ''
+        fb.red_zone = False
+        fb.sit_arrow_x = -1
+        fb.sit_arrow_right = False
+        fb.has_ball = False
+        fb.los_x = 0
+        fb.los_top_x = 0
+        fb.fd_x = -1
+        fb.fd_top_x = 0
+        fb.dir_right = False
 
     commit_state()
+
+
+def set_football_final(game, home_logo, away_logo) -> None:
+    """Publish a final football screen from a parsed football.FinalGame.
+
+    Reuses the (sport-agnostic) linescore final wholesale, exactly as NBA
+    does: mode 'final', quarters in the header columns, "T" totals, and
+    "F/OT" ("F/2OT", ...) when overtime was played.
+    """
+    n = game.periods_played
+    _set_linescore_final(game, home_logo, away_logo, 'football_final', 'T', n,
+                         _ot_final_text(n))
 
 
 # =============================================================================

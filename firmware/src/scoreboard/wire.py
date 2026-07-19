@@ -17,6 +17,8 @@ read by the display thread at 20 FPS, so attribute access stays on
 MicroPython's fast path — no property descriptors.
 """
 
+from .textfold import fold_text
+
 # Must match backend/src/wire.rs.
 WIRE_VERSION = 2
 STRUCT_CONTENT_TYPE = "application/x-scoreboard-struct"
@@ -55,7 +57,15 @@ def check_version(buf, end: int) -> None:
 
 
 def read_str(buf, offset: int, end: int, what: str) -> tuple[str, int]:
-    """Read one u8-length-prefixed UTF-8 string. Returns (text, next_offset)."""
+    """Read one u8-length-prefixed UTF-8 string. Returns (text, next_offset).
+
+    This is the single point where every wire string enters the firmware, so
+    it also normalizes to the display fonts' ASCII + Latin-1 repertoire
+    (textfold.fold_text): a decoded UTF-8 string is pure ASCII exactly when
+    its char count equals its byte count, so the common case skips the fold
+    in O(1). Game ids are folded too — harmless while ESPN ids stay numeric,
+    and every internal comparison sees the same folded form.
+    """
     if offset >= end:
         raise DeserializeError(f"@{offset}", f"truncated before {what} length")
     n = buf[offset]
@@ -64,7 +74,10 @@ def read_str(buf, offset: int, end: int, what: str) -> tuple[str, int]:
         raise DeserializeError(
             f"@{offset}", f"truncated inside {what}: need {n} bytes, have {end - offset}"
         )
-    return str(buf[offset:offset + n], "utf-8"), offset + n
+    s = str(buf[offset:offset + n], "utf-8")
+    if len(s) != n:
+        s = fold_text(s)
+    return s, offset + n
 
 
 class TeamColors:
@@ -116,11 +129,14 @@ class LastPlay:
         self.text = text
 
 
-def dispatch_detail(buf, live_cls, pregame_cls, final_cls):
+def dispatch_detail(buf, live_cls, pregame_cls, final_cls, league=None):
     """Parse a v2 detail payload, dispatching on the state header byte.
 
     Each sport's `parse_game_detail` is a thin wrapper passing its three
-    `from_struct`-bearing state classes.
+    `from_struct`-bearing state classes. Multi-league sports also pass
+    `league`, the polled league's display name, which is threaded into the
+    pregame model only (live/final don't carry it); single-league sports
+    leave it None.
     """
     end = len(buf)
     check_version(buf, end)
@@ -130,6 +146,8 @@ def dispatch_detail(buf, live_cls, pregame_cls, final_cls):
     if state == GAME_STATE_IN:
         return live_cls.from_struct(buf)
     if state == GAME_STATE_PRE:
+        if league is not None:
+            return pregame_cls.from_struct(buf, league)
         return pregame_cls.from_struct(buf)
     if state == GAME_STATE_POST:
         return final_cls.from_struct(buf)

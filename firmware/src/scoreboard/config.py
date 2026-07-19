@@ -49,7 +49,7 @@ _DEFAULTS = {
         # screens (pregame since 2026-07-15) carry no key; stale keys in a
         # stored config are ignored by screen_geometry.set_variants.
         "variants": {
-            "mlb_final": "C", "nba_final": "C",
+            "mlb_final": "C", "nba_final": "C", "football_final": "C",
             "soccer_live": "A",
         },
         # Divider lines between screen sections; applied live.
@@ -67,13 +67,15 @@ _DEFAULTS = {
         "clock_warning": {"r": 255, "g": 10, "b": 10}   # Red - low time, errors
     },
     # Which leagues the poller rotates through, edited from the settings
-    # page's Sports card. `soccer.leagues` holds ESPN slugs (see
-    # scoreboard/soccer.py LEAGUE_NAMES: usa.1, eng.1, mex.1, fifa.world);
-    # empty = soccer off. NBA defaults off like soccer — flip it on when the
-    # season is on.
+    # page's Sports card. `football.leagues` / `soccer.leagues` hold ESPN
+    # slugs (see the LEAGUE_NAMES tables in scoreboard/football.py: nfl,
+    # college-football; and scoreboard/soccer.py: usa.1, eng.1, mex.1,
+    # fifa.world); empty = that sport off. NBA defaults off like the league
+    # lists — flip it on when the season is on.
     "sports": {
         "mlb": {"enabled": True},
         "nba": {"enabled": False},
+        "football": {"leagues": []},
         "soccer": {"leagues": []}
     },
     "log": {
@@ -409,6 +411,18 @@ class Config:
     def nba_enabled(self) -> bool:
         """Whether NBA games are polled and rotated."""
         return bool(self._data["sports"]["nba"]["enabled"])
+
+    @property
+    def football_leagues(self) -> list:
+        """ESPN football league slugs to poll (empty list = football off).
+
+        Non-list/garbage values degrade to [] so a hand-edited config can't
+        crash the poller construction.
+        """
+        leagues = self._data["sports"]["football"]["leagues"]
+        if not isinstance(leagues, list):
+            return []
+        return [s for s in leagues if isinstance(s, str) and s]
 
     @property
     def soccer_leagues(self) -> list:

@@ -1,13 +1,16 @@
 """
-Hand-written screen geometry for the text-only PREGAME and FINAL screens.
+Hand-written screen geometry for the game-facing screens (live / pregame /
+final of every sport).
 
-Convention split: `mlb_layout.aseprite` (round-tripped through
-`tools/build.py` into `scoreboard/layout/`) remains the source of truth for
-every *sprite-bearing* screen (the live game view). The pregame and final
-screens carry no sprites -- only text, logos, and dividers -- so an aseprite
-round-trip would buy nothing. Their rectangles live here as plain code, the
-same way the startup / idle / error regions are code-defined in
-`display.Regions.__init__`.
+Convention split: coordinates registered to sprite *art* live in the
+aseprite -- a layer's authoritative `X`/`Y`, the base-marker slices -- and
+reach the firmware through `tools/build.py` into `scoreboard/layout/`.
+Coordinates registered to *text slots and drawn primitives* -- score / label
+/ name windows, dividers, count-dot rows -- live here as plain code, the same
+way the startup / idle / error regions are code-defined in
+`display.Regions.__init__`. So a live screen draws its sprites (field, base
+markers, ball) from the aseprite but places every text slot from a table
+below; the pregame and final screens carry no sprites at all.
 
 Variant selection is scoped PER SPORT x SCREEN (config `display.variants`
 keys like `mlb_pregame`, `soccer_live`): each key picks a letter from its
@@ -36,14 +39,6 @@ unscii_8 = 8px/char x 8px tall, unscii_16 = 8px/char x 16px tall. Logos are
 # pregame, final). A style-wide switch: the screens must read consistently, so
 # this is all-or-nothing rather than per-variant.
 SHOW_DIVIDERS = True
-
-# Live-screen divider geometry, aligned with pregame variant C's column split
-# (identity column | data column, bottom strip below a rule) so rotation
-# between screens keeps one visual frame. The hline sits centered in the
-# 8-row gap between the field/count block (last content row 32) and the
-# PIT/BAT strip (top row 41) — at 41 it sat directly on the text's top row.
-LIVE_DIVIDER_X = 45
-LIVE_SEPARATOR_Y = 36
 
 # --- Tuning constants (preview-tunable; user picks final values) -------------
 
@@ -81,6 +76,12 @@ FINAL_LS_PX_PER_SEC = 10
 # smooth set above.
 GAME_SCROLL_PX_PER_SEC = 20
 _SCROLL_SPEEDS = (5, 10, 20, 40)
+
+# Shared bottom-strip flash region, used by every live screen (MLB pitcher/
+# batter view, NBA/football play flash, soccer commentary) for the play
+# ticker and by play_text_display_ms to size the flash window. Fixed, not a
+# variant slot: the flash strip is the same rectangle on all four screens.
+PLAY_TEXT = (51, 43, 76, 16)
 
 
 def set_scroll_speed(px_per_sec) -> int:
@@ -254,6 +255,41 @@ _SOCCER_LIVE = {
 
 
 # =============================================================================
+# MLB LIVE table (single design: "field + count ledger")
+# =============================================================================
+# The original live screen, now a peer of the other live tables: identity
+# column left (logos + scores stacked, the inning ordinal below the away
+# score), the diamond + base markers and the B/S/O count block in the data
+# column, pitcher/batter names in the bottom strip. The divider column split
+# (identity | data, bottom strip below a rule) is the silhouette every other
+# live and pregame screen mirrors. The hline sits centered in the 8-row gap
+# between the count block (last content row 32) and the PIT/BAT strip (top
+# row 41) — at 41 it sat directly on the text's top row. Count-dot rows carry
+# their pixel widths: 4 balls via (w+1)//(dot_w+1), 3 strikes, 3 outs. Label
+# heights are 7px against 8px unscii_8 — that clip is part of the current art.
+
+_MLB_LIVE = {
+    "LOGO_AWAY": (0, 0, 24, 24),
+    "SCORE_AWAY": (24, 7, 22, 11),
+    "INNING": (11, 30, 32, 7),
+    "LOGO_HOME": (0, 40, 24, 24),
+    "SCORE_HOME": (24, 47, 22, 11),
+    "DIVIDER_X": 45,
+    "SEPARATOR_Y": 36,
+    "BALL_LABEL": (51, 5, 8, 7),
+    "BALL_DOTS": (61, 7, 19, 4),
+    "STRIKE_LABEL": (51, 15, 8, 7),
+    "STRIKE_DOTS": (61, 17, 14, 4),
+    "OUT_LABEL": (51, 25, 8, 7),
+    "OUT_DOTS": (61, 27, 14, 4),
+    "PITCHER_LABEL": (51, 41, 24, 7),
+    "PITCHER_NAME": (77, 41, 50, 8),
+    "BATTER_LABEL": (51, 54, 24, 7),
+    "BATTER_NAME": (77, 54, 50, 8),
+}
+
+
+# =============================================================================
 # NBA LIVE table (single design: "quarter + clock ledger")
 # =============================================================================
 # The soccer-A silhouette adapted for basketball: identity column left
@@ -296,31 +332,81 @@ _SOCCER_FINAL = {
 }
 
 
+# =============================================================================
+# FOOTBALL LIVE table (single design: "broadcast corners + field strip")
+# =============================================================================
+# The soccer-C silhouette (logos in the top corners, no column frame) with
+# the football field strip along the bottom: scores stack under the logos,
+# quarter chip + clock share the top-center band, down & distance sits
+# mid-screen with the possession arrow beside it, and the perspective field
+# (sprite `layout/football_field`, an __absolute layer — ITS X/Y are the
+# authoritative screen position, like MLB's diamond) runs under everything
+# with the ball sprite riding the line of scrimmage above it. The shared
+# play-flash strip (regions.play_text) overlays the field zone while a play
+# is flashing. First game screen born under the 1px edge rule: nothing here
+# touches row 0/63 or col 0/127.
+
+_FOOTBALL_LIVE = {
+    "LOGO_AWAY": (1, 1, 24, 24),
+    "LOGO_HOME": (103, 1, 24, 24),
+    "TIMEOUT_Y": 26,          # 3 bars per team, 6x1 px, 1px gaps
+    "TIMEOUT_AWAY_X": 3,
+    "TIMEOUT_HOME_X": 105,
+    "SCORE_AWAY": (1, 28, 24, 16),
+    "SCORE_HOME": (103, 28, 24, 16),
+    "PHASE": (26, 3, 26, 8),       # "Q3" / "OT" / "2OT" unscii_8
+    "CLOCK": (52, 2, 50, 16),      # poll-time display string, unscii_16
+    "SITUATION": (26, 30, 77, 8),  # "3RD & 7" spleen, centered; arrow beside
+}
+
+# Yardline -> pixel mapping for the field strip, shared by state.py's Core 0
+# precompute and the renderer's derived import-time constants (the preview
+# exercises both through the same values). The playing field spans 100 yards
+# at 1 px/yard between the goal lines; the sprite's 11px endzone blocks sit
+# outside this span. Perspective: vertical field lines lean toward a
+# vanishing point above the panel — a line whose bottom endpoint is at x
+# meets the field's top row at x + (VP_X - x) * FIELD_PERSP_NUM //
+# FIELD_PERSP_DEN (10 field rows of a 63-row run to the VP at y=-1).
+FOOTBALL_FIELD_YARD0_X = 14    # away goal line (yard 0)
+FOOTBALL_FIELD_LOS_MAX_X = 113  # clamp for 2px-wide perspective lines
+FOOTBALL_VP_X = 63
+FOOTBALL_PERSP_NUM = 10
+FOOTBALL_PERSP_DEN = 63
+
+
 # Variant registry: config key -> {letter: slot table}. Shared references
 # on purpose (see module docstring). Single-design screens (pregame since
-# 2026-07-15, soccer_final, nba_live) have one-entry tables and no settings
-# UI row. Final default per the 2026-07-07 gallery review: "Line-score
-# forward" (C).
+# 2026-07-15, soccer_final, mlb_live, nba_live, football_live) have one-entry tables
+# and no settings UI row. Final default per the 2026-07-07 gallery review:
+# "Line-score forward" (C).
 _TABLES = {
     "mlb_pregame": _PREGAME,
     "nba_pregame": _PREGAME,
+    "football_pregame": _PREGAME,
     "soccer_pregame": _PREGAME,
     "mlb_final": _FINAL,
     "nba_final": _FINAL,
+    "football_final": _FINAL,
     "soccer_live": _SOCCER_LIVE,
     "soccer_final": {"A": _SOCCER_FINAL},
+    "mlb_live": {"A": _MLB_LIVE},
     "nba_live": {"A": _NBA_LIVE},
+    "football_live": {"A": _FOOTBALL_LIVE},
 }
 
 _ACTIVE = {
     "mlb_pregame": "C",
     "nba_pregame": "C",
+    "football_pregame": "C",
     "soccer_pregame": "C",
     "mlb_final": "C",
     "nba_final": "C",
+    "football_final": "C",
     "soccer_live": "A",
     "soccer_final": "A",
+    "mlb_live": "A",
     "nba_live": "A",
+    "football_live": "A",
 }
 
 

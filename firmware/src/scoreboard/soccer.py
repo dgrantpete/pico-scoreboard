@@ -32,6 +32,7 @@ from .wire import (
     TeamColors,
     TeamState,
     check_version,
+    dispatch_detail,
     read_str,
 )
 
@@ -365,15 +366,4 @@ def parse_game_detail(buf, league: str) -> "LiveGame | PregameGame | FinalGame":
     `league` is the polled league's display name, threaded to the pregame
     model (live/final don't need it).
     """
-    end = len(buf)
-    check_version(buf, end)
-    if end < HDR_SIZE:
-        raise DeserializeError("@1", "truncated before state byte")
-    state = buf[1]
-    if state == GAME_STATE_IN:
-        return LiveGame.from_struct(buf)
-    if state == GAME_STATE_PRE:
-        return PregameGame.from_struct(buf, league)
-    if state == GAME_STATE_POST:
-        return FinalGame.from_struct(buf)
-    raise DeserializeError("@1", f"unknown game state {state}")
+    return dispatch_detail(buf, LiveGame, PregameGame, FinalGame, league)

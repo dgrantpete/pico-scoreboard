@@ -1,6 +1,6 @@
 """
-Game polling loop, generalized over leagues (MLB + NBA + configured soccer
-leagues).
+Game polling loop, generalized over leagues (MLB + NBA + configured
+football and soccer leagues).
 
 Owns all polling state on the `GamePoller` instance. No module-level or
 class-level mutable state — the instance is the single source of truth so
@@ -35,6 +35,7 @@ import uasyncio as asyncio
 from .api_client import ApiError, ScoreboardApiClient
 from .config import Config
 from .display import LogoPool, play_text_display_ms
+from . import football
 from . import mlb
 from . import nba
 from . import soccer
@@ -51,12 +52,14 @@ from .state import (
     set_error,
     set_toast,
     set_pregame,
-    set_final,
+    set_mlb_final,
     set_mlb_live,
     set_soccer_live,
     set_soccer_final,
     set_nba_live,
     set_nba_final,
+    set_football_live,
+    set_football_final,
     clear_toast_if_sticky,
     pulse_toast,
     build_play_strip,
@@ -174,14 +177,36 @@ def _commit_nba_live(poller, game_id: str, live, home_logo, away_logo) -> None:
         commit_state()
 
 
+def _commit_football_live(poller, game_id: str, live, home_logo, away_logo) -> None:
+    set_football_live(live, home_logo, away_logo)
+
+    # Football's last play is optional (absent between drives / pre-snap
+    # early game) — no play, no flash, and the shared play slot keeps its
+    # previous id so a play that reappears unchanged doesn't re-flash.
+    play = live.last_play
+    if play is not None and _flash_play(get_write_state().play, play.id, play.text):
+        commit_state()
+
+
 def mlb_source() -> LeagueSource:
     return LeagueSource("baseball/mlb", "mlb", "MLB", "MLB", "/baseball/mlb",
-                        mlb.parse_game_detail, _commit_mlb_live, set_final)
+                        mlb.parse_game_detail, _commit_mlb_live, set_mlb_final)
 
 
 def nba_source() -> LeagueSource:
     return LeagueSource("basketball/nba", "nba", "NBA", "NBA", "/basketball/nba",
                         nba.parse_game_detail, _commit_nba_live, set_nba_final)
+
+
+def football_source(slug: str) -> LeagueSource:
+    league_name = football.LEAGUE_NAMES.get(slug, slug.upper())
+
+    def parse(buf):
+        return football.parse_game_detail(buf, league_name)
+
+    return LeagueSource("football/" + slug, "football", slug.upper(), league_name,
+                        "/football/" + slug, parse, _commit_football_live,
+                        set_football_final)
 
 
 def soccer_source(slug: str) -> LeagueSource:
@@ -196,9 +221,10 @@ def soccer_source(slug: str) -> LeagueSource:
 
 
 def sources_from_config(config: Config) -> list:
-    """The configured league sources: MLB, then NBA, then soccer leagues in
-    config order. Adding a single-league sport = one row in the gate table
-    (+ its factory); multi-league sports expand like soccer."""
+    """The configured league sources: MLB, then NBA, then football leagues,
+    then soccer leagues in config order. Adding a single-league sport = one
+    row in the gate table (+ its factory); multi-league sports expand like
+    football/soccer."""
     sources = []
     for enabled, factory in (
         (config.mlb_enabled, mlb_source),
@@ -206,6 +232,8 @@ def sources_from_config(config: Config) -> list:
     ):
         if enabled:
             sources.append(factory())
+    for slug in config.football_leagues:
+        sources.append(football_source(slug))
     for slug in config.soccer_leagues:
         sources.append(soccer_source(slug))
     return sources
