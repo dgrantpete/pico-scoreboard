@@ -35,10 +35,12 @@ _COLON: int = ord(':') - 32       # 26
 
 def _glyph(font, cp: int) -> tuple:
     """The single glyph-lookup path: table entry for a codepoint, DEFAULT
-    ('?') for anything outside printable ASCII. Returns an existing tuple —
-    never allocates."""
+    ('?') for anything outside ASCII + Latin-1 (32..255; wire ingest folds
+    higher codepoints down — see scoreboard.textfold). Entries the font has
+    no glyph for are the DEFAULT tuple already, so this stays one bounds
+    check. Returns an existing tuple — never allocates."""
     i = cp - 32
-    return font.GLYPHS[i] if 0 <= i < 95 else font.DEFAULT
+    return font.GLYPHS[i] if 0 <= i < 224 else font.DEFAULT
 
 
 def measure_text(string: str, font) -> int:

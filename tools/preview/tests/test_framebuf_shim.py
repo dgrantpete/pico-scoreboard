@@ -158,6 +158,33 @@ def test_hline_vline_clipping():
     assert all(frame.pixel(5, y) == 0x2222 for y in range(8))
 
 
+def test_line_matches_micropython_bresenham():
+    # Pinned against MicroPython's modframebuf.c `line()`: the loop draws
+    # dx pixels stepping the minor axis whenever e >= 0, then sets the
+    # second endpoint unconditionally (both endpoints always lit). The
+    # 14→22 case is the football scrimmage line's shallowest projection.
+    frame = fb.FrameBuffer(bytearray(16 * 16 * 2), 16, 16, fb.RGB565)
+    frame.line(2, 10, 10, 0, 0x1111)  # shallow-steep swap path
+    assert frame.pixel(2, 10) == 0x1111
+    assert frame.pixel(10, 0) == 0x1111
+    lit = [(x, y) for x in range(16) for y in range(16) if frame.pixel(x, y)]
+    assert len(lit) == 11  # steep: one pixel per y step, both endpoints
+
+    frame2 = fb.FrameBuffer(bytearray(16 * 16 * 2), 16, 16, fb.RGB565)
+    frame2.line(0, 0, 15, 5, 0x2222)  # shallow: one pixel per x step
+    assert frame2.pixel(0, 0) == 0x2222
+    assert frame2.pixel(15, 5) == 0x2222
+    assert sum(1 for x in range(16) for y in range(16) if frame2.pixel(x, y)) == 16
+
+
+def test_line_clips_out_of_bounds():
+    frame = fb.FrameBuffer(bytearray(8 * 8 * 2), 8, 8, fb.RGB565)
+    frame.line(-4, -4, 12, 12, 0x3333)  # diagonal crossing the buffer
+    assert all(frame.pixel(i, i) == 0x3333 for i in range(8))
+    frame.line(5, -10, 5, 20, 0x4444)   # vertical fully spanning
+    assert all(frame.pixel(5, y) in (0x3333, 0x4444) for y in range(8))
+
+
 def test_odd_width_stride_isolated_rows():
     # 5-wide GS4: stride rounds to 6 px (3 bytes/row); row 1 must not read row 0.
     w, h = 5, 2

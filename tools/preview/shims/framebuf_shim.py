@@ -225,12 +225,45 @@ class FrameBuffer:
                 if col != key:
                     self._set_raw(dx, dy, col)
 
-    # --- unimplemented API: fail loudly so a missing feature is obvious ---
-    def line(self, *a, **k):
-        raise NotImplementedError(
-            "framebuf shim: line() is unimplemented; add it if a renderer needs it"
-        )
+    def line(self, x1, y1, x2, y2, col) -> None:
+        """Bresenham line, ported statement-for-statement from MicroPython's
+        modframebuf.c `line()` (steep-swap variant; the second endpoint is
+        set last, outside the loop) so preview pixels match the device
+        exactly — the football perspective lines are golden-tested."""
+        dx = x2 - x1
+        sx = 1 if dx > 0 else -1
+        if dx < 0:
+            dx = -dx
+        dy = y2 - y1
+        sy = 1 if dy > 0 else -1
+        if dy < 0:
+            dy = -dy
+        if dy > dx:
+            x1, y1 = y1, x1
+            dx, dy = dy, dx
+            sx, sy = sy, sx
+            steep = True
+        else:
+            steep = False
+        w = self._fb_width
+        h = self._fb_height
+        e = 2 * dy - dx
+        for _ in range(dx):
+            if steep:
+                if 0 <= y1 < w and 0 <= x1 < h:
+                    self._set_raw(y1, x1, col)
+            else:
+                if 0 <= x1 < w and 0 <= y1 < h:
+                    self._set_raw(x1, y1, col)
+            while e >= 0:
+                y1 += sy
+                e -= 2 * dx
+            x1 += sx
+            e += 2 * dy
+        if 0 <= x2 < w and 0 <= y2 < h:
+            self._set_raw(x2, y2, col)
 
+    # --- unimplemented API: fail loudly so a missing feature is obvious ---
     def ellipse(self, *a, **k):
         raise NotImplementedError(
             "framebuf shim: ellipse() is unimplemented; add it if a renderer needs it"
