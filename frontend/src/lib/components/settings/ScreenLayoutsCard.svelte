@@ -33,6 +33,12 @@
 			options: FINAL_OPTIONS,
 		},
 		{
+			key: "football_final",
+			label: "Football Final",
+			hint: "Football final screen with the quarter line score",
+			options: FINAL_OPTIONS,
+		},
+		{
 			key: "soccer_live",
 			label: "Soccer Live",
 			hint: "Live match screen with the running clock",

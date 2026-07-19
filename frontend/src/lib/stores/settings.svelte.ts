@@ -202,8 +202,8 @@ export function createSettingsStore() {
 
 		/**
 		 * Update a sports sub-config and mark it as touched. The touched path
-		 * is two-level (`sports.mlb`, `sports.soccer`) on purpose: the update
-		 * batcher splits paths into exactly [section, field], so the whole
+		 * is two-level (`sports.<sport>`) on purpose: the update batcher
+		 * splits paths into exactly [section, field], so the whole
 		 * sub-object ships in the PUT body.
 		 */
 		updateSports<K extends keyof Config['sports']>(key: K, value: Config['sports'][K]) {
@@ -256,7 +256,7 @@ export function createSettingsStore() {
 				touchedFields = new Set();
 
 				// Prompt for reboot when boot-time-only settings changed
-				// (network credentials, hardware watchdog)
+				// (network credentials, hardware watchdog, sports selection)
 				if (rebootRequired) {
 					showRebootPrompt = true;
 				}

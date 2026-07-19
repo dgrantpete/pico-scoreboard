@@ -26,10 +26,12 @@ export type GammaConfig =
 // Screen layout variant letters, keyed per sport × screen (see firmware
 // scoreboard/screen_geometry.py tables). Applied live on save — no reboot.
 // Screens with a single design (pregame — "Big time" locked in 2026-07-15 —
-// soccer final, NBA live) gain a key here only once a second design exists.
+// soccer final, NBA live, football live) gain a key here only once a second
+// design exists.
 export interface VariantsConfig {
 	mlb_final: string;
 	nba_final: string;
+	football_final: string;
 	soccer_live: string;
 }
 
@@ -90,11 +92,13 @@ export interface OtaConfig {
 
 export type OtaConfigUpdate = Partial<OtaConfig>;
 
-// Sports / league selection. Soccer leagues are ESPN slugs (see firmware
-// scoreboard/soccer.py LEAGUE_NAMES); empty list = soccer off.
+// Sports / league selection. Football and soccer leagues are ESPN slugs
+// (see the firmware LEAGUE_NAMES tables in scoreboard/football.py and
+// scoreboard/soccer.py); empty list = that sport off.
 export interface SportsConfig {
 	mlb: { enabled: boolean };
 	nba: { enabled: boolean };
+	football: { leagues: string[] };
 	soccer: { leagues: string[] };
 }
 
