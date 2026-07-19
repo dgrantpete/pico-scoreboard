@@ -1,14 +1,14 @@
 use crate::error::AppError;
-use crate::espn::types::parse_start_time;
+use crate::espn::types::{EspnWeather, parse_start_time};
 use crate::shared::competitor::{
     competitor_colors, competitor_to_team_state, linescore_bytes, order_competitors, parse_record,
     parse_score,
 };
+use crate::shared::game::LastPlay;
 
 use super::types::{
-    EspnCompetitor, EspnSituation, EspnWeather, InningHalf, MlbAtBat, MlbBases, MlbCount,
-    MlbFinalGame, MlbFinalTeam, MlbInning, MlbLastPlay, MlbLiveGame, MlbPregameGame, MlbPregameTeam,
-    MlbWeather,
+    EspnCompetitor, EspnSituation, InningHalf, MlbAtBat, MlbBases, MlbCount, MlbFinalGame,
+    MlbFinalTeam, MlbInning, MlbLiveGame, MlbPregameGame, MlbPregameTeam, MlbWeather,
 };
 
 /// Parse the inning half from ESPN's `shortDetail` prefix.
@@ -53,7 +53,8 @@ pub(crate) fn normalize_weather(weather: &EspnWeather) -> Option<MlbWeather> {
         }
     }
 
-    let condition = non_numeric(&weather.display_value).or_else(|| non_numeric(&weather.condition_id));
+    let condition =
+        non_numeric(&weather.display_value).or_else(|| non_numeric(&weather.condition_id));
     match (condition, weather.temperature) {
         (Some(condition), Some(temperature)) => Some(MlbWeather {
             condition: condition.to_string(),
@@ -164,7 +165,7 @@ pub(crate) fn live_competition_to_game(
         }),
         _ => None,
     };
-    let last_play = MlbLastPlay {
+    let last_play = LastPlay {
         id: situation.last_play.id,
         text: situation.last_play.text,
     };
@@ -291,8 +292,10 @@ mod tests {
     fn final_fixture_has_line_scores_and_score() {
         let event = fixture("final");
         let id = event.id;
-        let Some(EspnCompetition::Final { competitors, period }) =
-            event.competitions.into_iter().next()
+        let Some(EspnCompetition::Final {
+            competitors,
+            period,
+        }) = event.competitions.into_iter().next()
         else {
             panic!("fixture must be a final competition");
         };
@@ -343,10 +346,22 @@ mod tests {
 
     #[test]
     fn parse_inning_half_accepts_in_play_prefixes() {
-        assert!(matches!(parse_inning_half("Top 3rd"), Some(InningHalf::Top)));
-        assert!(matches!(parse_inning_half("Mid 5th"), Some(InningHalf::Middle)));
-        assert!(matches!(parse_inning_half("Bot 9th"), Some(InningHalf::Bottom)));
-        assert!(matches!(parse_inning_half("End 1st"), Some(InningHalf::End)));
+        assert!(matches!(
+            parse_inning_half("Top 3rd"),
+            Some(InningHalf::Top)
+        ));
+        assert!(matches!(
+            parse_inning_half("Mid 5th"),
+            Some(InningHalf::Middle)
+        ));
+        assert!(matches!(
+            parse_inning_half("Bot 9th"),
+            Some(InningHalf::Bottom)
+        ));
+        assert!(matches!(
+            parse_inning_half("End 1st"),
+            Some(InningHalf::End)
+        ));
     }
 
     #[test]

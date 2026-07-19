@@ -200,25 +200,85 @@
 //! in the line scores (overtime extends both past 4). Then the away and home
 //! line-score bytes and strings: `game_id`, `away.abbreviation`,
 //! `home.abbreviation`.
+//!
+//! # Football game detail (`GET /football/{league}/games/{game_id}`)
+//!
+//! Same 2-byte header (`u8 version = 2`, `u8 state`); the payload layout is
+//! sport-specific, like the others (the firmware picks the parser by which
+//! endpoint it polled). The games list reuses the shared list encoding above.
+//! Parsed by `firmware/src/scoreboard/football.py`.
+//!
+//! ## Football live (state = 1)
+//!
+//! Fixed 28-byte section at offset 2 (`struct.unpack_from('<BBBBBBBBHHIIII', buf, 2)`):
+//!
+//! | off | type | field                                            |
+//! |-----|------|--------------------------------------------------|
+//! | 2   | u8   | flags (see below)                                |
+//! | 3   | u8   | period (quarter 1–4; overtime = 5+)              |
+//! | 4   | u8   | phase (0=in progress, 1=halftime, 2=end of period) — NBA `LivePhase` twin |
+//! | 5   | u8   | down (1–4; 0 when no situation)                  |
+//! | 6   | u8   | distance — yards to the first-down line (0 when no situation) |
+//! | 7   | u8   | yard_line — absolute ball spot 0–100 (0 when no situation) |
+//! | 8   | u8   | away_timeouts (0 when timeouts absent)           |
+//! | 9   | u8   | home_timeouts (0 when timeouts absent)           |
+//! | 10  | u16  | away_score (u32 saturated to u16)                |
+//! | 12  | u16  | home_score                                       |
+//! | 14  | u32  | away_colors.primary (0x00RRGGBB)                 |
+//! | 18  | u32  | away_colors.alternate                            |
+//! | 22  | u32  | home_colors.primary                              |
+//! | 26  | u32  | home_colors.alternate                            |
+//!
+//! Flags: bit0 = last play present, bit1 = situation present, bit2 = possession
+//! is home (meaningless unless bit1; unset = away), bit3 = red zone (meaningless
+//! unless bit1), bit4 = timeouts present. When bit1 is unset, down/distance/
+//! yard_line are 0; when bit4 is unset, both timeout counts are 0.
+//!
+//! Strings from offset 30: `game_id`, `away.abbreviation`,
+//! `home.abbreviation`, `clock` (display-shaped: "12:00", "0:37"; meaningless
+//! during breaks — render by `phase`; never extrapolated, the firmware
+//! re-renders it each poll), then **iff** bit0: `last_play.id`
+//! (change-detection key for the flash) and `last_play.text`.
+//!
+//! ## Football pregame (state = 0)
+//!
+//! Byte-identical to the NBA pregame (`<BHHHHIIIII`, 29 bytes at offset 2:
+//! flags, away wins/losses, home wins/losses, start_time, then the four
+//! colors) plus two rank flag bits. Flags: bit0 = away record, bit1 = home
+//! record, bit2 = away rank line present, bit3 = home rank line present.
+//! Numeric record fields whose flag is unset are zero.
+//!
+//! Strings from offset 31, in order: `game_id`, `away.abbreviation`,
+//! `home.abbreviation`, `venue`, then `away.rank_line` **iff** bit2 and
+//! `home.rank_line` **iff** bit3 (display-shaped "#3 OHIO STATE" — college
+//! only, present only when ranked). Mirrors MLB's probable-pitcher flag/string
+//! pattern (the rank line rides the pitcher slot).
+//!
+//! ## Football final (state = 2)
+//!
+//! Byte-identical to the NBA final (`<BBBHHIIII`, 23 bytes at offset 2):
+//! `periods_played`, away/home line-score lengths, scores, colors, then the
+//! away and home per-quarter points bytes (overtime extends past 4) and
+//! strings `game_id`, `away.abbreviation`, `home.abbreviation`.
 
+use crate::football::{FootballFinalGame, FootballGame, FootballLiveGame, FootballPregameGame};
 use crate::mlb::{InningHalf, MlbFinalGame, MlbGame, MlbLiveGame, MlbPregameGame};
-use crate::nba::{LivePhase, NbaFinalGame, NbaGame, NbaLiveGame, NbaPregameGame};
-use crate::shared::game::GameListEntry;
+use crate::nba::{NbaFinalGame, NbaGame, NbaLiveGame, NbaPregameGame};
+use crate::shared::game::{GameListEntry, Side};
 use crate::soccer::{
-    LastEvent, Side, SoccerFinalFlavor, SoccerFinalGame, SoccerGame, SoccerLiveGame,
-    SoccerPregameGame,
+    LastEvent, SoccerFinalFlavor, SoccerFinalGame, SoccerGame, SoccerLiveGame, SoccerPregameGame,
 };
 
 pub const STRUCT_CONTENT_TYPE: &str = "application/x-scoreboard-struct";
 pub const WIRE_VERSION: u8 = 2;
 
-const FLAG_AT_BAT: u8 = 0x01;
+const MLB_FLAG_AT_BAT: u8 = 0x01;
 
-const FLAG_WEATHER: u8 = 0x01;
-const FLAG_AWAY_RECORD: u8 = 0x02;
-const FLAG_HOME_RECORD: u8 = 0x04;
-const FLAG_AWAY_PROBABLE: u8 = 0x08;
-const FLAG_HOME_PROBABLE: u8 = 0x10;
+const MLB_FLAG_WEATHER: u8 = 0x01;
+const MLB_FLAG_AWAY_RECORD: u8 = 0x02;
+const MLB_FLAG_HOME_RECORD: u8 = 0x04;
+const MLB_FLAG_AWAY_PROBABLE: u8 = 0x08;
+const MLB_FLAG_HOME_PROBABLE: u8 = 0x10;
 
 const MAX_STRING_BYTES: usize = 255;
 const MAX_LINESCORE_LEN: usize = 255;
@@ -257,28 +317,32 @@ fn score_u16(score: u32) -> [u8; 2] {
 }
 
 /// Encode one game detail: the 2-byte header followed by the state's payload.
-pub fn encode_game(game: &MlbGame) -> Vec<u8> {
+pub fn encode_mlb_game(game: &MlbGame) -> Vec<u8> {
     let mut out = Vec::with_capacity(256);
     out.push(WIRE_VERSION);
     match game {
         MlbGame::Pregame(g) => {
             out.push(0);
-            write_pregame(&mut out, g);
+            write_mlb_pregame(&mut out, g);
         }
         MlbGame::Live(g) => {
             out.push(1);
-            write_live(&mut out, g);
+            write_mlb_live(&mut out, g);
         }
         MlbGame::Final(g) => {
             out.push(2);
-            write_final(&mut out, g);
+            write_mlb_final(&mut out, g);
         }
     }
     out
 }
 
-fn write_live(out: &mut Vec<u8>, game: &MlbLiveGame) {
-    out.push(if game.at_bat.is_some() { FLAG_AT_BAT } else { 0 });
+fn write_mlb_live(out: &mut Vec<u8>, game: &MlbLiveGame) {
+    out.push(if game.at_bat.is_some() {
+        MLB_FLAG_AT_BAT
+    } else {
+        0
+    });
     out.push(game.inning.number);
     out.push(half_code(&game.inning.half));
     out.push(game.count.balls);
@@ -307,34 +371,34 @@ fn write_live(out: &mut Vec<u8>, game: &MlbLiveGame) {
     push_str(out, &game.last_play.text);
 }
 
-fn write_pregame(out: &mut Vec<u8>, game: &MlbPregameGame) {
+fn write_mlb_pregame(out: &mut Vec<u8>, game: &MlbPregameGame) {
     let mut flags = 0u8;
     let temperature = match &game.weather {
         Some(w) => {
-            flags |= FLAG_WEATHER;
+            flags |= MLB_FLAG_WEATHER;
             w.temperature.clamp(0, u8::MAX as i16) as u8
         }
         None => 0,
     };
     let (away_wins, away_losses) = match &game.away.record {
         Some(r) => {
-            flags |= FLAG_AWAY_RECORD;
+            flags |= MLB_FLAG_AWAY_RECORD;
             (r.wins, r.losses)
         }
         None => (0, 0),
     };
     let (home_wins, home_losses) = match &game.home.record {
         Some(r) => {
-            flags |= FLAG_HOME_RECORD;
+            flags |= MLB_FLAG_HOME_RECORD;
             (r.wins, r.losses)
         }
         None => (0, 0),
     };
     if game.away.probable_pitcher.is_some() {
-        flags |= FLAG_AWAY_PROBABLE;
+        flags |= MLB_FLAG_AWAY_PROBABLE;
     }
     if game.home.probable_pitcher.is_some() {
-        flags |= FLAG_HOME_PROBABLE;
+        flags |= MLB_FLAG_HOME_PROBABLE;
     }
 
     out.push(flags);
@@ -368,14 +432,17 @@ fn write_pregame(out: &mut Vec<u8>, game: &MlbPregameGame) {
 /// net — a real game never reaches 255 innings.
 fn line_score_bytes(line_score: &[u8]) -> &[u8] {
     if line_score.len() > MAX_LINESCORE_LEN {
-        tracing::warn!(len = line_score.len(), "line score exceeds wire cap; truncating");
+        tracing::warn!(
+            len = line_score.len(),
+            "line score exceeds wire cap; truncating"
+        );
         &line_score[..MAX_LINESCORE_LEN]
     } else {
         line_score
     }
 }
 
-fn write_final(out: &mut Vec<u8>, game: &MlbFinalGame) {
+fn write_mlb_final(out: &mut Vec<u8>, game: &MlbFinalGame) {
     let away_ls = line_score_bytes(&game.away.line_score);
     let home_ls = line_score_bytes(&game.home.line_score);
 
@@ -513,14 +580,6 @@ const NBA_FLAG_LAST_PLAY: u8 = 0x01;
 const NBA_FLAG_AWAY_RECORD: u8 = 0x01;
 const NBA_FLAG_HOME_RECORD: u8 = 0x02;
 
-fn nba_phase_code(phase: LivePhase) -> u8 {
-    match phase {
-        LivePhase::InProgress => 0,
-        LivePhase::Halftime => 1,
-        LivePhase::EndOfPeriod => 2,
-    }
-}
-
 /// Encode one NBA game detail (see the "NBA game detail" spec above).
 pub fn encode_nba_game(game: &NbaGame) -> Vec<u8> {
     let mut out = Vec::with_capacity(128);
@@ -583,7 +642,7 @@ fn write_nba_live(out: &mut Vec<u8>, game: &NbaLiveGame) {
         0
     });
     out.push(game.period);
-    out.push(nba_phase_code(game.phase));
+    out.push(game.phase.code());
     out.extend_from_slice(&score_u16(game.away.score));
     out.extend_from_slice(&score_u16(game.home.score));
     out.extend_from_slice(&game.away.colors.primary.to_le_bytes());
@@ -623,12 +682,166 @@ fn write_nba_final(out: &mut Vec<u8>, game: &NbaFinalGame) {
     push_str(out, &game.home.abbreviation);
 }
 
+const FOOTBALL_FLAG_LAST_PLAY: u8 = 0x01;
+const FOOTBALL_FLAG_SITUATION: u8 = 0x02;
+const FOOTBALL_FLAG_POSSESSION_HOME: u8 = 0x04;
+const FOOTBALL_FLAG_RED_ZONE: u8 = 0x08;
+const FOOTBALL_FLAG_TIMEOUTS: u8 = 0x10;
+
+const FOOTBALL_FLAG_AWAY_RECORD: u8 = 0x01;
+const FOOTBALL_FLAG_HOME_RECORD: u8 = 0x02;
+const FOOTBALL_FLAG_AWAY_RANK: u8 = 0x04;
+const FOOTBALL_FLAG_HOME_RANK: u8 = 0x08;
+
+/// Encode one football game detail (see the "Football game detail" spec above).
+pub fn encode_football_game(game: &FootballGame) -> Vec<u8> {
+    let mut out = Vec::with_capacity(128);
+    out.push(WIRE_VERSION);
+    match game {
+        FootballGame::Pregame(g) => {
+            out.push(0);
+            write_football_pregame(&mut out, g);
+        }
+        FootballGame::Live(g) => {
+            out.push(1);
+            write_football_live(&mut out, g);
+        }
+        FootballGame::Final(g) => {
+            out.push(2);
+            write_football_final(&mut out, g);
+        }
+    }
+    out
+}
+
+fn write_football_pregame(out: &mut Vec<u8>, game: &FootballPregameGame) {
+    let mut flags = 0u8;
+    let (away_wins, away_losses) = match &game.away.record {
+        Some(r) => {
+            flags |= FOOTBALL_FLAG_AWAY_RECORD;
+            (r.wins, r.losses)
+        }
+        None => (0, 0),
+    };
+    let (home_wins, home_losses) = match &game.home.record {
+        Some(r) => {
+            flags |= FOOTBALL_FLAG_HOME_RECORD;
+            (r.wins, r.losses)
+        }
+        None => (0, 0),
+    };
+    if game.away.rank_line.is_some() {
+        flags |= FOOTBALL_FLAG_AWAY_RANK;
+    }
+    if game.home.rank_line.is_some() {
+        flags |= FOOTBALL_FLAG_HOME_RANK;
+    }
+
+    out.push(flags);
+    out.extend_from_slice(&away_wins.to_le_bytes());
+    out.extend_from_slice(&away_losses.to_le_bytes());
+    out.extend_from_slice(&home_wins.to_le_bytes());
+    out.extend_from_slice(&home_losses.to_le_bytes());
+    out.extend_from_slice(&game.start_time.to_le_bytes());
+    out.extend_from_slice(&game.away.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.away.colors.alternate.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.alternate.to_le_bytes());
+
+    push_str(out, &game.game_id);
+    push_str(out, &game.away.abbreviation);
+    push_str(out, &game.home.abbreviation);
+    push_str(out, &game.venue);
+    if let Some(rank) = &game.away.rank_line {
+        push_str(out, rank);
+    }
+    if let Some(rank) = &game.home.rank_line {
+        push_str(out, rank);
+    }
+}
+
+fn write_football_live(out: &mut Vec<u8>, game: &FootballLiveGame) {
+    let mut flags = 0u8;
+    if game.last_play.is_some() {
+        flags |= FOOTBALL_FLAG_LAST_PLAY;
+    }
+    let (down, distance, yard_line) = match &game.situation {
+        Some(s) => {
+            flags |= FOOTBALL_FLAG_SITUATION;
+            if s.possession == Side::Home {
+                flags |= FOOTBALL_FLAG_POSSESSION_HOME;
+            }
+            if s.red_zone {
+                flags |= FOOTBALL_FLAG_RED_ZONE;
+            }
+            (s.down, s.distance, s.yard_line)
+        }
+        None => (0, 0, 0),
+    };
+    let (away_timeouts, home_timeouts) = match &game.timeouts {
+        Some(t) => {
+            flags |= FOOTBALL_FLAG_TIMEOUTS;
+            (t.away, t.home)
+        }
+        None => (0, 0),
+    };
+
+    out.push(flags);
+    out.push(game.period);
+    out.push(game.phase.code());
+    out.push(down);
+    out.push(distance);
+    out.push(yard_line);
+    out.push(away_timeouts);
+    out.push(home_timeouts);
+    out.extend_from_slice(&score_u16(game.away.score));
+    out.extend_from_slice(&score_u16(game.home.score));
+    out.extend_from_slice(&game.away.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.away.colors.alternate.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.alternate.to_le_bytes());
+
+    push_str(out, &game.game_id);
+    push_str(out, &game.away.abbreviation);
+    push_str(out, &game.home.abbreviation);
+    push_str(out, &game.clock);
+    if let Some(play) = &game.last_play {
+        push_str(out, &play.id);
+        push_str(out, &play.text);
+    }
+}
+
+fn write_football_final(out: &mut Vec<u8>, game: &FootballFinalGame) {
+    let away_ls = line_score_bytes(&game.away.line_score);
+    let home_ls = line_score_bytes(&game.home.line_score);
+
+    out.push(game.periods_played);
+    out.push(away_ls.len() as u8);
+    out.push(home_ls.len() as u8);
+    out.extend_from_slice(&score_u16(game.away.score));
+    out.extend_from_slice(&score_u16(game.home.score));
+    out.extend_from_slice(&game.away.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.away.colors.alternate.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.primary.to_le_bytes());
+    out.extend_from_slice(&game.home.colors.alternate.to_le_bytes());
+
+    out.extend_from_slice(away_ls);
+    out.extend_from_slice(home_ls);
+
+    push_str(out, &game.game_id);
+    push_str(out, &game.away.abbreviation);
+    push_str(out, &game.home.abbreviation);
+}
+
 /// Encode the games list: version, count, then `u8 state` + id per entry.
 pub fn encode_game_list(entries: &[GameListEntry]) -> Vec<u8> {
     if entries.len() > 255 {
         // u8 count caps the list; unreachable for MLB (~15 games/day) but
         // never truncate silently.
-        tracing::warn!(count = entries.len(), "game list exceeds wire cap; truncating to 255");
+        tracing::warn!(
+            count = entries.len(),
+            "game list exceeds wire cap; truncating to 255"
+        );
     }
     let mut out = Vec::with_capacity(2 + entries.len() * 13);
     out.push(WIRE_VERSION);
@@ -644,10 +857,9 @@ pub fn encode_game_list(entries: &[GameListEntry]) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::mlb::{
-        MlbAtBat, MlbBases, MlbCount, MlbFinalTeam, MlbInning, MlbLastPlay, MlbPregameTeam,
-        MlbWeather,
+        MlbAtBat, MlbBases, MlbCount, MlbFinalTeam, MlbInning, MlbPregameTeam, MlbWeather,
     };
-    use crate::shared::game::{GameState, Record};
+    use crate::shared::game::{GameState, LastPlay, LivePhase, Record};
     use crate::shared::team::{TeamColors, TeamState};
 
     fn team(abbrev: &str, score: u32, primary: u32, alternate: u32) -> TeamState {
@@ -689,7 +901,7 @@ mod tests {
                 pitcher: "G. Whitlock".to_string(),
                 batter: "J. Rodríguez".to_string(),
             }),
-            last_play: MlbLastPlay {
+            last_play: LastPlay {
                 id: "4015707290071".to_string(),
                 text: "Julio Rodríguez singles to center field.".to_string(),
             },
@@ -701,7 +913,7 @@ mod tests {
         // The v2 live payload must equal [0x02, 0x01] ++ v1_body[1..] — i.e.
         // the old body with its version byte replaced by the 2-byte header.
         let expected = format!("0201{}", &GOLDEN_FULL_V1[2..]);
-        let encoded = encode_game(&MlbGame::Live(full_live_fixture()));
+        let encoded = encode_mlb_game(&MlbGame::Live(full_live_fixture()));
         assert_eq!(hex::encode(&encoded), expected);
     }
 
@@ -720,7 +932,10 @@ mod tests {
                     primary: 0x003087,
                     alternate: 0xE4002C,
                 },
-                record: Some(Record { wins: 44, losses: 46 }),
+                record: Some(Record {
+                    wins: 44,
+                    losses: 46,
+                }),
                 probable_pitcher: Some("G. Marquez".to_string()),
             },
             home: MlbPregameTeam {
@@ -729,7 +944,10 @@ mod tests {
                     primary: 0x2F241D,
                     alternate: 0xFFC425,
                 },
-                record: Some(Record { wins: 50, losses: 40 }),
+                record: Some(Record {
+                    wins: 50,
+                    losses: 40,
+                }),
                 probable_pitcher: Some("Y. Darvish".to_string()),
             },
         }
@@ -739,7 +957,10 @@ mod tests {
 
     #[test]
     fn golden_pregame_all_flags() {
-        assert_eq!(hex::encode(encode_game(&MlbGame::Pregame(pregame_fixture()))), GOLDEN_PRE);
+        assert_eq!(
+            hex::encode(encode_mlb_game(&MlbGame::Pregame(pregame_fixture()))),
+            GOLDEN_PRE
+        );
     }
 
     const GOLDEN_PRE_NO_WEATHER: &str = "020000000000000000000000704d506a873000002c00e4001d242f0025c4ff0009343031353730303031034e59590253440a506574636f205061726b";
@@ -753,7 +974,7 @@ mod tests {
         game.away.probable_pitcher = None;
         game.home.probable_pitcher = None;
         assert_eq!(
-            hex::encode(encode_game(&MlbGame::Pregame(game))),
+            hex::encode(encode_mlb_game(&MlbGame::Pregame(game))),
             GOLDEN_PRE_NO_WEATHER
         );
     }
@@ -765,7 +986,7 @@ mod tests {
             condition: "Scorching".to_string(),
             temperature: 300,
         });
-        let bytes = encode_game(&MlbGame::Pregame(game));
+        let bytes = encode_mlb_game(&MlbGame::Pregame(game));
         // temperature sits at offset 3 (after version, state, flags).
         assert_eq!(bytes[3], 255);
     }
@@ -777,7 +998,7 @@ mod tests {
             condition: "Frigid".to_string(),
             temperature: -40,
         });
-        let bytes = encode_game(&MlbGame::Pregame(game));
+        let bytes = encode_mlb_game(&MlbGame::Pregame(game));
         assert_eq!(bytes[3], 0);
     }
 
@@ -813,7 +1034,7 @@ mod tests {
     #[test]
     fn golden_final_uneven_line_scores() {
         assert_eq!(
-            hex::encode(encode_game(&MlbGame::Final(final_fixture()))),
+            hex::encode(encode_mlb_game(&MlbGame::Final(final_fixture()))),
             GOLDEN_FINAL
         );
     }
@@ -822,7 +1043,7 @@ mod tests {
     fn final_score_saturates_to_u16() {
         let mut game = final_fixture();
         game.home.score = 1_000_000;
-        let bytes = encode_game(&MlbGame::Final(game));
+        let bytes = encode_mlb_game(&MlbGame::Final(game));
         // home_score at offset 7..9 (version, state, innings, nA, nH, away u16).
         assert_eq!(u16::from_le_bytes([bytes[7], bytes[8]]), u16::MAX);
     }
@@ -831,7 +1052,7 @@ mod tests {
     fn live_score_saturates_to_u16() {
         let mut game = full_live_fixture();
         game.home.score = 1_000_000;
-        let bytes = encode_game(&MlbGame::Live(game));
+        let bytes = encode_mlb_game(&MlbGame::Live(game));
         // home_score at offset 11..13 (see live spec table).
         assert_eq!(u16::from_le_bytes([bytes[11], bytes[12]]), u16::MAX);
     }
@@ -858,7 +1079,7 @@ mod tests {
 
     // --- Soccer goldens (shared verbatim with tools/wire_format_check.py) ---
 
-    use crate::soccer::{EventKind, LastEvent, Side, SoccerFinalTeam, SoccerGame, SoccerTeam};
+    use crate::soccer::{EventKind, LastEvent, SoccerFinalTeam, SoccerGame, SoccerPregameTeam};
 
     fn soccer_side(abbrev: &str, score: u32, primary: u32, alternate: u32) -> TeamState {
         TeamState {
@@ -943,10 +1164,14 @@ mod tests {
             }),
             commentary: None,
         });
-        assert_eq!(hex::encode(encode_soccer_game(&game)), GOLDEN_SOCCER_HALFTIME);
+        assert_eq!(
+            hex::encode(encode_soccer_game(&game)),
+            GOLDEN_SOCCER_HALFTIME
+        );
     }
 
-    const GOLDEN_SOCCER_QUIET: &str = "020100026414000000001248000027e8ea0041975d00955500000934303138303031303103504f5203534541";
+    const GOLDEN_SOCCER_QUIET: &str =
+        "020100026414000000001248000027e8ea0041975d00955500000934303138303031303103504f5203534541";
 
     #[test]
     fn golden_soccer_live_no_event() {
@@ -972,13 +1197,19 @@ mod tests {
             game_id: "401800102".to_string(),
             start_time: 1_783_647_600,
             venue: "Lumen Field".to_string(),
-            away: SoccerTeam {
+            away: SoccerPregameTeam {
                 abbreviation: "POR".to_string(),
-                colors: TeamColors { primary: 0x004812, alternate: 0xEAE827 },
+                colors: TeamColors {
+                    primary: 0x004812,
+                    alternate: 0xEAE827,
+                },
             },
-            home: SoccerTeam {
+            home: SoccerPregameTeam {
                 abbreviation: "SEA".to_string(),
-                colors: TeamColors { primary: 0x5D9741, alternate: 0x005595 },
+                colors: TeamColors {
+                    primary: 0x5D9741,
+                    alternate: 0x005595,
+                },
             },
         });
         assert_eq!(hex::encode(encode_soccer_game(&game)), GOLDEN_SOCCER_PRE);
@@ -993,13 +1224,19 @@ mod tests {
             away: SoccerFinalTeam {
                 abbreviation: "ESP".to_string(),
                 score: 1,
-                colors: TeamColors { primary: 0xFF0000, alternate: 0xFFC400 },
+                colors: TeamColors {
+                    primary: 0xFF0000,
+                    alternate: 0xFFC400,
+                },
                 scorers: "M. Merino 90'+1'".to_string(),
             },
             home: SoccerFinalTeam {
                 abbreviation: "POR".to_string(),
                 score: 0,
-                colors: TeamColors { primary: 0x004812, alternate: 0xEAE827 },
+                colors: TeamColors {
+                    primary: 0x004812,
+                    alternate: 0xEAE827,
+                },
                 scorers: String::new(),
             },
         })
@@ -1028,7 +1265,7 @@ mod tests {
 
     // --- NBA goldens (shared verbatim with tools/wire_format_check.py) ---
 
-    use crate::nba::{NbaFinalTeam, NbaLastPlay, NbaTeam};
+    use crate::nba::{NbaFinalTeam, NbaPregameTeam};
     use crate::shared::game::Record as NbaRecord;
 
     fn nba_side(abbrev: &str, score: u32, primary: u32, alternate: u32) -> TeamState {
@@ -1050,7 +1287,7 @@ mod tests {
             phase: LivePhase::InProgress,
             away: nba_side("OKC", 75, 0x007AC1, 0xEF3B24),
             home: nba_side("DEN", 77, 0x0E2240, 0xFEC524),
-            last_play: Some(NbaLastPlay {
+            last_play: Some(LastPlay {
                 id: "401811037411".to_string(),
                 text: "Zeke Nnaji out of bounds bad pass turnover".to_string(),
             }),
@@ -1080,7 +1317,7 @@ mod tests {
             game_id: "401811040".to_string(),
             start_time: 1_775_874_600,
             venue: "crypto.com Arena".to_string(),
-            away: NbaTeam {
+            away: NbaPregameTeam {
                 abbreviation: "PHX".to_string(),
                 colors: TeamColors {
                     primary: 0x29127A,
@@ -1091,7 +1328,7 @@ mod tests {
                     losses: 42,
                 }),
             },
-            home: NbaTeam {
+            home: NbaPregameTeam {
                 abbreviation: "LAL".to_string(),
                 colors: TeamColors {
                     primary: 0x552583,
@@ -1170,6 +1407,246 @@ mod tests {
         game.away.line_score.push(12);
         game.home.line_score.push(10);
         let bytes = encode_nba_game(&NbaGame::Final(game));
+        // periods_played, nA, nH sit at offsets 2..5 (after version, state).
+        assert_eq!(&bytes[2..5], &[5, 5, 5]);
+    }
+
+    // --- Football goldens (shared verbatim with tools/wire_format_check.py) ---
+
+    use crate::football::{
+        FootballFinalTeam, FootballGame, FootballLiveGame, FootballPregameGame,
+        FootballPregameTeam, FootballSituation, Timeouts,
+    };
+    use crate::shared::game::{LivePhase as FbPhase, Record as FbRecord, Side as FbSide};
+
+    fn fb_side(abbrev: &str, score: u32, primary: u32, alternate: u32) -> TeamState {
+        TeamState {
+            abbreviation: abbrev.to_string(),
+            score,
+            colors: TeamColors { primary, alternate },
+        }
+    }
+
+    fn football_live_fixture() -> FootballLiveGame {
+        FootballLiveGame {
+            game_id: "401772510".to_string(),
+            period: 3,
+            clock: "8:24".to_string(),
+            phase: FbPhase::InProgress,
+            away: fb_side("BUF", 14, 0x00338D, 0xC60C30),
+            home: fb_side("KC", 17, 0xE31837, 0xFFB81C),
+            situation: Some(FootballSituation {
+                down: 2,
+                distance: 7,
+                yard_line: 45,
+                possession: FbSide::Home,
+                red_zone: false,
+            }),
+            timeouts: Some(Timeouts { away: 2, home: 3 }),
+            last_play: Some(LastPlay {
+                id: "401772510105".to_string(),
+                text: "P. Mahomes pass complete to T. Kelce for 8 yards".to_string(),
+            }),
+        }
+    }
+
+    const GOLDEN_FOOTBALL_LIVE: &str = "020117030002072d02030e0011008d330000300cc6003718e3001cb8ff000934303137373235313003425546024b4304383a32340c34303137373235313031303530502e204d61686f6d6573207061737320636f6d706c65746520746f20542e204b656c636520666f722038207961726473";
+
+    #[test]
+    fn golden_football_live_with_situation() {
+        let game = FootballGame::Live(football_live_fixture());
+        assert_eq!(
+            hex::encode(encode_football_game(&game)),
+            GOLDEN_FOOTBALL_LIVE
+        );
+    }
+
+    const GOLDEN_FOOTBALL_LIVE_BREAK: &str = "020100020100000000000a000e008d330000300cc6003718e3001cb8ff000934303137373235313103425546024b4304303a3030";
+
+    #[test]
+    fn golden_football_live_break_no_situation() {
+        // Halftime: flags 0 (no last play, no situation, no timeouts), phase 1,
+        // down/distance/yard_line/timeouts all zero.
+        let game = FootballGame::Live(FootballLiveGame {
+            game_id: "401772511".to_string(),
+            period: 2,
+            clock: "0:00".to_string(),
+            phase: FbPhase::Halftime,
+            away: fb_side("BUF", 10, 0x00338D, 0xC60C30),
+            home: fb_side("KC", 14, 0xE31837, 0xFFB81C),
+            situation: None,
+            timeouts: None,
+            last_play: None,
+        });
+        assert_eq!(
+            hex::encode(encode_football_game(&game)),
+            GOLDEN_FOOTBALL_LIVE_BREAK
+        );
+    }
+
+    fn football_pregame_fixture() -> FootballPregameGame {
+        FootballPregameGame {
+            game_id: "401772512".to_string(),
+            start_time: 1_783_647_600,
+            venue: "Arrowhead Stadium".to_string(),
+            away: FootballPregameTeam {
+                abbreviation: "BUF".to_string(),
+                colors: TeamColors {
+                    primary: 0x00338D,
+                    alternate: 0xC60C30,
+                },
+                record: Some(FbRecord {
+                    wins: 11,
+                    losses: 3,
+                }),
+                rank_line: None,
+            },
+            home: FootballPregameTeam {
+                abbreviation: "KC".to_string(),
+                colors: TeamColors {
+                    primary: 0xE31837,
+                    alternate: 0xFFB81C,
+                },
+                record: Some(FbRecord {
+                    wins: 13,
+                    losses: 1,
+                }),
+                rank_line: None,
+            },
+        }
+    }
+
+    const GOLDEN_FOOTBALL_PRE: &str = "0200030b0003000d000100704d506a8d330000300cc6003718e3001cb8ff000934303137373235313203425546024b43114172726f7768656164205374616469756d";
+
+    #[test]
+    fn golden_football_pregame_nfl_records_no_ranks() {
+        assert_eq!(
+            hex::encode(encode_football_game(&FootballGame::Pregame(
+                football_pregame_fixture()
+            ))),
+            GOLDEN_FOOTBALL_PRE
+        );
+    }
+
+    const GOLDEN_FOOTBALL_PRE_RANKED: &str = "02000b0b0003000d000100704d506a8d330000300cc6003718e3001cb8ff0009343031373732353133044d494348034f53550c4f68696f205374616469756d0d2333204f48494f205354415445";
+
+    #[test]
+    fn golden_football_pregame_ncaaf_home_ranked() {
+        // College: home #3 carries a rank line (rides the pitcher slot), away
+        // unranked → absent. Records still travel numerically.
+        let mut game = football_pregame_fixture();
+        game.game_id = "401772513".to_string();
+        game.away.abbreviation = "MICH".to_string();
+        game.home.abbreviation = "OSU".to_string();
+        game.venue = "Ohio Stadium".to_string();
+        game.home.rank_line = Some("#3 OHIO STATE".to_string());
+        assert_eq!(
+            hex::encode(encode_football_game(&FootballGame::Pregame(game))),
+            GOLDEN_FOOTBALL_PRE_RANKED
+        );
+    }
+
+    fn football_final_fixture() -> FootballGame {
+        FootballGame::Final(FootballFinalGame {
+            game_id: "401772514".to_string(),
+            periods_played: 5,
+            away: FootballFinalTeam {
+                abbreviation: "BUF".to_string(),
+                score: 24,
+                colors: TeamColors {
+                    primary: 0x00338D,
+                    alternate: 0xC60C30,
+                },
+                line_score: vec![7, 3, 7, 7, 0],
+            },
+            home: FootballFinalTeam {
+                abbreviation: "KC".to_string(),
+                score: 27,
+                colors: TeamColors {
+                    primary: 0xE31837,
+                    alternate: 0xFFB81C,
+                },
+                line_score: vec![7, 7, 0, 10, 3],
+            },
+        })
+    }
+
+    const GOLDEN_FOOTBALL_FINAL_OT: &str = "020205050518001b008d330000300cc6003718e3001cb8ff0007030707000707000a030934303137373235313403425546024b43";
+
+    #[test]
+    fn golden_football_final_overtime() {
+        assert_eq!(
+            hex::encode(encode_football_game(&football_final_fixture())),
+            GOLDEN_FOOTBALL_FINAL_OT
+        );
+    }
+
+    const GOLDEN_FOOTBALL_FINAL: &str = "020204040418001b003718e3001cb8ff008d330000300cc60007030707000a070a09343031353437343137024b4303425546";
+
+    #[test]
+    fn golden_football_final_regulation() {
+        let game = FootballGame::Final(FootballFinalGame {
+            game_id: "401547417".to_string(),
+            periods_played: 4,
+            away: FootballFinalTeam {
+                abbreviation: "KC".to_string(),
+                score: 24,
+                colors: TeamColors {
+                    primary: 0xE31837,
+                    alternate: 0xFFB81C,
+                },
+                line_score: vec![7, 3, 7, 7],
+            },
+            home: FootballFinalTeam {
+                abbreviation: "BUF".to_string(),
+                score: 27,
+                colors: TeamColors {
+                    primary: 0x00338D,
+                    alternate: 0xC60C30,
+                },
+                line_score: vec![0, 10, 7, 10],
+            },
+        });
+        assert_eq!(
+            hex::encode(encode_football_game(&game)),
+            GOLDEN_FOOTBALL_FINAL
+        );
+    }
+
+    #[test]
+    fn football_live_flags_encode_situation_possession_and_redzone() {
+        // Away possession in the red zone with timeouts, no last play: bit1
+        // (situation) + bit3 (red zone) + bit4 (timeouts) set, bit0 and bit2
+        // (last play, possession-home) clear.
+        let mut live = football_live_fixture();
+        live.last_play = None;
+        live.situation = Some(FootballSituation {
+            down: 1,
+            distance: 8,
+            yard_line: 92,
+            possession: FbSide::Away,
+            red_zone: true,
+        });
+        let bytes = encode_football_game(&FootballGame::Live(live));
+        // flags at offset 2.
+        assert_eq!(
+            bytes[2],
+            FOOTBALL_FLAG_SITUATION | FOOTBALL_FLAG_RED_ZONE | FOOTBALL_FLAG_TIMEOUTS
+        );
+    }
+
+    #[test]
+    fn football_live_score_saturates_to_u16() {
+        let mut live = football_live_fixture();
+        live.home.score = 1_000_000;
+        let bytes = encode_football_game(&FootballGame::Live(live));
+        // home_score at offset 12..14 (see live spec table).
+        assert_eq!(u16::from_le_bytes([bytes[12], bytes[13]]), u16::MAX);
+    }
+
+    #[test]
+    fn football_final_overtime_extends_line_scores() {
+        let bytes = encode_football_game(&football_final_fixture());
         // periods_played, nA, nH sit at offsets 2..5 (after version, state).
         assert_eq!(&bytes[2..5], &[5, 5, 5]);
     }

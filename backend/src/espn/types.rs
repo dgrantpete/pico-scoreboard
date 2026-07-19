@@ -6,6 +6,7 @@ use chrono::NaiveDateTime;
 use serde::Deserialize;
 
 use crate::error::AppError;
+use crate::shared::game::LivePhase;
 
 /// The cross-sport game-state discriminant (`status.type.state`).
 ///
@@ -35,6 +36,11 @@ pub(crate) struct EspnTeam {
     pub(crate) abbreviation: String,
     pub(crate) color: String,
     pub(crate) alternate_color: String,
+    /// Short team name ("Ohio State"); football uppercases it into the
+    /// pregame rank line. Defaulted — absent for every other sport, and even
+    /// absent in some football events, so it must never gate deserialization.
+    #[serde(default)]
+    pub(crate) short_display_name: Option<String>,
 }
 
 /// A competition's venue. Only the pregame arm requires it (that is where the
@@ -74,6 +80,49 @@ pub(crate) struct EspnLastPlay {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EspnAthlete {
     pub(crate) short_name: String,
+}
+
+/// One scoreboard event; the per-sport part is the competition type `C`. The
+/// event shell (id, date, optional weather) is identical across sports — only
+/// the competition body differs — so each sport aliases
+/// `EspnEvent<EspnCompetition>`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EspnEvent<C> {
+    pub(crate) id: String,
+    /// Scheduled start, ISO 8601 (`%Y-%m-%dT%H:%MZ`); 100%-present in the
+    /// corpus. Parsed to a unix epoch for the pregame payload.
+    pub(crate) date: String,
+    /// Event-level weather; consumed only by MLB, all-`Option` so it can never
+    /// gate deserialization for any sport.
+    #[serde(default)]
+    pub(crate) weather: Option<EspnWeather>,
+    pub(crate) competitions: Vec<C>,
+}
+
+/// Event-level weather block. Only MLB consumes it (see
+/// `mlb::transform::normalize_weather`).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EspnWeather {
+    /// ESPN randomly swaps `displayValue`/`conditionId` between polls; the
+    /// non-numeric member is the human condition text (see
+    /// `mlb::transform::normalize_weather`).
+    #[serde(default)]
+    pub(crate) display_value: Option<String>,
+    #[serde(default)]
+    pub(crate) condition_id: Option<String>,
+    #[serde(default)]
+    pub(crate) temperature: Option<i16>,
+}
+
+/// `status.type` for the sports that discriminate live sub-state on
+/// `description` (NBA, soccer, football). MLB keys on `shortDetail` and keeps
+/// its own status-type struct.
+#[derive(Deserialize)]
+pub(crate) struct EspnStatusType {
+    pub(crate) state: CompetitionState,
+    pub(crate) description: Option<String>,
 }
 
 /// Outer scoreboard shell, deliberately lenient: events are held as raw JSON
@@ -169,6 +218,43 @@ pub(crate) fn parse_start_time(date: &str) -> Result<u32, AppError> {
     Ok(naive.and_utc().timestamp().max(0) as u32)
 }
 
+/// The live sub-state from `status.type.description`, shared by the two
+/// clock-stopping sports (NBA + football). Within state "in" the clock alone
+/// cannot distinguish a break (it reads "0.0" or a reset "12:00"), so the
+/// description is the only signal. ESPN labels the quarter break both "End of
+/// Period" and "End of Quarter" — both map to `EndOfPeriod`. `sport` only
+/// contexts the warn. An unknown live description — an OT-specific label would
+/// land here — degrades to in-play with a warning: the state is never guessed.
+pub(crate) fn parse_live_phase(description: Option<&str>, sport: &'static str) -> LivePhase {
+    match description {
+        Some("Halftime") => LivePhase::Halftime,
+        Some("End of Period" | "End of Quarter") => LivePhase::EndOfPeriod,
+        Some("In Progress") | None => LivePhase::InProgress,
+        Some(other) => {
+            tracing::warn!(
+                sport,
+                description = %other,
+                "unknown live status description — treating as in-play"
+            );
+            LivePhase::InProgress
+        }
+    }
+}
+
+/// Split a competition's competitors into the fixed `[_; 2]` array, erroring
+/// (with a byte-stable message that surfaces in parse-failure warns) when ESPN
+/// sends other than two.
+pub(crate) fn two_competitors<C>(competitors: Vec<C>) -> Result<[C; 2], String> {
+    <[C; 2]>::try_from(competitors)
+        .map_err(|v: Vec<_>| format!("expected 2 competitors, got {}", v.len()))
+}
+
+/// The pregame venue's full name, erroring (byte-stable) when it is absent —
+/// only the pregame arm requires it.
+pub(crate) fn venue_name(venue: Option<EspnVenue>) -> Result<String, String> {
+    Ok(venue.ok_or("pregame competition missing venue")?.full_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,7 +267,10 @@ mod tests {
     #[test]
     fn parse_start_time_reads_minute_precision_utc() {
         // 2026-07-08T01:40Z == 1783474800 (verified against a UTC epoch table).
-        assert_eq!(parse_start_time("2026-07-08T01:40Z").unwrap(), 1_783_474_800);
+        assert_eq!(
+            parse_start_time("2026-07-08T01:40Z").unwrap(),
+            1_783_474_800
+        );
     }
 
     #[test]

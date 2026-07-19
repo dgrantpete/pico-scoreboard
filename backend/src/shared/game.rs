@@ -39,3 +39,47 @@ pub struct Record {
     pub wins: u16,
     pub losses: u16,
 }
+
+/// The live sub-state shared by the clock-stopping sports (NBA + football):
+/// breaks render without a meaningful clock, so the phase — not the clock
+/// string — decides the live view. Same three states, same wire codes across
+/// both sports.
+#[derive(Serialize, ToSchema, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum LivePhase {
+    InProgress,
+    Halftime,
+    EndOfPeriod,
+}
+
+impl LivePhase {
+    /// The numeric wire `phase` byte: in-progress=0, halftime=1,
+    /// end-of-period=2 (see the live layouts in `wire.rs`).
+    pub fn code(self) -> u8 {
+        match self {
+            LivePhase::InProgress => 0,
+            LivePhase::Halftime => 1,
+            LivePhase::EndOfPeriod => 2,
+        }
+    }
+}
+
+/// Home or away side. Shared by football (which side has the ball) and soccer
+/// (which side an event belongs to); the wire carries it as a single flag bit
+/// per sport. Distinct from the inbound [`crate::espn::types::HomeAway`], which
+/// is ESPN's deserialization contract.
+#[derive(Serialize, ToSchema, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum Side {
+    Home,
+    Away,
+}
+
+/// The most recent play: display text plus a change-detection `id` the firmware
+/// compares between polls to trigger its flash. Shared by MLB, NBA, and football
+/// (soccer's play-by-play `Commentary` is a distinct type).
+#[derive(Serialize, ToSchema)]
+pub struct LastPlay {
+    pub id: String,
+    pub text: String,
+}

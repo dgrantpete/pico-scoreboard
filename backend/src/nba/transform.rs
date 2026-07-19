@@ -1,13 +1,14 @@
 use crate::error::AppError;
-use crate::espn::types::{EspnLastPlay, parse_start_time};
+use crate::espn::types::parse_start_time;
 use crate::shared::competitor::{
     competitor_colors, competitor_to_team_state, linescore_bytes, order_competitors, parse_record,
     parse_score,
 };
+use crate::shared::game::{LastPlay, LivePhase};
 
 use super::types::{
-    EspnCompetitor, LivePhase, NbaFinalGame, NbaFinalTeam, NbaLastPlay, NbaLiveGame,
-    NbaPregameGame, NbaTeam,
+    EspnCompetitor, EspnSituation, NbaFinalGame, NbaFinalTeam, NbaLiveGame, NbaPregameGame,
+    NbaPregameTeam,
 };
 
 /// Transform a pre-game competition into an `NbaPregameGame`. `date` comes
@@ -21,8 +22,8 @@ pub(crate) fn pregame_competition_to_game(
     let start_time = parse_start_time(date)?;
     let (home_c, away_c) = order_competitors(&event_id, competitors)?;
 
-    let team = |c: &EspnCompetitor| -> Result<NbaTeam, AppError> {
-        Ok(NbaTeam {
+    let team = |c: &EspnCompetitor| -> Result<NbaPregameTeam, AppError> {
+        Ok(NbaPregameTeam {
             abbreviation: c.team.abbreviation.clone(),
             colors: competitor_colors(c)?,
             record: parse_record(&c.records),
@@ -46,7 +47,7 @@ pub(crate) fn live_competition_to_game(
     period: u8,
     display_clock: String,
     phase: LivePhase,
-    last_play: Option<EspnLastPlay>,
+    situation: EspnSituation,
 ) -> Result<NbaLiveGame, AppError> {
     let (home_c, away_c) = order_competitors(&event_id, competitors)?;
     let home = competitor_to_team_state(&home_c)?;
@@ -59,7 +60,7 @@ pub(crate) fn live_competition_to_game(
         phase,
         home,
         away,
-        last_play: last_play.map(|p| NbaLastPlay {
+        last_play: situation.last_play.map(|p| LastPlay {
             id: p.id,
             text: p.text,
         }),
@@ -93,9 +94,9 @@ pub(crate) fn final_competition_to_game(
 
 #[cfg(test)]
 mod tests {
-    use super::super::types::{EspnCompetition, EspnEvent, parse_live_phase};
+    use super::super::types::{EspnCompetition, EspnEvent};
     use super::*;
-    use crate::espn::types::EspnRecord;
+    use crate::espn::types::{EspnRecord, parse_live_phase};
 
     /// Real live-captured NBA fixtures (see tools/extract_fixtures.py), from
     /// the April 2026 end-of-season/playoff collection.
@@ -111,7 +112,7 @@ mod tests {
         period: u8,
         display_clock: String,
         phase: LivePhase,
-        last_play: Option<EspnLastPlay>,
+        situation: EspnSituation,
     }
 
     fn live_parts(event: EspnEvent) -> LiveParts {
@@ -121,7 +122,7 @@ mod tests {
             period,
             display_clock,
             phase,
-            last_play,
+            situation,
         }) = event.competitions.into_iter().next()
         else {
             panic!("fixture must be a live competition");
@@ -132,7 +133,7 @@ mod tests {
             period,
             display_clock,
             phase,
-            last_play,
+            situation,
         }
     }
 
@@ -143,28 +144,40 @@ mod tests {
             p.period,
             p.display_clock,
             p.phase,
-            p.last_play,
+            p.situation,
         )
         .unwrap()
     }
 
     #[test]
     fn parse_live_phase_maps_known_descriptions() {
-        assert_eq!(parse_live_phase(Some("In Progress")), LivePhase::InProgress);
-        assert_eq!(parse_live_phase(Some("Halftime")), LivePhase::Halftime);
         assert_eq!(
-            parse_live_phase(Some("End of Period")),
+            parse_live_phase(Some("In Progress"), "nba"),
+            LivePhase::InProgress
+        );
+        assert_eq!(
+            parse_live_phase(Some("Halftime"), "nba"),
+            LivePhase::Halftime
+        );
+        assert_eq!(
+            parse_live_phase(Some("End of Period"), "nba"),
             LivePhase::EndOfPeriod
         );
-        assert_eq!(parse_live_phase(None), LivePhase::InProgress);
+        assert_eq!(parse_live_phase(None, "nba"), LivePhase::InProgress);
     }
 
     #[test]
     fn parse_live_phase_unknown_degrades_to_in_progress() {
         // An OT-specific or delay label has never been observed live; the
         // contract is warn-and-render rather than guess a break state.
-        assert_eq!(parse_live_phase(Some("Overtime")), LivePhase::InProgress);
-        assert_eq!(parse_live_phase(Some("Delayed")), LivePhase::InProgress);
+        assert_eq!(
+            parse_live_phase(Some("Overtime"), "nba"),
+            LivePhase::InProgress
+        );
+        assert_eq!(
+            parse_live_phase(Some("Delayed"), "nba"),
+            LivePhase::InProgress
+        );
     }
 
     #[test]
@@ -303,7 +316,7 @@ mod tests {
             period,
             display_clock,
             phase,
-            last_play,
+            situation,
         } = competition
         else {
             panic!("state 'in' must map to the Live variant");
@@ -314,7 +327,7 @@ mod tests {
             period,
             display_clock,
             phase,
-            last_play,
+            situation,
         )
         .unwrap();
         assert_eq!(game.period, 5);

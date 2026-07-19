@@ -3,44 +3,20 @@ use utoipa::ToSchema;
 
 use crate::espn::types::{
     CompetitionState, EspnAthlete, EspnLastPlay, EspnLinescore, EspnRecord, EspnTeam, EspnVenue,
-    HomeAway,
+    HomeAway, two_competitors, venue_name,
 };
 use crate::shared::competitor::Competitor;
-use crate::shared::game::Record;
+use crate::shared::game::{LastPlay, Record};
 use crate::shared::team::{TeamColors, TeamState};
 
-// (shared inbound leaves re-used here: CompetitionState, EspnTeam, HomeAway,
-// EspnVenue, EspnRecord, EspnLinescore, EspnLastPlay, EspnAthlete)
+// (shared inbound leaves re-used here: the `EspnEvent<C>` shell + `EspnWeather`,
+// CompetitionState, EspnTeam, HomeAway, EspnVenue, EspnRecord, EspnLinescore,
+// EspnLastPlay, EspnAthlete)
 
 // ---------- ESPN inbound types ----------
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct EspnEvent {
-    pub(crate) id: String,
-    /// Scheduled start, ISO 8601 (`%Y-%m-%dT%H:%MZ`); 100%-present in the
-    /// corpus. Parsed to a unix epoch for the pregame wire payload.
-    pub(crate) date: String,
-    /// Event-level weather (present pre/live, absent post). All-`Option` so a
-    /// malformed block degrades to "no weather" instead of dropping the event.
-    #[serde(default)]
-    pub(crate) weather: Option<EspnWeather>,
-    pub(crate) competitions: Vec<EspnCompetition>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct EspnWeather {
-    /// ESPN randomly swaps `displayValue`/`conditionId` between polls; the
-    /// non-numeric member is the human condition text (see
-    /// `transform::normalize_weather`).
-    #[serde(default)]
-    pub(crate) display_value: Option<String>,
-    #[serde(default)]
-    pub(crate) condition_id: Option<String>,
-    #[serde(default)]
-    pub(crate) temperature: Option<i16>,
-}
+#[cfg(test)]
+pub(crate) type EspnEvent = crate::espn::types::EspnEvent<EspnCompetition>;
 
 #[derive(Deserialize)]
 #[serde(try_from = "EspnCompetitionDto")]
@@ -77,21 +53,11 @@ impl TryFrom<EspnCompetitionDto> for EspnCompetition {
     type Error = String;
 
     fn try_from(dto: EspnCompetitionDto) -> Result<Self, Self::Error> {
-        let two_competitors = |competitors: Vec<EspnCompetitor>| {
-            <[EspnCompetitor; 2]>::try_from(competitors)
-                .map_err(|v: Vec<_>| format!("expected 2 competitors, got {}", v.len()))
-        };
         match dto.status.r#type.state {
-            CompetitionState::Pre => {
-                let venue_name = dto
-                    .venue
-                    .ok_or("pregame competition missing venue")?
-                    .full_name;
-                Ok(Self::PreGame {
-                    competitors: two_competitors(dto.competitors)?,
-                    venue_name,
-                })
-            }
+            CompetitionState::Pre => Ok(Self::PreGame {
+                competitors: two_competitors(dto.competitors)?,
+                venue_name: venue_name(dto.venue)?,
+            }),
             CompetitionState::In => {
                 let competitors = two_competitors(dto.competitors)?;
                 let situation = dto.situation.ok_or("live competition missing situation")?;
@@ -257,7 +223,7 @@ pub struct MlbLiveGame {
     pub bases: MlbBases,
     /// Absent between innings or before an at-bat starts.
     pub at_bat: Option<MlbAtBat>,
-    pub last_play: MlbLastPlay,
+    pub last_play: LastPlay,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -278,12 +244,6 @@ pub struct MlbBases {
 pub struct MlbAtBat {
     pub pitcher: String,
     pub batter: String,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct MlbLastPlay {
-    pub id: String,
-    pub text: String,
 }
 
 #[derive(Serialize, ToSchema)]

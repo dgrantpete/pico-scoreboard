@@ -18,7 +18,6 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::auth::ApiKey;
 use crate::error::{AppError, ErrorResponse};
 use crate::espn::league::{self, AnyLeague};
 use crate::espn::types::{RawScoreboard, parse_events};
@@ -93,16 +92,13 @@ fn resolve_team_logo(events: Vec<LogoEvent>, abbrev: &str, cdn_base: &str) -> Op
             ("image/x-rgb565")
         )),
         (status = 400, description = "Invalid parameters", body = ErrorResponse),
-        (status = 401, description = "Missing or invalid API key", body = ErrorResponse),
         (status = 404, description = "Unknown league, or team not on the current scoreboard", body = ErrorResponse),
         (status = 502, description = "Error fetching from ESPN", body = ErrorResponse),
     ),
-    security(("api_key" = [])),
     tag = "team"
 )]
 pub async fn get_team_logo(
     State(state): State<Arc<AppState>>,
-    _auth: ApiKey,
     Path((sport, league, abbrev)): Path<(String, String, String)>,
     Query(params): Query<LogoQuery>,
     headers: HeaderMap,
@@ -147,7 +143,10 @@ mod tests {
             ]}]}]"#,
         );
         let url = resolve_team_logo(evs, "por", CDN).unwrap();
-        assert_eq!(url, "https://a.espncdn.com/i/teamlogos/countries/500/por.png");
+        assert_eq!(
+            url,
+            "https://a.espncdn.com/i/teamlogos/countries/500/por.png"
+        );
     }
 
     #[test]
@@ -168,9 +167,8 @@ mod tests {
 
     #[test]
     fn missing_logo_field_resolves_to_none() {
-        let evs = events(
-            r#"[{"competitions":[{"competitors":[{"team":{"abbreviation":"BOS"}}]}]}]"#,
-        );
+        let evs =
+            events(r#"[{"competitions":[{"competitors":[{"team":{"abbreviation":"BOS"}}]}]}]"#);
         assert!(resolve_team_logo(evs, "BOS", CDN).is_none());
     }
 }

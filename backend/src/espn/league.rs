@@ -36,6 +36,45 @@ impl EspnLeague for Nba {
     }
 }
 
+/// Multi-league football sport: both leagues share the ESPN sport slug
+/// "football" and one `football/` backend module.
+#[derive(Clone, Copy)]
+pub enum FootballLeague {
+    Nfl,
+    CollegeFootball,
+}
+
+impl FootballLeague {
+    pub fn from_path(league: &str) -> Result<Self, AppError> {
+        match league {
+            "nfl" => Ok(Self::Nfl),
+            "college-football" => Ok(Self::CollegeFootball),
+            _ => Err(AppError::InvalidLeague {
+                league: format!("football/{league}"),
+                valid: VALID_LEAGUES,
+            }),
+        }
+    }
+
+    /// College football carries AP/Coaches poll ranks (the pregame rank line);
+    /// the pros do not.
+    pub fn is_college(self) -> bool {
+        matches!(self, Self::CollegeFootball)
+    }
+}
+
+impl EspnLeague for FootballLeague {
+    fn espn_sport(&self) -> &'static str {
+        "football"
+    }
+    fn espn_league(&self) -> &'static str {
+        match self {
+            Self::Nfl => "nfl",
+            Self::CollegeFootball => "college-football",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum SoccerLeague {
     FifaWorld,
@@ -74,11 +113,12 @@ impl EspnLeague for SoccerLeague {
 }
 
 /// Leagues addressable via `/{sport}/{league}/...` path segments.
-const VALID_LEAGUES: &str = "baseball/mlb, basketball/nba, soccer/{fifa.world, usa.1, eng.1, mex.1}";
+const VALID_LEAGUES: &str = "baseball/mlb, basketball/nba, football/{nfl, college-football}, soccer/{fifa.world, usa.1, eng.1, mex.1}";
 
 pub enum AnyLeague {
     Mlb,
     Nba,
+    Football(FootballLeague),
     Soccer(SoccerLeague),
 }
 
@@ -87,6 +127,9 @@ impl AnyLeague {
         match (sport, league) {
             ("baseball", "mlb") => Ok(Self::Mlb),
             ("basketball", "nba") => Ok(Self::Nba),
+            // FootballLeague::from_path already reports its error against the
+            // unified VALID_LEAGUES list, prefixed with the football segment.
+            ("football", lg) => FootballLeague::from_path(lg).map(Self::Football),
             // SoccerLeague::from_path already reports its error against the
             // unified VALID_LEAGUES list, prefixed with the soccer segment.
             ("soccer", lg) => SoccerLeague::from_path(lg).map(Self::Soccer),
@@ -103,6 +146,7 @@ impl EspnLeague for AnyLeague {
         match self {
             Self::Mlb => Mlb.espn_sport(),
             Self::Nba => Nba.espn_sport(),
+            Self::Football(league) => league.espn_sport(),
             Self::Soccer(league) => league.espn_sport(),
         }
     }
@@ -110,6 +154,7 @@ impl EspnLeague for AnyLeague {
         match self {
             Self::Mlb => Mlb.espn_league(),
             Self::Nba => Nba.espn_league(),
+            Self::Football(league) => league.espn_league(),
             Self::Soccer(league) => league.espn_league(),
         }
     }
@@ -151,25 +196,47 @@ mod tests {
             Ok(AnyLeague::Nba)
         ));
         assert!(matches!(
+            AnyLeague::from_path("football", "nfl"),
+            Ok(AnyLeague::Football(FootballLeague::Nfl))
+        ));
+        assert!(matches!(
+            AnyLeague::from_path("football", "college-football"),
+            Ok(AnyLeague::Football(FootballLeague::CollegeFootball))
+        ));
+        assert!(matches!(
             AnyLeague::from_path("soccer", "usa.1"),
             Ok(AnyLeague::Soccer(SoccerLeague::Usa1))
         ));
+    }
+
+    #[test]
+    fn football_leagues_map_to_the_shared_football_sport_slug() {
+        assert_eq!(FootballLeague::Nfl.espn_sport(), "football");
+        assert_eq!(FootballLeague::CollegeFootball.espn_sport(), "football");
+        assert_eq!(FootballLeague::Nfl.espn_league(), "nfl");
+        assert_eq!(
+            FootballLeague::CollegeFootball.espn_league(),
+            "college-football"
+        );
+        assert!(FootballLeague::CollegeFootball.is_college());
+        assert!(!FootballLeague::Nfl.is_college());
     }
 
     /// Both an unknown sport and an unknown soccer league report the same
     /// unified `VALID_LEAGUES` list (the previously-divergent error strings).
     #[test]
     fn invalid_pairs_share_the_unified_valid_leagues_string() {
-        let check = |sport: &str, league: &str, expected_label: &str| {
-            match AnyLeague::from_path(sport, league) {
-                Err(AppError::InvalidLeague { league, valid }) => {
-                    assert_eq!(valid, VALID_LEAGUES);
-                    assert_eq!(league, expected_label);
-                }
-                _ => panic!("{sport}/{league} must be InvalidLeague"),
+        let check = |sport: &str, league: &str, expected_label: &str| match AnyLeague::from_path(
+            sport, league,
+        ) {
+            Err(AppError::InvalidLeague { league, valid }) => {
+                assert_eq!(valid, VALID_LEAGUES);
+                assert_eq!(league, expected_label);
             }
+            _ => panic!("{sport}/{league} must be InvalidLeague"),
         };
         check("hockey", "nhl", "hockey/nhl");
+        check("football", "xfl", "football/xfl");
         check("soccer", "eng.99", "soccer/eng.99");
     }
 }

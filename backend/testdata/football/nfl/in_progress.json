@@ -1,0 +1,39 @@
+{
+  "id": "401772510",
+  "date": "2026-01-12T21:30Z",
+  "competitions": [
+    {
+      "venue": { "fullName": "Arrowhead Stadium", "indoor": false },
+      "competitors": [
+        {
+          "homeAway": "home",
+          "score": "17",
+          "team": { "id": "12", "abbreviation": "KC", "color": "e31837", "alternateColor": "ffb81c", "shortDisplayName": "Chiefs" }
+        },
+        {
+          "homeAway": "away",
+          "score": "14",
+          "team": { "id": "2", "abbreviation": "BUF", "color": "00338d", "alternateColor": "c60c30", "shortDisplayName": "Bills" }
+        }
+      ],
+      "situation": {
+        "down": 2,
+        "distance": 7,
+        "yardLine": 45,
+        "homeTimeouts": 3,
+        "awayTimeouts": 2,
+        "isRedZone": false,
+        "possession": "12",
+        "lastPlay": {
+          "id": "401772510105",
+          "text": "P. Mahomes pass complete to T. Kelce for 8 yards"
+        }
+      },
+      "status": {
+        "type": { "id": "2", "state": "in", "description": "In Progress" },
+        "period": 3,
+        "displayClock": "8:24"
+      }
+    }
+  ]
+}

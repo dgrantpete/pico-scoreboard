@@ -3,11 +3,11 @@ use crate::espn::types::parse_start_time;
 use crate::shared::competitor::{
     competitor_colors, competitor_to_team_state, order_competitors, parse_score,
 };
+use crate::shared::game::Side;
 
 use super::types::{
-    Commentary, EspnCompetitor, EspnDetail, EventKind, LastEvent, RawSummary, Side,
-    SoccerFinalFlavor, SoccerFinalGame, SoccerFinalTeam, SoccerLiveGame, SoccerPregameGame,
-    SoccerTeam,
+    Commentary, EspnCompetitor, EspnDetail, EventKind, LastEvent, RawSummary, SoccerFinalFlavor,
+    SoccerFinalGame, SoccerFinalTeam, SoccerLiveGame, SoccerPregameGame, SoccerPregameTeam,
 };
 
 /// The latest commentary line of a summary payload (highest sequence).
@@ -143,8 +143,8 @@ pub(crate) fn pregame_competition_to_game(
 ) -> Result<SoccerPregameGame, AppError> {
     let start_time = parse_start_time(date)?;
     let (home_c, away_c) = order_competitors(&event_id, competitors)?;
-    let team = |c: &EspnCompetitor| -> Result<SoccerTeam, AppError> {
-        Ok(SoccerTeam {
+    let team = |c: &EspnCompetitor| -> Result<SoccerPregameTeam, AppError> {
+        Ok(SoccerPregameTeam {
             abbreviation: c.team.abbreviation.clone(),
             colors: competitor_colors(c)?,
         })
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn first_half_transforms_with_stoppage_clock() {
-        let game = to_live(live_parts(fixture("first_half")));
+        let game = to_live(live_parts(fixture("fifa.world/first_half")));
         assert_eq!(game.clock, "45'+6'");
         assert_eq!(game.clock_seconds, 51 * 60);
         assert_eq!(game.half, 1);
@@ -299,7 +299,7 @@ mod tests {
         // Same clock ("45'+6'") and period (1) as the first_half fixture —
         // only status.type.description differs. This is the empirical reason
         // Live carries the break flag.
-        let p = live_parts(fixture("halftime"));
+        let p = live_parts(fixture("fifa.world/halftime"));
         assert_eq!(p.display_clock, "45'+6'");
         assert_eq!(p.period, 1);
         assert!(p.on_break);
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn second_half_stoppage_surfaces_latest_goal() {
-        let game = to_live(live_parts(fixture("second_half_stoppage")));
+        let game = to_live(live_parts(fixture("fifa.world/second_half_stoppage")));
         assert_eq!(game.clock, "90'+4'");
         assert_eq!(game.half, 2);
         assert_eq!(game.away.score, 4);
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn pregame_fixture_transforms_through_du() {
-        let event = fixture("pregame");
+        let event = fixture("fifa.world/pregame");
         let id = event.id;
         let date = event.date;
         let Some(EspnCompetition::PreGame {
@@ -346,7 +346,7 @@ mod tests {
         // Real ARG-SUI knockout details, truncated to the moment just after
         // the 72' red card so it is the latest surfaced event (later goals
         // would win the max otherwise).
-        let mut p = live_parts(fixture("live_red_card"));
+        let mut p = live_parts(fixture("fifa.world/live_red_card"));
         p.details.retain(|d| d.clock.value <= 4278.0);
         let event = to_live(p).last_event.expect("red card present");
         assert_eq!(event.kind, EventKind::RedCard);
@@ -360,14 +360,17 @@ mod tests {
     fn overtime_live_parses_with_extended_clock() {
         // Knockout extra time serves as in-state with description "Overtime":
         // active play (not a break), running clock, period passed through.
-        let game = to_live(live_parts(fixture("live_red_card")));
+        let game = to_live(live_parts(fixture("fifa.world/live_red_card")));
         assert_eq!(game.clock, "120'+4'");
         assert!(!game.on_break);
         assert_eq!(
             (game.home.abbreviation.as_str(), game.home.score),
             ("ARG", 3)
         );
-        assert_eq!((game.away.abbreviation.as_str(), game.away.score), ("SUI", 1));
+        assert_eq!(
+            (game.away.abbreviation.as_str(), game.away.score),
+            ("SUI", 1)
+        );
         // Latest event is the 120'+1' goal, not the earlier red card.
         let event = game.last_event.expect("late goal present");
         assert_eq!(event.kind, EventKind::Goal);
@@ -380,7 +383,7 @@ mod tests {
         // Same match, post state ("Final Score - After Extra Time"): three
         // home goals (one a header subtype — collapses to the name format)
         // in clock order, and the away side's lone goal kept separate.
-        let game = to_final(fixture("full_time_home_multi_goal"));
+        let game = to_final(fixture("fifa.world/full_time_home_multi_goal"));
         assert_eq!(game.flavor, SoccerFinalFlavor::AfterExtraTime);
         assert_eq!(
             (game.home.abbreviation.as_str(), game.home.score),
@@ -418,7 +421,7 @@ mod tests {
 
     #[test]
     fn full_time_fixture_builds_final_with_scorers() {
-        let game = to_final(fixture("full_time"));
+        let game = to_final(fixture("fifa.world/full_time"));
         assert_eq!(game.flavor, SoccerFinalFlavor::FullTime);
         assert_eq!(
             (game.home.abbreviation.as_str(), game.home.score),
@@ -438,7 +441,7 @@ mod tests {
     #[test]
     fn extra_time_in_play_parses_as_active_play() {
         // "Overtime" at period 4 (extra time), running clock, not a break.
-        let game = to_live(live_parts(fixture("overtime")));
+        let game = to_live(live_parts(fixture("fifa.world/overtime")));
         assert_eq!(game.half, 4);
         assert!(!game.on_break);
         assert_eq!(game.clock, "120'+4'");
@@ -448,7 +451,7 @@ mod tests {
     fn shootout_parses_at_period_five_active() {
         // "Shootout" is period 5; the match clock is frozen but it is not a
         // break flag (the firmware renders the shootout by half == 5).
-        let game = to_live(live_parts(fixture("shootout")));
+        let game = to_live(live_parts(fixture("fifa.world/shootout")));
         assert_eq!(game.half, 5);
         assert!(!game.on_break);
     }
@@ -456,7 +459,7 @@ mod tests {
     #[test]
     fn extra_time_halftime_is_a_break() {
         // The interval between the two extra-time halves (period 3).
-        let game = to_live(live_parts(fixture("extra_time_halftime")));
+        let game = to_live(live_parts(fixture("fifa.world/extra_time_halftime")));
         assert_eq!(game.half, 3);
         assert!(game.on_break);
     }
@@ -464,7 +467,7 @@ mod tests {
     #[test]
     fn end_of_regulation_is_a_break() {
         // The interval between second half and extra time (period 2).
-        let game = to_live(live_parts(fixture("end_of_regulation")));
+        let game = to_live(live_parts(fixture("fifa.world/end_of_regulation")));
         assert_eq!(game.half, 2);
         assert!(game.on_break);
     }
@@ -472,10 +475,21 @@ mod tests {
     #[test]
     fn is_break_covers_the_full_observed_description_set() {
         use super::super::types::is_break;
-        for d in ["Halftime", "Extra Time Halftime", "End of Regulation", "End of Extra Time"] {
+        for d in [
+            "Halftime",
+            "Extra Time Halftime",
+            "End of Regulation",
+            "End of Extra Time",
+        ] {
             assert!(is_break(Some(d)), "{d} should be a break");
         }
-        for d in ["First Half", "Second Half", "In Progress", "Overtime", "Shootout"] {
+        for d in [
+            "First Half",
+            "Second Half",
+            "In Progress",
+            "Overtime",
+            "Shootout",
+        ] {
             assert!(!is_break(Some(d)), "{d} should be active play");
         }
         assert!(!is_break(None));
@@ -485,7 +499,7 @@ mod tests {
 
     #[test]
     fn final_after_extra_time_sets_aet_flavor() {
-        let game = to_final(fixture("final_after_extra_time"));
+        let game = to_final(fixture("fifa.world/final_after_extra_time"));
         assert_eq!(game.flavor, SoccerFinalFlavor::AfterExtraTime);
         // Scorers still resolve from the same details path.
         assert!(!game.home.scorers.is_empty() || !game.away.scorers.is_empty());
@@ -493,7 +507,7 @@ mod tests {
 
     #[test]
     fn final_after_penalties_sets_penalties_flavor() {
-        let game = to_final(fixture("final_after_penalties"));
+        let game = to_final(fixture("fifa.world/final_after_penalties"));
         assert_eq!(game.flavor, SoccerFinalFlavor::AfterPenalties);
     }
 

@@ -1,0 +1,35 @@
+{
+  "id": "401772510",
+  "date": "2026-01-12T21:30Z",
+  "competitions": [
+    {
+      "venue": { "fullName": "Arrowhead Stadium", "indoor": false },
+      "competitors": [
+        {
+          "homeAway": "home",
+          "score": "7",
+          "team": { "id": "12", "abbreviation": "KC", "color": "e31837", "alternateColor": "ffb81c", "shortDisplayName": "Chiefs" }
+        },
+        {
+          "homeAway": "away",
+          "score": "3",
+          "team": { "id": "2", "abbreviation": "BUF", "color": "00338d", "alternateColor": "c60c30", "shortDisplayName": "Bills" }
+        }
+      ],
+      "situation": {
+        "down": 1,
+        "distance": 10,
+        "yardLine": 25,
+        "homeTimeouts": 3,
+        "awayTimeouts": 3,
+        "isRedZone": false,
+        "possession": "2"
+      },
+      "status": {
+        "type": { "id": "22", "state": "in", "description": "End of Period" },
+        "period": 1,
+        "displayClock": "0:00"
+      }
+    }
+  ]
+}

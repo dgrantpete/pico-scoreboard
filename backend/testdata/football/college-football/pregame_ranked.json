@@ -1,0 +1,30 @@
+{
+  "id": "401772513",
+  "date": "2026-01-01T18:00Z",
+  "competitions": [
+    {
+      "venue": { "fullName": "Ohio Stadium", "indoor": false },
+      "competitors": [
+        {
+          "homeAway": "home",
+          "score": "0",
+          "curatedRank": { "current": 3 },
+          "team": { "id": "194", "abbreviation": "OSU", "color": "bb0000", "alternateColor": "666666", "shortDisplayName": "Ohio State" },
+          "records": [{ "type": "total", "summary": "12-1" }]
+        },
+        {
+          "homeAway": "away",
+          "score": "0",
+          "curatedRank": { "current": 99 },
+          "team": { "id": "130", "abbreviation": "MICH", "color": "00274c", "alternateColor": "ffcb05", "shortDisplayName": "Michigan" },
+          "records": [{ "type": "total", "summary": "8-4" }]
+        }
+      ],
+      "status": {
+        "type": { "id": "1", "state": "pre", "description": "Scheduled" },
+        "period": 0,
+        "displayClock": "0:00"
+      }
+    }
+  ]
+}

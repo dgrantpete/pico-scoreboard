@@ -1,20 +1,18 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::espn::types::{CompetitionState, EspnAthlete, EspnTeam, EspnVenue, HomeAway};
+use crate::espn::types::{
+    CompetitionState, EspnAthlete, EspnStatusType, EspnTeam, EspnVenue, HomeAway, two_competitors,
+    venue_name,
+};
 use crate::shared::competitor::Competitor;
+use crate::shared::game::Side;
 use crate::shared::team::{TeamColors, TeamState};
 
 // ---------- ESPN inbound types ----------
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct EspnEvent {
-    pub(crate) id: String,
-    /// Scheduled start, ISO 8601.
-    pub(crate) date: String,
-    pub(crate) competitions: Vec<EspnCompetition>,
-}
+#[cfg(test)]
+pub(crate) type EspnEvent = crate::espn::types::EspnEvent<EspnCompetition>;
 
 #[derive(Deserialize)]
 #[serde(try_from = "EspnCompetitionDto")]
@@ -59,31 +57,18 @@ impl TryFrom<EspnCompetitionDto> for EspnCompetition {
     type Error = String;
 
     fn try_from(dto: EspnCompetitionDto) -> Result<Self, Self::Error> {
-        let two_competitors = |competitors: Vec<EspnCompetitor>| {
-            <[EspnCompetitor; 2]>::try_from(competitors)
-                .map_err(|v: Vec<_>| format!("expected 2 competitors, got {}", v.len()))
-        };
         match dto.status.r#type.state {
-            CompetitionState::Pre => {
-                let venue_name = dto
-                    .venue
-                    .ok_or("pregame competition missing venue")?
-                    .full_name;
-                Ok(Self::PreGame {
-                    competitors: two_competitors(dto.competitors)?,
-                    venue_name,
-                })
-            }
+            CompetitionState::Pre => Ok(Self::PreGame {
+                competitors: two_competitors(dto.competitors)?,
+                venue_name: venue_name(dto.venue)?,
+            }),
             CompetitionState::In => {
                 let display_clock = dto
                     .status
                     .display_clock
                     .ok_or("live competition missing displayClock")?;
                 let clock_seconds = parse_display_clock(&display_clock, dto.status.clock);
-                let period = dto
-                    .status
-                    .period
-                    .ok_or("live competition missing period")?;
+                let period = dto.status.period.ok_or("live competition missing period")?;
                 if !(1..=5).contains(&period) {
                     tracing::warn!(
                         period,
@@ -195,13 +180,6 @@ pub(crate) struct EspnStatus {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct EspnStatusType {
-    pub(crate) state: CompetitionState,
-    pub(crate) description: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct EspnCompetitor {
     pub(crate) home_away: HomeAway,
     pub(crate) score: String,
@@ -289,8 +267,8 @@ pub struct SoccerPregameGame {
     pub start_time: u32,
     /// Stadium name (ESPN `venue.fullName`); 100%-present in the corpus.
     pub venue: String,
-    pub home: SoccerTeam,
-    pub away: SoccerTeam,
+    pub home: SoccerPregameTeam,
+    pub away: SoccerPregameTeam,
 }
 
 /// Live state snapshot for one soccer game, tailored for the Pico firmware.
@@ -349,7 +327,7 @@ pub struct Commentary {
 }
 
 #[derive(Serialize, ToSchema)]
-pub struct SoccerTeam {
+pub struct SoccerPregameTeam {
     /// Team abbreviation, e.g. "POR" — key for `/{sport}/{league}/teams/{abbrev}/logo`.
     pub abbreviation: String,
     pub colors: TeamColors,
@@ -386,11 +364,4 @@ pub struct LastEvent {
 pub enum EventKind {
     Goal,
     RedCard,
-}
-
-#[derive(Serialize, ToSchema, Clone, Copy, PartialEq, Eq, Debug)]
-#[serde(rename_all = "lowercase")]
-pub enum Side {
-    Home,
-    Away,
 }

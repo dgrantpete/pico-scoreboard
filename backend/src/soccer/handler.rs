@@ -1,22 +1,17 @@
-use axum::{
-    Json,
-    http::{HeaderMap, header},
-    response::{IntoResponse, Response},
-};
+use axum::{http::HeaderMap, response::Response};
 
 use crate::AppState;
 use crate::error::{AppError, ErrorResponse};
 use crate::espn::league::{self, SoccerLeague};
-use crate::espn::types::{RawScoreboard, find_event, parse_events};
-use crate::shared::etag::{games_response, wants_struct};
 use crate::shared::game::{GameListEntry, GameState};
+use crate::shared::handler::{self, EventParts};
 use crate::wire;
 
 use super::transform::{
     final_competition_to_game, latest_commentary, live_competition_to_game,
     pregame_competition_to_game,
 };
-use super::types::{Commentary, EspnCompetition, EspnEvent, RawSummary, SoccerGame};
+use super::types::{Commentary, EspnCompetition, RawSummary, SoccerGame};
 
 /// Latest commentary line for a live game, best-effort: commentary is polish,
 /// so a summary fetch/parse failure degrades to None (with a warning) rather
@@ -27,7 +22,11 @@ async fn fetch_commentary(
     event_id: &str,
 ) -> Option<Commentary> {
     let url = league::summary_url(&state.config.espn, league, event_id);
-    match state.espn_client.fetch_json_cached::<RawSummary>(&url).await {
+    match state
+        .espn_client
+        .fetch_json_cached::<RawSummary>(&url)
+        .await
+    {
         Ok(summary) => latest_commentary(summary),
         Err(e) => {
             tracing::warn!(url = %url, error = ?e, "soccer summary fetch failed; serving live without commentary");
@@ -36,12 +35,12 @@ async fn fetch_commentary(
     }
 }
 
-fn list_state(competition: &EspnCompetition) -> GameState {
-    match competition {
+fn list_state(competition: &EspnCompetition) -> Option<GameState> {
+    Some(match competition {
         EspnCompetition::PreGame { .. } => GameState::Pregame,
         EspnCompetition::Live { .. } => GameState::Live,
         EspnCompetition::Final { .. } => GameState::Final,
-    }
+    })
 }
 
 /// GET /soccer/{league}/games — today's games for one league with their
@@ -53,11 +52,9 @@ fn list_state(competition: &EspnCompetition) -> GameState {
     responses(
         (status = 200, description = "Today's games with per-game state. Binary encoding available via `Accept: application/x-scoreboard-struct` (see backend/src/wire.rs)", body = Vec<GameListEntry>),
         (status = 304, description = "Game set and states unchanged since client's If-None-Match"),
-        (status = 401, description = "Missing or invalid API key", body = ErrorResponse),
         (status = 404, description = "Unknown league", body = ErrorResponse),
         (status = 502, description = "ESPN upstream error", body = ErrorResponse),
     ),
-    security(("api_key" = [])),
     tag = "soccer"
 )]
 pub async fn list_games(
@@ -65,27 +62,13 @@ pub async fn list_games(
     league: SoccerLeague,
     headers: &HeaderMap,
 ) -> Result<Response, AppError> {
-    let url = league::scoreboard_url(&state.config.espn, &league);
-    let raw: RawScoreboard = state.espn_client.fetch_json_cached(&url).await?;
-    // Serve whatever parsed: a transient ETag flap to a smaller set beats a 502.
-    let (events, _failed) = parse_events::<EspnEvent>(raw, &url);
-
-    let entries: Vec<GameListEntry> = events
-        .into_iter()
-        .filter_map(|event| {
-            let first = event.competitions.into_iter().next()?;
-            Some(GameListEntry {
-                id: event.id,
-                state: list_state(&first),
-            })
-        })
-        .collect();
-
-    let if_none_match = headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|v| v.to_str().ok());
-
-    Ok(games_response(entries, if_none_match, wants_struct(headers)))
+    handler::list_games_response::<EspnCompetition>(
+        state,
+        &league::scoreboard_url(&state.config.espn, &league),
+        headers,
+        list_state,
+    )
+    .await
 }
 
 /// GET /soccer/{league}/games/{game_id} — state snapshot for one game.
@@ -98,11 +81,9 @@ pub async fn list_games(
     ),
     responses(
         (status = 200, description = "Game state (pregame/live/final). Binary encoding available via `Accept: application/x-scoreboard-struct` (see backend/src/wire.rs)", body = SoccerGame),
-        (status = 401, description = "Missing or invalid API key", body = ErrorResponse),
         (status = 404, description = "Unknown league, or game not on today's scoreboard", body = ErrorResponse),
         (status = 502, description = "ESPN upstream error", body = ErrorResponse),
     ),
-    security(("api_key" = [])),
     tag = "soccer"
 )]
 pub async fn get_game(
@@ -112,21 +93,14 @@ pub async fn get_game(
     headers: &HeaderMap,
 ) -> Result<Response, AppError> {
     let url = league::scoreboard_url(&state.config.espn, &league);
-    let raw: RawScoreboard = state.espn_client.fetch_json_cached(&url).await?;
-    let (events, failed) = parse_events::<EspnEvent>(raw, &url);
-    let event = find_event(events, failed, game_id, &url, |e| &e.id)?;
-
-    let EspnEvent {
+    let EventParts {
         id,
         date,
-        competitions,
-    } = event;
-    let first = competitions
-        .into_iter()
-        .next()
-        .ok_or_else(|| AppError::GameNotFound(game_id.to_string()))?;
+        competition,
+        ..
+    } = handler::fetch_game_parts::<EspnCompetition>(state, &url, game_id).await?;
 
-    let game = match first {
+    let game = match competition {
         EspnCompetition::PreGame {
             competitors,
             venue_name,
@@ -167,16 +141,9 @@ pub async fn get_game(
         ),
     };
 
-    if wants_struct(headers) {
-        Ok((
-            [
-                (header::CONTENT_TYPE, wire::STRUCT_CONTENT_TYPE),
-                (header::VARY, "Accept"),
-            ],
-            wire::encode_soccer_game(&game),
-        )
-            .into_response())
-    } else {
-        Ok(([(header::VARY, "Accept")], Json(game)).into_response())
-    }
+    Ok(handler::game_response(
+        headers,
+        &game,
+        wire::encode_soccer_game,
+    ))
 }

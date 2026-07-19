@@ -8,7 +8,4 @@ pub mod transform;
 mod types;
 
 pub use handler::{get_game, list_games};
-pub use types::{
-    LivePhase, NbaFinalGame, NbaFinalTeam, NbaGame, NbaLastPlay, NbaLiveGame, NbaPregameGame,
-    NbaTeam,
-};
+pub use types::{NbaFinalGame, NbaFinalTeam, NbaGame, NbaLiveGame, NbaPregameGame, NbaPregameTeam};

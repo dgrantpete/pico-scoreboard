@@ -2,23 +2,17 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::espn::types::{
-    CompetitionState, EspnLastPlay, EspnLinescore, EspnRecord, EspnTeam, EspnVenue, HomeAway,
+    CompetitionState, EspnLastPlay, EspnLinescore, EspnRecord, EspnStatusType, EspnTeam, EspnVenue,
+    HomeAway, parse_live_phase, two_competitors, venue_name,
 };
 use crate::shared::competitor::Competitor;
-use crate::shared::game::Record;
+use crate::shared::game::{LastPlay, LivePhase, Record};
 use crate::shared::team::{TeamColors, TeamState};
 
 // ---------- ESPN inbound types ----------
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct EspnEvent {
-    pub(crate) id: String,
-    /// Scheduled start, ISO 8601 (`%Y-%m-%dT%H:%MZ`); 100%-present in the
-    /// corpus. Parsed to a unix epoch for the pregame payload.
-    pub(crate) date: String,
-    pub(crate) competitions: Vec<EspnCompetition>,
-}
+#[cfg(test)]
+pub(crate) type EspnEvent = crate::espn::types::EspnEvent<EspnCompetition>;
 
 #[derive(Deserialize)]
 #[serde(try_from = "EspnCompetitionDto")]
@@ -34,8 +28,9 @@ pub(crate) enum EspnCompetition {
         /// "0.0" or a reset "12:00" during breaks (see `phase`).
         display_clock: String,
         phase: LivePhase,
-        /// Absent in the observed early-game glitch where `situation` is `{}`.
-        last_play: Option<EspnLastPlay>,
+        /// Carried whole (an empty `{}` before the opening tip parses to a
+        /// last-play-less situation); the transform extracts `last_play`.
+        situation: EspnSituation,
     },
     Final {
         competitors: [EspnCompetitor; 2],
@@ -59,29 +54,19 @@ impl TryFrom<EspnCompetitionDto> for EspnCompetition {
     type Error = String;
 
     fn try_from(dto: EspnCompetitionDto) -> Result<Self, Self::Error> {
-        let two_competitors = |competitors: Vec<EspnCompetitor>| {
-            <[EspnCompetitor; 2]>::try_from(competitors)
-                .map_err(|v: Vec<_>| format!("expected 2 competitors, got {}", v.len()))
-        };
         match dto.status.r#type.state {
-            CompetitionState::Pre => {
-                let venue_name = dto
-                    .venue
-                    .ok_or("pregame competition missing venue")?
-                    .full_name;
-                Ok(Self::PreGame {
-                    competitors: two_competitors(dto.competitors)?,
-                    venue_name,
-                })
-            }
+            CompetitionState::Pre => Ok(Self::PreGame {
+                competitors: two_competitors(dto.competitors)?,
+                venue_name: venue_name(dto.venue)?,
+            }),
             CompetitionState::In => {
                 let situation = dto.situation.ok_or("live competition missing situation")?;
                 Ok(Self::Live {
                     competitors: two_competitors(dto.competitors)?,
                     period: dto.status.period,
                     display_clock: dto.status.display_clock,
-                    phase: parse_live_phase(dto.status.r#type.description.as_deref()),
-                    last_play: situation.last_play,
+                    phase: parse_live_phase(dto.status.r#type.description.as_deref(), "nba"),
+                    situation,
                 })
             }
             CompetitionState::Post => Ok(Self::Final {
@@ -92,38 +77,12 @@ impl TryFrom<EspnCompetitionDto> for EspnCompetition {
     }
 }
 
-/// The live sub-state from `status.type.description`: within state "in" the
-/// corpus shows exactly {In Progress, Halftime, End of Period}, and the clock
-/// alone cannot distinguish the breaks (it reads "0.0" or a reset "12:00").
-/// Unknown live descriptions — an OT-specific label would land here — degrade
-/// to in-play with a warning: the state itself is never guessed.
-pub(crate) fn parse_live_phase(description: Option<&str>) -> LivePhase {
-    match description {
-        Some("Halftime") => LivePhase::Halftime,
-        Some("End of Period") => LivePhase::EndOfPeriod,
-        Some("In Progress") | None => LivePhase::InProgress,
-        Some(other) => {
-            tracing::warn!(
-                description = %other,
-                "unknown live NBA status description (overtime?) — treating as in-play"
-            );
-            LivePhase::InProgress
-        }
-    }
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EspnStatus {
     pub(crate) r#type: EspnStatusType,
     pub(crate) period: u8,
     pub(crate) display_clock: String,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct EspnStatusType {
-    pub(crate) state: CompetitionState,
-    pub(crate) description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -184,14 +143,14 @@ pub struct NbaPregameGame {
     /// the device's `utc_offset` for local display — it never parses dates.
     pub start_time: u32,
     pub venue: String,
-    pub home: NbaTeam,
-    pub away: NbaTeam,
+    pub home: NbaPregameTeam,
+    pub away: NbaPregameTeam,
 }
 
 /// Pre-game team: identity and pre-game context, but no score (there is no
 /// game yet — a fake 0 would invite the firmware to render one).
 #[derive(Serialize, ToSchema)]
-pub struct NbaTeam {
+pub struct NbaPregameTeam {
     /// Team abbreviation, e.g. "LAL" — firmware uses this to fetch the logo.
     pub abbreviation: String,
     pub colors: TeamColors,
@@ -215,16 +174,7 @@ pub struct NbaLiveGame {
     pub home: TeamState,
     pub away: TeamState,
     /// Absent before the opening tip.
-    pub last_play: Option<NbaLastPlay>,
-}
-
-/// The live sub-state: breaks render without a meaningful clock.
-#[derive(Serialize, ToSchema, Clone, Copy, PartialEq, Eq, Debug)]
-#[serde(rename_all = "snake_case")]
-pub enum LivePhase {
-    InProgress,
-    Halftime,
-    EndOfPeriod,
+    pub last_play: Option<LastPlay>,
 }
 
 /// Final snapshot: score, per-quarter line score, and quarters played (4, or
@@ -245,10 +195,4 @@ pub struct NbaFinalTeam {
     pub colors: TeamColors,
     /// Points per quarter, quarter 1 first; overtime periods extend past 4.
     pub line_score: Vec<u8>,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct NbaLastPlay {
-    pub id: String,
-    pub text: String,
 }

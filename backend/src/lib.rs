@@ -17,6 +17,7 @@ pub mod clock;
 pub mod config;
 pub mod error;
 pub mod espn;
+pub mod football;
 pub mod logo;
 pub mod mlb;
 pub mod nba;
@@ -25,7 +26,6 @@ pub mod soccer;
 pub mod team;
 pub mod wire;
 
-use auth::ApiKey;
 use config::AppConfig;
 use error::AppError;
 use espn::EspnClient;
@@ -46,6 +46,8 @@ use espn::league::AnyLeague;
         mlb::handler::get_game,
         nba::handler::list_games,
         nba::handler::get_game,
+        football::handler::list_games,
+        football::handler::get_game,
         soccer::handler::list_games,
         soccer::handler::get_game,
         app_update::handler::get_app_manifest,
@@ -60,6 +62,9 @@ use espn::league::AnyLeague;
         shared::game::GameListEntry,
         shared::game::GameState,
         shared::game::Record,
+        shared::game::LivePhase,
+        shared::game::Side,
+        shared::game::LastPlay,
         shared::team::TeamColors,
         shared::team::TeamState,
         mlb::MlbGame,
@@ -72,28 +77,32 @@ use espn::league::AnyLeague;
         mlb::MlbCount,
         mlb::MlbBases,
         mlb::MlbAtBat,
-        mlb::MlbLastPlay,
         mlb::MlbInning,
         mlb::InningHalf,
         nba::NbaGame,
         nba::NbaLiveGame,
         nba::NbaPregameGame,
         nba::NbaFinalGame,
-        nba::NbaTeam,
+        nba::NbaPregameTeam,
         nba::NbaFinalTeam,
-        nba::NbaLastPlay,
-        nba::LivePhase,
+        football::FootballGame,
+        football::FootballLiveGame,
+        football::FootballPregameGame,
+        football::FootballFinalGame,
+        football::FootballPregameTeam,
+        football::FootballFinalTeam,
+        football::FootballSituation,
+        football::Timeouts,
         soccer::SoccerGame,
         soccer::SoccerLiveGame,
         soccer::SoccerPregameGame,
         soccer::SoccerFinalGame,
-        soccer::SoccerTeam,
+        soccer::SoccerPregameTeam,
         soccer::SoccerFinalTeam,
         soccer::SoccerFinalFlavor,
         soccer::LastEvent,
         soccer::EventKind,
         soccer::Commentary,
-        soccer::Side,
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -101,6 +110,7 @@ use espn::league::AnyLeague;
         (name = "team", description = "Team logo endpoint"),
         (name = "mlb", description = "MLB live game data (ESPN-backed)"),
         (name = "nba", description = "NBA live game data (ESPN-backed)"),
+        (name = "football", description = "Football live game data — NFL + NCAAF (ESPN-backed)"),
         (name = "soccer", description = "Soccer live game data (ESPN-backed)"),
         (name = "app", description = "Device app OTA image + manifest"),
     )
@@ -118,7 +128,7 @@ impl utoipa::Modify for SecurityAddon {
                     utoipa::openapi::security::ApiKey::Header(
                         utoipa::openapi::security::ApiKeyValue::with_description(
                             "X-Api-Key",
-                            "API key for authentication. When no key is configured on the server, authentication is disabled and this header is ignored.",
+                            "API key for the OTA endpoints (/app/*) only — game data, logos, and /time are unauthenticated (the scoreboard polls them over plain HTTP). When no key is configured on the server, authentication is disabled and this header is ignored.",
                         ),
                     ),
                 ),
@@ -244,13 +254,13 @@ async fn health() -> &'static str {
 /// OpenAPI doc (see the `#[utoipa::path]` handlers); this is only the router.
 async fn games_list(
     State(state): State<Arc<AppState>>,
-    _auth: ApiKey,
     Path((sport, league)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     match AnyLeague::from_path(&sport, &league)? {
         AnyLeague::Mlb => mlb::list_games(&state, &headers).await,
         AnyLeague::Nba => nba::list_games(&state, &headers).await,
+        AnyLeague::Football(league) => football::list_games(&state, league, &headers).await,
         AnyLeague::Soccer(league) => soccer::list_games(&state, league, &headers).await,
     }
 }
@@ -259,13 +269,13 @@ async fn games_list(
 /// for the per-game detail.
 async fn games_detail(
     State(state): State<Arc<AppState>>,
-    _auth: ApiKey,
     Path((sport, league, game_id)): Path<(String, String, String)>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     match AnyLeague::from_path(&sport, &league)? {
         AnyLeague::Mlb => mlb::get_game(&state, &game_id, &headers).await,
         AnyLeague::Nba => nba::get_game(&state, &game_id, &headers).await,
+        AnyLeague::Football(league) => football::get_game(&state, league, &game_id, &headers).await,
         AnyLeague::Soccer(league) => soccer::get_game(&state, league, &game_id, &headers).await,
     }
 }
@@ -295,6 +305,31 @@ mod tests {
             .filter_map(|arm| arm["allOf"][1]["properties"]["state"]["enum"][0].as_str())
             .collect();
         assert_eq!(states, ["pregame", "live", "final"]);
+    }
+
+    /// Football is a full sibling in the doc: `FootballGame` is the same
+    /// three-state `oneOf` as the others, and its routes sit under their own
+    /// tag. (The shared `LivePhase`/`Side`/`LastPlay` components are registered
+    /// once from `shared::game`, so there is no per-sport enum shape to assert.)
+    #[test]
+    fn openapi_registers_football_as_a_sibling_sport() {
+        let doc = ApiDoc::openapi();
+        let json = serde_json::to_string(&doc).expect("OpenAPI doc serializes");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        let arms = value["components"]["schemas"]["FootballGame"]["oneOf"]
+            .as_array()
+            .expect("FootballGame is a oneOf over its states");
+        assert_eq!(arms.len(), 3, "one arm per state");
+        let states: Vec<&str> = arms
+            .iter()
+            .filter_map(|arm| arm["allOf"][1]["properties"]["state"]["enum"][0].as_str())
+            .collect();
+        assert_eq!(states, ["pregame", "live", "final"]);
+
+        // The football routes are present under their own tag.
+        assert!(value["paths"]["/football/{league}/games"].is_object());
+        assert!(value["paths"]["/football/{league}/games/{game_id}"].is_object());
     }
 
     /// The generic games routes share the `/{sport}/{league}/...` prefix with
