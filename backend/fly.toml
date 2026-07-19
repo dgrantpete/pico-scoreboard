@@ -10,7 +10,11 @@ LOG_FORMAT = "json"
 
 [http_service]
 internal_port = 3000
-force_https = true
+# Plain HTTP is intentionally served (no 80 -> 443 redirect): the scoreboard
+# polls game data over http:// to avoid ~21 KB of standing mbedTLS buffers on
+# the Pico. The /app/* OTA endpoints remain API-key'd and are only ever
+# fetched over https by the device (ota.py).
+force_https = false
 auto_stop_machines = "stop"
 auto_start_machines = true
 min_machines_running = 1

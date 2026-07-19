@@ -72,15 +72,26 @@ def _raise_api_error(status: int, body) -> None:
 
 class ScoreboardApiClient:
     """
-    Async HTTP client for the Pico Scoreboard backend API.
+    Async HTTP client for the Pico Scoreboard backend's game-data API.
 
-    Provides the backend-authenticated HTTP session used by the firmware.
-    Every request runs under a hard timeout; on timeout the underlying
-    connection is dropped so the next request reconnects cleanly.
+    Speaks plain HTTP (see __init__) to unauthenticated routes; OTA is the
+    separate, TLS-only path in ota.py. Every request runs under a hard
+    timeout; on timeout the underlying connection is dropped so the next
+    request reconnects cleanly.
     """
 
     def __init__(self, config: Config) -> None:
         self._config: Config = config
+        # Score data is public and polled over PLAIN HTTP by design: the
+        # persistent polling connection would otherwise hold ~21 KB of
+        # mbedTLS record buffers on the heap for its whole lifetime (and pay
+        # a TLS handshake stall on every reconnect). Only the scheme is
+        # downgraded here — config.api_url stays https:// because ota.py and
+        # main.py's time sync read it directly, and OTA MUST stay on TLS
+        # (its manifest sha is the code-integrity root). These routes are
+        # unauthenticated backend-side, so no API key is sent (a cleartext
+        # key would leak).
+        self._base_url: str = config.api_url.rstrip('/').replace('https://', 'http://', 1)
         self._session: aiohttp.ClientSession = aiohttp.ClientSession()
         # Response bodies land here and are returned as aliasing memoryviews:
         # valid only until the next request. One buffer supports exactly one
@@ -137,7 +148,7 @@ class ScoreboardApiClient:
             OSError: On network errors (WiFi disconnected, DNS failure, etc.)
             asyncio.TimeoutError: If the request exceeds _REQUEST_TIMEOUT.
         """
-        url = f"{self._config.api_url.rstrip('/')}{path}"
+        url = f"{self._base_url}{path}"
         params = []
         if width is not None:
             params.append(f"width={width}")
@@ -148,7 +159,7 @@ class ScoreboardApiClient:
         if params:
             url += "?" + "&".join(params)
 
-        headers = {"X-Api-Key": self._config.api_key}
+        headers = {}
         if accept:
             headers["Accept"] = accept
 
@@ -186,8 +197,8 @@ class ScoreboardApiClient:
         caller can echo it verbatim as If-None-Match — backend does a strict
         string match and will not recognize a stripped-quote form.
         """
-        url = f"{self._config.api_url.rstrip('/')}{path}"
-        headers = {"X-Api-Key": self._config.api_key, "Accept": STRUCT_CONTENT_TYPE}
+        url = f"{self._base_url}{path}"
+        headers = {"Accept": STRUCT_CONTENT_TYPE}
         if if_none_match is not None:
             headers["If-None-Match"] = if_none_match
 
@@ -229,8 +240,8 @@ class ScoreboardApiClient:
         from today's scoreboard (404) — e.g. it dropped off the slate or
         entered a non-displayable delay between the list and this fetch.
         """
-        url = f"{self._config.api_url.rstrip('/')}{path}"
-        headers = {"X-Api-Key": self._config.api_key, "Accept": STRUCT_CONTENT_TYPE}
+        url = f"{self._base_url}{path}"
+        headers = {"Accept": STRUCT_CONTENT_TYPE}
         try:
             filled = await self._with_timeout(
                 self._get_struct_inner(url, path, tag, headers)
