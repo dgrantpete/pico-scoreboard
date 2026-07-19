@@ -93,7 +93,7 @@ register(Variant("default"))
 _SG = "scoreboard.screen_geometry"
 for _letter in ("A", "B", "C"):
     register(Variant(f"final-{_letter}", overrides={_SG: {"_ACTIVE": {
-        "mlb_final": _letter, "nba_final": _letter}}}))
+        "mlb_final": _letter, "nba_final": _letter, "football_final": _letter}}}))
     register(Variant(f"soccer-{_letter}", overrides={_SG: {"_ACTIVE": {
         "soccer_live": _letter}}}))
 

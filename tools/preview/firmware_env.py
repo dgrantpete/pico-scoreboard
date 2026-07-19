@@ -83,6 +83,7 @@ def load_firmware(clock) -> FirmwareEnv:
 
     import scoreboard.config as config
     import scoreboard.fonts as fonts
+    import scoreboard.football as football
     import scoreboard.mlb as mlb
     import scoreboard.nba as nba
     import scoreboard.soccer as soccer
@@ -93,6 +94,7 @@ def load_firmware(clock) -> FirmwareEnv:
         clock=clock,
         config=config,
         fonts=fonts,
+        football=football,
         mlb=mlb,
         nba=nba,
         soccer=soccer,

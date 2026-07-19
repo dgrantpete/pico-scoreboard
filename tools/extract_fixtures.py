@@ -5,7 +5,9 @@ taken from live-captured payloads so backend tests exercise exactly what ESPN
 serves. Regenerate any time with:  python tools/extract_fixtures.py
 
 Fixtures are grouped per league; each group scans that league's 200-responses
-newest-first and keeps the first event matching each named predicate.
+newest-first and keeps the first event matching each named predicate. Output
+dirs nest per ESPN league slug for the multi-league sports (football/nfl,
+soccer/fifa.world); the single-league sports (mlb, nba) stay flat.
 """
 
 import json
@@ -78,6 +80,27 @@ def _final(ev: dict, c: dict) -> bool:
     return _mlb_state(ev, c) == "post"
 
 
+def _football_situation(c: dict) -> dict:
+    return c.get("situation") or {}
+
+
+def _football_final_regulation(_ev: dict, c: dict) -> bool:
+    return c["status"]["type"]["state"] == "post" and c["status"].get("period", 0) <= 4
+
+
+def _football_final_overtime(_ev: dict, c: dict) -> bool:
+    return c["status"]["type"]["state"] == "post" and c["status"].get("period", 0) > 4
+
+
+def _football_pregame_ranked(_ev: dict, c: dict) -> bool:
+    """A scheduled game with at least one Top-25 side (ESPN's curatedRank
+    uses 99 for unranked)."""
+    return c["status"]["type"]["state"] == "pre" and any(
+        (x.get("curatedRank") or {}).get("current", 99) <= 25
+        for x in c.get("competitors") or []
+    )
+
+
 def _has_red_card(c: dict) -> bool:
     return any(d.get("redCard") for d in c.get("details") or [])
 
@@ -105,36 +128,8 @@ def _soccer_home_multi_goal_final(_ev: dict, c: dict) -> bool:
     return len(goals) >= 2
 
 
-# (league, output subdir, [(fixture name, predicate)])
+# (ESPN league slug, output subdir, [(fixture name, predicate)])
 GROUPS: list[tuple[str, str, list[tuple[str, Predicate]]]] = [
-    (
-        "fifa.world",
-        "soccer",
-        [
-            ("pregame", _description("Scheduled")),
-            ("first_half", _description("First Half")),
-            ("halftime", _description("Halftime")),
-            (
-                "second_half_stoppage",
-                _description(
-                    "Second Half",
-                    lambda c: "+" in c["status"]["displayClock"] and bool(c.get("details")),
-                ),
-            ),
-            ("full_time", _description("Full Time")),
-            # Coverage backfill (2026-07-15): red-card + home/multi-goal paths.
-            ("live_red_card", _soccer_live_red_card),
-            ("full_time_home_multi_goal", _soccer_home_multi_goal_final),
-            # Knockout-stage states observed in the corpus (wire support
-            # pending — extracted now so tests land with the model change).
-            ("overtime", _description("Overtime")),
-            ("shootout", _description("Shootout")),
-            ("extra_time_halftime", _description("Extra Time Halftime")),
-            ("end_of_regulation", _description("End of Regulation")),
-            ("final_after_extra_time", _description("Final Score - After Extra Time")),
-            ("final_after_penalties", _description("Final Score - After Penalties")),
-        ],
-    ),
     (
         "mlb",
         "mlb",
@@ -177,6 +172,77 @@ GROUPS: list[tuple[str, str, list[tuple[str, Predicate]]]] = [
             ("halftime", _description("Halftime")),
             ("end_of_period", _description("End of Period")),
             ("final", _description("Final")),
+        ],
+    ),
+    # Football corpus is empty until preseason (see BACKLOG); these groups
+    # report MISSING until real captures land and replace the synthetics.
+    (
+        "nfl",
+        "football/nfl",
+        [
+            ("pregame", _description("Scheduled")),
+            (
+                "in_progress",
+                _description(
+                    "In Progress",
+                    lambda c: bool(_football_situation(c).get("down"))
+                    and not _football_situation(c).get("isRedZone"),
+                ),
+            ),
+            (
+                "in_progress_redzone",
+                _description(
+                    "In Progress",
+                    lambda c: bool(_football_situation(c).get("isRedZone")),
+                ),
+            ),
+            # Early-game glitch bucket: situation present but empty ({}).
+            (
+                "in_progress_empty_situation",
+                _description(
+                    "In Progress",
+                    lambda c: not _football_situation(c).get("down"),
+                ),
+            ),
+            ("halftime", _description("Halftime")),
+            ("end_of_period", _description("End of Period")),
+            ("final", _football_final_regulation),
+            ("final_ot", _football_final_overtime),
+        ],
+    ),
+    (
+        "college-football",
+        "football/college-football",
+        [
+            ("pregame_ranked", _football_pregame_ranked),
+        ],
+    ),
+    (
+        "fifa.world",
+        "soccer/fifa.world",
+        [
+            ("pregame", _description("Scheduled")),
+            ("first_half", _description("First Half")),
+            ("halftime", _description("Halftime")),
+            (
+                "second_half_stoppage",
+                _description(
+                    "Second Half",
+                    lambda c: "+" in c["status"]["displayClock"] and bool(c.get("details")),
+                ),
+            ),
+            ("full_time", _description("Full Time")),
+            # Coverage backfill (2026-07-15): red-card + home/multi-goal paths.
+            ("live_red_card", _soccer_live_red_card),
+            ("full_time_home_multi_goal", _soccer_home_multi_goal_final),
+            # Knockout-stage states observed in the corpus (wire support
+            # pending — extracted now so tests land with the model change).
+            ("overtime", _description("Overtime")),
+            ("shootout", _description("Shootout")),
+            ("extra_time_halftime", _description("Extra Time Halftime")),
+            ("end_of_regulation", _description("End of Regulation")),
+            ("final_after_extra_time", _description("Final Score - After Extra Time")),
+            ("final_after_penalties", _description("Final Score - After Penalties")),
         ],
     ),
 ]

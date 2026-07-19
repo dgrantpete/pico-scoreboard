@@ -35,13 +35,25 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     modeled (schema/presence/spec/discover under data/espn/generated/,
     incl. a pooled nba+wnba discover for contract comparison). The
     conventions from the overhaul are exactly what it lands on: registry
-    rows in poller/SportsCard, its own module pair, variant keys.
+    rows in poller/SportsCard, its own module pair, variant keys. Plus,
+    from the consistency pass (2026-07-19): prefixed wire symbols
+    (`encode_<sport>_game`, `<SPORT>_FLAG_*`), `{Sport}PregameTeam`
+    naming, shared enums/handlers from `shared/`, testdata nested per
+    ESPN league slug, and a `_TABLES`/`_ACTIVE` registry key per screen.
 52. **League display names are triplicated** — frontend SportsCard,
     firmware soccer.LEAGUE_NAMES, backend espn/league.rs (casing already
     drifts: "Premier League" vs "PREMIER LEAGUE"). Single source or
     codegen.
 53. **Soccer `attendance`** — 100%-present in the corpus for every state;
     add to the wire only when a screen design wants it.
+57. **spleen-5x8 accent glyphs are ASCII stand-ins** — the Latin-1 font
+    support (2026-07-15) renders real accents in unscii 8/16, but the
+    spleen-5x8 asset ships blank placeholder bitmaps for its whole accented
+    range (upstream too), so `tools/compile_fonts.py` remaps those entries
+    to the base letter's record ("Peña" -> "Pena" in spleen only). If it
+    ever grates: draw the ~60 accented glyphs into a patched BDF (lowercase
+    accents fit 5x8; caps are the hard part) — the build picks up real
+    bitmaps automatically, no code change.
 56. **1px edge-gap migration for the game screens** — owner rule (2026-07-15):
     nothing draws in row 0, row 63, col 0, or col 127 (the panel has
     unreliable edge pixels — garbage-colored LEDs surfaced at one edge).
@@ -77,6 +89,19 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     - Idle-league row bloat: ~49% of `responses` rows are off-season
       empty-scoreboard duplicates; store only transitions (or prune) and
       index `responses(source)`.
+
+59. **Delete the dead `mlb_layout.aseprite` slices** — the MLB live migration
+    moved every text-slot rectangle into `screen_geometry._MLB_LIVE`, so 16
+    slices in `mlb_layout.aseprite` are now dead: `away_logo`, `home_logo`,
+    `away_score`, `home_score`, `inning`, `ball_label`, `ball_values`,
+    `strike_label`, `strike_values`, `out_label`, `out_values`,
+    `pitcher_label`, `pitcher_name`, `batter_label`, `batter_name`,
+    `play_text`. Keep `first_base`/`second_base`/`third_base` (base-marker
+    art anchors). Until they're deleted in the Aseprite GUI, editing any of
+    those slices silently does nothing (the firmware no longer reads them);
+    `compile_layout.compile_all` then auto-removes the stale generated
+    modules. GUI-trivial owner action — do NOT use the aseprite-io transpiler
+    harness (known silent-drop bug vs. a 2-minute manual delete).
 
 ## Firmware
 
@@ -135,6 +160,12 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     collections are too frequent/rare, tune toward 64 KB. History: heap
     457 KB, live set ~270-340 KB; pre-glyph-table churn was ~80 KB/s with
     GC every ~1.4 s and free bottoming at 1.9 KB.
+    2026-07-16 update: plaintext polling (see item 22) removes the ~21 KB
+    standing TLS buffers AND the 33 KB-contiguous reconnect spike from the
+    polling path entirely — TLS allocs now happen only at boot (time sync)
+    and the daily OTA check. The 48 KB threshold was calibrated around
+    those spikes; re-baseline with that input gone (likely room to relax
+    upward → fewer collections).
 
 18. **IPv6 reachability** — the device advertises an IPv6 AAAA over mDNS
     but the web server binds IPv4-only; IPv6-first clients eat a ~2 s stall
@@ -163,10 +194,22 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     2026-07-06 (v1.28.0 submodule + `firmware/board/PICO2W_SCOREBOARD`:
     ROMFS 256 KB, BT off ≈ +20 KB RAM, `MEMP_NUM_TCP_PCB=16`). Still on
     the table for later:
-    - *mbedTLS `MBEDTLS_SSL_IN_CONTENT_LEN` 16 K → 8 K*: ~8 KB heap per
-      live TLS connection, but servers can't be forced to send smaller
-      records (fly.io doesn't negotiate MFL) — needs validation against
-      the real backend before shipping; keep 16 K fallback.
+    - ~~mbedTLS `MBEDTLS_SSL_IN_CONTENT_LEN` 16 K → 8 K~~ — SUPERSEDED
+      2026-07-16 by plaintext polling (owner decision: score polling runs
+      over plain HTTP with no API key; OTA keeps TLS + key). Research
+      findings preserved in case TLS polling ever returns: per-connection
+      buffers are 16,717 B in + 4,429 B out on the GC HEAP (mbedtls_calloc
+      → m_tracked_calloc), held for the connection's life — and the
+      aiohttp fork keeps ONE polling connection alive, so this was a
+      standing cost, not a spike. Fly/rustls ignores MFL (probed with
+      s_client); RFC 8449 record-size-limit needs TLS 1.3 (disabled).
+      Measured records from Fly: routine API ≤ ~4.5 KB (cert-chain flight
+      3,602 B), but `/app/image` streams full 16 K records — so an 8 K
+      buffer requires Range-chunked OTA downloads (backend 206 support +
+      ota.py sequential 4 K ranges over one keep-alive conn) plus a
+      board-level `MBEDTLS_USER_CONFIG_FILE` override (deferred
+      target_compile_definitions on `micropy_lib_mbedtls`). Fully designed
+      and viable; just no longer needed.
     - *mbedTLS flash trims*: drop TLS 1.0/1.1, PSK, SECP*K1 curves
       (flash-only win, low priority).
     - *`mpy-cross -O2` for release builds*: strips asserts, keeps line
@@ -207,7 +250,10 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     ~10 lines; answers "what blocks the loop" with data instead of
     guesses. Note: TLS crypto itself is atomic C — the fix for it is
     fewer requests (item 25's combined backend endpoint also halves the
-    poller's TLS round-trips per cycle), not finer yielding.
+    poller's round-trips per cycle), not finer yielding.
+    2026-07-16: polling moved to plain HTTP (item 22) — TLS handshake
+    stalls now only possible at boot (time sync) and the daily OTA check;
+    if the stalls persist after that ships, TLS is exonerated.
 
 ## Soccer (end-to-end wiring landed 2026-07-09; remaining polish)
 
@@ -345,6 +391,42 @@ settings Sports card). Same change unified the outbound enum style
     `parse_live_phase` should map, and give the new screens the same
     on-hardware shakedown soccer got (item 34) — rotation with other
     sports, play-flash cadence, clock staleness across 30 s polls.
+
+## Football (end-to-end wiring landed 2026-07-18; live validation remaining)
+
+Landed 2026-07-18 as a full sibling sport (NFL + NCAAF, soccer-style
+multi-league): backend `football/` module + `FootballLeague` registry rows +
+wire encodings with goldens; firmware `football.py` parser (cross-pinned to
+the Rust bytes by `wire_format_check.py`), `football_live` screen (broadcast
+corners over the sprite field strip — endzones palette-tinted to team
+colors, Core-0-projected scrimmage/first-down perspective lines, ball at
+the LOS, timeout bars, possession arrow, red-zone warning colors; first
+game screen born edge-rule-compliant, item 56 unaffected), shared
+pregame/final reuse (NCAAF rank line rides the pitcher slot, venue rides
+the weather slot), poller/config/menu/frontend registry rows, preview
+scenarios + two goldens. `football_layout.aseprite` was generated from the
+archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
+`examples/gen_football_layout.rs`); the archive zip is deleted — the
+.aseprite is now the only source of truth.
+
+58. **Football corpus is empty until preseason — validate on live games
+    (Aug 2026)** — no live NFL/NCAAF bodies exist off-season, so the
+    transforms ship against synthetic fixtures modeled on the excavated
+    pre-rewrite ESPN shapes. When preseason starts (~Aug 7): confirm the
+    `yardLine` possession-relative semantics (THE highest-risk assumption —
+    the abs-ball mirror math in `set_football_live` is excavated from
+    working code but never validated live; flagged in the backend
+    `validate_situation` doc comment), displayClock string forms, live
+    status descriptions ("End of Period" vs "End of Quarter" alias),
+    curatedRank shape, timeouts presence timing, and last-play id/text
+    cadence. Capture real fixtures (tools/extract_fixtures.py), swap the
+    synthetics in backend/testdata/football/, re-run tools/espn
+    schema/spec/validate for nfl+ncaaf, and give the screens the same
+    on-hardware shakedown soccer/NBA got (items 34/41): rotation with
+    other sports, field/ball render on the physical panel, play-flash
+    cadence. NCAAF deliberately polls ESPN's default Top-25 slate
+    (doc-commented in the handler) — revisit only if the rotation wants
+    more games.
 
 ## Backend
 

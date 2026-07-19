@@ -37,6 +37,7 @@ wire = importlib.import_module("scoreboard.wire")
 mlb = importlib.import_module("scoreboard.mlb")
 nba = importlib.import_module("scoreboard.nba")
 soccer = importlib.import_module("scoreboard.soccer")
+football = importlib.import_module("scoreboard.football")
 inning_half = importlib.import_module("scoreboard.inning_half")
 
 
@@ -200,6 +201,60 @@ def encode_soccer_final(
                        away_pri, away_alt, home_pri, home_alt)
     out += _str(game_id) + _str(away_abbr) + _str(home_abbr)
     out += _str(away_scorers) + _str(home_scorers)
+    return bytes(out)
+
+
+def encode_football_live(
+    *, flags, period, phase, down, distance, yard_line,
+    away_timeouts, home_timeouts, away_score, home_score,
+    away_pri, away_alt, home_pri, home_alt,
+    game_id, away_abbr, home_abbr, clock, last_play_id, last_play_text,
+) -> bytes:
+    out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_IN])
+    out += struct.pack(
+        "<BBBBBBBBHHIIII",
+        flags, period, phase, down, distance, yard_line,
+        away_timeouts, home_timeouts, away_score, home_score,
+        away_pri, away_alt, home_pri, home_alt,
+    )
+    out += _str(game_id) + _str(away_abbr) + _str(home_abbr) + _str(clock)
+    if flags & 0x01:
+        out += _str(last_play_id) + _str(last_play_text)
+    return bytes(out)
+
+
+def encode_football_pregame(
+    *, flags, away_wins, away_losses, home_wins, home_losses,
+    start_time, away_pri, away_alt, home_pri, home_alt,
+    game_id, away_abbr, home_abbr, venue, away_rank, home_rank,
+) -> bytes:
+    out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_PRE])
+    out += struct.pack(
+        "<BHHHHIIIII",
+        flags, away_wins, away_losses, home_wins, home_losses,
+        start_time, away_pri, away_alt, home_pri, home_alt,
+    )
+    out += _str(game_id) + _str(away_abbr) + _str(home_abbr) + _str(venue)
+    if flags & 0x04:
+        out += _str(away_rank)
+    if flags & 0x08:
+        out += _str(home_rank)
+    return bytes(out)
+
+
+def encode_football_final(
+    *, periods_played, away_line, home_line, away_score, home_score,
+    away_pri, away_alt, home_pri, home_alt,
+    game_id, away_abbr, home_abbr,
+) -> bytes:
+    out = bytearray([wire.WIRE_VERSION, wire.GAME_STATE_POST])
+    out += struct.pack(
+        "<BBBHHIIII",
+        periods_played, len(away_line), len(home_line), away_score, home_score,
+        away_pri, away_alt, home_pri, home_alt,
+    )
+    out += bytes(away_line) + bytes(home_line)
+    out += _str(game_id) + _str(away_abbr) + _str(home_abbr)
     return bytes(out)
 
 
@@ -393,6 +448,92 @@ SOCCER_FINAL = dict(
 )
 
 
+FOOTBALL_LIVE_FULL = dict(
+    # Mirrors wire.rs football_live_fixture VERBATIM (cross-pinned below).
+    # flags: last play (0x01) + situation (0x02) + possession home (0x04)
+    # + timeouts (0x10); not in the red zone.
+    flags=0x17, period=3, phase=football.PHASE_IN_PROGRESS,
+    down=2, distance=7, yard_line=45,
+    away_timeouts=2, home_timeouts=3,
+    away_score=14, home_score=17,
+    away_pri=0x00338D, away_alt=0xC60C30, home_pri=0xE31837, home_alt=0xFFB81C,
+    game_id="401772510", away_abbr="BUF", home_abbr="KC", clock="8:24",
+    last_play_id="401772510105",
+    last_play_text="P. Mahomes pass complete to T. Kelce for 8 yards",
+)
+
+FOOTBALL_LIVE_OPEN = dict(
+    # flags: situation (0x02) + timeouts (0x10); possession away (bit2 clear),
+    # no red zone, no last play.
+    flags=0x12, period=1, phase=football.PHASE_IN_PROGRESS,
+    down=2, distance=8, yard_line=33,
+    away_timeouts=3, home_timeouts=3,
+    away_score=0, home_score=3,
+    away_pri=0x003594, away_alt=0x869397, home_pri=0x004C54, home_alt=0xA5ACAF,
+    game_id="401547500", away_abbr="DAL", home_abbr="PHI", clock="11:47",
+    last_play_id="", last_play_text="",
+)
+
+FOOTBALL_LIVE_BREAK = dict(
+    # Mirrors wire.rs golden_football_live_break_no_situation VERBATIM.
+    # Halftime: no situation, no timeouts, no last play. The fixed situation
+    # fields carry zeros the parser drops behind the flags.
+    flags=0x00, period=2, phase=football.PHASE_HALFTIME,
+    down=0, distance=0, yard_line=0,
+    away_timeouts=0, home_timeouts=0,
+    away_score=10, home_score=14,
+    away_pri=0x00338D, away_alt=0xC60C30, home_pri=0xE31837, home_alt=0xFFB81C,
+    game_id="401772511", away_abbr="BUF", home_abbr="KC", clock="0:00",
+    last_play_id="", last_play_text="",
+)
+
+FOOTBALL_PREGAME_NFL = dict(
+    # Mirrors wire.rs football_pregame_fixture VERBATIM (cross-pinned below).
+    # Records present (0x03), no ranks (pro football has none).
+    flags=0x03,
+    away_wins=11, away_losses=3, home_wins=13, home_losses=1,
+    start_time=1783647600,  # 2026-07-10T01:40Z
+    away_pri=0x00338D, away_alt=0xC60C30, home_pri=0xE31837, home_alt=0xFFB81C,
+    game_id="401772512", away_abbr="BUF", home_abbr="KC", venue="Arrowhead Stadium",
+    away_rank="", home_rank="",
+)
+
+FOOTBALL_PREGAME_NCAAF = dict(
+    # Mirrors wire.rs golden_football_pregame_ncaaf_home_ranked VERBATIM.
+    # Records (0x03) + home rank line only (0x08): the mixed ranked/unranked
+    # case — the display-shaped rank string rides the pitcher slot.
+    flags=0x0B,
+    away_wins=11, away_losses=3, home_wins=13, home_losses=1,
+    start_time=1783647600,
+    away_pri=0x00338D, away_alt=0xC60C30, home_pri=0xE31837, home_alt=0xFFB81C,
+    game_id="401772513", away_abbr="MICH", home_abbr="OSU",
+    venue="Ohio Stadium",
+    away_rank="", home_rank="#3 OHIO STATE",
+)
+
+# Mirrors wire.rs golden_football_final_regulation VERBATIM (cross-pinned
+# below).
+FOOTBALL_FINAL = dict(
+    periods_played=4,
+    away_line=[7, 3, 7, 7],
+    home_line=[0, 10, 7, 10],
+    away_score=24, home_score=27,
+    away_pri=0xE31837, away_alt=0xFFB81C, home_pri=0x00338D, home_alt=0xC60C30,
+    game_id="401547417", away_abbr="KC", home_abbr="BUF",
+)
+
+# Overtime: five periods, five line-score entries per side. Mirrors
+# wire.rs football_final_fixture VERBATIM (cross-pinned below).
+FOOTBALL_FINAL_OT = dict(
+    periods_played=5,
+    away_line=[7, 3, 7, 7, 0],
+    home_line=[7, 7, 0, 10, 3],
+    away_score=24, home_score=27,
+    away_pri=0x00338D, away_alt=0xC60C30, home_pri=0xE31837, home_alt=0xFFB81C,
+    game_id="401772514", away_abbr="BUF", home_abbr="KC",
+)
+
+
 # --- Goldens (swap a line to bytes.fromhex(...) to pin Rust bytes) ----------
 
 GOLDEN_LIST = encode_list(LIST_ENTRIES)
@@ -415,6 +556,13 @@ GOLDEN_SOCCER_LIVE_HALFTIME = encode_soccer_live(**SOCCER_LIVE_HALFTIME)
 GOLDEN_SOCCER_LIVE_QUIET = encode_soccer_live(**SOCCER_LIVE_QUIET)
 GOLDEN_SOCCER_PREGAME = encode_soccer_pregame(**SOCCER_PREGAME)
 GOLDEN_SOCCER_FINAL = encode_soccer_final(**SOCCER_FINAL)
+GOLDEN_FOOTBALL_LIVE_FULL = encode_football_live(**FOOTBALL_LIVE_FULL)
+GOLDEN_FOOTBALL_LIVE_OPEN = encode_football_live(**FOOTBALL_LIVE_OPEN)
+GOLDEN_FOOTBALL_LIVE_BREAK = encode_football_live(**FOOTBALL_LIVE_BREAK)
+GOLDEN_FOOTBALL_PREGAME_NFL = encode_football_pregame(**FOOTBALL_PREGAME_NFL)
+GOLDEN_FOOTBALL_PREGAME_NCAAF = encode_football_pregame(**FOOTBALL_PREGAME_NCAAF)
+GOLDEN_FOOTBALL_FINAL = encode_football_final(**FOOTBALL_FINAL)
+GOLDEN_FOOTBALL_FINAL_OT = encode_football_final(**FOOTBALL_FINAL_OT)
 
 _GOLDENS = [
     ("list", GOLDEN_LIST),
@@ -437,6 +585,13 @@ _GOLDENS = [
     ("soccer_live_quiet", GOLDEN_SOCCER_LIVE_QUIET),
     ("soccer_pregame", GOLDEN_SOCCER_PREGAME),
     ("soccer_final", GOLDEN_SOCCER_FINAL),
+    ("football_live_full", GOLDEN_FOOTBALL_LIVE_FULL),
+    ("football_live_open", GOLDEN_FOOTBALL_LIVE_OPEN),
+    ("football_live_break", GOLDEN_FOOTBALL_LIVE_BREAK),
+    ("football_pre_nfl", GOLDEN_FOOTBALL_PREGAME_NFL),
+    ("football_pre_ncaaf", GOLDEN_FOOTBALL_PREGAME_NCAAF),
+    ("football_final", GOLDEN_FOOTBALL_FINAL),
+    ("football_final_ot", GOLDEN_FOOTBALL_FINAL_OT),
 ]
 
 
@@ -523,6 +678,37 @@ RUST_PIN_SOCCER_FINAL = bytes.fromhex(
     "0345535003504f52104d2e204d6572696e6f203930272b312700"
 )
 
+# Football goldens (backend/src/wire.rs GOLDEN_FOOTBALL_* test constants,
+# copied verbatim from the passing Rust suite; the module fixtures above
+# mirror the Rust fixtures, so these assert both encoders byte-agree).
+RUST_PIN_FOOTBALL_LIVE = bytes.fromhex(
+    "020117030002072d02030e0011008d330000300cc6003718e3001cb8ff00093430"
+    "3137373235313003425546024b4304383a32340c3430313737323531303130353"
+    "0502e204d61686f6d6573207061737320636f6d706c65746520746f20542e204b"
+    "656c636520666f722038207961726473"
+)
+RUST_PIN_FOOTBALL_LIVE_BREAK = bytes.fromhex(
+    "020100020100000000000a000e008d330000300cc6003718e3001cb8ff00093430"
+    "3137373235313103425546024b4304303a3030"
+)
+RUST_PIN_FOOTBALL_PRE = bytes.fromhex(
+    "0200030b0003000d000100704d506a8d330000300cc6003718e3001cb8ff000934"
+    "303137373235313203425546024b43114172726f7768656164205374616469756d"
+)
+RUST_PIN_FOOTBALL_PRE_RANKED = bytes.fromhex(
+    "02000b0b0003000d000100704d506a8d330000300cc6003718e3001cb8ff000934"
+    "3031373732353133044d494348034f53550c4f68696f205374616469756d0d2333"
+    "204f48494f205354415445"
+)
+RUST_PIN_FOOTBALL_FINAL = bytes.fromhex(
+    "020204040418001b003718e3001cb8ff008d330000300cc60007030707000a070a"
+    "09343031353437343137024b4303425546"
+)
+RUST_PIN_FOOTBALL_FINAL_OT = bytes.fromhex(
+    "020205050518001b008d330000300cc6003718e3001cb8ff000703070700070700"
+    "0a030934303137373235313403425546024b43"
+)
+
 
 def check_rust_pins() -> None:
     assert encode_live(**LIVE_FULL) == RUST_PIN_LIVE
@@ -598,6 +784,37 @@ def check_rust_pins() -> None:
     ft = soccer.parse_game_detail(memoryview(RUST_PIN_SOCCER_FINAL), "MLS")
     assert ft.away.scorers == "M. Merino 90'+1'"
     assert ft.flavor == soccer.FT_REGULAR
+
+    # Football: the pure-Python encodings must reproduce the Rust bytes, and
+    # the firmware football parser must accept the Rust bytes directly.
+    assert encode_football_live(**FOOTBALL_LIVE_FULL) == RUST_PIN_FOOTBALL_LIVE
+    assert encode_football_live(**FOOTBALL_LIVE_BREAK) == RUST_PIN_FOOTBALL_LIVE_BREAK
+    assert encode_football_pregame(**FOOTBALL_PREGAME_NFL) == RUST_PIN_FOOTBALL_PRE
+    assert encode_football_pregame(**FOOTBALL_PREGAME_NCAAF) == RUST_PIN_FOOTBALL_PRE_RANKED
+    assert encode_football_final(**FOOTBALL_FINAL) == RUST_PIN_FOOTBALL_FINAL
+    assert encode_football_final(**FOOTBALL_FINAL_OT) == RUST_PIN_FOOTBALL_FINAL_OT
+
+    fb_live = football.parse_game_detail(memoryview(RUST_PIN_FOOTBALL_LIVE), "NFL")
+    assert fb_live.clock == "8:24"
+    assert fb_live.possession == football.SIDE_HOME
+    assert fb_live.last_play.id == "401772510105"
+    fb_break = football.parse_game_detail(memoryview(RUST_PIN_FOOTBALL_LIVE_BREAK), "NFL")
+    assert fb_break.phase == football.PHASE_HALFTIME
+    assert fb_break.possession == football.SIDE_NONE
+    assert fb_break.away_timeouts is None
+    fb_pre = football.parse_game_detail(memoryview(RUST_PIN_FOOTBALL_PRE), "NFL")
+    assert fb_pre.weather_condition == "Arrowhead Stadium"  # venue rides weather slot
+    assert fb_pre.venue == "NFL"                            # league keeps venue slot
+    assert fb_pre.away.pitcher is None                      # no rank line in the pros
+    fb_ranked = football.parse_game_detail(memoryview(RUST_PIN_FOOTBALL_PRE_RANKED), "NCAA FOOTBALL")
+    assert fb_ranked.away.pitcher is None                   # unranked side: no line
+    assert fb_ranked.home.pitcher == "#3 OHIO STATE"        # rank rides pitcher slot
+    fb_reg = football.parse_game_detail(memoryview(RUST_PIN_FOOTBALL_FINAL), "NFL")
+    assert fb_reg.periods_played == 4
+    assert fb_reg.away.line == bytes([7, 3, 7, 7])
+    fb_final = football.parse_game_detail(memoryview(RUST_PIN_FOOTBALL_FINAL_OT), "NFL")
+    assert fb_final.periods_played == 5
+    assert fb_final.home.line == bytes([7, 7, 0, 10, 3])
 
 
 # --- Round-trip checks ------------------------------------------------------
@@ -811,6 +1028,16 @@ def check_nba_final() -> None:
     assert ot.away.line[4] == 12
 
 
+def check_nba_final_copies_out() -> None:
+    """The line vec must not alias the source buffer after it's reused."""
+    buf = bytearray(GOLDEN_NBA_FINAL)
+    game = nba.parse_game_detail(memoryview(buf))
+    original = bytes(game.away.line)
+    for i in range(len(buf)):
+        buf[i] = 0xEE
+    assert game.away.line == original, "line vec aliased the reusable buffer"
+
+
 def check_nba_rejections() -> None:
     def expect_error(payload: bytes, why: str) -> None:
         try:
@@ -947,6 +1174,142 @@ def check_soccer_rejections() -> None:
     expect_error(GOLDEN_SOCCER_FINAL + b"\x00", "trailing bytes after final")
 
 
+def check_football_live_full() -> None:
+    game = football.parse_game_detail(memoryview(GOLDEN_FOOTBALL_LIVE_FULL), "NFL")
+    assert isinstance(game, football.LiveGame)
+    assert game.game_id == "401772510"
+    assert game.period == 3
+    assert game.phase == football.PHASE_IN_PROGRESS
+    assert game.clock == "8:24"
+    assert game.down == 2 and game.distance == 7 and game.yard_line == 45
+    assert game.possession == football.SIDE_HOME
+    assert game.red_zone is False
+    assert game.away_timeouts == 2 and game.home_timeouts == 3
+    assert game.away.abbreviation == "BUF" and game.away.score == 14
+    assert game.away.colors.primary == 0x00338D
+    assert game.away.colors.alternate == 0xC60C30
+    assert game.home.abbreviation == "KC" and game.home.score == 17
+    assert game.home.colors.primary == 0xE31837
+    play = game.last_play
+    assert play is not None
+    assert play.id == "401772510105"
+    assert play.text == "P. Mahomes pass complete to T. Kelce for 8 yards"
+
+
+def check_football_live_open() -> None:
+    game = football.parse_game_detail(memoryview(GOLDEN_FOOTBALL_LIVE_OPEN), "NFL")
+    assert isinstance(game, football.LiveGame)
+    assert game.period == 1
+    assert game.down == 2 and game.distance == 8 and game.yard_line == 33
+    assert game.possession == football.SIDE_AWAY  # bit2 clear
+    assert game.red_zone is False
+    assert game.away_timeouts == 3 and game.home_timeouts == 3
+    assert game.last_play is None
+    assert game.away.abbreviation == "DAL" and game.home.abbreviation == "PHI"
+
+
+def check_football_live_break() -> None:
+    game = football.parse_game_detail(memoryview(GOLDEN_FOOTBALL_LIVE_BREAK), "NFL")
+    assert isinstance(game, football.LiveGame)
+    assert game.phase == football.PHASE_HALFTIME
+    assert game.period == 2
+    assert game.clock == "0:00"  # break clock is meaningless; phase renders
+    # No situation flag: drive fields drop to zero, possession to SIDE_NONE.
+    assert game.possession == football.SIDE_NONE
+    assert game.down == 0 and game.distance == 0 and game.yard_line == 0
+    assert game.red_zone is False
+    # No timeouts flag: surfaced as None so the bars stay undrawn.
+    assert game.away_timeouts is None and game.home_timeouts is None
+    assert game.last_play is None
+    assert game.away.score == 10 and game.home.score == 14
+
+
+def check_football_pregame() -> None:
+    nfl = football.parse_game_detail(memoryview(GOLDEN_FOOTBALL_PREGAME_NFL), "NFL")
+    assert isinstance(nfl, football.PregameGame)
+    assert nfl.game_id == "401772512"
+    assert nfl.start_epoch == 1783647600
+    # League display name threads into the venue slot (see football.PregameGame).
+    assert nfl.venue == "NFL"
+    # Venue rides the weather-condition slot (league / venue / kickoff cycle);
+    # football still has no temperature.
+    assert nfl.weather_temp is None
+    assert nfl.weather_condition == "Arrowhead Stadium"
+    assert nfl.away.abbreviation == "BUF"
+    assert nfl.away.wins == 11 and nfl.away.losses == 3
+    assert nfl.home.wins == 13 and nfl.home.losses == 1
+    # No ranks in pro football: the pitcher slot stays absent.
+    assert nfl.away.pitcher is None and nfl.home.pitcher is None
+
+    ncaaf = football.parse_game_detail(memoryview(GOLDEN_FOOTBALL_PREGAME_NCAAF), "NCAA FOOTBALL")
+    assert isinstance(ncaaf, football.PregameGame)
+    assert ncaaf.venue == "NCAA FOOTBALL"
+    assert ncaaf.weather_condition == "Ohio Stadium"
+    assert ncaaf.away.wins == 11 and ncaaf.away.losses == 3
+    assert ncaaf.home.wins == 13 and ncaaf.home.losses == 1
+    # The rank line rides the probable-pitcher slot, in display shape; the
+    # away side is unranked (flag clear) — the mixed case.
+    assert ncaaf.away.pitcher is None
+    assert ncaaf.home.pitcher == "#3 OHIO STATE"
+
+
+def check_football_final() -> None:
+    game = football.parse_game_detail(memoryview(GOLDEN_FOOTBALL_FINAL), "NFL")
+    assert isinstance(game, football.FinalGame)
+    assert game.game_id == "401547417"
+    assert game.periods_played == 4
+    assert game.away.abbreviation == "KC" and game.away.score == 24
+    assert game.away.line == bytes([7, 3, 7, 7])
+    assert game.home.abbreviation == "BUF" and game.home.score == 27
+    assert game.home.line == bytes([0, 10, 7, 10])
+    assert isinstance(game.away.line, bytes)
+
+    ot = football.parse_game_detail(memoryview(GOLDEN_FOOTBALL_FINAL_OT), "NFL")
+    assert ot.periods_played == 5
+    assert len(ot.away.line) == 5 and len(ot.home.line) == 5
+    assert ot.away.line == bytes([7, 3, 7, 7, 0])
+    assert ot.home.line[4] == 3
+
+
+def check_football_final_copies_out() -> None:
+    """The line vec must not alias the source buffer after it's reused."""
+    buf = bytearray(GOLDEN_FOOTBALL_FINAL)
+    game = football.parse_game_detail(memoryview(buf), "NFL")
+    original = bytes(game.away.line)
+    for i in range(len(buf)):
+        buf[i] = 0xEE
+    assert game.away.line == original, "line vec aliased the reusable buffer"
+
+
+def check_football_rejections() -> None:
+    def expect_error(payload: bytes, why: str) -> None:
+        try:
+            football.parse_game_detail(memoryview(payload), "NFL")
+        except wire.DeserializeError:
+            return
+        raise AssertionError(f"accepted invalid football payload: {why}")
+
+    expect_error(b"", "empty payload")
+    expect_error(bytes([3]) + GOLDEN_FOOTBALL_LIVE_FULL[1:], "future version")
+    expect_error(bytes([wire.WIRE_VERSION, 9]), "unknown state")
+    expect_error(GOLDEN_FOOTBALL_LIVE_FULL[:20], "truncated football live fixed section")
+    expect_error(GOLDEN_FOOTBALL_LIVE_FULL[:-3], "truncated inside last play text")
+    expect_error(GOLDEN_FOOTBALL_LIVE_FULL + b"\x00", "trailing bytes after live")
+    expect_error(GOLDEN_FOOTBALL_PREGAME_NFL[:20], "truncated football pregame fixed section")
+    expect_error(GOLDEN_FOOTBALL_PREGAME_NCAAF[:-2], "truncated inside home rank line")
+    expect_error(GOLDEN_FOOTBALL_PREGAME_NFL + b"\x00", "trailing bytes after pregame")
+    expect_error(GOLDEN_FOOTBALL_FINAL[:15], "truncated football final fixed section")
+    expect_error(GOLDEN_FOOTBALL_FINAL + b"\x00", "trailing bytes after final")
+
+    bad_phase = bytearray(GOLDEN_FOOTBALL_LIVE_FULL)
+    bad_phase[4] = 9  # phase code (offset 2 + 2)
+    expect_error(bytes(bad_phase), "invalid live phase code")
+
+    bad_final = bytearray(GOLDEN_FOOTBALL_FINAL)
+    bad_final[3] = 200  # away linescore len
+    expect_error(bytes(bad_final), "linescore length overruns body")
+
+
 def check_rejections() -> None:
     """Malformed payloads must fail loudly with DeserializeError."""
 
@@ -1005,6 +1368,7 @@ def main() -> int:
     check_nba_live_halftime()
     check_nba_pregame()
     check_nba_final()
+    check_nba_final_copies_out()
     check_nba_rejections()
     check_soccer_live_full()
     check_soccer_live_commentary()
@@ -1013,6 +1377,13 @@ def main() -> int:
     check_soccer_pregame()
     check_soccer_final()
     check_soccer_rejections()
+    check_football_live_full()
+    check_football_live_open()
+    check_football_live_break()
+    check_football_pregame()
+    check_football_final()
+    check_football_final_copies_out()
+    check_football_rejections()
     check_rejections()
     check_rust_pins()
 

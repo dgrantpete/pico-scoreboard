@@ -48,6 +48,7 @@ class ScenarioContext:
         self.env = env
         self.clock: VirtualClock = env.clock
         self.logos = logos
+        self.football = env.football
         self.mlb = env.mlb
         self.nba = env.nba
         self.soccer = env.soccer
@@ -426,7 +427,7 @@ def _publish_final(ctx, game):
     hp, ha = _TEAMS[game.home.abbreviation]
     away_logo = ctx.logos.get(game.away.abbreviation, ap, aa)
     home_logo = ctx.logos.get(game.home.abbreviation, hp, ha)
-    ctx.state.set_final(game, home_logo, away_logo)
+    ctx.state.set_mlb_final(game, home_logo, away_logo)
 
 
 @scenario("final-9", duration_ms=6000, compatible_variants=_FINAL_VARIANTS | {"no-dividers"})
@@ -818,6 +819,217 @@ def nba_final_ot(ctx: ScenarioContext) -> None:
     )
     home_logo, away_logo = _nba_logos(ctx, game)
     ctx.state.set_nba_final(game, home_logo, away_logo)
+
+
+# =============================================================================
+# Football screens
+# =============================================================================
+# The live screen is a single design (broadcast corners over the field
+# strip: team-tinted endzones, scrimmage/first-down perspective lines, the
+# ball riding the scrimmage line); pregame reuses the MLB pregame pipeline
+# (league name in the venue slot, stadium riding the weather slot, NCAAF
+# rank lines riding the probable-pitcher slots), and the final reuses the
+# whole MLB final screen with quarters in the columns.
+
+_FOOTBALL_TEAMS = {
+    "KC":   (0xE31837, 0xFFB81C),
+    "BUF":  (0x00338D, 0xC60C30),
+    "DAL":  (0x003594, 0x869397),
+    "PHI":  (0x004C54, 0xA5ACAF),
+    "OSU":  (0xBB0000, 0x666666),
+    "MICH": (0x00274C, 0xFFCB05),
+}
+
+_FOOTBALL_LEAGUE_OF = {
+    "KC": "football/nfl", "BUF": "football/nfl",
+    "DAL": "football/nfl", "PHI": "football/nfl",
+    "OSU": "football/college-football", "MICH": "football/college-football",
+}
+
+
+def _football_logos(ctx, game):
+    ap, aa = _FOOTBALL_TEAMS[game.away.abbreviation]
+    hp, ha = _FOOTBALL_TEAMS[game.home.abbreviation]
+    away_logo = ctx.logos.get(game.away.abbreviation, ap, aa,
+                              _FOOTBALL_LEAGUE_OF[game.away.abbreviation])
+    home_logo = ctx.logos.get(game.home.abbreviation, hp, ha,
+                              _FOOTBALL_LEAGUE_OF[game.home.abbreviation])
+    return home_logo, away_logo
+
+
+def _football_state(ctx, abbr, score):
+    p, a = _FOOTBALL_TEAMS[abbr]
+    return ctx.mlb.TeamState(abbr, score, ctx.mlb.TeamColors(p, a))
+
+
+def _publish_football_live(ctx, *, away, home, away_score, home_score,
+                           period, clock, phase, down=0, distance=0,
+                           yard_line=0, possession=None, red_zone=False,
+                           timeouts=None, play=None):
+    football = ctx.football
+    game = football.LiveGame(
+        game_id="401772510",
+        period=period,
+        clock=clock,
+        phase=phase,
+        down=down,
+        distance=distance,
+        yard_line=yard_line,
+        possession=football.SIDE_NONE if possession is None else possession,
+        red_zone=red_zone,
+        away_timeouts=timeouts[0] if timeouts else None,
+        home_timeouts=timeouts[1] if timeouts else None,
+        home=_football_state(ctx, home, home_score),
+        away=_football_state(ctx, away, away_score),
+        last_play=play,
+    )
+    home_logo, away_logo = _football_logos(ctx, game)
+    ctx.state.set_football_live(game, home_logo, away_logo)
+
+
+@scenario("football-live", duration_ms=6000, compatible_variants={"default", "no-dividers"})
+def football_live(ctx: ScenarioContext) -> None:
+    # Mid-2nd-quarter drive: the away ball at their own 45 needing 7, both
+    # teams holding timeouts, a fresh completion flashing through the shared
+    # strip (over the field zone), then falling back to the field.
+    text = "P. Mahomes pass complete to T. Kelce for 12 yards."
+    _publish_football_live(
+        ctx, away="KC", home="BUF", away_score=14, home_score=17,
+        period=2, clock="8:24", phase=ctx.football.PHASE_IN_PROGRESS,
+        down=2, distance=7, yard_line=45, possession=ctx.football.SIDE_AWAY,
+        timeouts=(2, 3),
+    )
+    st = ctx.state.get_write_state()
+    play = st.play
+    play.id = "p-4017"
+    fitted = ctx.state.fit_play_text(text)  # mirrors the poller's commit
+    play.text = fitted
+    play.updated_ms = ctx.clock.now
+    play.display_ms = ctx.display.play_text_display_ms(fitted)
+    play.strip = ctx.state.build_play_strip(fitted)
+    ctx.state.commit_state()
+    football_live.scenario.duration_ms = ctx.display.play_text_display_ms(fitted) + 1000
+
+
+@scenario("football-live-redzone", compatible_variants={"default"})
+def football_live_redzone(ctx: ScenarioContext) -> None:
+    # Goal-to-go inside the red zone with a sub-minute Q4 clock: situation
+    # text and possession arrow in the warning color, first-down line at
+    # the goal line, home drive attacking left, warning-colored clock.
+    _publish_football_live(
+        ctx, away="DAL", home="PHI", away_score=21, home_score=20,
+        period=4, clock="0:42", phase=ctx.football.PHASE_IN_PROGRESS,
+        down=1, distance=8, yard_line=92, possession=ctx.football.SIDE_HOME,
+        red_zone=True, timeouts=(0, 1),
+    )
+
+
+@scenario("football-live-open", compatible_variants={"default"})
+def football_live_open(ctx: ScenarioContext) -> None:
+    # Just after kickoff: no drive situation yet (SIDE_NONE) and no timeout
+    # advertisement — the field renders bare (tinted endzones, no ball, no
+    # lines) and the timeout bar rows stay empty.
+    _publish_football_live(
+        ctx, away="KC", home="BUF", away_score=0, home_score=0,
+        period=1, clock="15:00", phase=ctx.football.PHASE_IN_PROGRESS,
+    )
+
+
+@scenario("football-halftime", compatible_variants={"default"})
+def football_halftime(ctx: ScenarioContext) -> None:
+    # The interval: clock slot reads HT in accent, period chip stays empty,
+    # bare field (halftime carries no situation on the wire).
+    _publish_football_live(
+        ctx, away="OSU", home="MICH", away_score=10, home_score=14,
+        period=2, clock="0:00", phase=ctx.football.PHASE_HALFTIME,
+        timeouts=(3, 3),
+    )
+
+
+@scenario("football-overtime", compatible_variants={"default"})
+def football_overtime(ctx: ScenarioContext) -> None:
+    # Overtime (period 5): the chip reads OT. No live corpus until August;
+    # pinned here so the first real OT game has a rehearsed screen.
+    _publish_football_live(
+        ctx, away="KC", home="BUF", away_score=27, home_score=27,
+        period=5, clock="7:12", phase=ctx.football.PHASE_IN_PROGRESS,
+        down=3, distance=2, yard_line=64, possession=ctx.football.SIDE_AWAY,
+        timeouts=(3, 2),
+    )
+
+
+@scenario("football-pregame", duration_ms=10000, compatible_variants={"default"})
+def football_pregame(ctx: ScenarioContext) -> None:
+    # NFL kickoff: records render like the NBA's, the venue slot carries the
+    # league name and the stadium rides the weather slot (the info cycle
+    # reads league / stadium / kickoff). No rank lines in the NFL.
+    import time as _wall
+    football = ctx.football
+    p_kc, a_kc = _FOOTBALL_TEAMS["KC"]
+    p_buf, a_buf = _FOOTBALL_TEAMS["BUF"]
+    game = football.PregameGame(
+        game_id="401772512",
+        start_epoch=int(_wall.time()) + 2 * 3600,   # today: no date phase
+        league="NFL",
+        venue="Arrowhead Stadium",
+        home=ctx.mlb.PregameTeam("KC", ctx.mlb.TeamColors(p_kc, a_kc), 11, 3, None),
+        away=ctx.mlb.PregameTeam("BUF", ctx.mlb.TeamColors(p_buf, a_buf), 10, 4, None),
+    )
+    home_logo, away_logo = _football_logos(ctx, game)
+    ctx.state.set_pregame(game, home_logo, away_logo, _UTC_OFFSET_EDT, sport='football')
+
+
+@scenario("football-pregame-ranked", duration_ms=10000, compatible_variants={"default"})
+def football_pregame_ranked(ctx: ScenarioContext) -> None:
+    # NCAAF: display-shaped rank lines ride the probable-pitcher slots and
+    # render in team color via the existing PITCHER_* regions; the away
+    # side is unranked (no line), pinning the mixed case.
+    import time as _wall
+    football = ctx.football
+    p_osu, a_osu = _FOOTBALL_TEAMS["OSU"]
+    p_mich, a_mich = _FOOTBALL_TEAMS["MICH"]
+    game = football.PregameGame(
+        game_id="401677091",
+        start_epoch=int(_wall.time()) + 2 * 3600,
+        league="NCAA FOOTBALL",
+        venue="Ohio Stadium",
+        home=ctx.mlb.PregameTeam("OSU", ctx.mlb.TeamColors(p_osu, a_osu), 11, 0,
+                                 "#1 OHIO STATE"),
+        away=ctx.mlb.PregameTeam("MICH", ctx.mlb.TeamColors(p_mich, a_mich), 9, 2, None),
+    )
+    home_logo, away_logo = _football_logos(ctx, game)
+    ctx.state.set_pregame(game, home_logo, away_logo, _UTC_OFFSET_EDT, sport='football')
+
+
+def _football_final_team(ctx, abbr, score, line):
+    p, a = _FOOTBALL_TEAMS[abbr]
+    return ctx.football.FinalTeam(abbr, ctx.mlb.TeamColors(p, a), score, bytes(line))
+
+
+@scenario("football-final", duration_ms=6000, compatible_variants=_FINAL_VARIANTS)
+def football_final(ctx: ScenarioContext) -> None:
+    # Quarters in the line-score columns, "T" over the pinned totals.
+    game = ctx.football.FinalGame(
+        game_id="401772514",
+        periods_played=4,
+        away=_football_final_team(ctx, "BUF", 24, (3, 7, 7, 7)),
+        home=_football_final_team(ctx, "KC", 27, (0, 10, 7, 10)),
+    )
+    home_logo, away_logo = _football_logos(ctx, game)
+    ctx.state.set_football_final(game, home_logo, away_logo)
+
+
+@scenario("football-final-ot", duration_ms=6000, compatible_variants=_FINAL_VARIANTS)
+def football_final_ot(ctx: ScenarioContext) -> None:
+    # Five columns and "F/OT" — rehearsed ahead of the first real OT game.
+    game = ctx.football.FinalGame(
+        game_id="401772515",
+        periods_played=5,
+        away=_football_final_team(ctx, "DAL", 30, (7, 3, 7, 7, 6)),
+        home=_football_final_team(ctx, "PHI", 27, (0, 10, 7, 7, 3)),
+    )
+    home_logo, away_logo = _football_logos(ctx, game)
+    ctx.state.set_football_final(game, home_logo, away_logo)
 
 
 # =============================================================================

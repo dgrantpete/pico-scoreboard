@@ -9,6 +9,11 @@ that alters even one pixel trips it.
   in the warning color plus the last-event strip.
 - `nba-live` @ 500 ms — NBA live, period chip + poll-time clock with the
   play flash scrolling through the bottom strip.
+- `football-live` @ 500 ms — football live, play flash overlaying the field
+  zone, possession arrow + timeout bars.
+- `football-live-redzone` @ 500 ms — football live, tinted-endzone field with
+  scrimmage/first-down perspective lines, ball sprite, and the red-zone
+  warning colors.
 
 If the generated layout/font artifacts are missing the tests skip with the
 build instruction rather than failing. On a hash mismatch the actual hash is
@@ -43,6 +48,14 @@ _GOLDENS = [
      "5cd32164d34ff0f5a549150151987eb6d67e5e71a65675a95645ceed20032ac6"),
     ("nba-live", 500,
      "c13366aa89346ba843f6c3346931cbffd69af7a5e1678f0ac460c38a1790572d"),
+    # Two football pins: the flash frame covers the shared-strip overlay of
+    # the field zone; the redzone frame covers what only football draws
+    # (endzone palette tint, Bresenham perspective lines, ball sprite,
+    # warning-colored situation + clock) — eyeballed in the gallery 2026-07-18.
+    ("football-live", 500,
+     "12b90549f491ef6d4753b7d39ba2bde9d8ebd36482d2525ca0d3c980a528801d"),
+    ("football-live-redzone", 500,
+     "d6eaf7cf816108802da81ed4154a57476be08a9c005bd167e2219a6d7f06a5bd"),
 ]
 
 
