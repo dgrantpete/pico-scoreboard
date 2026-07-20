@@ -23,3 +23,7 @@ targets:
     kind: scoreboard
     sport: basketball
     league: wnba
+  - name: ncaab
+    kind: scoreboard
+    sport: basketball
+    league: mens-college-basketball
