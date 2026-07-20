@@ -1,0 +1,8 @@
+# Declarative poll targets for the ESPN collector (see tools/espn/targets.py
+# for the schema; tools/espn/README.md for the workflow). Adding a sport is a
+# reviewed diff here + `ansible-playbook deploy.yml --tags targets` — no
+# rebuild, the running service hot-reloads within ~10s.
+version: 1
+defaults:
+  idle_interval: 300
+targets: []

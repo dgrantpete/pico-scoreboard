@@ -1,0 +1,9 @@
+# Copy to infra/inventory.yml (gitignored) and fill in your host. No real
+# addressing is committed in this repo.
+all:
+  children:
+    collector_host:
+      hosts:
+        nuc:
+          ansible_host: 192.0.2.10
+          ansible_user: someuser

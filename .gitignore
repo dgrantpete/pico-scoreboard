@@ -25,6 +25,11 @@ frontend/.env
 frontend/.env.*
 !frontend/.env.example
 
+# Collector deploy: host addressing + secrets stay out of git (.example committed)
+infra/.env
+infra/inventory.yml
+tools/espn/.env
+
 # Cache
 frontend/.cache/
 
