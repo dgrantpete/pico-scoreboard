@@ -49,3 +49,8 @@ targets:
     sport: soccer
     league: usa.1
     follow_summaries: true
+  - name: epl
+    kind: scoreboard
+    sport: soccer
+    league: eng.1
+    follow_summaries: true
