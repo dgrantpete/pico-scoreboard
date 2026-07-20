@@ -44,3 +44,8 @@ targets:
     sport: soccer
     league: fifa.world
     follow_summaries: true
+  - name: mls
+    kind: scoreboard
+    sport: soccer
+    league: usa.1
+    follow_summaries: true
