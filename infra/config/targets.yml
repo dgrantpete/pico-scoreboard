@@ -27,3 +27,7 @@ targets:
     kind: scoreboard
     sport: basketball
     league: mens-college-basketball
+  - name: nfl
+    kind: scoreboard
+    sport: football
+    league: nfl
