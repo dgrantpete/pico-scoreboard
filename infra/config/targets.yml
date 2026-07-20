@@ -39,3 +39,8 @@ targets:
     kind: scoreboard
     sport: hockey
     league: nhl
+  - name: world-cup
+    kind: scoreboard
+    sport: soccer
+    league: fifa.world
+    follow_summaries: true
