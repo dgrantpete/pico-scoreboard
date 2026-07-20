@@ -19,3 +19,7 @@ targets:
     kind: scoreboard
     sport: basketball
     league: nba
+  - name: wnba
+    kind: scoreboard
+    sport: basketball
+    league: wnba
