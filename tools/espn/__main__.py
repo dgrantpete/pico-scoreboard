@@ -49,13 +49,13 @@ def cmd_status(args: argparse.Namespace) -> int:
             print("store is empty")
         else:
             print(
-                f"{'sport':<12}{'league':<16}{'endpoint':<11}{'polls':>7}{'distinct':>10}"
+                f"{'sport':<12}{'league':<26}{'endpoint':<11}{'polls':>7}{'distinct':>10}"
                 f"{'dates':>7}{'changes':>9}{'non-200':>9}  first .. last (UTC)"
             )
             for sport, league, endpoint, polls, distinct, dates, first, last, non_200, changed in rows:
                 stamps = f"{first:%Y-%m-%d %H:%M} .. {last:%Y-%m-%d %H:%M}"
                 print(
-                    f"{sport:<12}{league:<16}{endpoint:<11}{polls:>7}{distinct:>10}{dates:>7}"
+                    f"{sport:<12}{league:<26}{endpoint:<11}{polls:>7}{distinct:>10}{dates:>7}"
                     f"{changed:>9}{non_200:>9}  {stamps}"
                 )
             bodies, raw, stored = store.body_totals()

@@ -79,16 +79,18 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     mid-uptime.
 
 54. **tools/espn optimizations** (from the pipeline audit):
-    - Staleness stamp: corpus fingerprint (max epoch + distinct count per
-      league) written into every generated artifact; `validate`/`spec`
-      warn when the DB has newer bodies. The committed artifacts were 9
-      days stale when the soccer knockout gap surfaced.
+    - Staleness stamp: corpus fingerprint (max requested_at + distinct
+      count per league) written into every generated artifact;
+      `validate`/`spec` warn when the DB has newer bodies. The committed
+      artifacts were 9 days stale when the soccer knockout gap surfaced.
     - Incremental inference: memoize per-body-hash contributions so
-      schema/discover stop re-inflating the full ~10 GB corpus every run
-      (discover currently makes two full passes).
-    - Idle-league row bloat: ~49% of `responses` rows are off-season
-      empty-scoreboard duplicates; store only transitions (or prune) and
-      index `responses(source)`.
+      schema/discover stop re-inflating the full corpus every run
+      (discover currently makes two full passes). Now reads the v2
+      Postgres store on the NUC.
+    - ~~Idle-league row bloat~~ SUPERSEDED by the 2026-07-19 v2 store:
+      there is no `source` column anymore, and every poll row is kept
+      deliberately — `coverage`'s gap accounting needs poll-cadence
+      facts, and body dedup bounds the cost.
 
 59. **Delete the dead `mlb_layout.aseprite` slices** — the MLB live migration
     moved every text-slot rectangle into `screen_geometry._MLB_LIVE`, so 16
@@ -102,6 +104,50 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     `compile_layout.compile_all` then auto-removes the stale generated
     modules. GUI-trivial owner action — do NOT use the aseprite-io transpiler
     harness (known silent-drop bug vs. a 2-minute manual delete).
+
+60. **espn `ui` viewer → Postgres (fast-follow, do next)** — `ui.py`/`ui.html`
+    were kept in-tree but the `ui` subcommand was unregistered when the store
+    moved to Postgres (2026-07-19; they still speak the old sqlite Store API —
+    if this item slips more than a couple of weeks, delete them instead).
+    Port: (a) each request opens a psycopg connection from `ESPN_DB_URL`
+    (tools/espn/.env), replacing `Store(readonly=True)`; (b) dashboard keeps
+    league_stats / latest_bodies_per_league / body_totals (already ported in
+    db.py) and gains a collector-health panel from `collector_sessions`:
+    running?, heartbeat age, current session's `targets` jsonb, recent
+    sessions with end_reason; the LIVE badge switches from "db recently
+    written" to "heartbeat fresh AND latest body has a state=in event";
+    (c) artifacts endpoints stay filesystem-based over `data/espn/generated`;
+    (d) add a coverage panel rendering `coverage.py` output (reuse the
+    module, don't reimplement in SQL); (e) re-register the subcommand. The
+    viewer stays a local dev tool — NOT part of the compose stack.
+
+61. **Archive import into Postgres + extract_fixtures port** —
+    `data/espn/espn.db` is frozen locally (v1 schema, free-text `source`;
+    288,150 rows through 2026-07-20 00:22 UTC), and NFL/NBA capture DBs from
+    the old machine sit in the desktop folder (NBA possibly already folded
+    into the frozen db — verify by row counts; NFL almost certainly not).
+    Import all of them into the v2 store: synthesize one `collector_sessions`
+    row per archive file/source (hostname `archive`, version `import:<name>`,
+    targets `[]`) so provenance stays a session FK — no `source` strings
+    return; scoreboard endpoint only, `date_param` preserved; body dedup by
+    hash makes re-runs idempotent. Then port `tools/extract_fixtures.py`
+    (raw sqlite3 today) to the v2 store, then delete the frozen sqlite.
+    Until this lands, `schema`/`discover`/`validate` see only the new corpus
+    — regenerating artifacts for existing sports needs this import or fresh
+    capture.
+
+62. **v2-store consumers + ops odds and ends (consciously deferred)** —
+    bundle exports / fake-ESPN staging replay consume the v2 store, gated on
+    `coverage`'s replay-grade predicate (see item 39's mock-rig notes for the
+    consumer side). Also deferred: pg_dump backup cadence for the NUC pgdata
+    volume; log shipping (docker logs suffices); binding the published 5432
+    to specific LAN+WireGuard addresses if the exposure posture changes
+    (note: Docker's published ports bypass host firewall rules — relevant to
+    homelab). Known-benign: at host reboot the collector's final
+    session-close write can lose the race against postgres shutdown, so that
+    session sweeps as `crash` with `ended_at = last_heartbeat` (≤60 s early)
+    on next boot — accounting stays honest, not worth fighting dockerd's
+    unordered shutdown.
 
 ## Firmware
 
