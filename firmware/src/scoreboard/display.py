@@ -84,16 +84,18 @@ FRAME_MS = 50
 # Inset 1px from every panel edge (owner rule 2026-07-15: edge pixels are
 # unreliable on this panel — draw nothing in row 0, row 63, col 0, col 127).
 # 5 list rows of 10px (y 1..50), separator hline at 52, DONE footer 54..62.
-# Checkbox 7x7 at x=2; label Regions in Regions.menu_rows; highlight bar and
-# scrollbar split the right side inside the inset.
+# Checkbox 7x7 at x=2, always drawn in the primary color OUTSIDE the highlight
+# bar — the bar starts at x=10 so a highlighted row can't invert the checkbox
+# and make checked read as unchecked; label Regions in Regions.menu_rows;
+# highlight bar and scrollbar split the right side inside the inset.
 _MENU_TOP = 1           # first list row's top edge (the 1px inset)
 _MENU_ROW_H = 10
 _MENU_VISIBLE_ROWS = 5
 _MENU_SEP_Y = 52
 _MENU_DONE_Y = 54       # footer band 54..62; row 63 stays dark
 _MENU_CHECKBOX_X = 2
-_MENU_HILIGHT_X = 1
-_MENU_HILIGHT_W = 124   # highlight bar x 1..124, stops before the scrollbar
+_MENU_HILIGHT_X = 10    # after the checkbox (x 2..8) + 1px dark separator
+_MENU_HILIGHT_W = 115   # highlight bar x 10..124, stops before the scrollbar
 _MENU_BAR_X = 125       # 2px scrollbar track at x 125..126, y 1..50
 
 # TEMPORARY (2026-07-11 GC/stutter investigation — remove when done): sample
@@ -1662,9 +1664,11 @@ def render_menu(display: Hub75Display, writer: FontWriter, regions: Regions, sta
             display.fill_rect(_MENU_HILIGHT_X, y, _MENU_HILIGHT_W,
                               _MENU_ROW_H, color)
         fg = BLACK if sel else color
-        display.rect(_MENU_CHECKBOX_X, y + 1, 7, 7, fg)
+        # Checkbox stays outside the highlight bar and always draws in the
+        # primary color, so checked/unchecked reads the same on every row.
+        display.rect(_MENU_CHECKBOX_X, y + 1, 7, 7, color)
         if menu.row_checked[i]:
-            display.fill_rect(_MENU_CHECKBOX_X + 2, y + 3, 3, 3, fg)
+            display.fill_rect(_MENU_CHECKBOX_X + 2, y + 3, 3, 3, color)
         strip = menu.row_strips[i]
         if strip is not None:
             writer.draw_strip(regions.menu_rows[i], strip, ALIGN_LEFT,
