@@ -559,8 +559,9 @@ def publish_app(output_dir: Path, deploy: bool) -> bool:
     return True
 
 
-def deploy_backend():
-    """Deploy the Rust backend to Fly.io."""
+def deploy_backend(staging: bool = False):
+    """Deploy the Rust backend to Fly.io (prod, or the staging mock pair's
+    backend with --staging: same image, fly.staging.toml config)."""
     # The Dockerfile COPYs app_dist/ (the OTA app image); guarantee the dir
     # exists so a deploy without a published image still builds.
     (root_directory / 'backend' / 'app_dist').mkdir(exist_ok=True)
@@ -577,12 +578,11 @@ def deploy_backend():
         print(f"Error: {key_file.relative_to(root_directory)} is empty.")
         return False
 
-    print("Deploying backend to Fly.io...")
-    result = subprocess.run(
-        ['fly', 'deploy', '--build-secret', f'MAXMIND_LICENSE_KEY={license_key}'],
-        cwd=root_directory / 'backend',
-        check=False
-    )
+    command = ['fly', 'deploy', '--build-secret', f'MAXMIND_LICENSE_KEY={license_key}']
+    if staging:
+        command += ['--config', 'fly.staging.toml']
+    print(f"Deploying {'staging' if staging else 'prod'} backend to Fly.io...")
+    result = subprocess.run(command, cwd=root_directory / 'backend', check=False)
     if result.returncode != 0:
         print("Deploy failed!")
         return False
@@ -599,7 +599,12 @@ def main():
     subparsers = parser.add_subparsers(dest='command')
 
     # deploy subcommand
-    subparsers.add_parser('deploy', help='Deploy backend to Fly.io')
+    deploy_parser = subparsers.add_parser('deploy', help='Deploy backend to Fly.io')
+    deploy_parser.add_argument(
+        '--staging',
+        action='store_true',
+        help='deploy the staging backend (fly.staging.toml; pointed at mock-ESPN)',
+    )
 
     # publish-app subcommand (OTA)
     publish_parser = subparsers.add_parser(
@@ -684,7 +689,7 @@ def main():
 
     # deploy command (doesn't use output_dir or firmware args)
     if args.command == 'deploy':
-        return 0 if deploy_backend() else 1
+        return 0 if deploy_backend(staging=args.staging) else 1
 
     # publish-app command (OTA)
     if args.command == 'publish-app':

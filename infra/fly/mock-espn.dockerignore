@@ -1,0 +1,11 @@
+# Repo-root build context: allow only what the mock image needs. NOTE:
+# .gitignore does NOT apply to docker contexts — the re-exclusions below are
+# what keep the dev-PC DSN and local demo config out of the image.
+*
+!tools/espn/**
+!backend/testdata/**
+!data/espn/bundles/**
+!infra/fly/mock.staging.yml
+tools/espn/.env
+tools/espn/mock.yml
+**/__pycache__

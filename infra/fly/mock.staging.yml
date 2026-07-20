@@ -1,0 +1,31 @@
+# Staging demo config, baked into the mock-espn image at /app/mock.yml
+# (bundle paths resolve relative to this file's baked location, next to
+# /app/bundles/). Changing the demo = edit here + redeploy the mock app.
+version: 1
+leagues:
+  - name: mlb-replay
+    mode: replay
+    sport: baseball
+    league: mlb
+    source: bundle
+    bundle: bundles/mlb_20260719.espnbundle
+    speed: 30
+    loop: true
+
+  - name: nba-in-july
+    mode: scenario
+    sport: basketball
+    league: nba
+    events:
+      - fixture: nba/in_progress.json
+      - fixture: nba/final.json
+
+  - name: worldcup-demo
+    mode: scenario
+    sport: soccer
+    league: fifa.world
+    events:
+      - fixture: soccer/fifa.world/live_red_card.json
+        commentary: "Red card! Down to ten men after a reckless challenge."
+      - fixture: soccer/fifa.world/pregame.json
+        start_in: 2h
