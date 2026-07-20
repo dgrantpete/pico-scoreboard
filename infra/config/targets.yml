@@ -5,4 +5,13 @@
 version: 1
 defaults:
   idle_interval: 300
-targets: []
+targets:
+  # follow_summaries policy: enable where a consumer exists — soccer (the
+  # backend's live commentary fetch) and mlb (replay-grade bundle richness).
+  # Flipping it for any league is a reviewed diff here, nothing else.
+  - name: mlb
+    kind: scoreboard
+    sport: baseball
+    league: mlb
+    follow_summaries: true
+    idle_interval: 120
