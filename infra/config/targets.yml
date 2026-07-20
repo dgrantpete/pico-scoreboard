@@ -15,3 +15,7 @@ targets:
     league: mlb
     follow_summaries: true
     idle_interval: 120
+  - name: nba
+    kind: scoreboard
+    sport: basketball
+    league: nba
