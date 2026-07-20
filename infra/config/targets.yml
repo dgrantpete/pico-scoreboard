@@ -54,3 +54,8 @@ targets:
     sport: soccer
     league: eng.1
     follow_summaries: true
+  - name: liga-mx
+    kind: scoreboard
+    sport: soccer
+    league: mex.1
+    follow_summaries: true
