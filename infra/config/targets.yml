@@ -31,3 +31,7 @@ targets:
     kind: scoreboard
     sport: football
     league: nfl
+  - name: ncaaf
+    kind: scoreboard
+    sport: football
+    league: college-football
