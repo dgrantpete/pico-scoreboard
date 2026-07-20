@@ -136,14 +136,20 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     — regenerating artifacts for existing sports needs this import or fresh
     capture.
 
-62. **v2-store consumers + ops odds and ends (consciously deferred)** —
-    bundle exports / fake-ESPN staging replay consume the v2 store, gated on
-    `coverage`'s replay-grade predicate (see item 39's mock-rig notes for the
-    consumer side). Also deferred: pg_dump backup cadence for the NUC pgdata
-    volume; log shipping (docker logs suffices); binding the published 5432
-    to specific LAN+WireGuard addresses if the exposure posture changes
-    (note: Docker's published ports bypass host firewall rules — relevant to
-    homelab). Known-benign: at host reboot the collector's final
+62. **Collector/mock ops odds and ends (consciously deferred)** —
+    ~~bundle exports / fake-ESPN staging replay~~ SHIPPED 2026-07-19
+    (`python -m tools.espn mock` / `bundle`, Fly staging pair
+    `pico-scoreboard-api-staging-dgrantpete` → private
+    `pico-mock-espn-dgrantpete`; see tools/espn README). Remaining follow-ups
+    from that leg: re-export a genuinely replay-grade bundle once a full
+    pregame→final capture lands (the baked mlb_20260719 bundle was --force'd,
+    mid-game start) and swap it into infra/fly/mock.staging.yml; consider an
+    HTTP scenario-control page on the mock for phone-driven demos. Still
+    deferred: pg_dump backup cadence for the NUC pgdata volume; log shipping
+    (docker logs suffices); binding the published 5432 to specific
+    LAN+WireGuard addresses if the exposure posture changes (note: Docker's
+    published ports bypass host firewall rules — relevant to homelab).
+    Known-benign: at host reboot the collector's final
     session-close write can lose the race against postgres shutdown, so that
     session sweeps as `crash` with `ended_at = last_heartbeat` (≤60 s early)
     on next boot — accounting stays honest, not worth fighting dockerd's

@@ -50,6 +50,8 @@ python -m tools.espn <subcommand> --help
 | `serve --targets <yml>` | Run the collector service (normally only the container runs this). |
 | `status` | Per-league/endpoint poll counts, store size, and recent sessions with heartbeat age. |
 | `coverage [--league X] [--date YYYYMMDD] [--json]` | Per-game replay-grade verdicts. |
+| `mock [--config PATH] [--port 8787]` | Serve fake ESPN endpoints for demos/testing — see "Mock-ESPN" below. |
+| `bundle --league X --date YYYYMMDD [--force]` | Export a captured day into a self-contained replayable `.espnbundle` (refuses without a replay-grade event unless `--force`). |
 | `discover --league mlb` | Rank discriminated-union tag candidates by information gain; MDL-scored split hierarchies. Repeat `--league` to pool sports. |
 | `schema --league mlb` | Genson-inferred JSON Schema + per-state field presence. |
 | `spec --league mlb` / `spec --combine mlb nba` | DU OpenAPI 3.1 spec per league, and the combined multi-league spec. |
@@ -58,6 +60,39 @@ python -m tools.espn <subcommand> --help
 `--league` on the analysis commands accepts a registry key from `leagues.py`
 (`mlb`, `nba`, `world-cup`, ...) or a raw `sport/slug` pair. The *collector*
 doesn't use the registry — its vocabulary is `targets.yml` alone.
+
+## Mock-ESPN (`mockdata.py` / `mockserver.py` / `bundle.py`)
+
+Injects fake game data at the ESPN boundary: the mock serves the two
+upstream routes the backend fetches, and the REAL backend is pointed at it
+via `APP_ESPN__BASE_URL` — no mock code exists in the backend, and every
+transform/wire/firmware path runs for real. Driven by a hot-reloaded
+`mock.yml` (copy `mock.example.yml`), two modes per league:
+
+- **scenario** — compose a slate from `backend/testdata/` fixture events;
+  dates are shifted to "today" (pre-state fixtures take `start_in`); a
+  `commentary` line serves as that event's summary.
+- **replay** — time-warped re-serve of a captured stream from the Postgres
+  store (`source: store`) or an exported `.espnbundle` (`source: bundle`),
+  with `speed`, `loop`, and `start_offset`; served dates are rewritten
+  through the warp so start times stay consistent at any speed. The
+  backend's own 5 s JSON TTL quantizes what devices see.
+
+Local rig: `python -m tools.espn mock` + `APP_ESPN__BASE_URL=http://127.0.0.1:8787
+cargo run` in backend/, then point a device's `api.url` at the PC (reboot
+required — the firmware reads it once at init). Logos keep coming from the
+real CDN (payload hrefs are absolute; `espn.logo_url` is only a prefix
+guard).
+
+Deployed rig (friend's-house demos): the Fly staging pair — public backend
+`pico-scoreboard-api-staging-dgrantpete.fly.dev` (unmodified prod image,
+`backend/fly.staging.toml`, deploy `python tools/build.py deploy --staging`)
+pointed over flycast at the PRIVATE mock app `pico-mock-espn-dgrantpete`
+(`infra/fly/`, deploy from repo root:
+`fly deploy . --config infra/fly/mock-espn.fly.toml`). The staging demo
+config + bundles are baked into the mock image — edit
+`infra/fly/mock.staging.yml` and redeploy to change the show. The mock app
+must never hold a public IP (`fly ips list` to audit).
 
 ## Deploying / operating the service
 
