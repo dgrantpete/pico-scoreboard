@@ -18,11 +18,14 @@ from pathlib import Path
 
 import yaml
 
+from .bundle import export_bundle
 from .config import database_url
 from .coverage import coverage_report, print_report as print_coverage
 from .db import Store
 from .discover import DEFAULT_INSTANCES, discover, print_report
 from .leagues import League, resolve
+from .mockdata import MockError
+from .mockserver import run as run_mock
 from .schema import build_schema
 from .service import serve
 from .spec import build_spec, combine_specs, prefix_for
@@ -31,6 +34,9 @@ from .validate import run_validation
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GENERATED_DIR = REPO_ROOT / "data" / "espn" / "generated"
 DEFAULT_TARGETS = REPO_ROOT / "infra" / "config" / "targets.yml"
+DEFAULT_MOCK_CONFIG = Path(__file__).resolve().parent / "mock.yml"
+DEFAULT_TESTDATA = REPO_ROOT / "backend" / "testdata"
+DEFAULT_BUNDLES = REPO_ROOT / "data" / "espn" / "bundles"
 
 
 def _store(args: argparse.Namespace) -> Store:
@@ -72,6 +78,30 @@ def cmd_status(args: argparse.Namespace) -> int:
                     state = f"{ended:%Y-%m-%d %H:%M} ({reason})"
                 targets = ", ".join(names) if names else "0 targets"
                 print(f"  #{sid} {started:%Y-%m-%d %H:%M} .. {state}  [{host} {version}] {targets}")
+    finally:
+        store.close()
+    return 0
+
+
+def cmd_mock(args: argparse.Namespace) -> int:
+    # DSN is lazy: only a `source: store` replay entry ever needs it.
+    return run_mock(
+        Path(args.config),
+        args.port,
+        Path(args.testdata),
+        lambda: args.db_url or database_url(),
+    )
+
+
+def cmd_bundle(args: argparse.Namespace) -> int:
+    league = _resolve(args.league)
+    out = Path(args.out) / f"{_slug_key(league.slug)}_{args.date}.espnbundle"
+    store = _store(args)
+    try:
+        export_bundle(store, league.sport, league.slug, args.date, out, force=args.force)
+    except MockError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     finally:
         store.close()
     return 0
@@ -238,6 +268,37 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("status", parents=[common], help="summarize the store + sessions")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser(
+        "mock", parents=[common], help="serve fake ESPN endpoints (scenario/replay via mock.yml)"
+    )
+    p.add_argument(
+        "--config",
+        default=str(DEFAULT_MOCK_CONFIG),
+        help=f"mock config YAML, hot-reloaded (default: {DEFAULT_MOCK_CONFIG})",
+    )
+    p.add_argument("--port", type=int, default=8787, help="listen port (default 8787)")
+    p.add_argument(
+        "--testdata",
+        default=str(DEFAULT_TESTDATA),
+        help=f"fixture root for scenario mode (default: {DEFAULT_TESTDATA})",
+    )
+    p.set_defaults(func=cmd_mock)
+
+    p = sub.add_parser(
+        "bundle", parents=[common], help="export a captured day into a replayable .espnbundle"
+    )
+    p.add_argument("--league", required=True, help="registry key or raw sport/slug")
+    p.add_argument("--date", required=True, help="YYYYMMDD game day to export")
+    p.add_argument(
+        "--out",
+        default=str(DEFAULT_BUNDLES),
+        help=f"output directory (default: {DEFAULT_BUNDLES})",
+    )
+    p.add_argument(
+        "--force", action="store_true", help="export even with no replay-grade event"
+    )
+    p.set_defaults(func=cmd_bundle)
 
     p = sub.add_parser(
         "coverage", parents=[common], help="per-game capture quality and replay-grade verdicts"

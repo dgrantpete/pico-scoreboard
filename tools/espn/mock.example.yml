@@ -1,0 +1,60 @@
+# Mock-ESPN demo config. Copy to tools/espn/mock.yml (gitignored) and edit;
+# the running `python -m tools.espn mock` hot-reloads on save.
+#
+# Point the backend here with:  APP_ESPN__BASE_URL=http://127.0.0.1:8787
+#
+# Modes per (sport, league):
+#   scenario — compose a slate from backend/testdata fixture events.
+#              `start_in` (pre-state fixtures only) sets the pregame start,
+#              default 60m; live/final fixtures read as "earlier today".
+#              `commentary` serves a soccer-style summary line for that event.
+#   replay   — time-warped re-serve of a captured stream, from the Postgres
+#              store (needs ESPN_DB_URL / tools/espn/.env) or an exported
+#              .espnbundle (python -m tools.espn bundle ...). `speed` warps
+#              time; `loop` restarts after a 60s hold on the final state;
+#              `start_offset` jumps into the capture.
+version: 1
+leagues:
+  - name: mlb-demo
+    mode: scenario
+    sport: baseball
+    league: mlb
+    events:
+      - fixture: mlb/live_inning.json
+      - fixture: mlb/pregame.json
+        start_in: 90m
+      - fixture: mlb/final.json
+
+  - name: nba-in-july
+    mode: scenario
+    sport: basketball
+    league: nba
+    events:
+      - fixture: nba/in_progress.json
+      - fixture: nba/final.json
+
+  - name: worldcup-demo
+    mode: scenario
+    sport: soccer
+    league: fifa.world
+    events:
+      - fixture: soccer/fifa.world/live_red_card.json
+        commentary: "Red card! Down to ten men after a reckless challenge."
+
+  # - name: mlb-replay
+  #   mode: replay
+  #   sport: baseball
+  #   league: mlb
+  #   source: store
+  #   date: "20260720"     # quoted — YAML would read it as an int
+  #   speed: 10
+  #   loop: true
+
+  # - name: wc-replay
+  #   mode: replay
+  #   sport: soccer
+  #   league: fifa.world
+  #   source: bundle
+  #   bundle: ../../data/espn/bundles/fifa_world_20260714.espnbundle
+  #   speed: 5
+  #   loop: true

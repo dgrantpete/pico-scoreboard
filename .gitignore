@@ -29,6 +29,7 @@ frontend/.env.*
 infra/.env
 infra/inventory.yml
 tools/espn/.env
+tools/espn/mock.yml
 
 # Cache
 frontend/.cache/

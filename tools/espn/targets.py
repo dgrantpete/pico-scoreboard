@@ -115,7 +115,10 @@ def _parse_scoreboard(entry: dict, defaults: dict) -> ScoreboardTarget:
 
 
 def parse_targets(text: str) -> TargetsFile:
-    doc = yaml.safe_load(text)
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise TargetsError(f"YAML syntax error: {exc}")
     _require(isinstance(doc, dict), f"targets file must be a mapping, got {type(doc).__name__}")
     _require(doc.get("version") == 1, f"unsupported targets version {doc.get('version')!r}")
     unknown = set(doc) - {"version", "defaults", "targets"}

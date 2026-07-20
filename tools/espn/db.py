@@ -275,6 +275,16 @@ class Store:
             (league, date_param),
         )
 
+    def iter_summary_stream(self, league: str, event_id: str):
+        """(requested_at, http_status, body_hash) for one event's summary
+        stream, in poll order."""
+        return self._conn.execute(
+            "SELECT requested_at, http_status, body_hash FROM responses"
+            " WHERE league = %s AND endpoint = 'summary' AND event_id = %s"
+            " ORDER BY requested_at",
+            (league, event_id),
+        )
+
     def fetch_body(self, body_hash: str) -> bytes:
         row = self._conn.execute(
             "SELECT body FROM bodies WHERE hash = %s", (body_hash,)
