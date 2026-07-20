@@ -36,6 +36,14 @@ services:
         condition: service_healthy
     environment:
       ESPN_DB_URL: postgresql://espn:${POSTGRES_PASSWORD}@postgres:5432/espn
+    # The NUC's uplink is Wi-Fi: at boot dhcpcd writes resolv.conf AFTER
+    # dockerd has already snapshotted DNS for the sandbox, leaving the
+    # embedded resolver with zero upstreams. Pinning public resolvers makes
+    # collector DNS independent of that race (service-name resolution stays
+    # on Docker's embedded DNS regardless).
+    dns:
+      - 1.1.1.1
+      - 9.9.9.9
     volumes:
       - ./config:/config:ro
 
