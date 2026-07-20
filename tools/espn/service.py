@@ -148,7 +148,14 @@ def serve(targets_path: Path, dsn: str) -> int:
         session_stop.set()
         watch_thread.join(timeout=WATCH_INTERVAL + 5)
         beat_thread.join(timeout=5)
-        store.end_session(session_id, "shutdown" if quit_event.is_set() else "reload")
+        reason = "shutdown" if quit_event.is_set() else "reload"
+        try:
+            store.end_session(session_id, reason)
+        except Exception:
+            # A Postgres restart poisons an idle main connection; the session
+            # bookkeeping matters more than the first attempt.
+            store.reconnect()
+            store.end_session(session_id, reason)
         config = watcher.config
 
     _log("bye")
