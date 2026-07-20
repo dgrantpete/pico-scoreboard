@@ -1,7 +1,6 @@
 genson
 jsonschema
-pillow
-pystray==0.19.5
+psycopg[binary]
 pyyaml
 referencing
 requests

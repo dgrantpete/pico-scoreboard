@@ -68,13 +68,11 @@ def run_validation(
     league: League,
     spec_path: Path,
     root_name: str,
-    *,
-    source_like: str = "%",
 ) -> bool:
     """Validate a league's distinct bodies; returns True iff every body passes."""
     spec = yaml.safe_load(Path(spec_path).read_text(encoding="utf-8"))
     validator = _build_validator(spec, root_name)
-    print(f"{league.slug}: spec {spec_path}, root {root_name}, source LIKE {source_like!r}")
+    print(f"{league.slug}: spec {spec_path}, root {root_name}")
 
     response_pass = response_fail = 0
     state_totals: Counter[str] = Counter()
@@ -83,9 +81,7 @@ def run_validation(
     error_counter: Counter[tuple[str, str]] = Counter()
     failing_examples = []
 
-    bodies = store.iter_bodies(
-        league.slug, http_status=200, distinct=True, source_like=source_like
-    )
+    bodies = store.iter_bodies(league.slug, http_status=200, distinct=True)
     for i, body in enumerate(bodies):
         resp = json.loads(body)
         events = resp.get("events", [])

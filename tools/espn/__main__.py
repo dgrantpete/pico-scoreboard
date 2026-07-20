@@ -1,82 +1,98 @@
 """CLI for the ESPN scoreboard sample tooling.
 
-Run from the repo root:
-    python -m tools.espn collect --league world-cup --league mlb --duration 5h --until-all-post
+The collector runs as a service (`serve`, normally containerized on the NUC);
+everything else is an analysis command reading the shared Postgres store.
+Connection comes from ESPN_DB_URL or tools/espn/.env (see .env.example).
+
+    python -m tools.espn serve --targets infra/config/targets.yml
     python -m tools.espn status
+    python -m tools.espn coverage --league mlb
 """
 
 import argparse
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
 
-from .collect import Collector
+from .config import database_url
+from .coverage import coverage_report, print_report as print_coverage
 from .db import Store
 from .discover import DEFAULT_INSTANCES, discover, print_report
-from .leagues import GAME_DAY_TZ, League, resolve
-from .migrate import migrate
+from .leagues import League, resolve
 from .schema import build_schema
-from .ui import DEFAULT_PORT, serve
+from .service import serve
 from .spec import build_spec, combine_specs, prefix_for
 from .validate import run_validation
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DB = REPO_ROOT / "data" / "espn" / "espn.db"
 GENERATED_DIR = REPO_ROOT / "data" / "espn" / "generated"
-
-_DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)([smh]?)$")
-
-
-def parse_duration(text: str) -> float:
-    match = _DURATION_RE.match(text)
-    if not match:
-        raise argparse.ArgumentTypeError(f"invalid duration {text!r} (try 30s, 90m, 5h)")
-    value, unit = float(match.group(1)), match.group(2)
-    return value * {"": 1, "s": 1, "m": 60, "h": 3600}[unit]
+DEFAULT_TARGETS = REPO_ROOT / "infra" / "config" / "targets.yml"
 
 
-def cmd_collect(args: argparse.Namespace) -> int:
+def _store(args: argparse.Namespace) -> Store:
+    return Store(args.db_url or database_url())
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    return serve(Path(args.targets), args.db_url or database_url())
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    store = _store(args)
     try:
-        leagues = {arg: resolve(arg) for arg in args.league}
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    date_param = args.date or datetime.now(GAME_DAY_TZ).strftime("%Y%m%d")
-    store = Store(args.db)
-    try:
-        print(f"collecting {', '.join(leagues)} dates={date_param} -> {store.path}", flush=True)
-        Collector(
-            store,
-            leagues,
-            date_param,
-            duration=args.duration,
-            until_all_post=args.until_all_post,
-            fixed_interval=args.fixed_interval,
-        ).run()
+        rows = store.league_stats()
+        if not rows:
+            print("store is empty")
+        else:
+            print(
+                f"{'sport':<12}{'league':<16}{'endpoint':<11}{'polls':>7}{'distinct':>10}"
+                f"{'dates':>7}{'changes':>9}{'non-200':>9}  first .. last (UTC)"
+            )
+            for sport, league, endpoint, polls, distinct, dates, first, last, non_200, changed in rows:
+                stamps = f"{first:%Y-%m-%d %H:%M} .. {last:%Y-%m-%d %H:%M}"
+                print(
+                    f"{sport:<12}{league:<16}{endpoint:<11}{polls:>7}{distinct:>10}{dates:>7}"
+                    f"{changed:>9}{non_200:>9}  {stamps}"
+                )
+            bodies, raw, stored = store.body_totals()
+            print(f"\n{bodies} unique bodies, {raw / 1e6:.1f} MB raw -> {stored / 1e6:.1f} MB stored")
+
+        sessions = store.recent_sessions()
+        if sessions:
+            print("\nsessions (newest first):")
+            for sid, started, beat, ended, reason, host, version, names in sessions:
+                if ended is None:
+                    age = (datetime.now(timezone.utc) - beat).total_seconds()
+                    state = f"RUNNING, heartbeat {age:.0f}s ago"
+                else:
+                    state = f"{ended:%Y-%m-%d %H:%M} ({reason})"
+                targets = ", ".join(names) if names else "0 targets"
+                print(f"  #{sid} {started:%Y-%m-%d %H:%M} .. {state}  [{host} {version}] {targets}")
     finally:
         store.close()
     return 0
 
 
-def cmd_migrate(args: argparse.Namespace) -> int:
-    legacy_dir = Path(args.legacy_dir)
-    if not legacy_dir.is_dir():
-        print(f"error: legacy dir not found: {legacy_dir}", file=sys.stderr)
-        return 2
-    store = Store(args.db)
+def cmd_coverage(args: argparse.Namespace) -> int:
+    store = _store(args)
     try:
-        return 0 if migrate(store, legacy_dir, dry_run=args.dry_run) else 1
+        reports = coverage_report(store, args.league, args.date)
     finally:
         store.close()
+    if args.json:
+        print(json.dumps(reports, indent=2))
+    else:
+        print_coverage(reports)
+    return 0
 
 
 def cmd_discover(args: argparse.Namespace) -> int:
     leagues = [_resolve(arg) for arg in args.league]
-    store = Store(args.db)
+    store = _store(args)
     try:
         report = discover(
             store,
@@ -85,7 +101,6 @@ def cmd_discover(args: argparse.Namespace) -> int:
             tag_presence=args.tag_presence,
             max_cardinality=args.max_cardinality,
             min_class_pct=args.min_class_pct,
-            source_like=args.source_like,
             beam_width=args.beam,
             max_depth=args.depth,
             min_split_gain=args.min_split_gain,
@@ -100,52 +115,6 @@ def cmd_discover(args: argparse.Namespace) -> int:
     out = GENERATED_DIR / f"{name}.json"
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"\nwrote {out}")
-    return 0
-
-
-def cmd_ui(args: argparse.Namespace) -> int:
-    return serve(
-        Path(args.db), GENERATED_DIR, args.port, open_browser=not args.no_browser
-    )
-
-
-def cmd_tray(args: argparse.Namespace) -> int:
-    from . import tray  # lazy: pystray only needed for this subcommand
-
-    if args.install_startup:
-        value = tray.install_startup()
-        print(f"installed HKCU\\...\\Run\\{tray.APP_NAME} = {value}")
-        return 0
-    if args.uninstall_startup:
-        removed = tray.uninstall_startup()
-        print("startup entry removed" if removed else "startup entry was not installed")
-        return 0
-    return tray.main(args.db)
-
-
-def cmd_status(args: argparse.Namespace) -> int:
-    if not Path(args.db).exists():
-        print(f"no database at {args.db}", file=sys.stderr)
-        return 1
-    store = Store(args.db)
-    try:
-        rows = store.league_stats()
-        if not rows:
-            print("store is empty")
-            return 0
-        print(
-            f"{'sport':<12}{'league':<16}{'polls':>7}{'distinct':>10}{'dates':>7}"
-            f"{'changes':>9}{'non-200':>9}  first .. last (UTC)"
-        )
-        for sport, league, polls, distinct, dates, first, last, non_200, changed in rows:
-            print(
-                f"{sport:<12}{league:<16}{polls:>7}{distinct:>10}{dates:>7}"
-                f"{changed or 0:>9}{non_200:>9}  {first} .. {last}"
-            )
-        bodies, raw, stored = store.body_totals()
-        print(f"\n{bodies} unique bodies, {raw / 1e6:.1f} MB raw -> {stored / 1e6:.1f} MB stored")
-    finally:
-        store.close()
     return 0
 
 
@@ -177,7 +146,7 @@ def _resolve(arg: str) -> League:
 
 def cmd_schema(args: argparse.Namespace) -> int:
     league = _resolve(args.league)
-    store = Store(args.db)
+    store = _store(args)
     try:
         schema, presence = build_schema(store, league)
     finally:
@@ -237,9 +206,9 @@ def cmd_validate(args: argparse.Namespace) -> int:
         root_name = f"{prefix_for(league.slug)}ScoreboardResponse"
     else:
         root_name = "ScoreboardResponse"
-    store = Store(args.db)
+    store = _store(args)
     try:
-        ok = run_validation(store, league, spec_path, root_name, source_like=args.source_like)
+        ok = run_validation(store, league, spec_path, root_name)
     finally:
         store.close()
     return 0 if ok else 1
@@ -248,9 +217,9 @@ def cmd_validate(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
-        "--db",
-        default=str(DEFAULT_DB),
-        help="path to the unified store (default: data/espn/espn.db)",
+        "--db-url",
+        default=None,
+        help="Postgres DSN (default: ESPN_DB_URL env var, else tools/espn/.env)",
     )
 
     parser = argparse.ArgumentParser(
@@ -259,37 +228,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("collect", parents=[common], help="poll live scoreboards into the store")
+    p = sub.add_parser("serve", parents=[common], help="run the collector service")
     p.add_argument(
-        "--league",
-        action="append",
-        required=True,
-        help="registry key (e.g. mlb, world-cup) or raw sport/slug; repeatable",
+        "--targets",
+        default=str(DEFAULT_TARGETS),
+        help=f"declarative poll-targets YAML, hot-reloaded (default: {DEFAULT_TARGETS})",
     )
-    p.add_argument("--date", help="YYYYMMDD ?dates= value (default: today in US/Eastern)")
-    p.add_argument("--duration", type=parse_duration, help="stop after this long (30s / 90m / 5h)")
-    p.add_argument(
-        "--until-all-post",
-        action="store_true",
-        help="stop a league once all its events have been final for two consecutive polls",
-    )
-    p.add_argument(
-        "--fixed-interval",
-        type=float,
-        help="poll every N seconds instead of honoring Cache-Control max-age",
-    )
-    p.set_defaults(func=cmd_collect)
+    p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("status", parents=[common], help="summarize the store + sessions")
+    p.set_defaults(func=cmd_status)
 
     p = sub.add_parser(
-        "migrate", parents=[common], help="one-shot import of the legacy espn_data_samples DBs"
+        "coverage", parents=[common], help="per-game capture quality and replay-grade verdicts"
     )
-    p.add_argument(
-        "--legacy-dir",
-        default=str(REPO_ROOT / "espn_data_samples"),
-        help="directory containing the legacy *_collection DBs",
-    )
-    p.add_argument("--dry-run", action="store_true", help="read and verify without writing")
-    p.set_defaults(func=cmd_migrate)
+    p.add_argument("--league", help="ESPN league slug (e.g. mlb, fifa.world); default: all")
+    p.add_argument("--date", help="restrict to one YYYYMMDD game day")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_coverage)
 
     p = sub.add_parser(
         "discover",
@@ -330,9 +286,6 @@ def main(argv: list[str] | None = None) -> int:
         default=1.0,
         help="classes below this %% of instances get no variant (default 1.0)",
     )
-    p.add_argument(
-        "--source-like", default="%", help="restrict to responses whose source matches (SQL LIKE)"
-    )
     p.add_argument("--top", type=int, default=10, help="how many ranked candidates to print")
     p.add_argument(
         "--beam",
@@ -350,29 +303,6 @@ def main(argv: list[str] | None = None) -> int:
         help="a nested split must gain at least this many bits to be kept (default 1.0)",
     )
     p.set_defaults(func=cmd_discover)
-
-    p = sub.add_parser(
-        "ui", parents=[common], help="serve the local read-only pipeline viewer"
-    )
-    p.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"listen port (default {DEFAULT_PORT})")
-    p.add_argument("--no-browser", action="store_true", help="don't open the browser on start")
-    p.set_defaults(func=cmd_ui)
-
-    p = sub.add_parser(
-        "tray", parents=[common], help="run the system-tray collector (console mode for testing)"
-    )
-    p.add_argument(
-        "--install-startup",
-        action="store_true",
-        help="register the tray app in HKCU Run so it starts at login, then exit",
-    )
-    p.add_argument(
-        "--uninstall-startup", action="store_true", help="remove the HKCU Run entry, then exit"
-    )
-    p.set_defaults(func=cmd_tray)
-
-    p = sub.add_parser("status", parents=[common], help="summarize the store")
-    p.set_defaults(func=cmd_status)
 
     p = sub.add_parser(
         "schema", parents=[common], help="infer JSON Schema + field presence for a league"
@@ -399,11 +329,6 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--league", required=True, help="registry key or raw sport/slug")
     p.add_argument("--spec", help="OpenAPI YAML (default: generated per-league spec)")
     p.add_argument("--root", help="root component schema (default: <Prefix>ScoreboardResponse)")
-    p.add_argument(
-        "--source-like",
-        default="%",
-        help="restrict to responses whose source matches this SQL LIKE pattern",
-    )
     p.set_defaults(func=cmd_validate)
 
     args = parser.parse_args(argv)

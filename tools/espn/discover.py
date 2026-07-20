@@ -94,8 +94,8 @@ def _walk_instances(obj, steps: list):
         yield from _walk_instances(value[selector], steps[1:])
 
 
-def _iter_instances(store: Store, league: League, source_like: str, steps: list):
-    for body in store.iter_bodies(league.slug, http_status=200, distinct=True, source_like=source_like):
+def _iter_instances(store: Store, league: League, steps: list):
+    for body in store.iter_bodies(league.slug, http_status=200, distinct=True):
         try:
             doc = json.loads(body)
         except ValueError:
@@ -104,14 +104,14 @@ def _iter_instances(store: Store, league: League, source_like: str, steps: list)
             yield from _walk_instances(doc, steps)
 
 
-def _iter_pooled(store: Store, leagues: list[League], source_like: str, steps: list):
+def _iter_pooled(store: Store, leagues: list[League], steps: list):
     """Instances across leagues. When pooling, each instance gets a synthetic
     `_league` scalar so sport identity competes as a discriminant candidate —
     letting the beam compare sport-first vs state-first hierarchies, which is
     the quantitative form of 'how much model/display structure is shared'."""
     pooled = len(leagues) > 1
     for league in leagues:
-        for instance in _iter_instances(store, league, source_like, steps):
+        for instance in _iter_instances(store, league, steps):
             if pooled:
                 instance[SYNTHETIC_LEAGUE_TAG] = league.slug
             yield instance
@@ -346,7 +346,6 @@ def discover(
     tag_presence: float = DEFAULT_TAG_PRESENCE,
     max_cardinality: int = DEFAULT_MAX_CARDINALITY,
     min_class_pct: float = DEFAULT_MIN_CLASS_PCT,
-    source_like: str = "%",
     beam_width: int = 3,
     max_depth: int = 2,
     min_split_gain: float = 1.0,
@@ -358,7 +357,7 @@ def discover(
     all_paths: set[str] = set()
     scalar_counts: Counter[str] = Counter()
     scalar_values: dict[str, object] = {}
-    for comp in _iter_pooled(store, leagues, source_like, steps):
+    for comp in _iter_pooled(store, leagues, steps):
         total += 1
         all_paths |= collect_paths(comp)
         for path, value in _scalar_items(comp):
@@ -381,7 +380,7 @@ def discover(
     )
 
     sigs = _Signatures(sorted(all_paths), candidates)
-    for comp in _iter_pooled(store, leagues, source_like, steps):
+    for comp in _iter_pooled(store, leagues, steps):
         sigs.add(comp)
 
     ranking = _rank(sigs, tag_presence=tag_presence, max_cardinality=max_cardinality)
