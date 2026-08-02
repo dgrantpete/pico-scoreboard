@@ -1,15 +1,14 @@
 <script lang="ts">
 	import { onMount } from "svelte";
-	import Eye from "@lucide/svelte/icons/eye";
-	import EyeOff from "@lucide/svelte/icons/eye-off";
 	import Wifi from "@lucide/svelte/icons/wifi";
-	import WifiOff from "@lucide/svelte/icons/wifi-off";
 	import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
 	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 	import { picoApi } from "$lib/api";
 	import type { NetworkStatus, Config } from "$lib/api/types";
 	import { rebootStore } from "$lib/stores/reboot.svelte";
 	import RebootOverlay from "$lib/components/RebootOverlay.svelte";
+	import SecretInput from "$lib/components/SecretInput.svelte";
+	import LoadingSkeleton from "$lib/components/LoadingSkeleton.svelte";
 
 	// Loading and error states
 	let isLoading = $state(true);
@@ -25,10 +24,6 @@
 	let password = $state("");
 	let apiUrl = $state("");
 	let apiKey = $state("");
-
-	// Visibility toggles
-	let showPassword = $state(false);
-	let showApiKey = $state(false);
 
 	// Validation
 	const isValid = $derived(ssid.trim().length > 0);
@@ -61,17 +56,17 @@
 		error = null;
 
 		try {
-			// Update config with form values
+			// The device is still running with the config loaded at mount —
+			// that's the "original" the reboot scenario is derived from.
+			const originalConfig = config;
+
 			const updatedConfig = await picoApi.updateConfig({
 				network: { ssid, password },
 				api: { url: apiUrl, key: apiKey }
 			});
-
-			// Update local config reference for reboot store
 			config = updatedConfig;
 
-			// Initiate reboot with the updated config
-			await rebootStore.initiateReboot(status, updatedConfig);
+			await rebootStore.initiateReboot(status, originalConfig, updatedConfig);
 		} catch (e) {
 			error = e instanceof Error ? e.message : "Failed to save configuration";
 			isSaving = false;
@@ -81,31 +76,12 @@
 
 <div class="setup-page">
 	{#if isLoading}
-		<!-- Loading skeleton -->
-		<div class="stack">
-			<div class="skeleton" style="height: 2rem; width: 16rem;"></div>
-			<div class="skeleton" style="height: 1rem; width: 24rem;"></div>
-			{#each { length: 2 } as _}
-				<section class="card">
-					<header class="card-header">
-						<div class="skeleton" style="height: 1.5rem; width: 8rem;"></div>
-					</header>
-					<div class="card-content stack">
-						{#each { length: 2 } as _}
-							<div class="field-group">
-								<div class="skeleton" style="height: 1rem; width: 6rem;"></div>
-								<div class="skeleton" style="height: 2.25rem; width: 100%;"></div>
-							</div>
-						{/each}
-					</div>
-				</section>
-			{/each}
-		</div>
+		<LoadingSkeleton cards={2} />
 	{:else if error && !config}
 		<!-- Error state when we couldn't load at all -->
-		<section class="card destructive-border">
+		<section class="card border-destructive">
 			<header class="card-header">
-				<h3 class="card-title destructive-text">Connection Error</h3>
+				<h3 class="card-title text-destructive">Connection Error</h3>
 				<p class="card-description">{error}</p>
 			</header>
 			<div class="card-content">
@@ -118,9 +94,20 @@
 	{:else}
 		<!-- Header with context-aware messaging -->
 		<div class="header-group">
-			{#if status?.setup_reason === "connection_failed"}
+			{#if status?.setup_reason === "bad_auth"}
 				<div class="header-row">
-					<div class="icon-circle amber">
+					<div class="icon-circle warn">
+						<TriangleAlert />
+					</div>
+					<h2 class="page-title">Wrong Password</h2>
+				</div>
+				<p class="subtitle">
+					"<span class="font-medium">{status.configured_ssid}</span>" rejected the
+					password. Re-enter it below and reconnect.
+				</p>
+			{:else if status?.setup_reason === "connection_failed"}
+				<div class="header-row">
+					<div class="icon-circle warn">
 						<TriangleAlert />
 					</div>
 					<h2 class="page-title">Connection Issue</h2>
@@ -142,7 +129,7 @@
 				</p>
 			{:else}
 				<div class="header-row">
-					<div class="icon-circle green">
+					<div class="icon-circle ok">
 						<Wifi />
 					</div>
 					<h2 class="page-title">Network Configuration</h2>
@@ -172,27 +159,13 @@
 						bind:value={ssid}
 					/>
 				</div>
-				<div class="field-group">
-					<label for="wifi-password">WiFi Password</label>
-					<div class="password-wrapper">
-						<input
-							id="wifi-password"
-							type={showPassword ? "text" : "password"}
-							placeholder="Enter password"
-							bind:value={password}
-						/>
-						<button
-							class="btn ghost sm toggle-btn"
-							onclick={() => (showPassword = !showPassword)}
-						>
-							{#if showPassword}
-								<EyeOff />
-							{:else}
-								<Eye />
-							{/if}
-						</button>
-					</div>
-				</div>
+				<SecretInput
+					id="wifi-password"
+					label="WiFi Password"
+					placeholder="Enter password"
+					value={password}
+					oninput={(value) => (password = value)}
+				/>
 			</div>
 		</section>
 
@@ -214,27 +187,13 @@
 						bind:value={apiUrl}
 					/>
 				</div>
-				<div class="field-group">
-					<label for="api-key">API Key</label>
-					<div class="password-wrapper">
-						<input
-							id="api-key"
-							type={showApiKey ? "text" : "password"}
-							placeholder="Enter API key"
-							bind:value={apiKey}
-						/>
-						<button
-							class="btn ghost sm toggle-btn"
-							onclick={() => (showApiKey = !showApiKey)}
-						>
-							{#if showApiKey}
-								<EyeOff />
-							{:else}
-								<Eye />
-							{/if}
-						</button>
-					</div>
-				</div>
+				<SecretInput
+					id="api-key"
+					label="API Key"
+					placeholder="Enter API key"
+					value={apiKey}
+					oninput={(value) => (apiKey = value)}
+				/>
 			</div>
 		</section>
 
@@ -266,62 +225,13 @@
 <RebootOverlay />
 
 <style>
+	/* Page-specific layout only — shared component styles live in app.css */
 	.setup-page {
 		max-width: 42rem;
 		margin-inline: auto;
 		display: flex;
 		flex-direction: column;
 		gap: 1.5rem;
-	}
-
-	.stack {
-		display: flex;
-		flex-direction: column;
-		gap: 1.5rem;
-	}
-
-	/* Skeleton loading */
-	.skeleton {
-		background: var(--muted);
-		border-radius: 0.375rem;
-		animation: shimmer 2s infinite;
-	}
-
-	/* Card */
-	.card {
-		background: var(--card);
-		color: var(--card-foreground);
-		border: 1px solid var(--border);
-		border-radius: 0.75rem;
-		box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
-
-		&.destructive-border {
-			border-color: var(--destructive);
-		}
-	}
-
-	.card-header {
-		padding: 1.5rem;
-		padding-block-end: 0;
-	}
-
-	.card-title {
-		font-weight: 600;
-		font-size: 1rem;
-
-		&.destructive-text {
-			color: var(--destructive);
-		}
-	}
-
-	.card-description {
-		color: var(--muted-foreground);
-		font-size: 0.875rem;
-		margin-block-start: 0.25rem;
-	}
-
-	.card-content {
-		padding: 1.5rem;
 	}
 
 	/* Header */
@@ -348,184 +258,6 @@
 
 	.font-medium {
 		font-weight: 500;
-	}
-
-	/* Icon circles */
-	.icon-circle {
-		border-radius: 50%;
-		padding: 0.5rem;
-
-		& :global(svg) {
-			width: 1.5rem;
-			height: 1.5rem;
-		}
-
-		&.amber {
-			background: oklch(0.962 0.059 95.617);
-
-			& :global(svg) {
-				color: oklch(0.666 0.179 58.318);
-			}
-		}
-
-		&.green {
-			background: oklch(0.962 0.052 153.211);
-
-			& :global(svg) {
-				color: oklch(0.627 0.194 149.214);
-			}
-		}
-
-		&.primary {
-			background: oklch(from var(--primary) l c h / 10%);
-
-			& :global(svg) {
-				color: var(--primary);
-			}
-		}
-	}
-
-	:global(.dark) .icon-circle {
-		&.amber {
-			background: oklch(0.356 0.09 56.09);
-
-			& :global(svg) {
-				color: oklch(0.828 0.159 84.429);
-			}
-		}
-
-		&.green {
-			background: oklch(0.356 0.101 150.091);
-
-			& :global(svg) {
-				color: oklch(0.792 0.209 151.711);
-			}
-		}
-	}
-
-	/* Form fields */
-	.field-group {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-	}
-
-	label {
-		font-size: 0.875rem;
-		font-weight: 500;
-	}
-
-	input[type="text"],
-	input[type="password"],
-	input[type="url"] {
-		height: 2.25rem;
-		width: 100%;
-		border-radius: 0.375rem;
-		border: 1px solid var(--input);
-		background: transparent;
-		padding-inline: 0.75rem;
-		font-size: 0.875rem;
-
-		&::placeholder {
-			color: var(--muted-foreground);
-		}
-
-		&:focus-visible {
-			outline: none;
-			border-color: var(--ring);
-			box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
-		}
-	}
-
-	.password-wrapper {
-		position: relative;
-
-		& input {
-			padding-inline-end: 2.5rem;
-		}
-	}
-
-	/* Buttons */
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0.5rem;
-		border-radius: 0.375rem;
-		font-size: 0.875rem;
-		font-weight: 500;
-		cursor: pointer;
-		border: none;
-		transition: background-color 0.15s;
-		outline: none;
-		height: 2.25rem;
-		padding-inline: 1rem;
-
-		&:disabled {
-			opacity: 0.5;
-			pointer-events: none;
-		}
-
-		&:focus-visible {
-			box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
-		}
-
-		&.default {
-			background: var(--primary);
-			color: var(--primary-foreground);
-		}
-
-		&.ghost {
-			background: transparent;
-
-			&:hover {
-				background: var(--accent);
-				color: var(--accent-foreground);
-			}
-		}
-
-		&.sm {
-			height: 2rem;
-			padding-inline: 0.75rem;
-		}
-
-		&.lg {
-			height: 2.75rem;
-			padding-inline: 1.5rem;
-			font-size: 1rem;
-		}
-
-		& :global(svg) {
-			width: 1rem;
-			height: 1rem;
-		}
-	}
-
-	.toggle-btn {
-		position: absolute;
-		inset-inline-end: 0;
-		inset-block-start: 0;
-		height: 100%;
-
-		& :global(svg) {
-			color: var(--muted-foreground);
-		}
-
-		&:hover {
-			background: transparent;
-		}
-	}
-
-	/* Alert */
-	.alert {
-		border-radius: 0.75rem;
-		padding: 1rem;
-		border: 1px solid var(--border);
-
-		&.destructive {
-			border-color: var(--destructive);
-			color: var(--destructive);
-		}
 	}
 
 	/* Submit */

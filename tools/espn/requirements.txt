@@ -1,0 +1,7 @@
+genson
+jsonschema
+psycopg[binary]
+pyyaml
+referencing
+requests
+tzdata

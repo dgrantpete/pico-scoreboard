@@ -1,0 +1,39 @@
+{
+  "id": "401772510",
+  "date": "2026-01-12T21:30Z",
+  "competitions": [
+    {
+      "venue": { "fullName": "Arrowhead Stadium", "indoor": false },
+      "competitors": [
+        {
+          "homeAway": "home",
+          "score": "17",
+          "team": { "id": "12", "abbreviation": "KC", "color": "e31837", "alternateColor": "ffb81c", "shortDisplayName": "Chiefs" }
+        },
+        {
+          "homeAway": "away",
+          "score": "21",
+          "team": { "id": "2", "abbreviation": "BUF", "color": "00338d", "alternateColor": "c60c30", "shortDisplayName": "Bills" }
+        }
+      ],
+      "situation": {
+        "down": 1,
+        "distance": 8,
+        "yardLine": 92,
+        "homeTimeouts": 2,
+        "awayTimeouts": 3,
+        "isRedZone": true,
+        "possession": "2",
+        "lastPlay": {
+          "id": "401772510208",
+          "text": "J. Allen pass complete to K. Coleman for 12 yards"
+        }
+      },
+      "status": {
+        "type": { "id": "2", "state": "in", "description": "In Progress" },
+        "period": 4,
+        "displayClock": "3:11"
+      }
+    }
+  ]
+}

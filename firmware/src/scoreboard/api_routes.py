@@ -1,9 +1,11 @@
 """Configuration API endpoints."""
 
+import json
 import machine
 import uasyncio as asyncio
-from microdot import Microdot, Request
-from scoreboard.config import Config
+from microdot import Microdot, Request, send_file
+from scoreboard.config import Config, CadenceError
+import scoreboard.logger as logger
 
 try:
     from typing import Callable
@@ -12,7 +14,8 @@ except ImportError:
 
 from scoreboard.state import (
     update_ui_colors, update_display_frequency,
-    update_display_refresh_rate, update_display_gamma, update_display_blanking_time
+    update_display_refresh_rate, update_display_gamma, update_display_blanking_time,
+    update_screen_variants, update_show_dividers, update_scroll_speed
 )
 
 def create_api(config: Config, get_network_status: "Callable[[], dict]") -> Microdot:
@@ -31,15 +34,17 @@ def create_api(config: Config, get_network_status: "Callable[[], dict]") -> Micr
         return config.raw
 
     @api.put('/config')
-    async def update_config(request: Request) -> dict:
-        """Merge provided fields into existing config."""
+    async def update_config(request: Request) -> dict | tuple:
+        """Merge provided fields into existing config (single flash write)."""
         data = request.json
         if data is None:
             return config.raw
-        for section, values in data.items():
-            if section in config.raw and isinstance(values, dict):
-                for key, value in values.items():
-                    config.update(section, key, value)
+
+        try:
+            config.update_many(data)
+        except CadenceError as e:
+            return {'error': 'invalid_cadence', 'message': str(e)}, 400
+
         # Re-compute UI colors if colors section was updated
         if 'colors' in data:
             update_ui_colors(config)
@@ -53,6 +58,12 @@ def create_api(config: Config, get_network_status: "Callable[[], dict]") -> Micr
                 update_display_gamma(config)
             if 'blanking_time_ns' in data['display']:
                 update_display_blanking_time(config)
+            if 'variants' in data['display']:
+                update_screen_variants(config)
+            if 'show_dividers' in data['display']:
+                update_show_dividers(config)
+            if 'scroll_speed_px_per_sec' in data['display']:
+                update_scroll_speed(config)
         return config.raw
 
     @api.get('/status')
@@ -60,29 +71,74 @@ def create_api(config: Config, get_network_status: "Callable[[], dict]") -> Micr
         """Return current device network status."""
         return get_network_status()
 
+    @api.get('/logs')
+    async def get_logs(request: Request):
+        """
+        Stream the in-RAM log ring as NDJSON: one `[seq, ts, level, msg]`
+        array per line. `?since=<seq>` returns only newer entries, enabling
+        tail-follow polling; clients use the last line's seq as the next
+        `since`. Streaming via a generator avoids building one large JSON
+        body on-device.
+        """
+        since = 0
+        raw_since = request.args.get('since')
+        if raw_since is not None:
+            try:
+                since = int(raw_since)
+            except ValueError:
+                pass
+
+        entries, _latest = logger.entries_since(since)
+
+        def stream():
+            for entry in entries:
+                yield json.dumps(entry) + "\n"
+
+        return stream(), 200, {'Content-Type': 'application/x-ndjson'}
+
+    @api.get('/logs/previous')
+    async def get_previous_log(request: Request):
+        """Serve the previous boot's flushed log file (rotated at startup)."""
+        try:
+            return send_file(logger.PREVIOUS_LOG, content_type='text/plain')
+        except OSError:
+            return {'error': 'not_found', 'message': 'No previous-boot log on flash'}, 404
+
+    @api.post('/check-update')
+    async def check_update(request: Request) -> dict | tuple:
+        """On-demand OTA check. Compares the device's app sha against the
+        backend manifest; when they differ, the OTA task downloads and
+        applies it (the device shows progress and restarts). The actual
+        logic lives in main.py's request_ota_check (littlefs) — reached via
+        the app attribute so this route degrades to 'unsupported' on a
+        main.py that predates it."""
+        check = getattr(request.app, 'request_ota_check', None)
+        if check is None:
+            return {'status': 'unsupported',
+                    'message': 'main.py predates on-demand checks; reflash over USB'}, 501
+        result = check()
+        logger.debug(f"[OTA] on-demand check: {result.get('status')}")
+        return result
+
     @api.post('/reboot')
     async def reboot(request: Request) -> dict:
         """Trigger a device restart after a brief delay."""
-        from scoreboard.logger import DEBUG
-        if config.log_level >= DEBUG:
-            print("[MAIN] reboot scheduled: delay=1s")
+        logger.debug("[MAIN] reboot scheduled: delay=1s")
         asyncio.create_task(_delayed_reboot())
         return {'message': 'Rebooting in 1 second...'}
 
     @api.post('/reset-network')
     async def reset_network(request: Request) -> dict:
         """Clear network credentials to trigger fresh setup on next boot."""
-        from scoreboard.logger import DEBUG
-        config.update('network', 'ssid', '')
-        config.update('network', 'password', '')
-        if config.log_level >= DEBUG:
-            print("[CONFIG] network credentials cleared: will enter setup on reboot")
+        config.update_many({'network': {'ssid': '', 'password': ''}})
+        logger.debug("[CONFIG] network credentials cleared: will enter setup on reboot")
         return {'message': 'Network configuration cleared. Reboot to enter setup mode.'}
 
     return api
 
 
 async def _delayed_reboot() -> None:
-    """Wait briefly then reset the device."""
+    """Wait briefly, persist the log ring, then reset the device."""
     await asyncio.sleep(1)
+    logger.flush_to_flash()
     machine.reset()

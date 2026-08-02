@@ -4,6 +4,15 @@ microdot
 
 The ``microdot`` module defines a few classes that help implement HTTP-based
 servers for MicroPython and standard Python.
+
+Vendored with modifications:
+- Per-connection timeout (``Microdot.connection_timeout``): a client that
+  opens a connection but never completes a request (browser speculative
+  preconnect, phone sleeping mid-request) or stops draining the response
+  used to park its handler task forever, permanently pinning one of lwip's
+  few TCP sockets. Leaked sockets accumulate over days of normal use until
+  inbound connections are silently dropped while the rest of the firmware
+  stays healthy. Abandoned connections are now cancelled and closed.
 """
 import asyncio
 import io
@@ -949,6 +958,12 @@ class Microdot:
         app = Microdot()
     """
 
+    #: Seconds a connection may take to complete one request/response cycle
+    #: before it is considered abandoned and closed (see vendor note above).
+    #: Generous enough for the full app bundle over a weak AP-mode link;
+    #: finite so leaked sockets are always reclaimed.
+    connection_timeout = 60
+
     def __init__(self):
         self.url_map = []
         self.before_request_handlers = []
@@ -1268,7 +1283,15 @@ class Microdot:
                 writer.awrite = MethodType(awrite, writer)
                 writer.aclose = MethodType(aclose, writer)
 
-            await self.handle_request(reader, writer)
+            try:
+                await asyncio.wait_for(self.handle_request(reader, writer),
+                                       self.connection_timeout)
+            except asyncio.TimeoutError:
+                # Abandoned connection — reclaim the socket (vendor note).
+                try:
+                    await writer.aclose()
+                except Exception:
+                    pass
 
         if self.debug:  # pragma: no cover
             print('Starting async server on {host}:{port}...'.format(

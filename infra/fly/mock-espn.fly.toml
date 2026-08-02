@@ -1,0 +1,24 @@
+# Mock-ESPN Fly app: PRIVATE (flycast-only — allocate the private v6 before
+# the first deploy and never a public IP; audit with `fly ips list`). The
+# staging backend reaches it at http://pico-mock-espn-dgrantpete.flycast
+# (Fly proxy port 80 -> internal_port; wakes stopped machines).
+# Deploy FROM THE REPO ROOT:
+#   fly deploy . --config infra/fly/mock-espn.fly.toml
+app = "pico-mock-espn-dgrantpete"
+primary_region = "iad"
+
+# NOTE: these paths resolve relative to THIS file, not the build context.
+[build]
+dockerfile = "mock-espn.Dockerfile"
+ignorefile = "mock-espn.dockerignore"
+
+[http_service]
+internal_port = 8787
+force_https = false          # flycast is plain HTTP on port 80
+auto_stop_machines = "stop"
+auto_start_machines = true
+min_machines_running = 0
+
+[[vm]]
+size = "shared-cpu-1x"
+memory = 256

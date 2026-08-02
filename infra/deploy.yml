@@ -1,0 +1,71 @@
+# Deploy the ESPN collector stack to the NUC. Host-level provisioning
+# (users, docker, hardening) belongs to the homelab repo — this playbook only
+# manages /opt/pico-scoreboard and its compose stack.
+#
+# Run from WSL (Ansible has no native-Windows control node), from infra/.
+# ANSIBLE_CONFIG must be explicit: on /mnt/c the directory is world-writable,
+# so Ansible refuses to auto-load ansible.cfg from it.
+#
+#   ANSIBLE_CONFIG=$PWD/ansible.cfg ansible-playbook deploy.yml                  # full
+#   ANSIBLE_CONFIG=$PWD/ansible.cfg ansible-playbook deploy.yml --tags targets   # config only
+#
+# One-time setup:
+#   cp .env.example .env && cp inventory.example.yml inventory.yml   # then fill in
+
+- name: ESPN collector stack
+  hosts: collector_host
+  vars:
+    app_dir: /opt/pico-scoreboard
+    git_sha: "{{ lookup('pipe', 'git rev-parse --short HEAD') }}"
+  tasks:
+    - name: App directory exists and is ours
+      become: true
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+      tags: [stack]
+
+    - name: Collector package synced
+      ansible.builtin.copy:
+        src: ../tools/espn/
+        dest: "{{ app_dir }}/collector/"
+      tags: [stack]
+
+    - name: Compose file deployed
+      ansible.builtin.copy:
+        src: compose.yml
+        dest: "{{ app_dir }}/compose.yml"
+      tags: [stack]
+
+    - name: Secrets env deployed
+      ansible.builtin.copy:
+        src: .env
+        dest: "{{ app_dir }}/.env"
+        mode: "0600"
+      tags: [stack]
+
+    - name: Config directory exists
+      ansible.builtin.file:
+        path: "{{ app_dir }}/config"
+        state: directory
+        mode: "0755"
+      tags: [stack, targets]
+
+    - name: Poll targets deployed (atomic; running collector hot-reloads)
+      ansible.builtin.copy:
+        src: config/targets.yml
+        dest: "{{ app_dir }}/config/targets.yml"
+      tags: [stack, targets]
+
+    - name: Stack built and up
+      ansible.builtin.command:
+        cmd: docker compose up -d --build --remove-orphans
+        chdir: "{{ app_dir }}"
+      environment:
+        GIT_SHA: "{{ git_sha }}"
+      register: compose_up
+      changed_when: "'Started' in compose_up.stderr or 'Recreated' in compose_up.stderr or 'Built' in compose_up.stderr"
+      tags: [stack]

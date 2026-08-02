@@ -1,0 +1,5 @@
+{
+  "configuration": "release",
+  "arch": "armv7emsp",
+  "flash_release": true
+}

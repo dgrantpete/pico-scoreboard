@@ -1,0 +1,37 @@
+# Staging backend: the UNMODIFIED prod image pointed at the mock-ESPN app
+# over Fly private networking. Demo devices point at this app's public URL;
+# prod (fly.toml) never learns mocks exist. Deploy:
+#   python tools/build.py deploy --staging
+app = "pico-scoreboard-api-staging-dgrantpete"
+primary_region = "iad"
+
+[build]
+dockerfile = "Dockerfile"
+
+[env]
+RUST_LOG = "info"
+LOG_FORMAT = "json"
+APP_ESPN__BASE_URL = "http://pico-mock-espn-dgrantpete.flycast"
+
+[http_service]
+internal_port = 3000
+# Plain HTTP intentionally served, same rationale as prod: the scoreboard
+# polls game data over http:// to avoid mbedTLS buffer overhead on the Pico.
+force_https = false
+auto_stop_machines = "stop"
+auto_start_machines = true
+min_machines_running = 0        # staging may sleep; first poll wakes it
+
+[http_service.http_options]
+idle_timeout = 120
+
+[[http_service.checks]]
+grace_period = "10s"
+interval = "15s"
+method = "GET"
+timeout = "5s"
+path = "/health"
+
+[[vm]]
+size = "shared-cpu-1x"
+memory = 256

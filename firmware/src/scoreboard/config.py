@@ -7,9 +7,18 @@ The config file is stored at the root of the Pico filesystem.
 
 import json
 from hub75 import gamma
+# Module-path import (not `from scoreboard import logger`): config is itself
+# imported during the scoreboard package's __init__, and binding the submodule
+# by full path is safe regardless of the package's partial-init state.
+import scoreboard.logger as logger
 from scoreboard.logger import NONE, ERROR, DEBUG
 
 _LOG_LEVEL_MAP = {"none": NONE, "error": ERROR, "debug": DEBUG}
+
+# RP2350 hardware watchdog limits (machine.WDT): max ~8.3s, and we keep a
+# sane floor so the feeder (timeout/4) never has to run more than ~2x/sec.
+_WDT_TIMEOUT_MIN_MS = 2000
+_WDT_TIMEOUT_MAX_MS = 8300
 
 # Default config path on Pico filesystem
 CONFIG_PATH = "/config.json"
@@ -24,16 +33,31 @@ _DEFAULTS = {
     },
     "api": {
         "url": "",
-        "key": "",
-        "mock": False
+        "key": ""
     },
     "display": {
         "brightness": 100,
         "poll_interval_seconds": 30,
+        "game_rotation_seconds": 60,
         "data_frequency_khz": 20000,
         "target_refresh_rate": 120,
         "gamma": {"type": "srgb"},
-        "blanking_time_ns": 0
+        "blanking_time_ns": 0,
+        # Screen layout variants (see scoreboard/screen_geometry.py tables).
+        # Applied live on config save — flip these from the settings page to
+        # compare layouts on the panel without a reboot. Single-design
+        # screens (pregame since 2026-07-15) carry no key; stale keys in a
+        # stored config are ignored by screen_geometry.set_variants.
+        "variants": {
+            "mlb_final": "C", "nba_final": "C", "football_final": "C",
+            "soccer_live": "A",
+        },
+        # Divider lines between screen sections; applied live.
+        "show_dividers": True,
+        # Game-description scroll speed (MLB play-by-play + soccer event/
+        # scorer text), px/s. Restricted to the smooth set in
+        # screen_geometry._SCROLL_SPEEDS; applied live.
+        "scroll_speed_px_per_sec": 20
     },
     "colors": {
         "primary": {"r": 255, "g": 255, "b": 255},      # White - dividers, status text
@@ -42,11 +66,35 @@ _DEFAULTS = {
         "clock_normal": {"r": 0, "g": 255, "b": 0},     # Green - clock with time remaining
         "clock_warning": {"r": 255, "g": 10, "b": 10}   # Red - low time, errors
     },
+    # Which leagues the poller rotates through, edited from the settings
+    # page's Sports card. `football.leagues` / `soccer.leagues` hold ESPN
+    # slugs (see the LEAGUE_NAMES tables in scoreboard/football.py: nfl,
+    # college-football; and scoreboard/soccer.py: usa.1, eng.1, mex.1,
+    # fifa.world); empty = that sport off. NBA defaults off like the league
+    # lists — flip it on when the season is on.
+    "sports": {
+        "mlb": {"enabled": True},
+        "nba": {"enabled": False},
+        "football": {"leagues": []},
+        "soccer": {"leagues": []}
+    },
     "log": {
         "level": "debug"
     },
     "server": {
         "cache_max_age_seconds": 600
+    },
+    # Hardware watchdog. Default OFF: once armed, machine.WDT cannot be
+    # disarmed, and it will reboot the device ~timeout_ms after mpremote
+    # interrupts the script — enable per-device once it's deployed/stable.
+    "watchdog": {
+        "enabled": False,
+        "timeout_ms": 8000
+    },
+    # Over-the-air app updates (see firmware/src/ota.py). Default ON: the
+    # whole point is that friends' devices update themselves.
+    "ota": {
+        "enabled": True
     }
 }
 
@@ -66,6 +114,20 @@ def _deep_merge(base: dict, override: dict) -> dict:
             result[key] = value
 
     return result
+
+
+class CadenceError(ValueError):
+    """Raised when poll_interval_seconds >= game_rotation_seconds."""
+    pass
+
+
+def _validate_cadence(poll_interval: int, rotation: int) -> None:
+    # Rotation must strictly exceed poll interval so the inner poll for the
+    # current game fires at least once before rotation advances the index.
+    if poll_interval >= rotation:
+        raise CadenceError(
+            f"poll_interval_seconds ({poll_interval}) must be < game_rotation_seconds ({rotation})"
+        )
 
 
 def _deep_copy(d: dict) -> dict:
@@ -102,22 +164,46 @@ class Config:
         """
         self._path: str = path
         self._data: dict = self._load()
+        self._log_level: int = self._compute_log_level()
+        logger.set_level(self._log_level)
 
     def _load(self) -> dict:
-        """Load config from file, merging with defaults."""
+        """Load config from file, merging with defaults.
+
+        Never raises: a corrupt or hand-edited config file must not be able
+        to brick boot (Config() is constructed at import time in main.py).
+        Invalid values fall back to defaults with a logged complaint.
+        """
         try:
             with open(self._path, 'r') as f:
                 data = json.load(f)
 
-            return _deep_merge(_deep_copy(_DEFAULTS), data)
+            merged = _deep_merge(_deep_copy(_DEFAULTS), data)
         except (OSError, ValueError):
-            return _deep_copy(_DEFAULTS)
+            merged = _deep_copy(_DEFAULTS)
+
+        try:
+            _validate_cadence(
+                merged["display"]["poll_interval_seconds"],
+                merged["display"]["game_rotation_seconds"],
+            )
+        except CadenceError as e:
+            # logger.error is safe here: the module default level is DEBUG
+            # until this Config finishes loading and pushes the real level.
+            logger.error(f"[CONFIG] invalid cadence in {self._path}, using defaults: {e}")
+            merged["display"]["poll_interval_seconds"] = _DEFAULTS["display"]["poll_interval_seconds"]
+            merged["display"]["game_rotation_seconds"] = _DEFAULTS["display"]["game_rotation_seconds"]
+        return merged
+
+    def _compute_log_level(self) -> int:
+        return _LOG_LEVEL_MAP.get(self._data["log"]["level"], DEBUG)
 
     def reload(self) -> None:
         """Reload configuration from file."""
         self._data = self._load()
-        if self.log_level >= DEBUG:
-            print(f"[CONFIG] reloaded: {self._path}")
+        self._log_level = self._compute_log_level()
+        logger.set_level(self._log_level)
+        logger.debug(f"[CONFIG] reloaded: {self._path}")
 
     def save(self) -> None:
         """Write current configuration to file."""
@@ -132,12 +218,62 @@ class Config:
             section: Top-level section (e.g., "network", "api", "display")
             key: Key within section (e.g., "ssid", "url", "brightness")
             value: New value to set
+
+        Raises:
+            CadenceError: If the write would violate poll_interval < game_rotation.
         """
-        if section in self._data:
-            self._data[section][key] = value
-            self.save()
-            if self.log_level >= DEBUG:
-                print(f"[CONFIG] updated: {section}.{key}={value}")
+        if section not in self._data:
+            return
+
+        if section == "display" and key in ("poll_interval_seconds", "game_rotation_seconds"):
+            display = self._data["display"]
+            poll = value if key == "poll_interval_seconds" else display["poll_interval_seconds"]
+            rotation = value if key == "game_rotation_seconds" else display["game_rotation_seconds"]
+            _validate_cadence(int(poll), int(rotation))  # type: ignore[arg-type]
+
+        self._data[section][key] = value
+        if section == "log":
+            self._log_level = self._compute_log_level()
+            logger.set_level(self._log_level)
+        self.save()
+        logger.debug(f"[CONFIG] updated: {section}.{key}={value}")
+
+    def update_many(self, data: dict) -> None:
+        """
+        Merge a {section: {key: value}} update into the config with ONE flash
+        write, validating cross-key invariants against the merged result.
+
+        Unknown sections and non-dict section values are ignored (same policy
+        as update()). Raises CadenceError before anything is applied if the
+        merged poll/rotation pair would be invalid.
+        """
+        # Validate the cadence pair as it will exist AFTER the merge, so a
+        # jointly-valid pair can't be rejected for arriving in the "wrong"
+        # key order (and a jointly-invalid one can't slip through).
+        display = data.get("display")
+        if isinstance(display, dict) and (
+            "poll_interval_seconds" in display or "game_rotation_seconds" in display
+        ):
+            current = self._data["display"]
+            poll = display.get("poll_interval_seconds", current["poll_interval_seconds"])
+            rotation = display.get("game_rotation_seconds", current["game_rotation_seconds"])
+            _validate_cadence(int(poll), int(rotation))  # type: ignore[arg-type]
+
+        changed = False
+        for section, values in data.items():
+            if section not in self._data or not isinstance(values, dict):
+                continue
+            for key, value in values.items():
+                self._data[section][key] = value
+                changed = True
+
+        if not changed:
+            return
+        if "log" in data:
+            self._log_level = self._compute_log_level()
+            logger.set_level(self._log_level)
+        self.save()
+        logger.debug(f"[CONFIG] updated: {', '.join(data.keys())} (batched)")
 
     def get(self, section: str, key: str, default: object = None) -> object:
         """
@@ -192,11 +328,6 @@ class Config:
         """API key for X-Api-Key header."""
         return self._data["api"]["key"]
 
-    @property
-    def api_mock(self) -> bool:
-        """Whether to use mock endpoints (/api/mock/games) instead of real ones."""
-        return self._data["api"].get("mock", False)
-
     # Display properties
     @property
     def brightness(self) -> int:
@@ -207,6 +338,11 @@ class Config:
     def poll_interval_seconds(self) -> int:
         """How often to poll the API in seconds."""
         return self._data["display"]["poll_interval_seconds"]
+
+    @property
+    def game_rotation_seconds(self) -> int:
+        """How often to rotate to the next live game in seconds."""
+        return self._data["display"]["game_rotation_seconds"]
 
     @property
     def data_frequency_khz(self) -> int:
@@ -240,17 +376,103 @@ class Config:
         """Blanking time in nanoseconds (0-3000)."""
         return self._data["display"]["blanking_time_ns"]
 
+    @property
+    def screen_variants(self) -> dict:
+        """Configured screen-layout variant letters, keyed per sport x screen
+        (mlb_pregame, nba_final, soccer_live, ...).
+
+        Values are validated (and silently corrected) by
+        screen_geometry.set_variants; garbage here can't crash rendering.
+        """
+        v = self._data["display"].get("variants")
+        return v if isinstance(v, dict) else {}
+
+    @property
+    def show_dividers(self) -> bool:
+        """Whether the DIM_GRAY divider lines are drawn on game screens."""
+        return bool(self._data["display"].get("show_dividers", True))
+
+    @property
+    def scroll_speed_px_per_sec(self) -> int:
+        """Game-description scroll speed (px/s). Clamped to the smooth set
+        by screen_geometry.set_scroll_speed; garbage degrades to 20."""
+        try:
+            return int(self._data["display"].get("scroll_speed_px_per_sec", 20))
+        except (TypeError, ValueError):
+            return 20
+
+    # Sports properties
+    @property
+    def mlb_enabled(self) -> bool:
+        """Whether MLB games are polled and rotated."""
+        return bool(self._data["sports"]["mlb"]["enabled"])
+
+    @property
+    def nba_enabled(self) -> bool:
+        """Whether NBA games are polled and rotated."""
+        return bool(self._data["sports"]["nba"]["enabled"])
+
+    @property
+    def football_leagues(self) -> list:
+        """ESPN football league slugs to poll (empty list = football off).
+
+        Non-list/garbage values degrade to [] so a hand-edited config can't
+        crash the poller construction.
+        """
+        leagues = self._data["sports"]["football"]["leagues"]
+        if not isinstance(leagues, list):
+            return []
+        return [s for s in leagues if isinstance(s, str) and s]
+
+    @property
+    def soccer_leagues(self) -> list:
+        """ESPN soccer league slugs to poll (empty list = soccer off).
+
+        Non-list/garbage values degrade to [] so a hand-edited config can't
+        crash the poller construction.
+        """
+        leagues = self._data["sports"]["soccer"]["leagues"]
+        if not isinstance(leagues, list):
+            return []
+        return [s for s in leagues if isinstance(s, str) and s]
+
     # Server properties
     @property
     def cache_max_age_seconds(self) -> int:
         """Cache-Control max-age for static content (0 = no caching)."""
         return self._data["server"]["cache_max_age_seconds"]
 
+    # Watchdog properties
+    @property
+    def watchdog_enabled(self) -> bool:
+        """Whether the hardware watchdog is armed at runtime."""
+        return bool(self._data["watchdog"]["enabled"])
+
+    @property
+    def watchdog_timeout_ms(self) -> int:
+        """Hardware watchdog timeout, clamped to the RP2350's valid range."""
+        raw = int(self._data["watchdog"]["timeout_ms"])
+        if raw < _WDT_TIMEOUT_MIN_MS:
+            return _WDT_TIMEOUT_MIN_MS
+        if raw > _WDT_TIMEOUT_MAX_MS:
+            return _WDT_TIMEOUT_MAX_MS
+        return raw
+
+    # OTA properties
+    @property
+    def ota_enabled(self) -> bool:
+        """Whether the daily OTA app-update check runs."""
+        return bool(self._data["ota"]["enabled"])
+
     # Log properties
     @property
     def log_level(self) -> int:
-        """Log level as integer: NONE=0, ERROR=1, DEBUG=2."""
-        return _LOG_LEVEL_MAP.get(self._data["log"]["level"], DEBUG)
+        """Log level as integer: NONE=0, ERROR=1, DEBUG=2.
+
+        Cached as a plain int (recomputed on load/update) because this is
+        checked before every log statement, including on hot paths.
+        """
+        return self._log_level
 
     # Color properties
     def get_color(self, name: str) -> dict:

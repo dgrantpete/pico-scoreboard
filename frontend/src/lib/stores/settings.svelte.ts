@@ -1,5 +1,5 @@
 import { picoApi, type Config, type ConfigUpdate, type NetworkStatus } from '$lib/api';
-import { rebootStore, type RebootScenario } from './reboot.svelte';
+import { rebootStore, determineRebootScenario } from './reboot.svelte';
 
 /**
  * Extract a nested value from config using a dot-notation path
@@ -18,42 +18,35 @@ function getValueByPath(obj: Config, path: string): unknown {
 }
 
 /**
- * Build a ConfigUpdate object from the current config and touched fields
+ * Build a ConfigUpdate object from the current config and touched fields.
+ * Sections are generic: any "section.field" touched path lands in the
+ * partial update, so new config sections need no code here.
  */
 function buildUpdateFromTouched(config: Config, touchedFields: Set<string>): ConfigUpdate {
-	const update: ConfigUpdate = {};
+	const update: Record<string, Record<string, unknown>> = {};
 
 	for (const path of touchedFields) {
-		const [section, field] = path.split('.') as [keyof Config, string];
-		const value = getValueByPath(config, path);
-
-		if (section === 'network') {
-			update.network = update.network || {};
-			(update.network as Record<string, unknown>)[field] = value;
-		} else if (section === 'api') {
-			update.api = update.api || {};
-			(update.api as Record<string, unknown>)[field] = value;
-		} else if (section === 'display') {
-			update.display = update.display || {};
-			(update.display as Record<string, unknown>)[field] = value;
-		} else if (section === 'colors') {
-			update.colors = update.colors || {};
-			(update.colors as Record<string, unknown>)[field] = value;
-		} else if (section === 'server') {
-			update.server = update.server || {};
-			(update.server as Record<string, unknown>)[field] = value;
-		}
+		const [section, field] = path.split('.');
+		if (!(section in config)) continue;
+		(update[section] ??= {})[field] = getValueByPath(config, path);
 	}
 
-	return update;
+	return update as ConfigUpdate;
 }
 
 /**
- * Check if any touched field is in the network section
+ * Sections whose settings only take effect at boot. `network.*` (WiFi
+ * reconnect), `watchdog.*` (the hardware WDT is armed once at startup), and
+ * `sports.*` (the game poller builds its league sources once at startup) —
+ * saving these must prompt for a reboot or the change silently does nothing.
  */
-function hasNetworkChanges(touchedFields: Set<string>): boolean {
+function needsRebootToApply(touchedFields: Set<string>): boolean {
 	for (const path of touchedFields) {
-		if (path.startsWith('network.')) {
+		if (
+			path.startsWith('network.') ||
+			path.startsWith('watchdog.') ||
+			path.startsWith('sports.')
+		) {
 			return true;
 		}
 	}
@@ -83,42 +76,15 @@ export function createSettingsStore() {
 	// Whether we just saved network changes (triggers reboot prompt)
 	let showRebootPrompt = $state(false);
 
+	// Single status poller — the status card and the memory/flash meters all
+	// read `status`, so one interval serves every consumer.
+	let statusPollInterval: ReturnType<typeof setInterval> | null = null;
+
 	// Computed: whether any field has been touched
 	const isDirty = $derived(touchedFields.size > 0);
 
 	// Computed: the pending changes to send
 	const pendingChanges = $derived(config ? buildUpdateFromTouched(config, touchedFields) : {});
-
-	/**
-	 * Determine the reboot scenario based on what changed between original and current config
-	 */
-	function determineRebootScenario(): RebootScenario {
-		if (!config || !originalConfig) {
-			return 'same_connection';
-		}
-
-		const ssidChanged = config.network.ssid !== originalConfig.network.ssid;
-		const passwordChanged = config.network.password !== originalConfig.network.password;
-		const hostnameChanged = config.network.device_name !== originalConfig.network.device_name;
-
-		// SSID change takes priority - user must switch networks
-		if (ssidChanged) {
-			return 'ssid_changed';
-		}
-
-		// Password-only change - risky, might fail
-		if (passwordChanged) {
-			return 'password_changed';
-		}
-
-		// Hostname-only change - redirect to new address
-		if (hostnameChanged) {
-			return 'hostname_changed';
-		}
-
-		// No network changes
-		return 'same_connection';
-	}
 
 	return {
 		// Getters
@@ -205,6 +171,49 @@ export function createSettingsStore() {
 		},
 
 		/**
+		 * Update a watchdog field and mark it as touched
+		 */
+		updateWatchdog<K extends keyof Config['watchdog']>(key: K, value: Config['watchdog'][K]) {
+			if (config) {
+				config.watchdog[key] = value;
+				this.markTouched(`watchdog.${key}`);
+			}
+		},
+
+		/**
+		 * Update a log field and mark it as touched
+		 */
+		updateLog<K extends keyof Config['log']>(key: K, value: Config['log'][K]) {
+			if (config) {
+				config.log[key] = value;
+				this.markTouched(`log.${key}`);
+			}
+		},
+
+		/**
+		 * Update an OTA field and mark it as touched
+		 */
+		updateOta<K extends keyof Config['ota']>(key: K, value: Config['ota'][K]) {
+			if (config) {
+				config.ota[key] = value;
+				this.markTouched(`ota.${key}`);
+			}
+		},
+
+		/**
+		 * Update a sports sub-config and mark it as touched. The touched path
+		 * is two-level (`sports.<sport>`) on purpose: the update batcher
+		 * splits paths into exactly [section, field], so the whole
+		 * sub-object ships in the PUT body.
+		 */
+		updateSports<K extends keyof Config['sports']>(key: K, value: Config['sports'][K]) {
+			if (config) {
+				config.sports[key] = value;
+				this.markTouched(`sports.${key}`);
+			}
+		},
+
+		/**
 		 * Load config and status from API
 		 */
 		async load() {
@@ -235,7 +244,7 @@ export function createSettingsStore() {
 		async save() {
 			if (!config || touchedFields.size === 0) return;
 
-			const hadNetworkChanges = hasNetworkChanges(touchedFields);
+			const rebootRequired = needsRebootToApply(touchedFields);
 			const changes = buildUpdateFromTouched(config, touchedFields);
 
 			isSaving = true;
@@ -246,8 +255,9 @@ export function createSettingsStore() {
 				config = updatedConfig;
 				touchedFields = new Set();
 
-				// Show reboot prompt if network settings were changed
-				if (hadNetworkChanges) {
+				// Prompt for reboot when boot-time-only settings changed
+				// (network credentials, hardware watchdog, sports selection)
+				if (rebootRequired) {
 					showRebootPrompt = true;
 				}
 			} catch (e) {
@@ -276,21 +286,46 @@ export function createSettingsStore() {
 		 */
 		async refreshStatus() {
 			try {
-				status = await picoApi.getStatus();
+				status = await picoApi.getStatus({ timeoutMs: 4000 });
 			} catch (e) {
 				console.error('Failed to refresh status:', e);
 			}
 		},
 
 		/**
+		 * Start polling /api/status on an interval (no-op if already polling).
+		 * Skips ticks while a reboot flow is active (the reboot store runs its
+		 * own reconnect poller) and while the tab is hidden.
+		 */
+		startStatusPolling(intervalMs = 5000) {
+			if (statusPollInterval) return;
+			this.refreshStatus();
+			statusPollInterval = setInterval(() => {
+				if (document.hidden || rebootStore.isActive) return;
+				this.refreshStatus();
+			}, intervalMs);
+		},
+
+		/**
+		 * Stop the status polling interval
+		 */
+		stopStatusPolling() {
+			if (statusPollInterval) {
+				clearInterval(statusPollInterval);
+				statusPollInterval = null;
+			}
+		},
+
+		/**
 		 * Reboot device - delegates to reboot store for graceful handling.
-		 * Automatically determines the scenario based on what config fields changed.
+		 * The scenario comes from the shared resolver, comparing the config
+		 * snapshot from load/save time against the current one.
 		 */
 		async reboot() {
-			if (!config || !status) return;
+			if (!config || !originalConfig || !status) return;
 			showRebootPrompt = false;
 
-			const scenario = determineRebootScenario();
+			const scenario = determineRebootScenario(status, originalConfig, config);
 			await rebootStore.initiateRebootWithScenario(status, config, scenario);
 		},
 

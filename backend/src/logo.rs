@@ -1,0 +1,520 @@
+use axum::{
+    body::Body,
+    http::{HeaderMap, Response, StatusCode, header},
+};
+use bytes::Bytes;
+use image::{DynamicImage, ImageFormat, Rgba, RgbaImage, imageops::FilterType};
+use serde::Deserialize;
+use std::io::Cursor;
+use utoipa::{IntoParams, ToSchema};
+
+use crate::error::AppError;
+
+/// Query parameters for the logo endpoints.
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
+pub struct LogoQuery {
+    /// Width in pixels (default: 128)
+    #[serde(default = "default_size")]
+    pub width: u32,
+
+    /// Height in pixels (default: 128)
+    #[serde(default = "default_size")]
+    pub height: u32,
+
+    /// Background color as hex RGB888 without # (e.g., "FFFFFF").
+    /// If provided, transparent pixels are blended with this color.
+    pub background_color: Option<String>,
+}
+
+fn default_size() -> u32 {
+    128
+}
+
+/// Largest resize dimension the endpoint will perform. The panel is 128px
+/// wide, so 512 leaves generous headroom for browser use while keeping an
+/// unauthenticated-sized request from asking for a multi-hundred-MB resize.
+const MAX_DIMENSION: u32 = 512;
+
+/// Supported output formats, selected via the Accept header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToSchema)]
+pub enum OutputFormat {
+    Png,
+    Ppm,
+    Rgb888,
+    Rgb565,
+}
+
+impl OutputFormat {
+    fn content_type(&self) -> &'static str {
+        match self {
+            OutputFormat::Png => "image/png",
+            OutputFormat::Ppm => "image/x-portable-pixmap",
+            OutputFormat::Rgb888 => "image/x-rgb888",
+            OutputFormat::Rgb565 => "image/x-rgb565",
+        }
+    }
+}
+
+/// Determine output format from Accept header. Defaults to PNG.
+fn parse_accept_header(headers: &HeaderMap) -> OutputFormat {
+    for accept in headers.get_all(header::ACCEPT) {
+        if let Ok(accept_str) = accept.to_str() {
+            if accept_str.contains("image/x-rgb565") {
+                return OutputFormat::Rgb565;
+            }
+            if accept_str.contains("image/x-rgb888") {
+                return OutputFormat::Rgb888;
+            }
+            if accept_str.contains("image/x-portable-pixmap") {
+                return OutputFormat::Ppm;
+            }
+        }
+    }
+    OutputFormat::Png
+}
+
+/// The full post-fetch logo pipeline shared by every logo handler:
+/// dimension validation, Accept negotiation, decode, resize, background
+/// blend, encode, and response headers.
+pub fn build_logo_response(
+    logo_bytes: &Bytes,
+    params: &LogoQuery,
+    headers: &HeaderMap,
+) -> Result<Response<Body>, AppError> {
+    if !(1..=MAX_DIMENSION).contains(&params.width) || !(1..=MAX_DIMENSION).contains(&params.height)
+    {
+        return Err(AppError::InvalidDimensions {
+            width: params.width,
+            height: params.height,
+        });
+    }
+
+    let output_format = parse_accept_header(headers);
+
+    let background = if let Some(ref hex) = params.background_color {
+        Some(parse_hex_color(hex)?)
+    } else {
+        None
+    };
+
+    let supports_transparency = output_format == OutputFormat::Png;
+
+    let img = decode_png(logo_bytes)?;
+    let resized = resize_image(&img, params.width, params.height);
+
+    let processed = if let Some(bg) = background {
+        blend_with_background(&resized, bg)
+    } else if !supports_transparency {
+        blend_with_background(&resized, (0, 0, 0))
+    } else {
+        resized
+    };
+
+    let (output_bytes, content_type) = match output_format {
+        OutputFormat::Png => (encode_png(&processed)?, OutputFormat::Png.content_type()),
+        OutputFormat::Ppm => (encode_ppm_p6(&processed), OutputFormat::Ppm.content_type()),
+        OutputFormat::Rgb888 => (
+            encode_rgb888_raw(&processed),
+            OutputFormat::Rgb888.content_type(),
+        ),
+        OutputFormat::Rgb565 => (
+            encode_rgb565_raw(&processed),
+            OutputFormat::Rgb565.content_type(),
+        ),
+    };
+
+    let mut response = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, "public, max-age=86400")
+        .header(header::VARY, "Accept");
+
+    if matches!(output_format, OutputFormat::Png | OutputFormat::Ppm) {
+        let ext = match output_format {
+            OutputFormat::Png => "png",
+            OutputFormat::Ppm => "ppm",
+            _ => unreachable!(),
+        };
+        response = response.header(
+            header::CONTENT_DISPOSITION,
+            format!("inline; filename=\"logo.{ext}\""),
+        );
+    }
+
+    Ok(response.body(Body::from(output_bytes)).unwrap())
+}
+
+/// Parse hex RGB888 color string (without #) into RGB tuple
+pub fn parse_hex_color(hex: &str) -> Result<(u8, u8, u8), AppError> {
+    if hex.len() != 6 {
+        return Err(AppError::InvalidColor(hex.to_string()));
+    }
+
+    let r =
+        u8::from_str_radix(&hex[0..2], 16).map_err(|_| AppError::InvalidColor(hex.to_string()))?;
+    let g =
+        u8::from_str_radix(&hex[2..4], 16).map_err(|_| AppError::InvalidColor(hex.to_string()))?;
+    let b =
+        u8::from_str_radix(&hex[4..6], 16).map_err(|_| AppError::InvalidColor(hex.to_string()))?;
+
+    Ok((r, g, b))
+}
+
+/// Resize a decoded image to the specified dimensions.
+///
+/// Uses premultiplied alpha to prevent transparent pixel RGB values from
+/// bleeding into visible edges during interpolation (the "gray fringe" problem).
+/// CatmullRom (bicubic) produces sharper results than Triangle (bilinear)
+/// without the ringing artifacts of Lanczos3.
+pub fn resize_image(img: &DynamicImage, width: u32, height: u32) -> RgbaImage {
+    let mut rgba = img.to_rgba8();
+    premultiply_alpha(&mut rgba);
+    let mut resized = image::imageops::resize(&rgba, width, height, FilterType::CatmullRom);
+    unpremultiply_alpha(&mut resized);
+    resized
+}
+
+/// Multiply RGB channels by alpha, neutralizing hidden RGB values in transparent pixels.
+fn premultiply_alpha(img: &mut RgbaImage) {
+    for pixel in img.pixels_mut() {
+        let a = pixel[3] as u16;
+        pixel[0] = (pixel[0] as u16 * a / 255) as u8;
+        pixel[1] = (pixel[1] as u16 * a / 255) as u8;
+        pixel[2] = (pixel[2] as u16 * a / 255) as u8;
+    }
+}
+
+/// Restore straight alpha by dividing RGB channels by alpha.
+fn unpremultiply_alpha(img: &mut RgbaImage) {
+    for pixel in img.pixels_mut() {
+        let a = pixel[3] as u16;
+        if a > 0 && a < 255 {
+            pixel[0] = (pixel[0] as u16 * 255 / a).min(255) as u8;
+            pixel[1] = (pixel[1] as u16 * 255 / a).min(255) as u8;
+            pixel[2] = (pixel[2] as u16 * 255 / a).min(255) as u8;
+        }
+    }
+}
+
+/// Blend transparent pixels with a background color.
+/// Uses standard alpha compositing: out = src * alpha + bg * (1 - alpha)
+pub fn blend_with_background(img: &RgbaImage, bg: (u8, u8, u8)) -> RgbaImage {
+    let (width, height) = img.dimensions();
+
+    let mut output = RgbaImage::new(width, height);
+
+    for (x, y, pixel) in img.enumerate_pixels() {
+        let Rgba([r, g, b, a]) = *pixel;
+
+        if a == 255 {
+            // Fully opaque - keep as is
+            output.put_pixel(x, y, Rgba([r, g, b, 255]));
+        } else if a == 0 {
+            // Fully transparent - use background
+            output.put_pixel(x, y, Rgba([bg.0, bg.1, bg.2, 255]));
+        } else {
+            // Partial transparency - blend
+            let alpha = a as f32 / 255.0;
+            let inv_alpha = 1.0 - alpha;
+
+            let out_r = (r as f32 * alpha + bg.0 as f32 * inv_alpha).round() as u8;
+            let out_g = (g as f32 * alpha + bg.1 as f32 * inv_alpha).round() as u8;
+            let out_b = (b as f32 * alpha + bg.2 as f32 * inv_alpha).round() as u8;
+
+            output.put_pixel(x, y, Rgba([out_r, out_g, out_b, 255]));
+        }
+    }
+
+    output
+}
+
+/// Encode image as PNG bytes
+pub fn encode_png(img: &RgbaImage) -> Result<Vec<u8>, AppError> {
+    let mut buffer = Cursor::new(Vec::new());
+    img.write_to(&mut buffer, ImageFormat::Png)
+        .map_err(|e| AppError::ImageDecode(e.to_string()))?;
+    Ok(buffer.into_inner())
+}
+
+/// Convert image to PPM P6 binary format (RGB888, no alpha)
+pub fn encode_ppm_p6(img: &RgbaImage) -> Vec<u8> {
+    let (width, height) = img.dimensions();
+
+    // PPM P6 header: "P6\n{width} {height}\n255\n"
+    let header = format!("P6\n{} {}\n255\n", width, height);
+
+    // Calculate total size: header + 3 bytes per pixel
+    let pixel_count = (width * height) as usize;
+    let mut output = Vec::with_capacity(header.len() + pixel_count * 3);
+
+    // Write header
+    output.extend_from_slice(header.as_bytes());
+
+    // Write RGB data (strip alpha channel)
+    for pixel in img.pixels() {
+        let Rgba([r, g, b, _]) = *pixel;
+        output.push(r);
+        output.push(g);
+        output.push(b);
+    }
+
+    output
+}
+
+/// Decode PNG bytes into a DynamicImage
+pub fn decode_png(bytes: &[u8]) -> Result<DynamicImage, AppError> {
+    image::load_from_memory_with_format(bytes, ImageFormat::Png)
+        .map_err(|e| AppError::ImageDecode(e.to_string()))
+}
+
+/// Convert image to raw RGB888 bytes (3 bytes per pixel, no header)
+///
+/// Pixels are stored in row-major order: R0,G0,B0,R1,G1,B1,...
+/// Alpha channel is discarded.
+pub fn encode_rgb888_raw(img: &RgbaImage) -> Vec<u8> {
+    let (width, height) = img.dimensions();
+    let pixel_count = (width * height) as usize;
+
+    let mut output = Vec::with_capacity(pixel_count * 3);
+
+    for pixel in img.pixels() {
+        let Rgba([r, g, b, _]) = *pixel;
+        output.push(r);
+        output.push(g);
+        output.push(b);
+    }
+
+    output
+}
+
+/// Convert image to raw RGB565 bytes (2 bytes per pixel, little-endian)
+///
+/// RGB565 format: RRRRR GGGGGG BBBBB (5 bits red, 6 bits green, 5 bits blue)
+/// - Red:   bits 15-11 (top 5 bits of 8-bit red)
+/// - Green: bits 10-5  (top 6 bits of 8-bit green)
+/// - Blue:  bits 4-0   (top 5 bits of 8-bit blue)
+///
+/// Byte order: Little-endian (low byte first) for embedded compatibility.
+/// Pixels are stored in row-major order.
+pub fn encode_rgb565_raw(img: &RgbaImage) -> Vec<u8> {
+    let (width, height) = img.dimensions();
+    let pixel_count = (width * height) as usize;
+
+    let mut output = Vec::with_capacity(pixel_count * 2);
+
+    for pixel in img.pixels() {
+        let Rgba([r, g, b, _]) = *pixel;
+
+        // Convert RGB888 to RGB565
+        let r5 = (r >> 3) as u16;
+        let g6 = (g >> 2) as u16;
+        let b5 = (b >> 3) as u16;
+
+        let rgb565: u16 = (r5 << 11) | (g6 << 5) | b5;
+
+        // Little-endian: low byte first
+        output.push((rgb565 & 0xFF) as u8);
+        output.push((rgb565 >> 8) as u8);
+    }
+
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_hex_color_valid() {
+        assert_eq!(parse_hex_color("FF0000").unwrap(), (255, 0, 0));
+        assert_eq!(parse_hex_color("00FF00").unwrap(), (0, 255, 0));
+        assert_eq!(parse_hex_color("0000FF").unwrap(), (0, 0, 255));
+        assert_eq!(parse_hex_color("FFFFFF").unwrap(), (255, 255, 255));
+        assert_eq!(parse_hex_color("000000").unwrap(), (0, 0, 0));
+        assert_eq!(parse_hex_color("ff0000").unwrap(), (255, 0, 0)); // lowercase
+    }
+
+    #[test]
+    fn test_parse_hex_color_invalid() {
+        assert!(parse_hex_color("").is_err());
+        assert!(parse_hex_color("FFF").is_err()); // too short
+        assert!(parse_hex_color("FFFFFFF").is_err()); // too long
+        assert!(parse_hex_color("GGGGGG").is_err()); // invalid chars
+        assert!(parse_hex_color("#FF0000").is_err()); // has #
+    }
+
+    #[test]
+    fn test_ppm_header_format() {
+        let img = RgbaImage::new(10, 20);
+        let ppm = encode_ppm_p6(&img);
+
+        // Check header
+        let header_end = ppm.iter().position(|&b| b == b'\n').unwrap() + 1;
+        let header_end =
+            header_end + ppm[header_end..].iter().position(|&b| b == b'\n').unwrap() + 1;
+        let header_end =
+            header_end + ppm[header_end..].iter().position(|&b| b == b'\n').unwrap() + 1;
+
+        let header = std::str::from_utf8(&ppm[..header_end]).unwrap();
+        assert_eq!(header, "P6\n10 20\n255\n");
+
+        // Check data size: 10 * 20 * 3 = 600 bytes
+        assert_eq!(ppm.len() - header_end, 600);
+    }
+
+    #[test]
+    fn test_blend_fully_transparent() {
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([100, 100, 100, 0])); // fully transparent
+
+        let result = blend_with_background(&img, (255, 0, 0));
+
+        // Should be pure background color
+        assert_eq!(*result.get_pixel(0, 0), Rgba([255, 0, 0, 255]));
+    }
+
+    #[test]
+    fn test_blend_fully_opaque() {
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([100, 150, 200, 255])); // fully opaque
+
+        let result = blend_with_background(&img, (255, 0, 0));
+
+        // Should be original color
+        assert_eq!(*result.get_pixel(0, 0), Rgba([100, 150, 200, 255]));
+    }
+
+    #[test]
+    fn test_blend_half_transparent() {
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([0, 0, 0, 128])); // ~50% transparent black
+
+        let result = blend_with_background(&img, (255, 255, 255)); // white bg
+
+        // Should be roughly gray (127-128 range due to rounding)
+        let pixel = result.get_pixel(0, 0);
+        assert!(pixel[0] >= 126 && pixel[0] <= 128);
+        assert!(pixel[1] >= 126 && pixel[1] <= 128);
+        assert!(pixel[2] >= 126 && pixel[2] <= 128);
+        assert_eq!(pixel[3], 255);
+    }
+
+    #[test]
+    fn test_rgb888_raw_size() {
+        let img = RgbaImage::new(10, 20);
+        let raw = encode_rgb888_raw(&img);
+        // 10 * 20 * 3 = 600 bytes
+        assert_eq!(raw.len(), 600);
+    }
+
+    #[test]
+    fn test_rgb888_raw_pixel_values() {
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([0xAB, 0xCD, 0xEF, 0xFF]));
+        let raw = encode_rgb888_raw(&img);
+        assert_eq!(raw, vec![0xAB, 0xCD, 0xEF]);
+    }
+
+    #[test]
+    fn test_rgb888_raw_strips_alpha() {
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([0x12, 0x34, 0x56, 0x78])); // alpha ignored
+        let raw = encode_rgb888_raw(&img);
+        assert_eq!(raw, vec![0x12, 0x34, 0x56]);
+    }
+
+    #[test]
+    fn test_rgb565_raw_size() {
+        let img = RgbaImage::new(10, 20);
+        let raw = encode_rgb565_raw(&img);
+        // 10 * 20 * 2 = 400 bytes
+        assert_eq!(raw.len(), 400);
+    }
+
+    #[test]
+    fn test_rgb565_pure_red() {
+        let mut img = RgbaImage::new(1, 1);
+        // Pure red: R=255 (0xFF), G=0, B=0
+        // RGB565: 11111 000000 00000 = 0xF800
+        // Little-endian: 0x00, 0xF8
+        img.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
+        let raw = encode_rgb565_raw(&img);
+        assert_eq!(raw, vec![0x00, 0xF8]);
+    }
+
+    #[test]
+    fn test_rgb565_pure_green() {
+        let mut img = RgbaImage::new(1, 1);
+        // Pure green: R=0, G=255, B=0
+        // RGB565: 00000 111111 00000 = 0x07E0
+        // Little-endian: 0xE0, 0x07
+        img.put_pixel(0, 0, Rgba([0, 255, 0, 255]));
+        let raw = encode_rgb565_raw(&img);
+        assert_eq!(raw, vec![0xE0, 0x07]);
+    }
+
+    #[test]
+    fn test_rgb565_pure_blue() {
+        let mut img = RgbaImage::new(1, 1);
+        // Pure blue: R=0, G=0, B=255
+        // RGB565: 00000 000000 11111 = 0x001F
+        // Little-endian: 0x1F, 0x00
+        img.put_pixel(0, 0, Rgba([0, 0, 255, 255]));
+        let raw = encode_rgb565_raw(&img);
+        assert_eq!(raw, vec![0x1F, 0x00]);
+    }
+
+    #[test]
+    fn test_rgb565_white() {
+        let mut img = RgbaImage::new(1, 1);
+        // White: R=255, G=255, B=255
+        // RGB565: 11111 111111 11111 = 0xFFFF
+        // Little-endian: 0xFF, 0xFF
+        img.put_pixel(0, 0, Rgba([255, 255, 255, 255]));
+        let raw = encode_rgb565_raw(&img);
+        assert_eq!(raw, vec![0xFF, 0xFF]);
+    }
+
+    #[test]
+    fn test_rgb565_black() {
+        let mut img = RgbaImage::new(1, 1);
+        // Black: R=0, G=0, B=0
+        // RGB565: 00000 000000 00000 = 0x0000
+        img.put_pixel(0, 0, Rgba([0, 0, 0, 255]));
+        let raw = encode_rgb565_raw(&img);
+        assert_eq!(raw, vec![0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_premultiply_opaque_unchanged() {
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([100, 150, 200, 255]));
+        premultiply_alpha(&mut img);
+        assert_eq!(*img.get_pixel(0, 0), Rgba([100, 150, 200, 255]));
+    }
+
+    #[test]
+    fn test_premultiply_transparent_zeroes_rgb() {
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([255, 255, 255, 0])); // "dirty" transparent white
+        premultiply_alpha(&mut img);
+        assert_eq!(*img.get_pixel(0, 0), Rgba([0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn test_premultiply_roundtrip() {
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([100, 150, 200, 128]));
+        premultiply_alpha(&mut img);
+        // After premultiply: RGB scaled by 128/255 ≈ 0.502
+        let p = img.get_pixel(0, 0);
+        assert_eq!(p[3], 128); // alpha unchanged
+        unpremultiply_alpha(&mut img);
+        // Should roundtrip close to original (within ±1 due to integer rounding)
+        let p = img.get_pixel(0, 0);
+        assert!((p[0] as i16 - 100).unsigned_abs() <= 1);
+        assert!((p[1] as i16 - 150).unsigned_abs() <= 1);
+        assert!((p[2] as i16 - 200).unsigned_abs() <= 1);
+        assert_eq!(p[3], 128);
+    }
+}

@@ -9,42 +9,58 @@ use utoipa::ToSchema;
 /// Application error types
 #[derive(Debug)]
 pub enum AppError {
-    /// Error making request to ESPN API
-    EspnRequest(reqwest::Error),
     /// Error fetching image from ESPN CDN
     ImageFetch(reqwest::Error),
     /// Error decoding or encoding image
     ImageDecode(String),
     /// Invalid hex color format
     InvalidColor(String),
-    /// Team logo not found (ESPN returned 404)
+    /// Requested image dimensions outside the allowed range
+    InvalidDimensions { width: u32, height: u32 },
+    /// Team abbreviation not found at ESPN CDN
     TeamNotFound(String),
-    /// Game not found in scoreboard
-    GameNotFound(String),
-    /// Invalid event ID format
-    InvalidEventId(String),
-    /// Invalid mock scenario
-    InvalidScenario(String),
-    /// Mock game not found in repository
-    MockGameNotFound(String),
     /// Missing API key header
     MissingApiKey,
     /// Invalid API key
     Unauthorized,
-    /// HMAC signature has expired
-    ExpiredSignature,
-    /// HMAC signature is invalid
-    InvalidSignature,
-    /// ESPN API response deserialization failed
-    EspnDeserialize { path: String, message: String },
-    /// Invalid league path parameter
-    InvalidLeague { league: String, valid: &'static str },
+    /// Network / HTTP status failure against ESPN
+    EspnRequest(reqwest::Error),
+    /// ESPN JSON response failed to deserialize
+    EspnDeserialize {
+        url: String,
+        json_path: String,
+        message: String,
+    },
+    /// Game ID not found or not currently live
+    GameNotFound(String),
+    /// Unknown league path segment for a sport's routes
+    InvalidLeague {
+        league: String,
+        valid: &'static str,
+    },
+    /// Team color hex string could not be parsed
+    InvalidTeamColor { team: String, raw: String },
+    /// No device app image published on this deployment
+    AppImageUnavailable,
+}
+
+impl AppError {
+    /// Fill in the upstream URL on an `EspnDeserialize` error whose producer
+    /// didn't have it in scope (the transformation helpers in `mlb.rs`).
+    pub fn with_url(mut self, request_url: &str) -> Self {
+        if let AppError::EspnDeserialize { ref mut url, .. } = self
+            && url.is_empty()
+        {
+            *url = request_url.to_string();
+        }
+        self
+    }
 }
 
 /// Error response body
 #[derive(Serialize, ToSchema)]
 pub struct ErrorResponse {
-    /// Error code (e.g., "game_not_found", "unauthorized")
+    /// Error code (e.g., "unauthorized")
     pub error: String,
     /// Human-readable error message
     pub message: String,
@@ -53,11 +69,6 @@ pub struct ErrorResponse {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, error, message) = match self {
-            AppError::EspnRequest(e) => (
-                StatusCode::BAD_GATEWAY,
-                "espn_error".to_string(),
-                format!("Failed to fetch data from ESPN: {}", e),
-            ),
             AppError::ImageFetch(e) => (
                 StatusCode::BAD_GATEWAY,
                 "image_fetch_error".to_string(),
@@ -76,65 +87,88 @@ impl IntoResponse for AppError {
                     c
                 ),
             ),
-            AppError::TeamNotFound(team) => (
+            AppError::TeamNotFound(abbrev) => (
                 StatusCode::NOT_FOUND,
                 "team_not_found".to_string(),
-                format!("Team '{}' not found", team),
+                format!("Team '{}' not found", abbrev),
             ),
-            AppError::GameNotFound(id) => (
-                StatusCode::NOT_FOUND,
-                "game_not_found".to_string(),
-                format!("Game with ID '{}' not found on current scoreboard", id),
-            ),
-            AppError::InvalidEventId(id) => (
+            AppError::InvalidDimensions { width, height } => (
                 StatusCode::BAD_REQUEST,
-                "invalid_event_id".to_string(),
-                format!("Event ID '{}' is invalid. Must be numeric.", id),
-            ),
-            AppError::InvalidScenario(s) => (
-                StatusCode::BAD_REQUEST,
-                "invalid_scenario".to_string(),
+                "invalid_dimensions".to_string(),
                 format!(
-                    "Invalid scenario '{}'. Valid options: pregame, live, final, mixed, redzone, overtime",
-                    s
+                    "Requested dimensions {}x{} outside allowed range 1..=512",
+                    width, height
                 ),
-            ),
-            AppError::MockGameNotFound(id) => (
-                StatusCode::NOT_FOUND,
-                "mock_game_not_found".to_string(),
-                format!("Mock game with ID '{}' not found", id),
             ),
             AppError::MissingApiKey => (
                 StatusCode::UNAUTHORIZED,
                 "missing_api_key".to_string(),
-                "X-Api-Key header or valid signature is required".to_string(),
+                "X-Api-Key header is required".to_string(),
             ),
             AppError::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "unauthorized".to_string(),
                 "Invalid API key".to_string(),
             ),
-            AppError::ExpiredSignature => (
-                StatusCode::UNAUTHORIZED,
-                "expired_signature".to_string(),
-                "Signature has expired".to_string(),
+            AppError::EspnRequest(e) => (
+                StatusCode::BAD_GATEWAY,
+                "espn_request_error".to_string(),
+                format!("ESPN upstream request failed: {}", e),
             ),
-            AppError::InvalidSignature => (
-                StatusCode::UNAUTHORIZED,
-                "invalid_signature".to_string(),
-                "Invalid request signature".to_string(),
-            ),
-            AppError::EspnDeserialize { path, message } => (
+            AppError::EspnDeserialize {
+                json_path, message, ..
+            } => (
                 StatusCode::BAD_GATEWAY,
                 "espn_deserialize_error".to_string(),
-                format!("Failed to parse ESPN response at '{}': {}", path, message),
+                format!(
+                    "Upstream response at {} failed to parse: {}",
+                    json_path, message
+                ),
             ),
+            AppError::GameNotFound(id) => (
+                StatusCode::NOT_FOUND,
+                "game_not_found".to_string(),
+                format!(
+                    "Game '{}' is not on today's scoreboard (or is in a non-displayable delay)",
+                    id
+                ),
+            ),
+            // 404, not 400: an unknown league is a path segment with no
+            // resource behind it, same as an unknown team abbreviation.
             AppError::InvalidLeague { league, valid } => (
-                StatusCode::BAD_REQUEST,
+                StatusCode::NOT_FOUND,
                 "invalid_league".to_string(),
-                format!("Invalid league '{}'. Valid leagues: {}", league, valid),
+                format!("Unknown league '{}'. Valid leagues: {}", league, valid),
+            ),
+            AppError::InvalidTeamColor { team, raw } => (
+                StatusCode::BAD_GATEWAY,
+                "invalid_team_color".to_string(),
+                format!(
+                    "Upstream returned invalid team color for '{}': '{}'",
+                    team, raw
+                ),
+            ),
+            AppError::AppImageUnavailable => (
+                StatusCode::NOT_FOUND,
+                "app_image_unavailable".to_string(),
+                "No device app image is published on this deployment".to_string(),
             ),
         };
+
+        // Every 5xx response gets one structured log line HERE, so a
+        // failure's server-side visibility never depends on the producing
+        // code path remembering to log. Producer-side lines (the client's
+        // deserialize choke point, the transform parsers) add raw-value
+        // context on top; this is the floor. 4xx responses are normal flow
+        // (game rotation 404s every day) and stay quiet.
+        if status.is_server_error() {
+            tracing::error!(
+                status = status.as_u16(),
+                error = %error,
+                message = %message,
+                "serving error response"
+            );
+        }
 
         let body = ErrorResponse { error, message };
 

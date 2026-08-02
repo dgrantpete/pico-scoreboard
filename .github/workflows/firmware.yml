@@ -1,0 +1,41 @@
+name: firmware
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "firmware/board/**"
+      - "firmware/micropython"
+      - "tools/build_firmware.sh"
+      - ".github/workflows/firmware.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with pinned micropython submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: true # micropython only; the rp2 port's own submodules are fetched by the build script
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake gcc-arm-none-eabi libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-newlib build-essential
+
+      # Deliberately no cache of firmware/micropython/lib: restoring
+      # submodule contents without their git metadata (.git/modules) leaves
+      # git unable to open them ("could not get a repository handle"). The
+      # fresh fetch costs ~2 minutes; correctness wins.
+      - name: Build firmware
+        run: bash tools/build_firmware.sh
+
+      - name: Upload UF2 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scoreboard-firmware-uf2
+          path: firmware/dist/*.uf2
+          if-no-files-found: error

@@ -5,6 +5,8 @@
 # - Removed WebSocket support (aiohttp_ws dependency)
 # - Added ClientResponse.readinto() for zero-copy reads into pre-allocated buffers
 # - Added TCP/TLS connection reuse with stale connection detection
+# - Bodiless responses (204/304, HEAD) are marked body-consumed so connection
+#   reuse survives them (otherwise every 304 poll tore down the TLS session)
 
 import asyncio
 import json as _json
@@ -212,6 +214,11 @@ class ClientSession:
                 resp.status = status
                 resp.headers = _headers
                 resp.url = redir_url
+                # RFC 7230 §3.3: 204/304 responses and responses to HEAD carry
+                # no body. Mark them consumed so the context-manager exit keeps
+                # the connection alive for reuse instead of closing it.
+                if status == 204 or status == 304 or method == "HEAD":
+                    resp._body_consumed = True
                 if params:
                     resp.url += "?" + "&".join(f"{k}={params[k]}" for k in sorted(params))
                 try:

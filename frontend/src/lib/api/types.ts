@@ -12,7 +12,6 @@ export type NetworkConfigUpdate = Partial<NetworkConfig>;
 export interface ApiConfig {
 	url: string;
 	key: string;
-	mock: boolean;
 }
 
 export type ApiConfigUpdate = Partial<ApiConfig>;
@@ -24,13 +23,29 @@ export type GammaConfig =
 	| { type: "none" };
 
 // Display configuration
+// Screen layout variant letters, keyed per sport × screen (see firmware
+// scoreboard/screen_geometry.py tables). Applied live on save — no reboot.
+// Screens with a single design (pregame — "Big time" locked in 2026-07-15 —
+// soccer final, NBA live, football live) gain a key here only once a second
+// design exists.
+export interface VariantsConfig {
+	mlb_final: string;
+	nba_final: string;
+	football_final: string;
+	soccer_live: string;
+}
+
 export interface DisplayConfig {
 	brightness: number; // 0-100
 	poll_interval_seconds: number; // min: 1
+	game_rotation_seconds: number; // min: 1, default: 60
 	data_frequency_khz: number; // min: 2, max: 50000, default: 20000
 	target_refresh_rate: number; // 30-240 Hz
 	gamma: GammaConfig;
 	blanking_time_ns: number; // 0-3000 nanoseconds
+	variants: VariantsConfig;
+	show_dividers: boolean; // divider lines on game screens; applied live
+	scroll_speed_px_per_sec: number; // 5 | 10 | 20 | 40; applied live
 }
 
 export type DisplayConfigUpdate = Partial<DisplayConfig>;
@@ -41,6 +56,14 @@ export interface ServerConfig {
 }
 
 export type ServerConfigUpdate = Partial<ServerConfig>;
+
+// Hardware watchdog configuration
+export interface WatchdogConfig {
+	enabled: boolean; // default false: an armed WDT reboots ~8s after mpremote interrupts the script
+	timeout_ms: number; // clamped on-device to 2000..8300 (RP2350 hardware max)
+}
+
+export type WatchdogConfigUpdate = Partial<WatchdogConfig>;
 
 // Colors configuration (RGB 0-255)
 export interface ColorsConfig {
@@ -53,6 +76,34 @@ export interface ColorsConfig {
 
 export type ColorsConfigUpdate = Partial<ColorsConfig>;
 
+// Device logging configuration
+export type LogLevel = 'none' | 'error' | 'debug';
+
+export interface LogConfig {
+	level: LogLevel;
+}
+
+export type LogConfigUpdate = Partial<LogConfig>;
+
+// Over-the-air app update configuration
+export interface OtaConfig {
+	enabled: boolean;
+}
+
+export type OtaConfigUpdate = Partial<OtaConfig>;
+
+// Sports / league selection. Football and soccer leagues are ESPN slugs
+// (see the firmware LEAGUE_NAMES tables in scoreboard/football.py and
+// scoreboard/soccer.py); empty list = that sport off.
+export interface SportsConfig {
+	mlb: { enabled: boolean };
+	nba: { enabled: boolean };
+	football: { leagues: string[] };
+	soccer: { leagues: string[] };
+}
+
+export type SportsConfigUpdate = Partial<SportsConfig>;
+
 // Full configuration
 export interface Config {
 	network: NetworkConfig;
@@ -60,6 +111,10 @@ export interface Config {
 	display: DisplayConfig;
 	colors: ColorsConfig;
 	server: ServerConfig;
+	watchdog: WatchdogConfig;
+	log: LogConfig;
+	ota: OtaConfig;
+	sports: SportsConfig;
 }
 
 // Partial configuration for PUT requests
@@ -69,6 +124,10 @@ export interface ConfigUpdate {
 	display?: DisplayConfigUpdate;
 	colors?: ColorsConfigUpdate;
 	server?: ServerConfigUpdate;
+	watchdog?: WatchdogConfigUpdate;
+	log?: LogConfigUpdate;
+	ota?: OtaConfigUpdate;
+	sports?: SportsConfigUpdate;
 }
 
 // Network status response
@@ -76,7 +135,7 @@ export interface NetworkStatus {
 	mode: 'ap' | 'station' | 'unknown';
 	connected: boolean;
 	setup_mode: boolean;
-	setup_reason: 'no_network_configured' | 'connection_failed' | null;
+	setup_reason: 'no_network_configured' | 'connection_failed' | 'bad_auth' | null;
 	configured_ssid?: string | null;
 	ip?: string | null;
 	hostname?: string | null;
@@ -87,11 +146,21 @@ export interface NetworkStatus {
 	memory_free: number;
 	flash_used: number;
 	flash_free: number;
+	// sha256 of the running app's ROMFS image; null on dev (littlefs) deploys
+	app_version?: string | null;
 }
 
 // Reboot response
 export interface RebootResponse {
 	message: string;
+}
+
+// POST /api/check-update response. 'updating' means the device is about to
+// download and restart; every other status is terminal for this check.
+export interface CheckUpdateResponse {
+	status: 'current' | 'updating' | 'disabled' | 'dev_deploy' | 'no_network' | 'error';
+	version?: string | null;
+	message?: string;
 }
 
 export interface Color {
@@ -100,76 +169,7 @@ export interface Color {
 	b: number;
 }
 
-// Game types (matching backend FootballGameResponse)
-
-export interface Team {
-	abbreviation: string;
-	color: Color;
-	record?: string;
-	rank?: number;
-}
-
-export interface TeamScore {
-	abbreviation: string;
-	color: Color;
-	record?: string;
-	rank?: number;
-	score: number;
-	timeouts: number;
-}
-
-export type Period = 'Q1' | 'Q2' | 'Q3' | 'Q4' | 'OT' | 'OT2' | 'OT3' | 'OT4' | 'Halftime';
-
-export interface LastPlay {
-	play_type: string;
-	text?: string;
-}
-
-export interface Situation {
-	down: 'first' | 'second' | 'third' | 'fourth';
-	distance: number;
-	yard_line: number;
-	possession: 'home' | 'away';
-	red_zone: boolean;
-}
-
-export interface Weather {
-	temp: number;
-	description: string;
-}
-
-export interface PregameGame {
-	state: 'pregame';
-	event_id: string;
-	home: Team;
-	away: Team;
-	start_time: number;
-	venue?: string;
-	broadcast?: string;
-	weather?: Weather;
-}
-
-export interface LiveGame {
-	state: 'live';
-	event_id: string;
-	home: TeamScore;
-	away: TeamScore;
-	period: Period;
-	clock: string;
-	clock_running: boolean;
-	situation?: Situation;
-	last_play?: LastPlay;
-	weather?: Weather;
-}
-
-export interface FinalGame {
-	state: 'final';
-	event_id: string;
-	home: TeamScore;
-	away: TeamScore;
-	status: 'final' | 'final/OT';
-	winner: 'home' | 'away' | 'tie';
-}
-
-export type Game = PregameGame | LiveGame | FinalGame;
+// One device log entry: [seq, unix_ts, level, message].
+// level: 1 = ERROR, 2 = DEBUG (scoreboard/logger.py).
+export type LogEntry = [number, number, number, string];
 

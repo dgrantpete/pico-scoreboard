@@ -1,0 +1,61 @@
+# Declarative poll targets for the ESPN collector (see tools/espn/targets.py
+# for the schema; tools/espn/README.md for the workflow). Adding a sport is a
+# reviewed diff here + `ansible-playbook deploy.yml --tags targets` — no
+# rebuild, the running service hot-reloads within ~10s.
+version: 1
+defaults:
+  idle_interval: 300
+targets:
+  # follow_summaries policy: enable where a consumer exists — soccer (the
+  # backend's live commentary fetch) and mlb (replay-grade bundle richness).
+  # Flipping it for any league is a reviewed diff here, nothing else.
+  - name: mlb
+    kind: scoreboard
+    sport: baseball
+    league: mlb
+    follow_summaries: true
+    idle_interval: 120
+  - name: nba
+    kind: scoreboard
+    sport: basketball
+    league: nba
+  - name: wnba
+    kind: scoreboard
+    sport: basketball
+    league: wnba
+  - name: ncaab
+    kind: scoreboard
+    sport: basketball
+    league: mens-college-basketball
+  - name: nfl
+    kind: scoreboard
+    sport: football
+    league: nfl
+  - name: ncaaf
+    kind: scoreboard
+    sport: football
+    league: college-football
+  - name: nhl
+    kind: scoreboard
+    sport: hockey
+    league: nhl
+  - name: world-cup
+    kind: scoreboard
+    sport: soccer
+    league: fifa.world
+    follow_summaries: true
+  - name: mls
+    kind: scoreboard
+    sport: soccer
+    league: usa.1
+    follow_summaries: true
+  - name: epl
+    kind: scoreboard
+    sport: soccer
+    league: eng.1
+    follow_summaries: true
+  - name: liga-mx
+    kind: scoreboard
+    sport: soccer
+    league: mex.1
+    follow_summaries: true

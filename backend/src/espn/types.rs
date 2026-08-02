@@ -1,221 +1,349 @@
+//! Inbound ESPN types shared by every sport, plus the lenient scoreboard
+//! shell. Sport-specific composites (competitions, situations) live in each
+//! sport's module and are built from these leaves.
+
+use chrono::NaiveDateTime;
 use serde::Deserialize;
 
-/// Root response from ESPN scoreboard API
-#[derive(Debug, Deserialize)]
-pub struct EspnScoreboard {
-    pub events: Vec<EspnEvent>,
+use crate::error::AppError;
+use crate::shared::game::LivePhase;
+
+/// The cross-sport game-state discriminant (`status.type.state`).
+///
+/// Empirically 100%-covered with exactly these three values in every league
+/// sampled (see tools/espn discover) — safe to deserialize strictly.
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum CompetitionState {
+    Pre,
+    In,
+    Post,
 }
 
-/// Single game/event from ESPN
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum HomeAway {
+    Home,
+    Away,
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EspnEvent {
-    pub id: String,
-    #[allow(dead_code)]
-    pub date: String,
-    pub status: EspnStatus,
-    pub competitions: Vec<EspnCompetition>,
-    pub weather: Option<EspnWeather>,
+pub(crate) struct EspnTeam {
+    /// ESPN's numeric team id as a string; 100%-present in every sampled
+    /// sport. Soccer matches scoring details to a side through it.
+    pub(crate) id: String,
+    pub(crate) abbreviation: String,
+    pub(crate) color: String,
+    pub(crate) alternate_color: String,
+    /// Short team name ("Ohio State"); football uppercases it into the
+    /// pregame rank line. Defaulted — absent for every other sport, and even
+    /// absent in some football events, so it must never gate deserialization.
     #[serde(default)]
-    pub geo_broadcasts: Vec<EspnBroadcast>,
+    pub(crate) short_display_name: Option<String>,
 }
 
-/// Game status information
-#[derive(Debug, Deserialize)]
+/// A competition's venue. Only the pregame arm requires it (that is where the
+/// firmware shows it), but the block is present in every sampled state.
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EspnStatus {
-    pub period: u8,
-    pub display_clock: String,
-    #[serde(rename = "type")]
-    pub status_type: EspnStatusType,
+pub(crate) struct EspnVenue {
+    pub(crate) full_name: String,
 }
 
-/// Status type with state and display info
-#[derive(Debug, Deserialize)]
+/// One record entry from a competitor's `records` list. The `type=="total"`
+/// entry carries the overall season W-L (see [`crate::shared::competitor::parse_record`]).
+#[derive(Deserialize)]
+pub(crate) struct EspnRecord {
+    pub(crate) r#type: String,
+    pub(crate) summary: String,
+}
+
+/// One per-period line-score cell (runs for MLB, points for NBA).
+#[derive(Deserialize)]
+pub(crate) struct EspnLinescore {
+    pub(crate) value: f64,
+    pub(crate) period: u8,
+}
+
+/// The most recent play — MLB carries it inside the live situation, NBA at the
+/// competition level. `id` is the firmware's change-detection key for its flash.
+#[derive(Deserialize)]
+pub(crate) struct EspnLastPlay {
+    pub(crate) id: String,
+    pub(crate) text: String,
+}
+
+/// An athlete reference reduced to the short display name (probable pitcher,
+/// at-bat player, soccer scorer).
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EspnStatusType {
-    pub id: String,
-    pub state: String,
-    pub short_detail: String,
+pub(crate) struct EspnAthlete {
+    pub(crate) short_name: String,
 }
 
-/// Competition (the actual matchup)
-#[derive(Debug, Deserialize)]
-pub struct EspnCompetition {
-    pub competitors: Vec<EspnCompetitor>,
-    pub situation: Option<EspnSituation>,
-    pub venue: Option<EspnVenue>,
-}
-
-/// Team competitor in a game
-#[derive(Debug, Deserialize)]
+/// One scoreboard event; the per-sport part is the competition type `C`. The
+/// event shell (id, date, optional weather) is identical across sports — only
+/// the competition body differs — so each sport aliases
+/// `EspnEvent<EspnCompetition>`.
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EspnCompetitor {
-    pub team: EspnTeam,
-    pub score: Option<String>,
-    pub home_away: String,
+pub(crate) struct EspnEvent<C> {
+    pub(crate) id: String,
+    /// Scheduled start, ISO 8601 (`%Y-%m-%dT%H:%MZ`); 100%-present in the
+    /// corpus. Parsed to a unix epoch for the pregame payload.
+    pub(crate) date: String,
+    /// Event-level weather; consumed only by MLB, all-`Option` so it can never
+    /// gate deserialization for any sport.
     #[serde(default)]
-    pub records: Vec<EspnRecord>,
-    pub curated_rank: Option<EspnCuratedRank>,
+    pub(crate) weather: Option<EspnWeather>,
+    pub(crate) competitions: Vec<C>,
 }
 
-/// Curated rank for college sports
-#[derive(Debug, Deserialize)]
-pub struct EspnCuratedRank {
-    pub current: Option<u8>,
-}
-
-/// Team information
-#[derive(Debug, Deserialize)]
-pub struct EspnTeam {
-    pub id: String,
-    pub abbreviation: String,
-    pub color: Option<String>,
-}
-
-/// Team record
-#[derive(Debug, Deserialize)]
-pub struct EspnRecord {
-    pub summary: String,
-}
-
-/// Live game situation (only present during active play)
-#[derive(Debug, Deserialize)]
+/// Event-level weather block. Only MLB consumes it (see
+/// `mlb::transform::normalize_weather`).
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EspnSituation {
-    pub down: Option<i8>,
-    pub distance: Option<i8>,
-    pub yard_line: Option<i8>,
-    pub possession: Option<String>,
-    pub is_red_zone: Option<bool>,
-    pub home_timeouts: Option<u8>,
-    pub away_timeouts: Option<u8>,
-    pub last_play: Option<EspnLastPlay>,
-}
-
-/// Last play information
-#[derive(Debug, Deserialize)]
-pub struct EspnLastPlay {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub play_type: EspnPlayType,
-    pub text: Option<String>,
-}
-
-/// Play type information
-#[derive(Debug, Deserialize)]
-pub struct EspnPlayType {
-    pub id: String,
-    pub text: Option<String>,
-}
-
-/// Venue information
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EspnVenue {
-    pub full_name: String,
-    pub indoor: Option<bool>,
-}
-
-/// Weather information
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EspnWeather {
-    pub temperature: Option<i16>,
-    pub display_value: Option<String>,
-}
-
-/// Broadcast information
-#[derive(Debug, Deserialize)]
-pub struct EspnBroadcast {
-    pub media: Option<EspnMedia>,
-}
-
-/// Media/network information
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EspnMedia {
-    pub short_name: String,
-}
-
-// ── Summary endpoint types (basketball single-game detail) ──
-
-/// Summary endpoint response
-#[derive(Debug, Deserialize)]
-pub struct EspnSummary {
-    pub header: EspnSummaryHeader,
-    pub boxscore: Option<EspnBoxscore>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct EspnSummaryHeader {
-    pub id: String,
-    pub competitions: Vec<EspnSummaryCompetition>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct EspnSummaryCompetition {
-    pub competitors: Vec<EspnCompetitor>,
-    pub status: EspnStatus,
-    pub venue: Option<EspnVenue>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct EspnBoxscore {
-    pub teams: Vec<EspnBoxscoreTeam>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct EspnBoxscoreTeam {
-    pub team: EspnTeam,
-    pub statistics: Vec<EspnBoxscoreStat>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EspnBoxscoreStat {
-    pub name: String,
-    pub display_value: String,
-}
-
-// ── Teams list types (for college logo resolution via abbreviation map) ──
-
-/// Response from ESPN teams list endpoint
-/// (e.g., /sports/football/college-football/teams?limit=500&page=1)
-#[derive(Debug, Deserialize)]
-pub struct EspnTeamsListResponse {
+pub(crate) struct EspnWeather {
+    /// ESPN randomly swaps `displayValue`/`conditionId` between polls; the
+    /// non-numeric member is the human condition text (see
+    /// `mlb::transform::normalize_weather`).
     #[serde(default)]
-    pub sports: Vec<EspnTeamsListSport>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct EspnTeamsListSport {
+    pub(crate) display_value: Option<String>,
     #[serde(default)]
-    pub leagues: Vec<EspnTeamsListLeague>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct EspnTeamsListLeague {
+    pub(crate) condition_id: Option<String>,
     #[serde(default)]
-    pub teams: Vec<EspnTeamsListEntry>,
+    pub(crate) temperature: Option<i16>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct EspnTeamsListEntry {
-    pub team: EspnTeamsListTeam,
+/// `status.type` for the sports that discriminate live sub-state on
+/// `description` (NBA, soccer, football). MLB keys on `shortDetail` and keeps
+/// its own status-type struct.
+#[derive(Deserialize)]
+pub(crate) struct EspnStatusType {
+    pub(crate) state: CompetitionState,
+    pub(crate) description: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct EspnTeamsListTeam {
-    pub id: String,
-    /// Some ESPN team entries (e.g., all-star or placeholder teams) omit abbreviation.
+/// Outer scoreboard shell, deliberately lenient: events are held as raw JSON
+/// and parsed individually by `parse_events`. ESPN has been observed serving
+/// a 200 scoreboard whose events were all empty objects — a strict
+/// `Vec<EspnEvent>` turns one glitch poll into a whole-scoreboard failure.
+#[derive(Deserialize)]
+pub(crate) struct RawScoreboard {
     #[serde(default)]
-    pub abbreviation: Option<String>,
-    #[serde(default)]
-    pub logos: Vec<EspnLogo>,
+    pub(crate) events: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct EspnLogo {
-    pub href: String,
+/// Parse each event individually, skipping (and logging) unparseable ones.
+/// The warn carries the offending event's full JSON — that payload is the
+/// artifact needed to fix the sport's model when live data grows a new shape.
+///
+/// Returns the parsed events and the number that failed. Callers that map
+/// "id not found" to 404 MUST treat a nonzero failure count as an upstream
+/// error instead — a glitched scoreboard must never masquerade as
+/// "game ended" to the firmware.
+pub(crate) fn parse_events<E: serde::de::DeserializeOwned>(
+    raw: RawScoreboard,
+    url: &str,
+) -> (Vec<E>, usize) {
+    let mut parsed = Vec::with_capacity(raw.events.len());
+    let mut failed = 0usize;
+    for (index, value) in raw.events.into_iter().enumerate() {
+        // Deserialize from a reference so the value survives for the failure
+        // log; costs nothing on the success path.
+        match serde_path_to_error::deserialize::<_, E>(&value) {
+            Ok(event) => parsed.push(event),
+            Err(err) => {
+                failed += 1;
+                let json_path = err.path().to_string();
+                tracing::warn!(
+                    url = %url,
+                    event_index = index,
+                    json_path = %json_path,
+                    error = %err.into_inner(),
+                    payload = %value,
+                    "skipping unparseable ESPN event"
+                );
+            }
+        }
+    }
+    (parsed, failed)
+}
+
+/// Find one event by id in a leniently-parsed scoreboard.
+///
+/// 404 (`GameNotFound`) is the firmware's "game ended, drop it" signal, so an
+/// absent id only maps to it when the scoreboard parsed clean: if any events
+/// failed, the game may be inside the glitched subset and the caller gets an
+/// upstream error (502) instead.
+pub(crate) fn find_event<E>(
+    events: Vec<E>,
+    failed: usize,
+    game_id: &str,
+    url: &str,
+    id_of: impl Fn(&E) -> &str,
+) -> Result<E, AppError> {
+    match events.into_iter().find(|e| id_of(e) == game_id) {
+        Some(event) => Ok(event),
+        None if failed > 0 => Err(AppError::EspnDeserialize {
+            url: url.to_string(),
+            json_path: "events".to_string(),
+            message: format!(
+                "{failed} event(s) unparseable; cannot distinguish 'ended' from 'glitched'"
+            ),
+        }),
+        None => Err(AppError::GameNotFound(game_id.to_string())),
+    }
+}
+
+/// Parse ESPN's `event.date` into a unix epoch (seconds, UTC).
+///
+/// The corpus is uniformly `%Y-%m-%dT%H:%MZ` (no seconds) in every sampled
+/// sport; a with-seconds variant is accepted as a fallback. The field is
+/// 100%-present, so a parse failure is a glitch, not an expected state —
+/// surfaced as `EspnDeserialize`.
+pub(crate) fn parse_start_time(date: &str) -> Result<u32, AppError> {
+    let parsed = NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%MZ")
+        .or_else(|_| NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%M:%SZ"));
+    let naive = parsed.map_err(|e| {
+        tracing::error!(raw_date = %date, error = %e, "ESPN event.date failed to parse");
+        AppError::EspnDeserialize {
+            url: String::new(),
+            json_path: "events[?].date".to_string(),
+            message: format!("invalid date '{date}': {e}"),
+        }
+    })?;
+    // ESPN dates are UTC; the epoch is non-negative for any real event.
+    Ok(naive.and_utc().timestamp().max(0) as u32)
+}
+
+/// The live sub-state from `status.type.description`, shared by the two
+/// clock-stopping sports (NBA + football). Within state "in" the clock alone
+/// cannot distinguish a break (it reads "0.0" or a reset "12:00"), so the
+/// description is the only signal. ESPN labels the quarter break both "End of
+/// Period" and "End of Quarter" — both map to `EndOfPeriod`. `sport` only
+/// contexts the warn. An unknown live description — an OT-specific label would
+/// land here — degrades to in-play with a warning: the state is never guessed.
+pub(crate) fn parse_live_phase(description: Option<&str>, sport: &'static str) -> LivePhase {
+    match description {
+        Some("Halftime") => LivePhase::Halftime,
+        Some("End of Period" | "End of Quarter") => LivePhase::EndOfPeriod,
+        Some("In Progress") | None => LivePhase::InProgress,
+        Some(other) => {
+            tracing::warn!(
+                sport,
+                description = %other,
+                "unknown live status description — treating as in-play"
+            );
+            LivePhase::InProgress
+        }
+    }
+}
+
+/// Split a competition's competitors into the fixed `[_; 2]` array, erroring
+/// (with a byte-stable message that surfaces in parse-failure warns) when ESPN
+/// sends other than two.
+pub(crate) fn two_competitors<C>(competitors: Vec<C>) -> Result<[C; 2], String> {
+    <[C; 2]>::try_from(competitors)
+        .map_err(|v: Vec<_>| format!("expected 2 competitors, got {}", v.len()))
+}
+
+/// The pregame venue's full name, erroring (byte-stable) when it is absent —
+/// only the pregame arm requires it.
+pub(crate) fn venue_name(venue: Option<EspnVenue>) -> Result<String, String> {
+    Ok(venue.ok_or("pregame competition missing venue")?.full_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Deserialize, Debug)]
+    struct MinimalEvent {
+        id: String,
+    }
+
+    #[test]
+    fn parse_start_time_reads_minute_precision_utc() {
+        // 2026-07-08T01:40Z == 1783474800 (verified against a UTC epoch table).
+        assert_eq!(
+            parse_start_time("2026-07-08T01:40Z").unwrap(),
+            1_783_474_800
+        );
+    }
+
+    #[test]
+    fn parse_start_time_accepts_seconds_fallback() {
+        assert_eq!(
+            parse_start_time("2026-07-08T01:40:30Z").unwrap(),
+            1_783_474_830
+        );
+    }
+
+    #[test]
+    fn parse_start_time_rejects_garbage() {
+        assert!(matches!(
+            parse_start_time("not-a-date"),
+            Err(AppError::EspnDeserialize { .. })
+        ));
+    }
+
+    fn raw(json: &str) -> RawScoreboard {
+        serde_json::from_str(json).expect("test scoreboard json parses")
+    }
+
+    #[test]
+    fn all_empty_events_parse_to_zero_with_failures_counted() {
+        // Shape observed live from ESPN (MLB, 2026-07-06): 200 response,
+        // every event an empty object.
+        let sb = raw(r#"{"events":[{},{},{}]}"#);
+        let (events, failed) = parse_events::<MinimalEvent>(sb, "test://sb");
+        assert!(events.is_empty());
+        assert_eq!(failed, 3);
+    }
+
+    #[test]
+    fn mixed_scoreboard_keeps_good_events_and_counts_bad() {
+        let sb = raw(r#"{"events":[{"id":"401"},{},{"id":"402"}]}"#);
+        let (events, failed) = parse_events::<MinimalEvent>(sb, "test://sb");
+        assert_eq!(
+            events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            ["401", "402"]
+        );
+        assert_eq!(failed, 1);
+    }
+
+    #[test]
+    fn missing_events_key_is_an_empty_scoreboard() {
+        let sb = raw(r#"{}"#);
+        let (events, failed) = parse_events::<MinimalEvent>(sb, "test://sb");
+        assert!(events.is_empty());
+        assert_eq!(failed, 0);
+    }
+
+    #[test]
+    fn absent_id_with_clean_parse_is_not_found() {
+        let sb = raw(r#"{"events":[{"id":"401"}]}"#);
+        let (events, failed) = parse_events::<MinimalEvent>(sb, "test://sb");
+        let err = find_event(events, failed, "999", "test://sb", |e| &e.id).unwrap_err();
+        assert!(matches!(err, AppError::GameNotFound(id) if id == "999"));
+    }
+
+    #[test]
+    fn absent_id_with_glitched_parse_is_upstream_error_not_404() {
+        let sb = raw(r#"{"events":[{"id":"401"},{}]}"#);
+        let (events, failed) = parse_events::<MinimalEvent>(sb, "test://sb");
+        assert_eq!(failed, 1);
+        let err = find_event(events, failed, "999", "test://sb", |e| &e.id).unwrap_err();
+        assert!(matches!(err, AppError::EspnDeserialize { .. }));
+    }
+
+    #[test]
+    fn present_id_is_found_even_when_other_events_glitched() {
+        let sb = raw(r#"{"events":[{"id":"401"},{}]}"#);
+        let (events, failed) = parse_events::<MinimalEvent>(sb, "test://sb");
+        let event = find_event(events, failed, "401", "test://sb", |e| &e.id).unwrap();
+        assert_eq!(event.id, "401");
+    }
 }

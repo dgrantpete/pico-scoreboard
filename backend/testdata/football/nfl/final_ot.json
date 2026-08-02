@@ -1,0 +1,40 @@
+{
+  "id": "401772515",
+  "date": "2026-01-12T21:30Z",
+  "competitions": [
+    {
+      "venue": { "fullName": "Highmark Stadium", "indoor": false },
+      "competitors": [
+        {
+          "homeAway": "home",
+          "score": "30",
+          "team": { "id": "2", "abbreviation": "BUF", "color": "00338d", "alternateColor": "c60c30", "shortDisplayName": "Bills" },
+          "linescores": [
+            { "value": 7.0, "period": 1 },
+            { "value": 7.0, "period": 2 },
+            { "value": 3.0, "period": 3 },
+            { "value": 7.0, "period": 4 },
+            { "value": 6.0, "period": 5 }
+          ]
+        },
+        {
+          "homeAway": "away",
+          "score": "27",
+          "team": { "id": "12", "abbreviation": "KC", "color": "e31837", "alternateColor": "ffb81c", "shortDisplayName": "Chiefs" },
+          "linescores": [
+            { "value": 3.0, "period": 1 },
+            { "value": 14.0, "period": 2 },
+            { "value": 7.0, "period": 3 },
+            { "value": 0.0, "period": 4 },
+            { "value": 3.0, "period": 5 }
+          ]
+        }
+      ],
+      "status": {
+        "type": { "id": "3", "state": "post", "description": "Final/OT" },
+        "period": 5,
+        "displayClock": "0:00"
+      }
+    }
+  ]
+}

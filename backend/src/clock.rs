@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::Json;
 use chrono::{Offset, Utc};
 use chrono_tz::Tz;
 use serde::Serialize;
@@ -56,10 +56,7 @@ fn client_ip(headers: &HeaderMap) -> Option<IpAddr> {
     ),
     tag = "clock"
 )]
-pub async fn time(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Json<TimeResponse> {
+pub async fn time(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Json<TimeResponse> {
     let now = Utc::now();
     let timestamp = now.timestamp();
     let utc_offset = resolve_utc_offset(&state, &headers, &now);
@@ -84,22 +81,24 @@ fn resolve_utc_offset(
         None
     })?;
 
-    let city: maxminddb::geoip2::City = reader.lookup(ip).map_err(|e| {
-        tracing::warn!(ip = %ip, error = %e, "GeoIP lookup failed");
-        e
-    }).ok()?;
+    let city: maxminddb::geoip2::City = reader
+        .lookup(ip)
+        .map_err(|e| {
+            tracing::warn!(ip = %ip, error = %e, "GeoIP lookup failed");
+            e
+        })
+        .ok()?;
 
     let tz_name = city.location?.time_zone?;
 
-    let tz: Tz = tz_name.parse().inspect_err(|&e| {
-        tracing::warn!(timezone = tz_name, error = ?e, "Failed to parse IANA timezone");
-    }).ok()?;
+    let tz: Tz = tz_name
+        .parse()
+        .inspect_err(|&e| {
+            tracing::warn!(timezone = tz_name, error = ?e, "Failed to parse IANA timezone");
+        })
+        .ok()?;
 
-    let offset_seconds = now
-        .with_timezone(&tz)
-        .offset()
-        .fix()
-        .local_minus_utc();
+    let offset_seconds = now.with_timezone(&tz).offset().fix().local_minus_utc();
 
     Some(offset_seconds)
 }

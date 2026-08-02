@@ -1,22 +1,34 @@
 """
 Async HTTP client for the Pico Scoreboard backend API.
+
+No manual gc.collect() calls: MicroPython auto-collects (and retries) when an
+allocation fails, so genuine OOMs surface honestly instead of being masked by
+scheduled pauses. Memory robustness comes from the client's pre-allocated
+response buffer, not from collection timing.
 """
 
-import gc
+import json
 import time
-import ujson
-import uasyncio as asyncio
 import aiohttp
+import uasyncio as asyncio
 from .config import Config
-from .logger import DEBUG, ERROR
-from .models import parse_game_response, PregameGame, LiveGame, FinalGame
+import scoreboard.logger as logger
+from .logger import DEBUG
+from .wire import (
+    parse_game_list,
+    STRUCT_CONTENT_TYPE,
+)
 
-# Pre-allocated response buffer to avoid heap fragmentation
-_MAX_RESPONSE_SIZE = 16_384
-_response_buf = bytearray(_MAX_RESPONSE_SIZE)
-_response_mv = memoryview(_response_buf)
+# Size of the client's pre-allocated response buffer. The largest body the
+# backend ever sends is a logo: LogoPool's 24x24 RGB565 = 1,152 bytes (game
+# structs are ~200 B, game lists and error JSON smaller still), so 4 KB is
+# ~3.5x headroom. If logo dimensions ever grow past ~45x45, readinto will
+# fail loudly with "Response too large" — bump this constant then.
+_MAX_RESPONSE_SIZE = 4096
 
-# Request timeout in seconds
+# Applied to every request via asyncio.wait_for. Without this a wedged TCP
+# connection (backend hang, silent WiFi drop) would stall the poller forever
+# — the display watchdog only guards the render thread, not networking.
 _REQUEST_TIMEOUT = 15
 
 
@@ -26,7 +38,7 @@ class ApiError(Exception):
 
     Attributes:
         status_code: HTTP status code
-        error: Error code from response (e.g., "game_not_found")
+        error: Short error code string from the response body
         message: Human-readable error message
     """
 
@@ -37,211 +49,106 @@ class ApiError(Exception):
         super().__init__(f"{status_code}: {error} - {message}")
 
 
-def _log_api(config, tag, path, status, start_ms):
-    if config.log_level >= DEBUG:
+def _log_api(tag, path, status, start_ms):
+    # Guarded: runs on every request; skip the f-string build below DEBUG.
+    if logger.level >= DEBUG:
         elapsed = time.ticks_diff(time.ticks_ms(), start_ms)
-        print(f"[{tag}] GET {path}: status={status} elapsed={elapsed}ms")
+        logger.debug(f"[{tag}] GET {path}: status={status} elapsed={elapsed}ms")
+
+
+def _raise_api_error(status: int, body) -> None:
+    """Parse an error response body and raise the corresponding ApiError."""
+    err_code = "unknown_error"
+    err_msg = ""
+    try:
+        err = json.loads(body)
+        if isinstance(err, dict):
+            err_code = str(err.get("error", err_code))
+            err_msg = str(err.get("message", ""))
+    except ValueError:
+        pass
+    raise ApiError(status, err_code, err_msg)
 
 
 class ScoreboardApiClient:
     """
-    Async HTTP client for the Pico Scoreboard backend API.
+    Async HTTP client for the Pico Scoreboard backend's game-data API.
 
-    Fetches game data from the backend, which proxies ESPN's API and
-    transforms it into a minimal format suitable for the Pico display.
-
-    Example usage:
-        cfg = Config()
-        client = ScoreboardApiClient(cfg)
-        game = await client.get_game()
-        print(game.state, game.home.abbreviation)
+    Speaks plain HTTP (see __init__) to unauthenticated routes; OTA is the
+    separate, TLS-only path in ota.py. Every request runs under a hard
+    timeout; on timeout the underlying connection is dropped so the next
+    request reconnects cleanly.
     """
 
     def __init__(self, config: Config) -> None:
         self._config: Config = config
+        # Score data is public and polled over PLAIN HTTP by design: the
+        # persistent polling connection would otherwise hold ~21 KB of
+        # mbedTLS record buffers on the heap for its whole lifetime (and pay
+        # a TLS handshake stall on every reconnect). Only the scheme is
+        # downgraded here — config.api_url stays https:// because ota.py and
+        # main.py's time sync read it directly, and OTA MUST stay on TLS
+        # (its manifest sha is the code-integrity root). These routes are
+        # unauthenticated backend-side, so no API key is sent (a cleartext
+        # key would leak).
+        self._base_url: str = config.api_url.rstrip('/').replace('https://', 'http://', 1)
         self._session: aiohttp.ClientSession = aiohttp.ClientSession()
+        # Response bodies land here and are returned as aliasing memoryviews:
+        # valid only until the next request. One buffer supports exactly one
+        # in-flight request — see _with_timeout's guard.
+        self._response_buf: bytearray = bytearray(_MAX_RESPONSE_SIZE)
+        self._response_mv: memoryview = memoryview(self._response_buf)
+        self._request_in_flight: bool = False
 
-    def _games_path(self) -> str:
-        """Return the games API path, using mock path if mock mode is enabled."""
-        if self._config.api_mock:
-            return "/api/mock/games"
-        return "/api/football/nfl/games"
+    async def _with_timeout(self, coro):
+        """Run a request coroutine under _REQUEST_TIMEOUT.
 
-    async def get_game(self, event_id: str) -> PregameGame | LiveGame | FinalGame:
+        Fails loudly on concurrent use: the shared response buffer supports
+        one in-flight request at a time (one sequential caller — today the
+        MLB poller). A second concurrent caller would silently corrupt the
+        first caller's response mid-parse; an immediate RuntimeError is
+        infinitely more debuggable than that. Consuming the returned
+        memoryview after this returns is safe without the guard as long as
+        the caller does not await before parsing (asyncio is single-threaded).
         """
-        Fetch game data for the given event_id.
-
-        Args:
-            event_id: ESPN event ID (numeric string)
-
-        Returns:
-            PregameGame, LiveGame, or FinalGame depending on game state
-
-        Raises:
-            ApiError: On 4xx/5xx responses from the API
-            OSError: On network errors (WiFi disconnected, DNS failure, etc.)
-            ValueError: If response contains unknown game state
-        """
-        gc.collect()
-        url = f"{self._config.api_url.rstrip('/')}{self._games_path()}/{event_id}"
-        headers = {"X-Api-Key": self._config.api_key}
-
-        async with self._session.get(url, headers=headers, ssl=True) as resp:
-            if resp.status != 200:
-                try:
-                    data = await resp.json()
-                    error = data.get("error", "unknown")
-                    message = data.get("message", "Unknown error")
-                except (ValueError, KeyError):
-                    error = "unknown"
-                    message = f"HTTP {resp.status}"
-                raise ApiError(resp.status, error, message)
-
-            data = await resp.json()
-            return parse_game_response(data)
-
-    async def get_game_safe(self, event_id: str) -> PregameGame | LiveGame | FinalGame | None:
-        """
-        Fetch game data, returning None on any error.
-
-        This is a convenience wrapper around get_game() that catches all
-        exceptions and returns None instead. Useful for polling loops where
-        you want to continue even if a single request fails.
-
-        Args:
-            event_id: ESPN event ID (numeric string)
-
-        Returns:
-            PregameGame, LiveGame, FinalGame, or None on error
-        """
+        if self._request_in_flight:
+            raise RuntimeError(
+                "concurrent ScoreboardApiClient use: the shared response "
+                "buffer supports one in-flight request; give each concurrent "
+                "caller its own client instance"
+            )
+        self._request_in_flight = True
         try:
-            return await asyncio.wait_for(self.get_game(event_id), timeout=_REQUEST_TIMEOUT)
-        except (ApiError, OSError, ValueError) as e:
-            if self._config.log_level >= ERROR:
-                print(f"[API] fetch failed: event_id={event_id} error={e}")
-            return None
+            return await asyncio.wait_for(coro, _REQUEST_TIMEOUT)
         except asyncio.TimeoutError:
-            if self._config.log_level >= ERROR:
-                print(f"[API] fetch failed: event_id={event_id} error=timeout")
-            return None
+            # The connection is in an unknown mid-request state — drop it so
+            # the next request opens a fresh one.
+            await self._session.close()
+            raise
+        finally:
+            self._request_in_flight = False
 
-    async def get_all_games(self) -> list[PregameGame | LiveGame | FinalGame]:
-        """
-        Fetch all games from the backend.
-
-        Returns:
-            List of PregameGame, LiveGame, or FinalGame objects
-
-        Raises:
-            ApiError: On 4xx/5xx responses from the API
-            OSError: On network errors (WiFi disconnected, DNS failure, etc.)
-            ValueError: If response contains unknown game state
-        """
-        gc.collect()
-        url = f"{self._config.api_url.rstrip('/')}{self._games_path()}"
-        headers = {"X-Api-Key": self._config.api_key}
-
-        _t = time.ticks_ms()
-        async with self._session.get(url, headers=headers, ssl=True) as resp:
-            if resp.status != 200:
-                try:
-                    data = await resp.json()
-                    error = data.get("error", "unknown")
-                    message = data.get("message", "Unknown error")
-                except (ValueError, KeyError):
-                    error = "unknown"
-                    message = f"HTTP {resp.status}"
-                _log_api(self._config, "API", self._games_path(), resp.status, _t)
-                raise ApiError(resp.status, error, message)
-
-            data = await resp.json()
-            _log_api(self._config, "API", self._games_path(), 200, _t)
-            return [parse_game_response(game) for game in data]
-
-    async def get_all_games_safe(self) -> list[PregameGame | LiveGame | FinalGame]:
-        """
-        Fetch all games, returning empty list on any error.
-
-        This is a convenience wrapper around get_all_games() that catches all
-        exceptions and returns an empty list instead.
-
-        Returns:
-            List of game objects, or empty list on error
-        """
-        try:
-            return await asyncio.wait_for(self.get_all_games(), timeout=_REQUEST_TIMEOUT)
-        except (ApiError, OSError, ValueError) as e:
-            if self._config.log_level >= ERROR:
-                print(f"[API] fetch all failed: error={e}")
-            return []
-        except asyncio.TimeoutError:
-            if self._config.log_level >= ERROR:
-                print("[API] fetch all failed: error=timeout")
-            return []
-
-    async def get_game_raw(self, event_id: str) -> tuple[int, memoryview]:
-        """
-        Fetch raw game data bytes without parsing.
-
-        Returns the response body as raw bytes in a pre-allocated buffer,
-        avoiding JSON serialization/deserialization overhead on the Pico.
-
-        Args:
-            event_id: ESPN event ID (numeric string)
-
-        Returns:
-            Tuple of (status_code, body_memoryview)
-
-        Raises:
-            OSError: On network errors (WiFi disconnected, DNS failure, etc.)
-        """
-        gc.collect()
-        url = f"{self._config.api_url.rstrip('/')}{self._games_path()}/{event_id}"
-        headers = {"X-Api-Key": self._config.api_key}
-
-        async with self._session.get(url, headers=headers, ssl=True) as resp:
-            return (resp.status, await resp.readinto(_response_mv))
-
-    async def get_all_games_raw(self) -> tuple[int, memoryview]:
-        """
-        Fetch raw games list bytes without parsing.
-
-        Returns the response body as raw bytes in a pre-allocated buffer,
-        avoiding JSON serialization/deserialization overhead on the Pico.
-
-        Returns:
-            Tuple of (status_code, body_memoryview)
-
-        Raises:
-            OSError: On network errors (WiFi disconnected, DNS failure, etc.)
-        """
-        gc.collect()
-        url = f"{self._config.api_url.rstrip('/')}{self._games_path()}"
-        headers = {"X-Api-Key": self._config.api_key}
-
-        async with self._session.get(url, headers=headers, ssl=True) as resp:
-            return (resp.status, await resp.readinto(_response_mv))
-
-    async def get_team_logo_raw(self, team_id: str, width: int | None = None, height: int | None = None,
+    async def get_team_logo_raw(self, path: str, width: int | None = None, height: int | None = None,
                                 background_color: str | None = None, accept: str | None = None) -> tuple[int, memoryview]:
         """
-        Fetch team logo as raw bytes into pre-allocated buffer.
+        Fetch a team logo as raw bytes into the pre-allocated buffer.
 
         Args:
-            team_id: Team abbreviation (e.g., "dal", "nyy")
-            width: Optional width in pixels
-            height: Optional height in pixels
-            background_color: Optional hex color (e.g., "FF0000")
-            accept: Optional Accept header value for format selection
+            path: Backend URL path for the logo resource (e.g. "/api/foo/bar/logo").
+            width: Optional width in pixels.
+            height: Optional height in pixels.
+            background_color: Optional hex color (e.g. "FF0000").
+            accept: Optional Accept header value for format selection.
 
         Returns:
-            Tuple of (status_code, body_memoryview)
+            Tuple of (status_code, body_memoryview). The memoryview aliases a
+            client's shared buffer — copy it out before the next request.
 
         Raises:
             OSError: On network errors (WiFi disconnected, DNS failure, etc.)
+            asyncio.TimeoutError: If the request exceeds _REQUEST_TIMEOUT.
         """
-        gc.collect()
-        url = f"{self._config.api_url.rstrip('/')}/api/football/nfl/{team_id}/logo"
+        url = f"{self._base_url}{path}"
         params = []
         if width is not None:
             params.append(f"width={width}")
@@ -252,12 +159,97 @@ class ScoreboardApiClient:
         if params:
             url += "?" + "&".join(params)
 
-        headers = {"X-Api-Key": self._config.api_key}
+        headers = {}
         if accept:
             headers["Accept"] = accept
 
+        return await self._with_timeout(self._get_logo_inner(url, path, headers))
+
+    async def _get_logo_inner(self, url: str, path: str, headers: dict) -> tuple[int, memoryview]:
         _t = time.ticks_ms()
-        async with self._session.get(url, headers=headers, ssl=True) as resp:
-            result = (resp.status, await resp.readinto(_response_mv))
-            _log_api(self._config, "LOGO", f"logo/{team_id}", resp.status, _t)
+        async with self._session.get(url, headers=headers, ssl=None) as resp:
+            result = (resp.status, await resp.readinto(self._response_mv))
+            _log_api("LOGO", path, resp.status, _t)
             return result
+
+    async def _get_struct_inner(self, url: str, path: str, tag: str, headers: dict):
+        """Fetch a binary wire-format body into the shared buffer.
+
+        Returns the filled memoryview; raises ApiError on 4xx/5xx (error
+        bodies are always JSON regardless of the Accept header).
+        """
+        _t = time.ticks_ms()
+        async with self._session.get(url, headers=headers, ssl=None) as resp:
+            filled = await resp.readinto(self._response_mv)
+            _log_api(tag, path, resp.status, _t)
+            if resp.status >= 400:
+                _raise_api_error(resp.status, filled)
+            return filled
+
+    async def get_game_list(
+        self, path: str, if_none_match: str | None, tag: str = "GAMES"
+    ) -> tuple[int, list[tuple[int, str]], str | None]:
+        """Fetch one league's game list (state, id) pairs.
+
+        `path` is the league's list endpoint (e.g. "/baseball/mlb/games",
+        "/soccer/usa.1/games") — the list wire encoding is sport-agnostic.
+        The returned etag is the raw header value (quotes included) so the
+        caller can echo it verbatim as If-None-Match — backend does a strict
+        string match and will not recognize a stripped-quote form.
+        """
+        url = f"{self._base_url}{path}"
+        headers = {"Accept": STRUCT_CONTENT_TYPE}
+        if if_none_match is not None:
+            headers["If-None-Match"] = if_none_match
+
+        return await self._with_timeout(
+            self._get_game_list_inner(url, path, tag, headers)
+        )
+
+    async def _get_game_list_inner(
+        self, url: str, path: str, tag: str, headers: dict
+    ) -> tuple[int, list[tuple[int, str]], str | None]:
+        _t = time.ticks_ms()
+        async with self._session.get(url, headers=headers, ssl=None) as resp:
+            etag = None
+            if resp.headers:
+                for k in resp.headers:
+                    if k.lower() == "etag":
+                        etag = resp.headers[k]
+                        break
+
+            if resp.status == 304:
+                _log_api(tag, path, resp.status, _t)
+                return (304, [], etag)
+
+            filled = await resp.readinto(self._response_mv)
+            _log_api(tag, path, resp.status, _t)
+
+            if resp.status >= 400:
+                _raise_api_error(resp.status, filled)
+
+            return (resp.status, parse_game_list(filled), etag)
+
+    async def get_game_state(self, path: str, parse, tag: str = "GAME"):
+        """Fetch one game's detail and parse it with the league's parser.
+
+        `parse` is a SYNCHRONOUS callable (e.g. mlb.parse_game_detail or a
+        soccer wrapper) invoked on the shared response buffer — it must not
+        await, so the buffer can't be overwritten by another request before
+        it reads it. Returns the parsed model, or None when the game is gone
+        from today's scoreboard (404) — e.g. it dropped off the slate or
+        entered a non-displayable delay between the list and this fetch.
+        """
+        url = f"{self._base_url}{path}"
+        headers = {"Accept": STRUCT_CONTENT_TYPE}
+        try:
+            filled = await self._with_timeout(
+                self._get_struct_inner(url, path, tag, headers)
+            )
+        except ApiError as e:
+            if e.status_code == 404:
+                return None
+            raise
+        # No awaits between here and the parse: the shared buffer can't be
+        # overwritten by another request before the parser reads it.
+        return parse(filled)

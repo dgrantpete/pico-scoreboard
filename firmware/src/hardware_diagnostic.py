@@ -1,6 +1,6 @@
 # Hardware Diagnostic Display
-# Temporarily replaces main.py to test all hardware integrations.
-# Restore by deleting this file and renaming main_production.py back to main.py.
+# Standalone bring-up tool: temporarily deploy in place of main.py to test all
+# hardware integrations (display, light sensor, rotary encoder, buttons).
 #
 # GPIO Pin assignments (same as production):
 #   VEML7700: GPIO 0 (SDA), GPIO 1 (SCL)
@@ -10,12 +10,12 @@
 #   HUB75: GPIO 11-15 (Addr), 16-21 (Data), 26 (Clk), 27 (Latch), 28 (OE)
 
 import time
-import math
 import rp2
 from machine import Pin, I2C
 from scoreboard.config import Config
 from scoreboard.display import init_display
-from scoreboard.fonts import FontWriter, unscii_8, unscii_16, spleen_5x8, rgb565, ALIGN_LEFT, ALIGN_CENTER
+from scoreboard import brightness
+from scoreboard.fonts import unscii_8, unscii_16, spleen_5x8, rgb565, ALIGN_CENTER
 from rotary_encoder import RotaryEncoder
 from veml7700 import VEML7700
 
@@ -29,17 +29,6 @@ BLUE = rgb565(80, 80, 255)
 ACCENT = rgb565(255, 165, 0)
 
 DISPLAY_WIDTH = 128
-
-# --- Auto-brightness tunable constants ---
-LUX_MIN = 2.0       # Lux at/below which display is at minimum brightness
-LUX_MAX = 300.0     # Lux at/above which display is at maximum brightness
-BRI_MIN = 0.05      # Minimum display brightness (never fully black)
-BRI_MAX = 1.0       # Maximum display brightness
-EMA_ALPHA = 0.08    # Lux smoothing factor (lower = slower, less flicker)
-RAMP_STEP = 0.01    # Max brightness change per frame (~0.2/sec at 20 FPS)
-
-# Pre-compute log denominator (constant)
-_LOG_LUX_RANGE = math.log(LUX_MAX / LUX_MIN)
 
 
 def btn_label(pin: Pin) -> tuple[str, int]:
@@ -72,7 +61,7 @@ def main():
     # 1. Initialize display (reuses production config/driver)
     print("Initializing display...")
     config = Config()
-    driver, display, writer = init_display(config)
+    driver, display, writer, _regions = init_display(config)
     print("Display OK")
 
     # 2. Initialize rotary encoder (PIO-based, GPIO 3 = Ch A, GPIO 4 = Ch B)
@@ -113,14 +102,14 @@ def main():
 
     print("Starting diagnostic display loop...")
 
-    # Auto-brightness state
+    # Auto-brightness state (math shared with production via scoreboard.brightness)
     current_brightness = config.brightness / 100.0
     ambient_bri = current_brightness  # Will ramp toward sensor-derived value
     user_pref = 50  # Default: center = pure auto
     enc_offset = encoder.value  # baseline so pref starts at 50
 
     # Lux polling
-    lux_read_interval_ms = 200
+    lux_read_interval_ms = brightness.TICK_MS
     last_lux_read_ms = 0
 
     # Encoder button debounce
@@ -166,7 +155,7 @@ def main():
                         smoothed_lux = raw_lux
                         lux_initialized = True
                     else:
-                        smoothed_lux += EMA_ALPHA * (raw_lux - smoothed_lux)
+                        smoothed_lux = brightness.smooth_lux(smoothed_lux, raw_lux)
                     lux_ok = True
                     lux_fail_count = 0
                 except Exception as e:
@@ -188,30 +177,14 @@ def main():
 
             last_lux_read_ms = now_ms
 
-        # --- Auto-brightness computation ---
-        # Ramp only the ambient component (sensor-driven, gradual)
-        if lux_ok and smoothed_lux > 0:
-            t = math.log(max(smoothed_lux, LUX_MIN) / LUX_MIN) / _LOG_LUX_RANGE
-            t = clamp(t, 0.0, 1.0)
-            ambient_target = BRI_MIN + t * (BRI_MAX - BRI_MIN)
+        # --- Auto-brightness computation (production math) ---
+        if lux_ok and lux_initialized:
+            ambient_target = brightness.lux_to_ambient(smoothed_lux)
         else:
-            ambient_target = BRI_MAX
+            ambient_target = brightness.BRI_MAX
 
-        delta = ambient_target - ambient_bri
-        if delta > RAMP_STEP:
-            ambient_bri += RAMP_STEP
-        elif delta < -RAMP_STEP:
-            ambient_bri -= RAMP_STEP
-        else:
-            ambient_bri = ambient_target
-
-        # Dual-lerp with ramped ambient + instant user pref
-        if user_pref <= 50:
-            blend = user_pref / 50
-            current_brightness = BRI_MIN + blend * (ambient_bri - BRI_MIN)
-        else:
-            blend = (user_pref - 50) / 50
-            current_brightness = ambient_bri + blend * (BRI_MAX - ambient_bri)
+        ambient_bri = brightness.ramp(ambient_bri, ambient_target)
+        current_brightness = brightness.apply_preference(ambient_bri, user_pref)
 
         driver.set_brightness(current_brightness)
 

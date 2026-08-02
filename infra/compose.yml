@@ -1,0 +1,51 @@
+# ESPN collector stack on the NUC. Deployed by infra/deploy.yml into
+# /opt/pico-scoreboard; secrets come from a sibling .env (POSTGRES_PASSWORD),
+# rendered at deploy time from the gitignored infra/.env.
+#
+# The config/ directory (not the single file) is bind-mounted deliberately:
+# atomic temp+rename replacement of targets.yml swaps the file's inode, and a
+# single-file mount would pin the container to the stale one forever.
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: espn
+      POSTGRES_DB: espn
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U espn -d espn"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  collector:
+    build:
+      context: ./collector
+      args:
+        GIT_SHA: "${GIT_SHA:-unknown}"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ESPN_DB_URL: postgresql://espn:${POSTGRES_PASSWORD}@postgres:5432/espn
+    # The NUC's uplink is Wi-Fi: at boot dhcpcd writes resolv.conf AFTER
+    # dockerd has already snapshotted DNS for the sandbox, leaving the
+    # embedded resolver with zero upstreams. Pinning public resolvers makes
+    # collector DNS independent of that race (service-name resolution stays
+    # on Docker's embedded DNS regardless).
+    dns:
+      - 1.1.1.1
+      - 9.9.9.9
+    volumes:
+      - ./config:/config:ro
+
+volumes:
+  pgdata:
