@@ -66,7 +66,8 @@ pub struct EspnConfig {
     #[serde(default = "default_logo_url")]
     pub logo_url: String,
 
-    /// User agent for ESPN requests (default: pico-scoreboard/1.0)
+    /// User agent for ESPN requests. Must lead with an allowlisted dev-tool
+    /// prefix (curl/*, python-requests/*) — ESPN's edge 403s anything else.
     #[serde(default = "default_user_agent")]
     pub user_agent: String,
 
@@ -115,7 +116,7 @@ fn default_logo_url() -> String {
 }
 
 fn default_user_agent() -> String {
-    "pico-scoreboard/1.0".to_string()
+    "python-requests/2.32.3 pico-scoreboard/1.0".to_string()
 }
 
 impl Default for ServerConfig {

@@ -87,7 +87,9 @@ class Collector:
 
     def run(self) -> None:
         session = requests.Session()
-        session.headers["User-Agent"] = "pico-scoreboard/espn-collector"
+        # ESPN 403s unrecognized UA prefixes; python-requests/* is allowlisted,
+        # so lead with it (we really are requests) and keep identity as suffix.
+        session.headers["User-Agent"] = "python-requests/2.32.3 pico-scoreboard/espn-collector"
         start = time.monotonic()
         self._heap = [(start, key) for key in self._runs]
         heapq.heapify(self._heap)

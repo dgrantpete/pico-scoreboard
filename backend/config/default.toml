@@ -8,7 +8,10 @@ port = 3000
 [espn]
 base_url = "https://site.api.espn.com/apis/site/v2/sports"
 logo_url = "https://a.espncdn.com"
-user_agent = "pico-scoreboard/1.0"
+# ESPN's edge (Akamai) 403s unrecognized User-Agents; only known dev-tool
+# prefixes (curl/*, python-requests/*) pass, so lead with one and keep our
+# identity as a suffix. Verified empirically 2026-08-07.
+user_agent = "python-requests/2.32.3 pico-scoreboard/1.0"
 timeout_secs = 10
 
 [geoip]
