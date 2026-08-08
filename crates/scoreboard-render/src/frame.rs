@@ -101,4 +101,15 @@ impl SkipMemo {
         self.last_had_toast = toast_active;
         true
     }
+
+    /// Force the next [`should_render`](Self::should_render) to say yes.
+    ///
+    /// The static-screen skip assumes the only thing that can change a frame is
+    /// a new commit. A settings change breaks that assumption — turn the
+    /// dividers off while an idle screen is up and there is no commit coming to
+    /// redraw it, so the panel would keep showing them until the next game
+    /// update. Core 1 calls this when it takes a settings update.
+    pub fn invalidate(&mut self) {
+        self.last_drawn = None;
+    }
 }

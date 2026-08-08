@@ -124,6 +124,19 @@ impl PreparedView {
     pub fn commit_seq(&self) -> Option<u32> {
         self.commit_seq
     }
+
+    /// Forget which commit this was built from, so the next
+    /// [`sync`](Self::sync) rebuilds whatever the snapshot says.
+    ///
+    /// `sync` keys on the commit sequence alone, which is right for the only
+    /// thing that normally changes — core 0 publishing new state. It is not
+    /// enough when the *settings* change: `play_window_ms` is measured against
+    /// the configured scroll speed, so a `PUT /api/config` that halves the
+    /// speed leaves a window sized for the old one, and no new commit is coming
+    /// to correct it. Core 1 calls this when it takes a settings update.
+    pub fn invalidate(&mut self) {
+        self.commit_seq = None;
+    }
 }
 
 /// How long a play flash stays on screen: exactly one scroll cycle — the
