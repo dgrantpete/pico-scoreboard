@@ -805,3 +805,13 @@ impl ScoreboardSnapshot {
     /// enum, or a [`Text`] whose length prefix is a `u16`.
     pub const SIZE: usize = core::mem::size_of::<Self>();
 }
+
+// SPEC §4 requires the handoff type to be `Sync`, and `SnapshotChannel`'s
+// `unsafe impl Sync` rests on it: core 1 reads a slot core 0 wrote. Both hold
+// today because every field is plain owned data, but that is a property of the
+// fields, not a declaration — one `Cell` or one raw pointer added later would
+// take it away silently. This fails the build instead.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<ScoreboardSnapshot>();
+};
