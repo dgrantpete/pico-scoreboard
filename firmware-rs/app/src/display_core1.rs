@@ -85,6 +85,61 @@ struct LoopState {
     probe: FrameProbe,
     /// Last value pushed into the driver, so an unchanged atomic costs nothing.
     brightness: u8,
+    /// The configured variants, dividers and scroll speed.
+    ///
+    /// Cross-frame state, so it lives here and nowhere else — the mutation
+    /// contract's first bucket. `Scene` borrows it for the length of one frame
+    /// and no renderer can name it. Core 0 replaces it through
+    /// [`crate::settings`]; until the first update arrives it is the compiled
+    /// default, which is what the panel showed before this loop existed.
+    settings: RenderSettings,
+}
+
+/// Apply a config change from core 0.
+///
+/// The order is `api_routes.py`'s, and it is load-bearing in one place: the
+/// data clock goes in before the refresh rate, because `set_data_clock`
+/// deliberately does not re-balance the timing and `set_target_refresh_rate`
+/// is what re-derives it from the new clock. Blanking time going in *after*
+/// the refresh rate is also MicroPython's order, and it leaves the rate
+/// un-rebalanced against the new blanking — preserved rather than fixed,
+/// because the achieved rate is observable and this is a parity release.
+///
+/// Both invalidations are needed and for different reasons: the prepared view
+/// caches a scroll window measured against the old speed, and the skip memo
+/// would otherwise let a static screen keep showing the old dividers until the
+/// next commit — which, on an idle scoreboard, could be minutes.
+fn apply_settings(
+    state: &mut LoopState,
+    driver: &mut Hub75Driver,
+    update: crate::settings::DisplayUpdate,
+) {
+    let lap = Lap::start();
+    if update.applied.render_settings {
+        state.settings = update.render;
+    }
+    if update.applied.data_clock {
+        driver.set_data_clock(update.data_clock_hz);
+    }
+    if update.applied.refresh_rate {
+        driver.set_target_refresh_rate(update.target_refresh_rate_hz);
+    }
+    if update.applied.gamma {
+        driver.set_gamma(update.gamma);
+    }
+    if update.applied.blanking_time {
+        driver.set_blanking_time(update.blanking_time_ns);
+    }
+    state.prepared.invalidate();
+    state.memo.invalidate();
+    // Not a `ringlog` line: this is core 1, and the ring's lock is a critical
+    // section that would land inside the frame. The probe's timing is the
+    // measurement that matters here anyway.
+    defmt::info!(
+        "core 1: settings applied in {} us, refresh now {} Hz",
+        lap.elapsed_us(),
+        driver.refresh_rate() as u32
+    );
 }
 
 /// Core 1's only task.
@@ -94,13 +149,13 @@ pub async fn render_loop(
     mut display: Hub75Display<'static, Hub75Driver>,
     logos: &'static [LogoSlot],
 ) -> ! {
-    let settings = RenderSettings::new();
     let mut state = LoopState {
         rail: FrameRail::new(),
         prepared: PreparedView::new(),
         memo: SkipMemo::new(),
         probe: FrameProbe::new(),
         brightness: BRIGHTNESS.load(Ordering::Relaxed),
+        settings: RenderSettings::new(),
     };
     // Whatever the atomic said at startup has not reached the driver yet.
     display
@@ -134,19 +189,23 @@ pub async fn render_loop(
             state.probe.record_brightness(lap.elapsed_us());
         }
 
+        if let Some(update) = crate::settings::take_display() {
+            apply_settings(&mut state, display.sink_mut(), update);
+        }
+
         state.rail.advance_and_latch(snapshot);
 
         // Before the skip check, and before the scene exists: a rebuilt
         // prepared view *is* what a new commit means, and the scene borrows it.
         let lap = Lap::start();
-        if state.prepared.sync(snapshot, &settings) {
+        if state.prepared.sync(snapshot, &state.settings) {
             state.probe.record_rebuild(lap.elapsed_us());
         }
 
         let scene = Scene {
             snapshot,
             prepared: &state.prepared,
-            settings: &settings,
+            settings: &state.settings,
             logos: Logos::new(logos),
             now,
             view: state.rail.view_elapsed(),

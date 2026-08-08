@@ -37,11 +37,20 @@
 
 #![no_std]
 #![no_main]
+// picoserve's router is a type, not a table: every `.route()` wraps the
+// previous one as its fallback, so eight routes are eight layers of nested
+// generics and the trait solver walks all of them. The default limit of 128 is
+// not enough to prove `PathRouter` for the result.
+#![recursion_limit = "256"]
 
+mod config;
 mod demo;
 mod display_core1;
+mod http;
 mod net;
 mod probe;
+mod ringlog;
+mod settings;
 mod supervise;
 
 use core::cell::UnsafeCell;
@@ -99,6 +108,51 @@ static CHANNEL: SnapshotChannel = SnapshotChannel::new();
 /// one commit and copying two crests per publish would double the handoff).
 static CRESTS: [LogoSlot; 2] = [flat_crest(0xF800), flat_crest(0x001F)];
 
+/// Paint core 0's stack so its high-water mark can be measured, and record how
+/// much RAM the statics took.
+///
+/// flip-link inverts the RAM layout: the stack sits at the bottom, growing down
+/// *away* from `.data`/`.bss`, with MSPLIM armed at the very bottom. That gives
+/// two addresses that bracket everything — the limit is the floor of the stack,
+/// and the current stack pointer at the top of `main` is within a frame or two
+/// of its ceiling, which is also the bottom of the statics. So:
+///
+/// - **static RAM** = end of RAM − stack ceiling, and
+/// - **stack size** = ceiling − MSPLIM.
+///
+/// Neither needs a linker symbol; both are read from the registers the linker
+/// script produced, which is one fewer thing that can silently disagree with
+/// `memory.x`.
+///
+/// The paint stops a margin below the current stack pointer, because the region
+/// being painted is the one this function is running on. The margin costs a
+/// slightly pessimistic watermark — the deepest frames of `main` itself read as
+/// already-used — and buys the guarantee that painting cannot scribble on its
+/// own return address.
+fn paint_core0_stack() -> supervise::StackProbe {
+    /// Bytes left unpainted below the stack pointer: room for this function's
+    /// frame and the compiler's spills, with a wide margin.
+    const MARGIN: u32 = 1024;
+
+    let floor = cortex_m::register::msplim::read();
+    let pointer = cortex_m::register::msp::read();
+    let ceiling = pointer.saturating_sub(MARGIN);
+
+    supervise::record_static_ram(
+        (scoreboard_layout::RAM_BASE + scoreboard_layout::RAM_SIZE).saturating_sub(pointer),
+    );
+
+    let len = ceiling.saturating_sub(floor) as usize;
+    // SAFETY: `[floor, ceiling)` is core-0 stack below the live frame — MSPLIM
+    // is its floor by construction, and `ceiling` is a full margin below the
+    // stack pointer, so nothing live is in the range.
+    let region = unsafe { core::slice::from_raw_parts_mut(floor as *mut u8, len) };
+    region.fill(supervise::STACK_PAINT);
+
+    // SAFETY: just painted, and `StackProbe` only ever reads, through atomics.
+    unsafe { supervise::StackProbe::new(floor as *mut u8, len) }
+}
+
 const fn flat_crest(color: u16) -> LogoSlot {
     let [low, high] = color.to_le_bytes();
     let mut slot = [0u8; LOGO_BYTES];
@@ -115,6 +169,8 @@ const fn flat_crest(color: u16) -> LogoSlot {
 fn main() -> ! {
     // Before `init`, per embassy-rp: it fails if the MPU is already configured.
     embassy_rp::install_core0_stack_guard().expect("core-0 stack guard already installed");
+    // Immediately after, because it reads the limit that call just programmed.
+    let core0_stack = paint_core0_stack();
     let peripherals = embassy_rp::init(Default::default());
     let system_clock_hz = embassy_rp::clocks::clk_sys_freq();
 
@@ -182,6 +238,15 @@ fn main() -> ! {
         clk: peripherals.PIN_29,
     };
 
+    // Before anything reads it, and before core 0's executor starts: the boot
+    // configuration is what the HTTP server serves and what the display
+    // settings below are derived from. Task #12 makes this a flash read.
+    let boot_config = config::load();
+    // Core 1 starts from `RenderSettings::new()` and the driver from
+    // `Config::defaults`, neither of which has seen the stored configuration —
+    // so it is sent once here, with every hook on.
+    settings::publish_display(settings::DisplayUpdate::boot(&boot_config));
+
     let executor = EXECUTOR0.init(Executor::new());
     executor.run(|spawner| {
         // Owns the publisher through the boot — it is what draws the startup
@@ -190,6 +255,7 @@ fn main() -> ! {
         // nothing publishes again, because the setup screen does not change.
         spawner.spawn(defmt::unwrap!(net::bringup(spawner, publisher, radio)));
         spawner.spawn(defmt::unwrap!(demo::brightness()));
-        spawner.spawn(defmt::unwrap!(supervise::liveness(stack_probe)));
+        spawner.spawn(defmt::unwrap!(supervise::liveness(stack_probe, core0_stack)));
+        spawner.spawn(defmt::unwrap!(supervise::reboot_on_request()));
     });
 }

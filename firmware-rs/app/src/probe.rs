@@ -132,11 +132,8 @@ impl Bucket {
     }
 
     fn mean_us(&self) -> u32 {
-        if self.count == 0 {
-            0
-        } else {
-            self.total_us / self.count
-        }
+        // A scenario the probe never entered has no samples and no mean.
+        self.total_us.checked_div(self.count).unwrap_or(0)
     }
 }
 

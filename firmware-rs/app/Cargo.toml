@@ -75,12 +75,31 @@ cyw43-pio = { version = "=0.10.0", features = ["defmt"] }
 # never-die-on-a-bad-packet rule the same as the captive DNS responder's.
 edge-dhcp = { version = "=0.8.0", default-features = false, features = ["defmt"] }
 scoreboard-portal = { version = "0.1.0", path = "../../crates/scoreboard-portal" }
+scoreboard-config = { path = "../../crates/scoreboard-config" }
+scoreboard-log = { path = "../../crates/scoreboard-log" }
+# The HTTP server (SPEC §7.3). `default-features = false` is load-bearing: the
+# default set includes `std`, which enables `alloc`. `embassy` selects the
+# timer and the embassy-net socket glue; `json` adds `serde-json-core` for the
+# response bodies. `ws` and `log` stay off — no websockets, and defmt is the
+# log channel.
+picoserve = { version = "=0.19.0", default-features = false, features = ["embassy", "defmt", "json"] }
+# Response bodies are serialized straight into a caller-owned slice.
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde-json-core = "=0.6.0"
+# `msp` / `msplim`, for the core-0 stack watermark and the static-RAM figure in
+# `/api/status`, and `SCB::sys_reset` for `/api/reboot`. Already in the graph
+# under rp235x-pac; named here because this crate calls it directly.
+cortex-m = "=0.7.8"
 # `net-probe` only — the `Read`/`Write` traits embassy-net's TcpSocket
 # implements. reqwless brings its own in task #11.
 embedded-io-async = { version = "=0.7.0", optional = true }
 
 [build-dependencies]
 scoreboard-layout = { path = "layout", features = ["std"] }
+# Host-side only: hashes the embedded web bundle into its ETag. Zero
+# dependencies, and already in the target graph via picoserve, so it adds no
+# new audit surface.
+const-sha1 = "=0.3.0"
 
 [profile.release]
 debug = 2

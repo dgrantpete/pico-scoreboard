@@ -58,6 +58,7 @@ pub mod dhcp_server;
 pub mod hosts;
 #[cfg(feature = "net-probe")]
 mod probe;
+pub mod status;
 pub mod wifi;
 
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
@@ -208,7 +209,14 @@ pub async fn bringup(spawner: Spawner, mut publisher: Publisher<'static>, p: Net
             spawner.spawn(defmt::unwrap!(crate::demo::feed(publisher)));
             #[cfg(feature = "net-probe")]
             spawner.spawn(defmt::unwrap!(probe::fetch_time(stack)));
-            MyHosts::station(credentials.device_name, &wifi::address_text(ip))
+
+            let address = wifi::address_text(ip);
+            status::publish(status::NetStatus::Station {
+                ip: bounded(&address),
+                device_name: bounded(credentials.device_name),
+                configured_ssid: bounded(credentials.ssid),
+            });
+            MyHosts::station(credentials.device_name, &address)
         }
         Provisioned::Ap { reason, ip } => {
             store.finish_startup(StartupExit::Setup {
@@ -227,6 +235,13 @@ pub async fn bringup(spawner: Spawner, mut publisher: Publisher<'static>, p: Net
             );
             spawner.spawn(defmt::unwrap!(captive_dns::serve(stack, ip)));
             spawner.spawn(defmt::unwrap!(dhcp_server::serve(stack, ip)));
+
+            status::publish(status::NetStatus::Ap {
+                reason,
+                ap_ip: bounded(wifi::AP_IP_TEXT),
+                ap_ssid: bounded(credentials.device_name),
+                configured_ssid: bounded(credentials.ssid),
+            });
             MyHosts::ap(credentials.device_name, wifi::AP_IP_TEXT)
         }
     };
@@ -251,12 +266,31 @@ pub async fn bringup(spawner: Spawner, mut publisher: Publisher<'static>, p: Net
         );
     });
 
+    // Last, and only now: the server answers `Host` questions out of what was
+    // just published, so starting it earlier would open a window in which a
+    // request could be answered against no host set at all.
+    crate::http::start(spawner, stack);
+
     spawner.spawn(defmt::unwrap!(watch_link(stack)));
 
     // The radio and `control` outlive this function either way — the runner
     // task owns the hardware. What ends here is the *boot*, which is why this
     // task returns instead of parking: nothing it holds, the `Store` included,
     // has a reader once the handoff above is done.
+}
+
+/// Copy into a bounded string, truncating. Every caller passes a value already
+/// bounded by the same limit — an SSID, a device name, a dotted-quad — so the
+/// truncation is unreachable and exists to avoid a fallible return nobody could
+/// handle.
+fn bounded<const N: usize>(text: &str) -> heapless::String<N> {
+    let mut out = heapless::String::new();
+    for character in text.chars() {
+        if out.push(character).is_err() {
+            break;
+        }
+    }
+    out
 }
 
 /// The API spelling of a setup reason, for logs and for task #10's

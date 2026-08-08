@@ -27,10 +27,41 @@ fn main() {
     println!("cargo::rustc-env=LINK_PROFILE={profile:?}");
 
     emit_dev_config();
+    emit_spa_etag();
 
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=layout/src/lib.rs");
 }
+
+/// Hash the embedded web bundle into the ETag the SPA route serves it under.
+///
+/// Port of `main.py:319-336`'s `_compute_index_etag`, moved from boot to build:
+/// SHA-1 of the gzip, first 8 bytes as lowercase hex. MicroPython recomputed it
+/// at every startup by streaming the file through `hashlib` in 512-byte chunks,
+/// because on a filesystem the bundle could change under a running device. Here
+/// the bundle is `include_bytes!`d into the image, so its hash is a property of
+/// the build and there is nothing to recompute — the boot cost goes to zero and
+/// the value cannot disagree with the bytes it names.
+fn emit_spa_etag() {
+    println!("cargo::rerun-if-changed={SPA_ASSET}");
+
+    let bundle = fs::read(SPA_ASSET).unwrap_or_else(|error| {
+        panic!(
+            "{SPA_ASSET} is missing ({error}). It is a committed build artifact — see \
+             assets/README.md for how to regenerate it from `frontend/`."
+        )
+    });
+    let digest = const_sha1::sha1(&bundle).as_bytes();
+    let mut etag = String::with_capacity(16);
+    for byte in &digest[..8] {
+        etag.push_str(&format!("{byte:02x}"));
+    }
+    println!("cargo::rustc-env=SPA_ETAG={etag}");
+}
+
+/// The web bundle, relative to this crate's root. Named here so `build.rs` and
+/// the `include_bytes!` in `http::spa` cannot drift.
+const SPA_ASSET: &str = "assets/index.html.gz";
 
 /// Every key `dev.toml` may set, as `(section, key, env var, default)`.
 ///

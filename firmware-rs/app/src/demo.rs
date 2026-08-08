@@ -124,6 +124,14 @@ fn commit(
     publisher: &mut Publisher<'static>,
     commits: &mut u32,
 ) {
+    // The config→snapshot seam. UI colours are model state rather than a
+    // core-1 setting, so `PUT /api/config` cannot apply them itself — whoever
+    // owns the snapshot has to, before its next commit. Today that is this
+    // stand-in; task #11's poller inherits exactly this call, which is why it
+    // is here rather than folded into `dress`.
+    if let Some(colors) = crate::settings::take_ui_colors() {
+        snapshot.ui_colors = colors;
+    }
     *commits += 1;
     snapshot.commit_seq = *commits;
     publisher.publish(snapshot);
