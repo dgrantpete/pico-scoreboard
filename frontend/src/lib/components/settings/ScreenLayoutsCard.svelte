@@ -56,18 +56,26 @@
 		settingsStore.updateDisplay("variants", { ...current, [key]: value });
 	}
 
-	// Mirrors screen_geometry._SCROLL_SPEEDS: only speeds that evenly divide
-	// the panel's 20 FPS refresh stay smooth.
+	// Mirrors geometry::SCROLL_SPEEDS: only speeds that divide the panel's
+	// 60 FPS refresh evenly stay smooth. 40 px/s was on this list when the
+	// panel ran at 20 FPS and is not a divisor of 60 — a device that still has
+	// it stored renders at the default instead, and `storedSpeedIsLegal` below
+	// is what stops the form from quietly showing a value the panel is not using.
 	const SCROLL_SPEED_OPTIONS = [
 		{ value: 5, label: "5 px/s — Slowest" },
 		{ value: 10, label: "10 px/s — Slow" },
-		{ value: 20, label: "20 px/s — Default" },
-		{ value: 40, label: "40 px/s — Fast" },
+		{ value: 20, label: "20 px/s — Steady" },
+		{ value: 30, label: "30 px/s — Default" },
+		{ value: 60, label: "60 px/s — Fastest" },
 	];
+	const DEFAULT_SCROLL_SPEED = 30;
 </script>
 
 {#if settingsStore.config}
 	{@const config = settingsStore.config}
+	{@const storedSpeedIsLegal = SCROLL_SPEED_OPTIONS.some(
+		(option) => option.value === config.display.scroll_speed_px_per_sec,
+	)}
 	<section class="card">
 		<header class="card-header">
 			<h3 class="card-title">Screen Layouts</h3>
@@ -127,7 +135,9 @@
 				<label for="scroll-speed">Text Scroll Speed</label>
 				<select
 					id="scroll-speed"
-					value={config.display.scroll_speed_px_per_sec}
+					value={storedSpeedIsLegal
+						? config.display.scroll_speed_px_per_sec
+						: DEFAULT_SCROLL_SPEED}
 					onchange={(e) =>
 						settingsStore.updateDisplay(
 							"scroll_speed_px_per_sec",
@@ -140,8 +150,15 @@
 				</select>
 				<p class="hint">
 					Play-by-play and goal-scorer text. Limited to speeds that stay
-					smooth at the panel's 20 FPS. Applies live.
+					smooth at the panel's 60 FPS. Applies live.
 				</p>
+				{#if !storedSpeedIsLegal}
+					<p class="hint">
+						Saved as {config.display.scroll_speed_px_per_sec} px/s, which
+						stutters at 60 FPS — the panel is drawing
+						{DEFAULT_SCROLL_SPEED} px/s instead. Save to make it stick.
+					</p>
+				{/if}
 			</div>
 		</div>
 	</section>

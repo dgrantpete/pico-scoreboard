@@ -46,12 +46,14 @@ the frontend actually changed, not that somebody rebuilt it.
 
 | | |
 |---|---|
-| SHA-1 | `6547ed6160066a76ad04f715d4f6f31e3472df81` |
-| ETag (first 8 bytes) | `6547ed6160066a76` |
-| Size | 54,528 B |
-| Built | 2026-08-08, `bun 1.3.6`, from `frontend/` at commit `18a05c8` |
+| SHA-1 | `8f3da1a8a347aabe343947c357f73f4d3fa4d264` |
+| ETag (first 8 bytes) | `8f3da1a8a347aabe` |
+| Size | 54,641 B |
+| Built | 2026-08-08, `bun 1.3.6`, from the `frontend/` of the commit that carries it |
 
-The previously deployed bundle (`pico/index.html.gz`, from 2026-07-19) was
-54,522 B with SHA-1 `93e48d32…`; this one is a fresh build of the current
-`frontend/` source, so the six-byte difference is real source drift and not a
-rebuild artifact.
+The provenance line names no commit hash because it cannot: the rule above puts
+the bundle and the source change in one commit, so the hash would have to
+reference the commit it is inside. The previous artifact was 54,528 B with SHA-1
+`6547ed61…`, built from `frontend/` at commit `18a05c8`; the 113-byte growth is
+the 60 FPS scroll-speed options and the stale-value hint in
+`ScreenLayoutsCard.svelte`.
