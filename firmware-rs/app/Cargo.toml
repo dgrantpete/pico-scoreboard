@@ -25,6 +25,12 @@ link-boot-integrated = []
 # without waiting for the client in task #11 — see `net::probe`.
 net-probe = ["dep:embedded-io-async"]
 
+# Bench instrument, off in every shipped build: adds `POST /api/induce-panic`,
+# which panics on purpose. It exists so the crash path — breadcrumb, reset,
+# `/api/logs/previous` — can be exercised without waiting for a real bug, and a
+# recovery path nobody has run is a recovery path that does not work.
+induce-panic = []
+
 [dependencies]
 scoreboard-layout = { path = "layout" }
 hub75 = { path = "../../crates/hub75" }
@@ -81,6 +87,21 @@ edge-dhcp = { version = "=0.8.0", default-features = false, features = ["defmt"]
 scoreboard-portal = { version = "0.1.0", path = "../../crates/scoreboard-portal" }
 scoreboard-config = { path = "../../crates/scoreboard-config" }
 scoreboard-log = { path = "../../crates/scoreboard-log" }
+# The button driver's PIO program and its consumer logic, the league menu
+# session, and the brightness curve — the pure half of task #12, host-tested
+# against `tools/pio_sim.py`'s scenarios and `brightness.py`'s values.
+scoreboard-input = { path = "../../crates/scoreboard-input" }
+# Persistence (SPEC §9). `default-features = false` is the whole point: the
+# default set is empty here, but `alloc`, `std`, `arrayvec`, `postcard` and the
+# `heapless` value impls all exist and every one of them would add a dependency
+# for a convenience this crate does not need — the two values stored are a JSON
+# document and a hand-encoded breadcrumb, both `&[u8]`.
+sequential-storage = { version = "=8.0.1", default-features = false, features = ["defmt"] }
+# `adapter::BlockingAsync`, which is the only piece of it linked: embassy-rp's
+# Flash implements the *blocking* `NorFlash` traits and sequential-storage's map
+# API is async, so one of the two has to be adapted. See `storage`'s module docs
+# for why adapting the blocking side is not a lie about what happens.
+embassy-embedded-hal = { version = "=0.6.0", features = ["defmt"] }
 # The HTTP server (SPEC §7.3). `default-features = false` is load-bearing: the
 # default set includes `std`, which enables `alloc`. `embassy` selects the
 # timer and the embassy-net socket glue; `json` adds `serde-json-core` for the
@@ -90,6 +111,10 @@ picoserve = { version = "=0.19.0", default-features = false, features = ["embass
 # Response bodies are serialized straight into a caller-owned slice.
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde-json-core = "=0.6.0"
+# The PIO clock divider's 16.8 fixed-point type. embassy-rp takes it by value in
+# `pio::Config` and does not re-export the crate, so it is named here; already in
+# the graph under embassy-rp and cyw43-pio.
+fixed = "=1.30.0"
 # `msp` / `msplim`, for the core-0 stack watermark and the static-RAM figure in
 # `/api/status`, and `SCB::sys_reset` for `/api/reboot`. Already in the graph
 # under rp235x-pac; named here because this crate calls it directly.

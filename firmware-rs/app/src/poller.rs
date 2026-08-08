@@ -56,6 +56,8 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant, Timer};
 use scoreboard_config::DeviceConfig;
+use scoreboard_input::button::Press;
+use scoreboard_input::menu::{Action, Button as MenuButton, MenuController};
 use scoreboard_model::feed::LeagueId;
 use scoreboard_model::poll::{
     self, FailureTracker, PollError, SkipKind, SkipMachine, SkipVerdict,
@@ -86,14 +88,26 @@ pub enum Command {
     /// `api_routes.py` wrote them into a module the renderers read directly and
     /// they appeared on the next frame; this is what keeps that promise.
     ColorsChanged,
+    /// A button press, already debounced and folded into short or long by
+    /// [`crate::inputs`]. Where it goes is [`MenuController`]'s decision, not
+    /// the input task's — see its module docs.
+    Press(MenuButton, Press),
 }
 
-/// Task #12's presses land here, and so does `PUT /api/config`.
+/// Presses land here, and so does `PUT /api/config`.
 ///
 /// Four deep: a command is consumed between ticks, and no producer sends more
 /// than one per user action. A full channel means the poller is inside a
 /// request, and `try_send`'s failure is the right answer — a press that could
 /// not be delivered is a press that would have been rejected anyway.
+///
+/// The depth is also what makes a **burst** of presses advance the rotation
+/// exactly once, together with the skip machine: the first press arms a skip,
+/// and every press that arrives before that skip's tick completes is *rejected*
+/// rather than queued (`SkipMachine::request`). Four slots is enough that a
+/// human mashing the button at ~10 Hz never overflows the channel between
+/// ticks, and if one ever did, the dropped press would have been rejected on
+/// arrival anyway.
 static COMMANDS: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 
 /// Send a command, dropping it if the queue is full. Never blocks, so an HTTP
@@ -204,6 +218,13 @@ pub fn describe(error: &PollError) -> DescribedError {
 
 pub struct DescribedError(poll::Friendly);
 
+/// Whether a command wants the poll loop to tick now or to finish its sleep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wake {
+    Now,
+    Later,
+}
+
 impl defmt::Format for DescribedError {
     fn format(&self, formatter: defmt::Formatter<'_>) {
         defmt::write!(
@@ -248,6 +269,10 @@ struct Poller {
     /// tick syncs before it commits anything — `main.py` ran the sync in the
     /// boot sequence, ahead of the poller, for the same reason.
     next_time_sync: Instant,
+    /// The league-select session. Lives here because it mutates the `Slate` and
+    /// the `Store`, and this task owns both — `menu.py`'s controller had the
+    /// same two references for the same reason.
+    menu: MenuController,
     buffer: ResponseBuffer,
 }
 
@@ -270,6 +295,7 @@ pub async fn run(
         etags: [const { None }; MAX_SOURCES],
         last_rotation_ms: None,
         next_time_sync: Instant::now(),
+        menu: MenuController::new(),
         buffer: [0; poll::RESPONSE_BYTES],
     };
     poller.slate.set_sources(&sources);
@@ -314,14 +340,7 @@ pub async fn run(
             }
         }
 
-        // The interruptible sleep. `asyncio.wait_for(self._wake.wait(),
-        // poll_interval_seconds)` — a command arriving mid-tick is already in
-        // the channel and returns from this immediately.
-        if let Either::Second(command) =
-            select(Timer::after(cadence.poll_interval), COMMANDS.receive()).await
-        {
-            poller.apply(command);
-        }
+        poller.sleep(cadence.poll_interval).await;
     }
 }
 
@@ -555,7 +574,62 @@ impl Poller {
         Ok(())
     }
 
-    fn apply(&mut self, command: Command) {
+    /// The interruptible sleep between ticks.
+    ///
+    /// `asyncio.wait_for(self._wake.wait(), poll_interval_seconds)`, plus one
+    /// thing MicroPython did not need. Two rules:
+    ///
+    /// * **Only some commands wake the loop.** `skip()` and `skip_league()` set
+    ///   `self._wake` because the whole point is to advance *now*;
+    ///   `toggle_lock()` deliberately did not, because a lock changes nothing
+    ///   that a tick would show. A menu keystroke is the same — it repaints
+    ///   through the store and needs no poll — so applying it and going back to
+    ///   sleep is both cheaper and closer to the original.
+    /// * **An open menu caps the sleep.** `menu.py` checked its 10 s inactivity
+    ///   timeout from the 50 ms button loop, a task that ran regardless. Here
+    ///   the controller lives with its state's owner, and this task sleeps for a
+    ///   poll interval — 30 s by default, three times the timeout. Without the
+    ///   cap a user who walked away would leave the menu on the panel until the
+    ///   next poll.
+    async fn sleep(&mut self, interval: Duration) {
+        let deadline = Instant::now() + interval;
+        loop {
+            let wake_at = match self.menu.deadline_ms() {
+                Some(menu_ms) => deadline.min(Instant::from_millis(menu_ms)),
+                None => deadline,
+            };
+            match select(Timer::at(wake_at), COMMANDS.receive()).await {
+                Either::First(()) => {
+                    let now = Instant::now();
+                    if self.menu_timeout(now.as_millis()) || now >= deadline {
+                        return;
+                    }
+                }
+                Either::Second(command) => {
+                    if self.apply(command) == Wake::Now {
+                        return;
+                    }
+                    if Instant::now() >= deadline {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Apply the menu's inactivity timeout. Returns whether the loop should
+    /// tick now.
+    fn menu_timeout(&mut self, now_ms: Millis) -> bool {
+        let action = self.menu.check_timeout(&mut self.slate, self.store, now_ms);
+        if action == Action::FilterApplied {
+            crate::debug!("menu: input timeout, filter applied");
+            self.publish();
+            return true;
+        }
+        false
+    }
+
+    fn apply(&mut self, command: Command) -> Wake {
         match command {
             Command::ColorsChanged => {
                 if let Some(colors) = settings::take_ui_colors() {
@@ -563,20 +637,68 @@ impl Poller {
                     self.publish();
                     crate::debug!("poll: ui colours applied");
                 }
+                Wake::Later
+            }
+            Command::Press(button, press) => self.route(button, press),
+        }
+    }
+
+    /// Hand a press to the menu controller and act on what it hands back.
+    ///
+    /// The controller is the single dispatch point for both buttons whether or
+    /// not the menu is open — `menu.py`'s arrangement, and the reason the
+    /// open/closed question is asked in exactly one place.
+    fn route(&mut self, button: MenuButton, press: Press) -> Wake {
+        let now = Instant::now().as_millis();
+        match self.menu.press(button, press, &mut self.slate, self.store, now) {
+            Action::Handled => Wake::Later,
+            Action::Skip => self.skip(SkipKind::Game),
+            Action::SkipLeague => self.skip(SkipKind::League),
+            Action::ToggleLock => {
+                let locked = self.slate.toggle_lock();
+                // Non-sticky, deliberately: a lock toast fired mid-skip has to
+                // survive the skip tick's `clear_toast_if_sticky` teardown.
+                self.store.set_toast(
+                    "",
+                    if locked {
+                        scoreboard_model::ToastKind::Lock
+                    } else {
+                        scoreboard_model::ToastKind::Unlock
+                    },
+                    false,
+                    now,
+                );
+                self.publish();
+                crate::debug!("poll: rotation lock {}", locked);
+                // `toggle_lock` did not set `self._wake`: the current game keeps
+                // polling either way and there is nothing for a tick to do.
+                Wake::Later
+            }
+            Action::FilterApplied => {
+                crate::debug!("menu: filter applied, {} in rotation", self.slate.len());
+                self.publish();
+                // `poller.py:353` woke the loop here so the board moves off a
+                // filtered-out game within a tick rather than a poll interval.
+                Wake::Now
             }
         }
     }
 
-    /// A press, once task #12 has one to deliver.
+    /// A press that asks the rotation to advance.
     ///
     /// The accept/reject decision lives here rather than in the input task
     /// because it is about the poller's state, and `poller.py`'s `skip()` made
-    /// it in the same place. What #12 adds is the [`Command`] variant that
-    /// calls this; the machine underneath is host-tested in `scoreboard-model`.
-    #[expect(
-        dead_code,
-        reason = "task #12 owns the button loop; declaring the seam before its caller exists, as `ringlog::set_wall_clock` did for this task"
-    )]
+    /// it in the same place; the machine underneath is host-tested in
+    /// `scoreboard-model`. A rejected press does **not** wake the loop — there
+    /// is no work to do, and waking would turn a burst of presses into a burst
+    /// of polls.
+    fn skip(&mut self, kind: SkipKind) -> Wake {
+        match self.press(kind) {
+            SkipVerdict::Armed => Wake::Now,
+            SkipVerdict::Rejected => Wake::Later,
+        }
+    }
+
     fn press(&mut self, kind: SkipKind) -> SkipVerdict {
         let now = Instant::now().as_millis();
         let verdict = self.skips.request(kind);

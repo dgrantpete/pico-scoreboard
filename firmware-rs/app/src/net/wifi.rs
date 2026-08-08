@@ -97,54 +97,38 @@ pub enum Provisioned {
 
 /// Station credentials and the device identity derived from them.
 ///
-/// Today these come from the build (see [`Credentials::from_dev_build`]).
-/// Task #12 replaces that one constructor with a read from flash and nothing
-/// else in this module changes.
+/// **Owned, not borrowed.** They used to be `&'static str` out of `build.rs`;
+/// they now come from [`crate::config`], which lives behind a lock that must
+/// not be held across an `await` — and provisioning is nothing but awaits. So
+/// they are copied out once, into the ~130 B this struct costs in the bringup
+/// task's arena, and the lock is released before the radio is touched.
 pub struct Credentials {
-    pub ssid: &'static str,
-    pub password: &'static str,
+    pub ssid: heapless::String<{ scoreboard_config::MAX_SSID }>,
+    pub password: heapless::String<{ scoreboard_config::MAX_PASSWORD }>,
     /// `config.device_name`: the DHCP hostname in station mode, the AP's SSID
     /// in setup mode, and the base of the mDNS name the Host-header check
     /// accepts.
-    pub device_name: &'static str,
+    pub device_name: heapless::String<{ scoreboard_config::MAX_SSID }>,
     /// `config.connect_timeout_seconds`, per attempt, before the NOIP grant.
     pub connect_timeout: Duration,
 }
 
 impl Credentials {
-    /// Read what `build.rs` pulled out of the gitignored `dev.toml`.
+    /// Read the running configuration's network section.
     ///
-    /// **The bench seam.** With no `dev.toml` every field is its default and
-    /// `ssid` is empty, which is the un-provisioned device: [`provision`] skips
-    /// the station attempts and goes straight to setup mode, reason
-    /// `no_network_configured`. That is the same path a device out of the box
-    /// takes, so the absence of the file is a supported configuration.
-    pub const fn from_dev_build() -> Credentials {
-        Credentials {
-            ssid: env!("DEV_WIFI_SSID"),
-            password: env!("DEV_WIFI_PASSWORD"),
-            device_name: env!("DEV_DEVICE_NAME"),
-            connect_timeout: Duration::from_secs(parse_secs(env!("DEV_CONNECT_TIMEOUT_SECONDS"))),
-        }
+    /// An empty `ssid` is the un-provisioned device: [`provision`] skips the
+    /// station attempts and goes straight to setup mode, reason
+    /// `no_network_configured`. Three different situations produce it and all
+    /// three are supported — a device out of the box, a bench image built with
+    /// no `dev.toml`, and one that has just had `POST /api/reset-network`.
+    pub fn from_config() -> Credentials {
+        crate::config::with(|config| Credentials {
+            ssid: config.network.ssid.clone(),
+            password: config.network.password.clone(),
+            device_name: config.network.device_name.clone(),
+            connect_timeout: Duration::from_secs(config.network.connect_timeout_seconds as u64),
+        })
     }
-}
-
-/// `str::parse` is not `const`, and the timeout wants to be.
-const fn parse_secs(text: &str) -> u64 {
-    let bytes = text.as_bytes();
-    let mut value = 0u64;
-    let mut index = 0;
-    while index < bytes.len() {
-        let digit = bytes[index];
-        assert!(
-            digit.is_ascii_digit(),
-            "dev.toml: connect_timeout_seconds must be a whole number of seconds"
-        );
-        value = value * 10 + (digit - b'0') as u64;
-        index += 1;
-    }
-    assert!(value > 0, "dev.toml: connect_timeout_seconds must be > 0");
-    value
 }
 
 /// Join the configured network, or become one.
@@ -161,7 +145,7 @@ pub async fn provision(
     match station(control, stack, store, publisher, credentials).await {
         Ok(ip) => Provisioned::Station { ip },
         Err(reason) => {
-            let ip = start_ap(control, stack, credentials.device_name).await;
+            let ip = start_ap(control, stack, &credentials.device_name).await;
             Provisioned::Ap { reason, ip }
         }
     }
@@ -203,7 +187,7 @@ async fn station(
         };
 
         let mut detail = heapless::String::<12>::new();
-        match scan(control, credentials.ssid).await {
+        match scan(control, &credentials.ssid).await {
             Some(found) => {
                 let _ = write!(detail, "Found {found}");
             }
@@ -221,7 +205,7 @@ async fn station(
         );
 
         // `main.py:683`: the detail line shows at most 20 characters of SSID.
-        let shown_ssid = truncate(credentials.ssid, 20);
+        let shown_ssid = truncate(&credentials.ssid, 20);
         step(
             store,
             publisher,
@@ -271,7 +255,7 @@ async fn attempt_join(
     // Armed before the join so the client is already listening when the link
     // comes up. `reset_radio` cleared it, so this is a fresh transaction every
     // attempt — the DHCP equivalent of MicroPython's per-attempt `deinit`.
-    stack.set_config_v4(ConfigV4::Dhcp(dhcp_config(credentials.device_name)));
+    stack.set_config_v4(ConfigV4::Dhcp(dhcp_config(&credentials.device_name)));
 
     let started = Instant::now();
     // The un-extended budget. Association is what buys the extension.
@@ -286,7 +270,7 @@ async fn attempt_join(
         }
 
         let joining = control.join(
-            credentials.ssid,
+            &credentials.ssid,
             JoinOptions::new(credentials.password.as_bytes()),
         );
         match with_timeout(remaining, joining).await {

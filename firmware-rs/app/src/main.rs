@@ -43,16 +43,20 @@
 // not enough to prove `PathRouter` for the result.
 #![recursion_limit = "256"]
 
+mod brightness;
 mod config;
 mod display_core1;
 mod http;
+mod inputs;
 mod logos;
 mod net;
 mod poller;
 mod probe;
 mod ringlog;
 mod settings;
+mod storage;
 mod supervise;
+mod veml7700;
 
 use core::cell::UnsafeCell;
 
@@ -60,12 +64,20 @@ use cortex_m_rt::entry;
 use defmt_rtt as _;
 use embassy_executor::Executor;
 use embassy_rp::multicore::{Stack, spawn_core1};
+use embassy_rp::watchdog::Watchdog;
 use hub75::display::{FrameBytes, Hub75Display};
 use hub75::driver::{Config, Hub75Driver};
 use hub75::geometry::RGB565_FRAME_BYTES;
-use panic_probe as _;
 use scoreboard_model::{SnapshotChannel, Store};
 use static_cell::{ConstStaticCell, StaticCell};
+
+// Debug builds print the panic over RTT and trap for the debugger, which is
+// what a probe session wants. Release builds install `supervise::panic`
+// instead: it writes a breadcrumb to uninitialised RAM and resets, so the crash
+// is at `/api/logs/previous` after the reboot. See that function for why the two
+// cannot both exist and why the release one does not log.
+#[cfg(debug_assertions)]
+use panic_probe as _;
 
 /// Core 1's stack.
 ///
@@ -181,6 +193,37 @@ fn main() -> ! {
     // timing from whatever `clk_sys` ended up at. There is no `machine.freq()`
     // to consult later and the driver does not support the clock moving under
     // it, so it has to be told the settled value.
+    // Everything that touches flash happens **here**, before `spawn_core1`.
+    //
+    // A flash program or erase runs from RAM with XIP disabled, and embassy-rp
+    // arranges that by parking core 1 through the multicore FIFO. With core 1
+    // not yet started that park is a no-op, so the boot's reads — and the one
+    // write that promotes a crash breadcrumb — cost nothing at all. The same
+    // calls after the render loop is up cost the panel a frame, which is why
+    // `storage`'s API is blocking and says so.
+    storage::install(peripherals.FLASH);
+    let has_previous_record = supervise::load_previous_record();
+    let boot_config = config::load();
+
+    // Read before the watchdog task can arm it again, and logged because it is
+    // the one fact that separates "somebody pulled the plug" from "this device
+    // reset itself" — which is exactly the question BACKLOG 69 left open.
+    let watchdog = Watchdog::new(peripherals.WATCHDOG);
+    match watchdog.reset_reason() {
+        Some(embassy_rp::watchdog::ResetReason::TimedOut) => defmt::warn!(
+            "boot: the previous run ended in a watchdog timeout{=str}",
+            if has_previous_record {
+                "; see /api/logs/previous"
+            } else {
+                " with no breadcrumb — see supervise's docs"
+            }
+        ),
+        Some(embassy_rp::watchdog::ResetReason::Forced) => {
+            defmt::info!("boot: reset was forced (probe, or POST /api/reboot)")
+        }
+        None => defmt::info!("boot: power-on or SYSRESETREQ"),
+    }
+
     let pac = rp235x_pac::Peripherals::take().expect("rp235x-pac peripherals already taken");
     let driver = Hub75Driver::new(pac.PIO0, pac.DMA, Config::defaults(system_clock_hz));
     defmt::info!(
@@ -218,10 +261,10 @@ fn main() -> ! {
 
     // The radio's silicon, decided here so the resource map lives in one place.
     // PIO2 is RP2350-only, which is what lets the panel keep PIO0 whole and
-    // leaves PIO1 for the button driver (task #12). DMA CH0 is low on purpose:
-    // hub75 owns 12-15 through the other PAC and neither side can see the
-    // other's claim, so the two ranges are kept apart by convention and by
-    // `net`'s module docs, which is the only mechanism available.
+    // leaves PIO1 for the button driver. DMA CH0 is low on purpose: hub75 owns
+    // 12-15 through the other PAC and neither side can see the other's claim,
+    // so the two ranges are kept apart by convention and by `net`'s module
+    // docs, which is the only mechanism available.
     let radio = net::NetPeripherals {
         pio: peripherals.PIO2,
         dma: peripherals.DMA_CH0,
@@ -231,10 +274,21 @@ fn main() -> ! {
         clk: peripherals.PIN_29,
     };
 
-    // Before anything reads it, and before core 0's executor starts: the boot
-    // configuration is what the HTTP server serves and what the display
-    // settings below are derived from. Task #12 makes this a flash read.
-    let boot_config = config::load();
+    // Everything the boot hands to whichever provisioning arm wins. The buttons
+    // and the watchdog are both *after the network phase* by design — the
+    // buttons because there is no poller to send presses to in setup mode, and
+    // the watchdog because arming it around a blocking Wi-Fi join would reset
+    // the device mid-join. `main.py` ordered both the same way.
+    let deferred = net::Deferred {
+        inputs: inputs::InputPeripherals {
+            pio: peripherals.PIO1,
+            a: peripherals.PIN_10,
+            b: peripherals.PIN_22,
+        },
+        watchdog,
+        system_clock_hz,
+    };
+
     // Core 1 starts from `RenderSettings::new()` and the driver from
     // `Config::defaults`, neither of which has seen the stored configuration —
     // so it is sent once here, with every hook on.
@@ -249,9 +303,18 @@ fn main() -> ! {
         // wins. On the station path that is the poller; in setup mode nothing
         // publishes again, because the setup screen does not change.
         spawner.spawn(defmt::unwrap!(net::bringup(
-            spawner, store, publisher, radio
+            spawner, store, publisher, radio, deferred
         )));
         spawner.spawn(defmt::unwrap!(supervise::liveness(stack_probe, core0_stack)));
         spawner.spawn(defmt::unwrap!(supervise::reboot_on_request()));
+        // Both modes, always: a setup screen in a dark room should dim too, and
+        // an absent sensor is a supported configuration either way.
+        spawner.spawn(defmt::unwrap!(brightness::auto_brightness(
+            brightness::SensorPeripherals {
+                i2c: peripherals.I2C0,
+                sda: peripherals.PIN_0,
+                scl: peripherals.PIN_1,
+            }
+        )));
     });
 }

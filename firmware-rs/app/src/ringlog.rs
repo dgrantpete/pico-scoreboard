@@ -63,6 +63,17 @@ pub fn now_seconds() -> u32 {
     WALL_CLOCK_EPOCH.load(Ordering::Relaxed).saturating_add(uptime)
 }
 
+/// The wall-clock time now, or `None` if the clock has never synced.
+///
+/// [`now_seconds`] deliberately conflates the two — an unsynced device stamps
+/// entries with its uptime and the SPA renders those as `+123s`. The crash
+/// breadcrumb cannot conflate them: it carries uptime in its own field, so a
+/// zero here has to mean "unknown" rather than "the epoch".
+pub fn unix_seconds() -> Option<u32> {
+    let epoch = WALL_CLOCK_EPOCH.load(Ordering::Relaxed);
+    (epoch != 0).then(|| epoch.saturating_add(Instant::now().as_secs() as u32))
+}
+
 /// Anchor the wall clock: `unix_seconds` is the time *now*, with the device
 /// `Instant::now()` seconds into its uptime.
 ///

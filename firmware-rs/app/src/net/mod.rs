@@ -98,6 +98,23 @@ pub struct NetPeripherals {
     pub clk: Peri<'static, PIN_29>,
 }
 
+/// What the boot holds back until provisioning has finished.
+///
+/// `main.py` starts the button loop and the watchdog feeder from `main()`,
+/// *after* `start_station_mode()` has returned — and both orderings are
+/// load-bearing. The watchdog cannot be armed around a blocking join, because a
+/// join takes longer than any timeout it could use; the buttons have nothing to
+/// talk to until the poller exists. So they arrive here and are spawned by
+/// whichever arm won, which is the same shape [`bringup`] already uses for the
+/// poller and the captive portal.
+pub struct Deferred {
+    pub inputs: crate::inputs::InputPeripherals,
+    pub watchdog: embassy_rp::watchdog::Watchdog,
+    /// For the button driver's PIO clock divider, settled by
+    /// `embassy_rp::init`.
+    pub system_clock_hz: u32,
+}
+
 /// The CYW43's own firmware, uploaded over SPI at every boot because the radio
 /// has no flash of its own. Provenance and hashes: `cyw43-firmware/README.md`.
 static FIRMWARE: &cyw43::Aligned<cyw43::A4, [u8]> =
@@ -144,6 +161,7 @@ pub async fn bringup(
     store: &'static mut Store,
     mut publisher: Publisher<'static>,
     p: NetPeripherals,
+    deferred: Deferred,
 ) {
     // Step 1 of 5. `main.py` commits this from its display-init block, before
     // core 1 starts; here core 1 is already running, so this is the first thing
@@ -176,7 +194,7 @@ pub async fn bringup(
     spawner.spawn(defmt::unwrap!(cyw43_runner(runner)));
     control.init(CLM).await;
 
-    let credentials = Credentials::from_dev_build();
+    let credentials = Credentials::from_config();
 
     // Seeds smoltcp's TCP sequence numbers and ephemeral port choice. ROSC
     // entropy rather than the TRNG peripheral: this is the only randomness the
@@ -206,7 +224,7 @@ pub async fn bringup(
             defmt::info!(
                 "station mode: {} as {=str}, services starting",
                 ip,
-                credentials.device_name
+                credentials.device_name.as_str()
             );
             // The handover. The poller takes both the store and the publisher,
             // so nothing here can touch either afterwards — which is the
@@ -214,40 +232,49 @@ pub async fn bringup(
             spawner.spawn(defmt::unwrap!(crate::poller::run(store, publisher, stack)));
             #[cfg(feature = "net-probe")]
             spawner.spawn(defmt::unwrap!(probe::fetch_time(stack)));
+            // Station mode only, as `main.py`'s task table has it: every action
+            // a press can produce belongs to the poller, and in setup mode
+            // there is no poller to receive one.
+            spawner.spawn(defmt::unwrap!(crate::inputs::run(
+                deferred.inputs,
+                deferred.system_clock_hz
+            )));
+            arm_watchdog(spawner, deferred.watchdog, true);
 
             let address = wifi::address_text(ip);
             status::publish(status::NetStatus::Station {
                 ip: bounded(&address),
-                device_name: bounded(credentials.device_name),
-                configured_ssid: bounded(credentials.ssid),
+                device_name: bounded(&credentials.device_name),
+                configured_ssid: bounded(&credentials.ssid),
             });
-            MyHosts::station(credentials.device_name, &address)
+            MyHosts::station(&credentials.device_name, &address)
         }
         Provisioned::Ap { reason, ip } => {
             store.finish_startup(StartupExit::Setup {
                 reason,
-                ap_ssid: credentials.device_name,
+                ap_ssid: &credentials.device_name,
                 ap_ip: wifi::AP_IP_TEXT,
-                wifi_ssid: credentials.ssid,
+                wifi_ssid: &credentials.ssid,
             });
             publisher.publish(store.snapshot());
 
             defmt::info!(
                 "setup mode: reason {=str}, ap ssid {=str}, ap ip {}",
                 reason_name(reason),
-                credentials.device_name,
+                credentials.device_name.as_str(),
                 ip
             );
             spawner.spawn(defmt::unwrap!(captive_dns::serve(stack, ip)));
             spawner.spawn(defmt::unwrap!(dhcp_server::serve(stack, ip)));
+            arm_watchdog(spawner, deferred.watchdog, false);
 
             status::publish(status::NetStatus::Ap {
                 reason,
                 ap_ip: bounded(wifi::AP_IP_TEXT),
-                ap_ssid: bounded(credentials.device_name),
-                configured_ssid: bounded(credentials.ssid),
+                ap_ssid: bounded(&credentials.device_name),
+                configured_ssid: bounded(&credentials.ssid),
             });
-            MyHosts::ap(credentials.device_name, wifi::AP_IP_TEXT)
+            MyHosts::ap(&credentials.device_name, wifi::AP_IP_TEXT)
         }
     };
 
@@ -282,6 +309,36 @@ pub async fn bringup(
     // task owns the hardware. What ends here is the *boot*, which is why this
     // task returns instead of parking: the `Store` and the `Publisher` have
     // moved to whoever owns them next, and nothing else it holds has a reader.
+}
+
+/// Start the watchdog task, if the configuration asks for one.
+///
+/// Opt-in and off by default, which is `main.py`'s arrangement and the reason
+/// a bench session can halt the core at a breakpoint without the device
+/// rebooting under the debugger a few seconds later.
+///
+/// `station` decides whether the poller's health counts. It must not in setup
+/// mode: there is no poller there by design, so its health would read as "never
+/// reached the backend" forever and the gate would reset the device every few
+/// seconds while somebody was typing their Wi-Fi password into the settings
+/// page.
+fn arm_watchdog(spawner: Spawner, watchdog: embassy_rp::watchdog::Watchdog, station: bool) {
+    let (enabled, timeout_ms, poll_interval_s) = crate::config::with(|config| {
+        (
+            config.watchdog.enabled,
+            config.watchdog_timeout_ms(),
+            config.display.poll_interval_seconds,
+        )
+    });
+    if !enabled {
+        defmt::info!("watchdog: disabled by configuration");
+        return;
+    }
+    spawner.spawn(defmt::unwrap!(crate::supervise::watchdog(
+        watchdog,
+        timeout_ms,
+        station.then_some(poll_interval_s),
+    )));
 }
 
 /// Copy into a bounded string, truncating. Every caller passes a value already

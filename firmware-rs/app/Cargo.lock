@@ -689,6 +689,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0641612053b2f34fc250bb63f6630ae75de46e02ade7f457268447081d709ce"
 dependencies = [
+ "defmt 1.1.1",
  "embassy-futures",
  "embassy-hal-internal 0.4.0",
  "embassy-sync",
@@ -2089,6 +2090,7 @@ dependencies = [
  "defmt 1.1.1",
  "defmt-rtt",
  "edge-dhcp",
+ "embassy-embedded-hal",
  "embassy-executor",
  "embassy-futures",
  "embassy-net",
@@ -2097,6 +2099,7 @@ dependencies = [
  "embassy-time",
  "embedded-io 0.7.1",
  "embedded-io-async 0.7.0",
+ "fixed",
  "heapless 0.9.3",
  "hub75",
  "panic-probe",
@@ -2104,12 +2107,14 @@ dependencies = [
  "reqwless",
  "rp235x-pac",
  "scoreboard-config",
+ "scoreboard-input",
  "scoreboard-layout",
  "scoreboard-log",
  "scoreboard-model",
  "scoreboard-portal",
  "scoreboard-render",
  "scoreboard-wire",
+ "sequential-storage",
  "serde",
  "serde-json-core",
  "static_cell",
@@ -2125,6 +2130,17 @@ dependencies = [
  "scoreboard-render",
  "serde",
  "serde-json-core",
+]
+
+[[package]]
+name = "scoreboard-input"
+version = "0.1.0"
+dependencies = [
+ "heapless 0.9.3",
+ "libm",
+ "pio",
+ "scoreboard-model",
+ "scoreboard-render",
 ]
 
 [[package]]
@@ -2199,6 +2215,16 @@ name = "semver-parser"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
+
+[[package]]
+name = "sequential-storage"
+version = "8.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e750f14f4f6e5a81277c66311713a56106c8df0196df62a634d1fc806556832b"
+dependencies = [
+ "defmt 1.1.1",
+ "embedded-storage-async",
+]
 
 [[package]]
 name = "serde"

@@ -8,27 +8,26 @@
 //! be the *innermost* layer, and [`build`] starts from it with
 //! `Router::from_service`.
 //!
-//! # Two seams that are deliberately unfinished
+//! # One seam that is deliberately unfinished
 //!
-//! Both are places where the honest answer today is an error code, and where
-//! inventing a stand-in would be worse than saying so:
+//! **`POST /api/check-update`** — `501 {"status": "unsupported"}`. This is not
+//! a placeholder: it is precisely the answer `api_routes.py` gave when
+//! `request.app.request_ota_check` was absent, which was its way of saying
+//! "this build has no on-demand update path". Task #15 gives it one.
 //!
-//! - **`GET /api/logs/previous`** — the previous boot's log. MicroPython
-//!   rotated `current.log` to `previous.log` at boot and served the file. SPEC
-//!   §9 replaces that with a single panic breadcrumb written to
-//!   sequential-storage, which is task #12's. Until then there is no record to
-//!   serve and this answers `404` with the same body shape the file-missing
-//!   branch produced — which is a state the SPA already handles, because a
-//!   device on its first boot always had one.
-//! - **`POST /api/check-update`** — `501 {"status": "unsupported"}`. This is
-//!   not a placeholder: it is precisely the answer `api_routes.py` gave when
-//!   `request.app.request_ota_check` was absent, which was its way of saying
-//!   "this build has no on-demand update path". Task #15 gives it one.
+//! # The two routes that touch flash
 //!
-//! Persistence is the third: every write here changes the running
-//! configuration and **nothing is written to flash**, so a `PUT /api/config`
-//! does not survive a reboot. Task #12 owns storage, and the seam it fills is
-//! one function — [`persist`].
+//! `PUT /api/config` and `POST /api/reset-network` both end in [`persist`],
+//! which is **one** write per request and stops the panel for its duration —
+//! see that function. Nothing else here reaches storage: `/api/logs/previous`
+//! serves a record read once at boot.
+//!
+//! # `POST /api/induce-panic`
+//!
+//! Behind `--features induce-panic`, off in every shipped build. It exists for
+//! one drill — panic, breadcrumb, reboot, read the breadcrumb back — which is
+//! otherwise only reachable by finding a real bug, and a recovery path that has
+//! never been exercised is a recovery path that does not work.
 
 use picoserve::request::Path;
 use picoserve::response::{IntoResponse, Response, StatusCode, chunked};
@@ -42,7 +41,7 @@ use crate::{config, poller, ringlog, settings, supervise};
 
 /// Build the router. See the module docs for why the catch-all comes first.
 pub fn build() -> picoserve::Router<impl picoserve::routing::PathRouter> {
-    picoserve::Router::from_service(CatchAll)
+    let router = picoserve::Router::from_service(CatchAll)
         .route("/", get(index))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/status", get(get_status))
@@ -50,7 +49,18 @@ pub fn build() -> picoserve::Router<impl picoserve::routing::PathRouter> {
         .route("/api/logs/previous", get(get_previous_log))
         .route("/api/check-update", post(check_update))
         .route("/api/reboot", post(reboot))
-        .route("/api/reset-network", post(reset_network))
+        .route("/api/reset-network", post(reset_network));
+    #[cfg(feature = "induce-panic")]
+    let router = router.route("/api/induce-panic", post(induce_panic));
+    router
+}
+
+/// `POST /api/induce-panic` — panic on core 0, on purpose. See the module docs.
+#[cfg(feature = "induce-panic")]
+async fn induce_panic() -> impl IntoResponse {
+    panic!("induced by POST /api/induce-panic");
+    #[expect(unreachable_code, reason = "the panic is the whole handler")]
+    ok_json("{}")
 }
 
 // ---------------------------------------------------------------------------
@@ -358,16 +368,20 @@ async fn put_config(body: ConfigBody) -> impl IntoResponse {
     Either::B(json(render_config()))
 }
 
-/// The single flash write `update_many` performed, for task #12 to fill in.
+/// The single flash write `update_many` performed.
 ///
 /// It is one call in one place on purpose. `config.py` was emphatic that a
 /// batched update is **one** write — the flash on these boards is the part that
-/// wears out, and the settings page sends a whole section per save.
+/// wears out, and the settings page sends a whole section per save. Both
+/// callers above have already finished mutating before they reach this.
+///
+/// It is also the one place in the HTTP surface that **stops the panel**: a
+/// flash program parks core 1 for its duration. Measured at one dropped frame
+/// per save, which is why it happens once per request and not once per key.
 fn persist() {
-    // Deliberately empty. Task #12 owns the storage region; when it lands, the
-    // whole of its write is `config::with(|config| storage.save(config))` here,
-    // and every caller above is already in the right place to make it one
-    // write per request.
+    if !config::persist() {
+        crate::error!("api: the configuration was applied but not saved");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -439,13 +453,28 @@ impl chunked::Chunks for LogChunks {
     }
 }
 
-/// `GET /api/logs/previous` — the previous boot's record. See the module docs:
-/// always `404` until task #12 writes the breadcrumb.
+/// `GET /api/logs/previous` — the crash breadcrumb, as plain text.
+///
+/// MicroPython rotated the whole ring to `previous.log` at every boot and served
+/// the file; SPEC §9 replaces it with one record written when something dies
+/// (see [`scoreboard_log::breadcrumb`]). Both are `text/plain` and both answer
+/// `404` when there is nothing, which is what the SPA's `getPreviousLog` reads
+/// — it takes `response.text()` and maps a `404` to `null`.
+///
+/// The record is read from flash once at boot and served from RAM, so opening
+/// the logs page does not park core 1.
 async fn get_previous_log() -> impl IntoResponse {
-    error_response(
-        StatusCode::NOT_FOUND,
-        r#"{"error":"not_found","message":"No previous-boot record"}"#,
-    )
+    let rendered = scratch::claim().and_then(|mut lease| {
+        let len = supervise::render_previous_record(lease.as_mut())?;
+        Some(TextBody { lease, len })
+    });
+    match rendered {
+        Some(body) => Either::A(Response::ok(body)),
+        None => Either::B(error_response(
+            StatusCode::NOT_FOUND,
+            r#"{"error":"not_found","message":"No previous-boot record"}"#,
+        )),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -551,6 +580,26 @@ impl picoserve::response::Content for StaticJson {
 struct JsonBody {
     lease: Lease,
     len: usize,
+}
+
+/// The same, as `text/plain`. `GET /api/logs/previous`'s only shape.
+struct TextBody {
+    lease: Lease,
+    len: usize,
+}
+
+impl picoserve::response::Content for TextBody {
+    fn content_type(&self) -> &'static str {
+        "text/plain"
+    }
+
+    fn content_length(&self) -> usize {
+        self.len
+    }
+
+    async fn write_content<W: io::Write>(self, mut writer: W) -> Result<(), W::Error> {
+        writer.write_all(&self.lease.as_slice()[..self.len]).await
+    }
 }
 
 impl picoserve::response::Content for JsonBody {
