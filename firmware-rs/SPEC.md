@@ -234,7 +234,8 @@ Deliberate deviation from "smallest first": Phase 1 front-loads the riskiest har
 
 ## Appendix A — Dependency audit table
 
-Audited 2026-08-07 against the tree as it stands after Phase 1: `crates/scoreboard-wire`,
+Audited 2026-08-07 against the tree as it stands after Phase 2's render foundation:
+`crates/scoreboard-wire`, `crates/scoreboard-model`, `crates/scoreboard-render`,
 `crates/hub75`, and `firmware-rs/hub75-diag`. Versions are read from the two committed
 lockfiles (root `Cargo.lock`; `firmware-rs/hub75-diag/Cargo.lock`, a standalone workspace).
 Everything embedded is exact-pinned per §14. "Buffers" answers *are the buffers
@@ -245,8 +246,10 @@ caller-owned?* — `n/a` means the crate holds no runtime buffer at all.
 | Crate | Ver | Used by | no_std | no-alloc | Buffers | Notes |
 |---|---|---|---|---|---|---|
 | *(none)* | | scoreboard-wire | yes | yes | caller | The crate has **zero dependencies**. `#![no_std]`, decode borrows the caller's receive buffer, encode writes through a `Sink`. |
-| `heapless` | =0.9.3 | scoreboard-model | yes | yes² | inline | ²Off-by-default `alloc` feature; not activated. Bounded strings and vectors, all inline in the owning struct. Strings carry a `u16` length so a snapshot has the same layout on the host and on `thumbv8m` — that is what makes the BUDGET.md figures host-measurable. |
+| `heapless` | =0.9.3 | scoreboard-model, scoreboard-render | yes | yes² | inline | ²Off-by-default `alloc` feature; not activated. Bounded strings and vectors, all inline in the owning struct. Strings carry a `u16` length so a snapshot has the same layout on the host and on `thumbv8m` — that is what makes the BUDGET.md figures host-measurable. |
 | `scoreboard-wire` | path | scoreboard-model | yes | yes | caller | The model builds its bounded owned views straight out of the borrowed decode, with no intermediate owned copy. |
+| `scoreboard-model` | path | scoreboard-render | yes | yes | inline | The renderer reads a snapshot and writes nothing back. |
+| `qrcodegen-no-heap` | =1.8.1 | scoreboard-render | yes | yes | caller | Nayuki's reference QR encoder with every buffer moved to the caller — **zero dependencies**, `#![no_std]`, `#![forbid(unsafe_code)]`, no allocation of any kind. The two working buffers are stack arrays sized from `Version::buffer_len()` (211 B each at the version cap). Replaces `lib/miqro`, whose encoder shipped as opaque precompiled ARM `.mpy`; §6's "port the miqro subset" fallback was not needed. |
 | `libm` | =0.2.16 | hub75 | yes | yes | n/a | `pow`/`floor`/`fmod` behind `Gamma::Power`. Pure computation, no state. |
 | `pio` | =0.3.0 | hub75 | yes | yes | n/a | Compile-time only: `pio_asm!` assembles both PIO programs into a `Program<32>` (inline `ArrayVec`, no heap). Its `pio-proc` half is a proc macro — it allocates on the *host* at build time; nothing of it ships. `pio-core` pulls `arrayvec` with `default-features = false`. |
 | `rp235x-pac` | =0.2.0 | hub75, hub75-diag | yes | yes | n/a | Register definitions; the driver's PAC-level DMA chaining. hub75-diag enables `critical-section`. See the two-PAC note below. |
@@ -280,7 +283,6 @@ caller-owned?* — `n/a` means the crate holds no runtime buffer at all.
 | `cyw43`, `cyw43-pio` (+ firmware blobs) | not yet pinned | 3 | |
 | `sequential-storage` | not yet pinned | 3 | Persistence (§9) |
 | `serde` (+`derive`) | not yet pinned | 3 | Must deserialize to borrowed/bounded types only |
-| QR encoder (crate TBD) | not yet pinned | 2–3 | ~4 KB caller-owned scratch, or port the miqro subset (§6) |
 | `embassy-boot`(-rp) | not yet pinned | 4 | OTA + signature verification (§8) |
 | `flip-link` | not yet pinned | 3 | Linker wrapper, §2. **Not yet in use** — `hub75-diag` links without it, so stack overflow currently corrupts `.bss` instead of faulting. |
 | `png-stream` deps | not yet pinned | S | Out of parity scope |

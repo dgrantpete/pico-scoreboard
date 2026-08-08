@@ -28,7 +28,7 @@ no heap to absorb a mistake.
 | embassy-net buffers + sockets | ~49,152 | ESTIMATE | Poller + HTTP server ×2 + DNS + OTA. |
 | cyw43 driver state | ~16,384 | ESTIMATE | |
 | Receive/scratch buffers (wire, HTTP, OTA chunk) | ~40,960 | ESTIMATE | Unioned where phases cannot overlap (OTA vs. poll). |
-| Glyph/font tables | 0 | ESTIMATE | Design invariant, not a guess: `&'static` in flash, zero init cost. Verify when the font pipeline lands in Phase 2. |
+| Glyph/font tables + compiled sprites | 0 | **MEASURED** | `crates/scoreboard-render`. **9,538 B of flash, 0 B of RAM** — read out of the crate's own object code, not asserted. Breakdown and the command below. |
 | Core-0 task arenas + stack | ~24,576 | ESTIMATE | |
 | Core-1 stack | 8,192 | ESTIMATE | Render loop only. |
 | Ring log + misc statics | ~8,192 | ESTIMATE | Measured floor today is 272 B — embassy-rp GPIO wakers, the time driver, the critical-section lock, and the PAC singleton flags. The deployed RAM log (SPEC §9) is the bulk of this line. |
@@ -72,6 +72,43 @@ Folding those together — mutating the publisher's back buffer in place and
 carrying forward from the just-published slot — would recover 2,848 B at the
 price of making the whole state machine borrow the channel. If RAM ever gets
 tight, that is the lever; at 53.9 % headroom it is not worth the coupling.
+
+### The render tables are flash, and that is checked rather than assumed
+
+SPEC §11 budgeted "Glyph/font tables: 0 RAM — `&'static` in flash". True, but a
+`static` only lands in `.rodata` while nothing can write to it, and a single
+`static mut` or a `Cell` in a palette would move kilobytes into `.bss` without a
+compiler complaint. `scoreboard-render` forbids `unsafe`, mutates no static at
+all (the mutation-contract table in its crate docs says why), and the result is
+visible in the symbol table:
+
+| Table | Bytes | Section |
+|---|---:|---|
+| `unscii_16` heap + index | 3,888 | `.rodata` |
+| `unscii_8` heap + index | 2,360 | `.rodata` |
+| `spleen_5x8` heap + index | 1,410 | `.rodata` |
+| 10 compiled sprites (pixels + palettes) | 1,880 | `.rodata` |
+| **Total** | **9,538** | **flash, 0 B RAM** |
+
+The 19 Aseprite slices cost nothing at all: they are `const` rectangles, folded
+into the code that reads them.
+
+Reproduce (needs `binutils-arm-none-eabi`):
+
+```sh
+cargo build -p scoreboard-render --release --target thumbv8m.main-none-eabihf
+RLIB=target/thumbv8m.main-none-eabihf/release/libscoreboard_render.rlib
+# Every generated table, by section. All 'R' (read-only) is the claim.
+arm-none-eabi-nm -S -td "$RLIB" | grep scoreboard_render9generated
+# Writable statics from this crate. Zero is the claim.
+arm-none-eabi-nm -S -td "$RLIB" | awk '$3 ~ /^[bBdD]$/' | grep scoreboard_render
+```
+
+The QR encoder is the crate's only sizeable working memory and it is **stack**,
+not static: two 211 B buffers live inside `QrBitmap::encode` for the duration of
+one call. The 343 B bitmap it fills is a field of the app's `PreparedView`,
+which lands wherever the render loop's locals do — a core-1 stack line, not a
+static.
 
 ### Correction to SPEC §11
 
