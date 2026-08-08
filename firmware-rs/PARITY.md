@@ -295,3 +295,154 @@ once during Phase 3's soak, from a phone, which is the client it exists for.
 `Response.send_file_buffer_size = 2048` (`main.py:242`) has no counterpart:
 picoserve writes the body straight out of `.rodata` through the TCP send buffer,
 so there is no intermediate copy to size.
+
+---
+
+# Backend client parity — `api_client.py`, `poller.py`, `LogoPool`, time sync
+
+Phase 3, task #11. The whole poll pipeline, from the socket to a committed
+snapshot. Bench-validated against the **production backend** from the device at
+`192.168.50.236` on 2026-08-08, on real August MLB data; transcripts in the task
+report. The pure half — the error mapping, the failure streak, the skip machine,
+the buffer sizing — is host-tested in `scoreboard-model::poll`.
+
+## `api_client.py`
+
+| Behaviour | Status | Notes |
+|---|---|---|
+| Scheme downgrade `https://` → `http://`, once, on the leading scheme | **Match** | Bench-validated by restoring `api.url` as `https://…fly.dev/` mid-run and watching the next poll succeed — the migration case a stored MicroPython config presents. |
+| No API key on score routes | **Match** | Unauthenticated backend-side; a cleartext key would leak. `config.api.key` stays in the configuration for OTA. |
+| Single pre-allocated receive buffer, 4,096 B | **Match**, derivation corrected | The constant is right; `api_client.py:22-27`'s reasoning sized it against the logo. The binding case is a games list — see BUDGET.md. |
+| Response is an aliasing view, valid only until the next request | **Match**, enforced rather than documented | The response borrows the caller's buffer, so using it after the next request does not compile. `api_client.py` stated the rule in a docstring. |
+| `_request_in_flight` → `RuntimeError` on concurrent use | **Unreachable** | Every request takes `&mut self` and the client has one owner. The runtime guard has no counterpart because the condition cannot arise. |
+| 15 s timeout on every request | **Match** | `embassy_time::with_timeout` around the whole request. |
+| Session closed on timeout | **Match**, by construction | The connection lives inside the timed-out future; dropping the future drops it, and `TcpConnection::drop` closes the socket. |
+| Persistent `ClientSession` across polls | **Deviation** | One connection per request. See below. |
+| `Accept: application/x-scoreboard-struct` | **Match** | |
+| ETag scanned case-insensitively | **Match** | The header's case is the server's choice; the deployed backend sends lowercase `etag`. |
+| ETag stored and echoed **with its quotes** | **Match** | The backend compares strings. Bench-validated: `"0b81674f50a5ebf9"` echoed as `If-None-Match` returned `304`. |
+| `304` returns without reading a body | **Match** | And it has to, harder than in MicroPython — see SPEC §7.4's fourth bullet. |
+| Detail `404` → `None`; other 4xx/5xx → error | **Match** | A `404` on a *games list* is still an error: a configured league that does not exist is a configuration to fix. |
+| Error bodies are JSON regardless of `Accept`; the `error` field, defaulting to `unknown_error` | **Match** | Host-tested. |
+| `_log_api` per request at DEBUG | **Match** | Path, status and elapsed time, to defmt *and* the ring — `logger.debug` reached the log file, so `/api/logs` is where it belongs. The URL is trimmed to its path, because the ring's 128-byte message would otherwise spend 96 of them repeating the host and truncate away the status. |
+
+## `poller.py`
+
+| Behaviour | Status | Notes |
+|---|---|---|
+| One poller owns every league, slates merged into one rotation | **Match** | |
+| `sources_from_config` order: MLB, NBA, football, soccer | **Match** | |
+| Live-first rotation; finals before pregames; empty merged slate → `no_games` | **Match** | `Slate`, host-tested. |
+| League filter, its empty-slate fallback, and the index restore | **Match** | `Slate`, host-tested. |
+| Per-source ETag; `304` keeps the cached slate | **Match** | Bench-validated. |
+| One source failing keeps its cached slate; only an all-source failure fails the tick | **Match** | Bench-validated: `baseball/mlb list refresh failed, keeping cached slate`. |
+| `MAX_FAILURES = 5` → `set_error("API ERROR", …)` | **Match** | Bench-validated: five timeouts, then `Mode::Error` on the panel. |
+| `_friendly_error`'s four arms and the two 25-character detail lines | **Match** | Host-tested arm for arm. The `OSError` arm says what failed in words rather than an errno — see below. |
+| `failing for {n}m`, recomputed on every failure past the fifth | **Match** | |
+| Recovery logged at ERROR with the streak length | **Match** | Bench-validated: `recovered after 7 failed polls`. |
+| **No exponential backoff**; the sleep is always `poll_interval_seconds` | **Match** | |
+| Sleep interrupted by a wake | **Match** | An `embassy_sync` channel rather than an `Event`; see `poller`'s module docs. |
+| Skip machine: armed/rejected, one in flight, sticky spinner, `finally` teardown on every path | **Match** | Host-tested. The *sender* is task #12's — the button loop does not exist yet. |
+| `skip_league` stays within the league filter | **Match** | `Slate::advance_league`, host-tested. |
+| `_poll_current` re-fetches every tick, including static screens | **Match** | Bench-validated: three detail fetches per rotation at `poll_interval=5`, `game_rotation=15`. |
+| Detail `404` skips the slot; the next rotation refreshes the list | **Match** | |
+| `_flash_play`: one slot for every sport, previous id carried in the snapshot | **Match** | `Store::commit_detail`, host-tested. |
+| Soccer stale-clock guard | **Match** | `Store`, host-tested. |
+| `no_games` committed every tick | **Deviation**, trivially | Committed on the transition only: it is a static mode, so an unconditional commit wakes core 1 out of its skip once a poll interval to draw the identical frame. |
+| A partial list decode leaves the source short rather than keeping its cached slate | **Accepted** | `Slate::update_source`'s docs record it: the transport failures that dominate never get that far, and the next refresh is unconditional because the ETag is dropped. |
+
+## `display.py`'s `LogoPool`
+
+| Behaviour | Status | Notes |
+|---|---|---|
+| 8 slots, 24×24 RGB565, LRU | **Match** | Bench-validated, including eviction once all eight filled. |
+| `Accept: image/x-rgb565`, `width=24&height=24&background_color=000000` | **Match** | |
+| Keys league-namespaced and lower-cased | **Match** | `baseball/mlb/nym`. |
+| One sequential caller | **Match**, enforced | `&mut self`. |
+| Cache re-check after the fetch | **Unreachable** | It guarded against a second caller filling the same key mid-`await`; there is one caller and it holds `&mut self`. |
+| Non-200 → `None`, nothing cached, not a poll failure | **Match** | Improved: the slot is never written on a failure, so a failed fetch cannot leave a torn crest behind. |
+| Core 0 fills buffers core 1 draws from | **Deviation** | The pixels moved to core 1. See below. |
+| Evicting a slot the displayed state references | **Fixed** | Held slots are never chosen as victims. |
+
+## Time sync (`main.py:453-488`)
+
+| Behaviour | Status | Notes |
+|---|---|---|
+| `GET {api_url}/time` under a 15 s cap | **Match** | Bench-validated: `GET /time -> 200 in 662 ms`, `utc offset -21600 s`. |
+| `utc_offset` absent or `null` reads as `0` | **Match** | |
+| **`None` ≠ `Some(0)`** — an unsynced device omits start times entirely | **Match** | Two values, not one: `local_clock()` returns `utc_offset_s: None` until the first success, and the model's pregame builder then skips both the time and the date line. |
+| `machine.RTC()` set from the reply, RTC stays UTC | **Replaced** | There is no RTC (SPEC §7.4). The epoch is anchored against `embassy_time::Instant`, the clock every other deadline already rides. `ringlog::set_wall_clock` makes the log's timestamps real from that moment — bench-validated, `/api/logs` entries carry unix seconds. |
+| Synced once, in the boot sequence, before services start | **Deviation** | Daily, and as the poll loop's first phase. See below. |
+
+## Deviations, all deliberate
+
+**1. One connection per request, not a persistent session.** `aiohttp`'s
+`ClientSession` held one open across polls. The default poll interval is 30 s,
+which is past the idle timeout of every proxy between the device and fly.io — the
+persistent session was reconnecting on most polls anyway, it just could not say
+so. Opening per request makes "close the connection on timeout" the default
+rather than an `except` arm, and frees the socket between polls. Measured cost:
+~640 ms on a cold connection against ~130 ms on a warm one, against a tick that
+makes at most four requests every 30 s.
+
+**2. `api.url` is re-read every tick.** `ScoreboardApiClient.__init__` computed
+the base URL once, so changing the backend on the settings page did nothing until
+a reboot — with no indication that it had not worked. The URL is read from the
+running configuration each tick now, which is also what makes the failure-path
+bench possible without a reset.
+
+**3. Time sync re-runs daily, and does not block the boot.** `main.py` synced
+once and never again, so a device up for a month drifted by whatever its crystal
+drifted by. It also awaited the sync before starting any service. Here it is the
+poll loop's first phase — so it still runs before anything commits — but the HTTP
+server and the render loop are already up, and a device whose backend is
+unreachable reaches its setup page instead of sitting on the startup screen.
+
+**4. The crest pool is split across the cores.** `LogoPool` let Core 0 write
+buffers Core 1 was drawing from. That is a cosmetic race in Python and undefined
+behaviour in Rust; the pixels moved to core 1 and only the key/LRU bookkeeping
+stayed on core 0. Costs 2,337 B and one 1,152 B copy per crest fetched. BUDGET.md
+prices the three alternatives.
+
+**5. `_friendly_error`'s `OSError` arm says what failed, not which errno.**
+`str(OSError)` gave `[Errno 113] EHOSTUNREACH`, of which four characters were
+useful on a 25-character line. The transport failures are enumerated instead —
+`cannot resolve backend`, `cannot reach backend`, `connection lost`, `bad http
+response`, `response too large` — which is the same information in words the
+owner of a scoreboard can act on.
+
+**6. A command reaches the poller between ticks, not at the instant it is
+sent.** `skip()` set the spinner toast at press time; here the press is a message
+the poller applies when its in-flight request finishes. Bench-measured that is
+60–300 ms, and the 15 s request timeout is its ceiling. The alternative is a
+second writer to the display state, which is the thing the design buys. Task #12
+owns the button loop and can decide whether the gap is worth closing.
+
+**7. One publish per commit, not two.** `set_mlb_live` committed and then
+`_flash_play` committed again, microseconds apart, so core 1 could latch the
+intermediate state. `Store::commit_detail` does both mutations and the poller
+publishes once. The snapshot channel still needs its three slots — a toast and a
+commit inside one frame still do it.
+
+**8. UI colours are nudged, not waited for.** `update_ui_colors` wrote into a
+module the renderers read directly, so a colour change appeared on the next
+frame. Here colours ride *in* the snapshot, so they only move when something
+commits — up to a poll interval away, on a screen the render loop is skipping.
+`PUT /api/config` therefore sends the poller a `ColorsChanged` command.
+Bench-validated: applied within the `PUT`'s own round trip, against the 30 s it
+would otherwise have taken.
+
+## Not yet bench-validated
+
+**Every sport but MLB.** August has MLB and preseason college football and
+nothing else, so the bench ran a single-source slate. The multi-league paths —
+the merged rotation's league ordering, `skip_league`, the filter — are host-tested
+against the corpus in `scoreboard-model`, and the wire decoders are pixel-parity
+verified for all four sports (above), so what is unexercised on hardware is the
+*fan-out*: N list refreshes in one tick, and the crest pool under two leagues'
+worth of teams. Worth a deliberate run in task #13's soak with football and
+soccer enabled, once their seasons overlap.
+
+**The skip machine on real buttons.** Host-tested exhaustively, and unreachable
+today because task #12 owns the input loop. The first thing #12 should check is
+that a burst of presses advances the rotation exactly once.

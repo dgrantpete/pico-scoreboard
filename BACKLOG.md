@@ -573,10 +573,20 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     frame counter will not, because core 1 is perfectly healthy throughout.
     Candidates: fail the health gate when `stack.config_v4()` has been `None`
     past a threshold, or when the poller has had no successful fetch in N
-    intervals (task #11 gives that for free). Worth reproducing first with a
-    long `probe-rs attach` capture to find out whether cyw43 reports the
-    disassociation at all — if it does not, that is an upstream bug worth
-    filing alongside item 65.
+    intervals. Worth reproducing first with a long `probe-rs attach` capture to
+    find out whether cyw43 reports the disassociation at all — if it does not,
+    that is an upstream bug worth filing alongside item 65.
+
+    **The second candidate now exists** (task #11): `poller::health()` returns
+    the consecutive-failure streak and seconds since the last successful poll,
+    and `supervise::liveness` already logs both every 10 s, so the number is
+    visible before anything depends on it. `Health`'s docs carry the gate #12
+    should use and the argument for it — `since_success_s > 3 × poll_interval`
+    **or** `streak >= MAX_FAILURES`, not `streak > 0`, because one failed poll
+    is a backend restart and rebooting over it is worse than a stale score.
+    Both halves are needed: the streak alone cannot tell a poller that is
+    failing from one that has stopped ticking, and a task that has stopped is
+    what a watchdog is for.
 
 ## Backend
 

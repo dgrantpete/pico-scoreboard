@@ -211,6 +211,41 @@ deliberate, are PARITY.md's. Four things this section did not anticipate:
 - Port of `api_client.py` + `poller.py`: plain-HTTP as today (the https→http downgrade becomes simply configuring an http URL; keep the config-side https URL rewrite behavior so existing configs migrate), `Accept: application/x-scoreboard-struct`, ETag/backoff/jitter semantics copied from the Python, decode via `scoreboard-wire` straight out of the receive buffer, snapshot publish per §4.
 - Time sync: same backend endpoint as today over plain HTTP; feeds an `embassy_time`-anchored wall-clock offset (no RTC dependency).
 
+**Built and bench-validated, Phase 3** (reqwless `=0.14.0`, on the one socket
+§7.1 reserved). The endpoint-for-endpoint comparison against `api_client.py`
+and `poller.py` is PARITY.md's; the module docs in `app/src/poller.rs`,
+`app/src/net/api_client.rs` and `app/src/logos.rs` carry the reasoning. There is
+no "backoff/jitter semantics" to copy — **`poller.py` has neither**, the sleep
+is always `poll_interval_seconds`, and the port keeps it that way. Four things
+this section did not anticipate:
+
+- **The buffer sizing in `api_client.py` was derived against the wrong
+  maximum.** Its comment sizes 4 KB as "~3.5× the largest body (a 1,152 B
+  logo)". The largest body is a *games list*, and it is the only one that scales
+  with anything: at the wire format's own ceiling (a `u8` count, so 255 entries)
+  with the nine-digit ESPN ids the corpus carries, that is 2,807 B, plus a
+  measured 386 B of response headers. 4 KB is still the right number; the margin
+  is 903 B rather than the 2.9 KB the comment implies. Asserted against the
+  corpus in `scoreboard-model::poll`.
+- **A decoded game and a crest are live at the same time.** `_poll_current`
+  fetches a detail, then two crests, then commits — and the decoded game borrows
+  the receive buffer across all of it. MicroPython's parsers produced owned
+  Python objects so this never came up; here the one buffer is `split_at_mut`
+  for that phase, which is what makes "the parse must not await" a thing the
+  compiler checks rather than a docstring.
+- **The crest pool cannot be shared between the cores.** `LogoPool` let Core 0
+  fill buffers Core 1 was drawing from and accepted the tear. A `&[LogoSlot]`
+  handed to a renderer asserts those bytes do not change while it lives, so the
+  same arrangement is undefined behaviour here. The pixels moved to core 1 and
+  the key/LRU bookkeeping stayed on core 0, with new crests crossing on a
+  channel — 11.7 KB total, against 18.4 KB for the obvious alternative of
+  putting crest bytes in the snapshot, and no tear.
+- **A `304` has no body and reqwless does not know it.** With no
+  `Content-Length` and no chunked encoding the library reads to end of
+  connection, which on a keep-alive socket means waiting out the full 15 s
+  timeout for zero bytes. The client returns before touching the body, which is
+  what `api_client.py:221-223` meant by "without reading a body".
+
 ---
 
 ## 8. OTA (the one subsystem that changes shape)
@@ -361,6 +396,18 @@ caller-owned?* — `n/a` means the crate holds no runtime buffer at all.
 | `picoserve_derive` / `pin-project` / `ryu` / `thiserror` | 0.1.4 / 1.1.13 / 1.0.23 / 2.0 | via picoserve | yes | yes | n/a | Proc macros and support crates. `thiserror` with default features off is `no_std`; the macro halves allocate on the *host* and nothing of them ships. |
 | `scoreboard-config` | path | scoreboard-app | yes | yes | caller | First-party. The merged config shape, the deep-merge (which is serde's `default` attributes), the `poll_interval < game_rotation` invariant, and the partial-update semantics `PUT /api/config` applies. `#![forbid(unsafe_code)]`, host-tested. |
 | `scoreboard-log` | path | scoreboard-config, scoreboard-app | yes | yes | caller | First-party. The RAM ring `/api/logs` serves and its NDJSON encoding, including the JSON string escaping that one unescaped quote in a play-by-play line would otherwise turn into a blank logs page. `#![forbid(unsafe_code)]`, host-tested. |
+
+**Backend client, pinned in Phase 3** (`firmware-rs/app`)
+
+| Crate | Ver | Used by | no_std | no-alloc | Buffers | Notes |
+|---|---|---|---|---|---|---|
+| `reqwless` | =0.14.0 | scoreboard-app | yes | yes¹ | caller | The HTTP client. ¹**`default-features = false` is load-bearing and for the opposite reason picoserve's is**: reqwless's default feature is `embedded-tls`, and score polling is plain HTTP by design (`api_client.py:94`, §8), so the TLS stack never links. Only `defmt` is on; `alloc`, `rsa` and `embedded-tls` stay off. Every buffer is the caller's — one `&mut [u8]` per request holds the headers *and* the body, which is why [`poll::RESPONSE_BYTES`]'s derivation counts both. **Audit note below on the crypto crates it names unconditionally.** |
+| `httparse` | 1.10.1 | via reqwless | yes | yes | caller | The response-header parser, `default-features = false`. Parses in place out of the caller's buffer into a `[Header; 64]` on the stack; no allocation, no copy. |
+| `nourl` | 0.1.5 | via reqwless | yes | yes | caller | URL splitting. `Url::parse` borrows the string it is given and stores four `&str`s. Zero dependencies beyond `defmt`. |
+| `buffered-io` | 0.6.0 | via reqwless | yes | yes | caller | A `BufRead` adapter over `embedded-io-async`, wrapping a caller-supplied slice. Only reached on the buffered-write path, which the client does not use. |
+| `embedded-nal-async` | 0.9.0 | via reqwless, embassy-net | yes | yes | n/a | Trait definitions — `TcpConnect`, `Dns` — and nothing else. It is what lets reqwless sit on `embassy_net::tcp::client::TcpClient` with no glue: **both crates already depend on this exact version**, which was the compatibility question worth checking before pinning either. |
+| `base64` / `hex` | 0.21.7 / 0.4.3 | via reqwless | yes | yes | caller | `base64` encodes HTTP basic-auth credentials, which the client never sends; `hex` writes and reads chunked transfer-encoding size lines. Both `default-features = false`, both a few hundred bytes. |
+| `p256`, `rand_chacha`, `pkcs8`, and their trees | 0.13.2, 0.3.1, 0.10.2 | via reqwless | yes | yes | n/a | **Named unconditionally by reqwless's manifest but used only behind `cfg(feature = "embedded-tls")`.** So they compile — about fifteen crates of elliptic-curve and hashing code, a real build-time cost — and then **contribute zero bytes to the image**: `arm-none-eabi-nm` finds no symbol from any of them in the linked ELF, because with the feature off nothing references them and LTO drops the lot. Worth re-checking on a reqwless bump: a version that reaches one of them from a non-TLS path would link the whole tree, and the first sign would be the flash figure in BUDGET.md. |
 
 **Transitive, load-bearing**
 

@@ -23,26 +23,35 @@ no heap to absorb a mistake.
 | `Hub75Display` RGB565 frame buffer | 16,384 | **MEASURED** | 128 × 64 × 2 B. App-owned, not a driver static — the driver never allocates the drawing surface. Costs 16,385 B as linked (`ConstStaticCell` appends a 1 B taken flag). |
 | Gamma LUT | 256 | **MEASURED** | `[u8; 256]` **inside `Hub75Driver`**, not a separate static. It lands in whichever arena owns the driver — do not add it again to the core-1 line. |
 | Snapshot handoff — `SnapshotChannel` | 8,552 | **MEASURED** | `crates/scoreboard-model`. Three `ScoreboardSnapshot` slots of 2,848 B + 2 B of index + padding. Three, not two — see the correction below. |
-| `Store` (core-0 authoritative state) | 2,880 | **MEASURED** | One more snapshot plus the startup flag and the soccer stale-clock guard. Core 0 mutates this and publishes clones of it. |
-| `Slate` (merged games list + rotation) | 4,596 | **MEASURED** | 160 entries × (source, state, 20-byte game id) + the rotation order + 8 league descriptors. Sized for a college-football Saturday alongside a full MLB slate. |
+| `Store` (core-0 authoritative state) | 2,888 | **MEASURED** | `scoreboard-app`'s `STORE`. One more snapshot plus the startup flag and the soccer stale-clock guard, plus `StaticCell`'s 1 B taken flag and padding. A `static` rather than a task local because it is *lent* to `net::bringup` for the boot screen and then moves to the poller — see the state-sharing note below. |
+| Poller task arena | 13,824 | **MEASURED** | `scoreboard-app`, task #11. The `Slate` (4,596 B — 160 entries × (source, state, 20-byte game id), the rotation order and 8 league descriptors, sized for a college-football Saturday alongside a full MLB slate), the 4,096 B receive buffer, eight per-source ETags, the crest directory's keys and LRU, and the futures of a whole tick: a detail fetch with two crest fetches nested inside it, each carrying its own 256 B URL. |
+| Crest pool (core 1) + its channel | 11,553 | **MEASURED** | `CRESTS` 9,217 B — eight 24×24 RGB565 slots, owned by core 1 — plus `logos::UPDATES` 2,336 B, the two-deep channel core 0 ships new crest pixels over. See the note below on why the pool is split across the cores; the alternative costs 18,432 B and still tears. |
+| Poller TCP socket | 2,050 | **MEASURED** | `api_client::TCP_STATE`: one connection, 1,536 B receive + 512 B send. One, because a request is never concurrent with another — the client takes `&mut self`. |
 | cyw43 driver state | 17,928 | **MEASURED** | `CYW43_STATE` 12,696 B (the driver's ioctl state and its 4 + 4 packet channel) plus the runner task's 5,232 B arena. Came in 9 % over SPEC §11's 16 KB guess. |
 | embassy-net stack + captive-portal sockets | 12,868 | **MEASURED** | `StackResources<8>` 4,584 B + the net runner's 136 B arena, plus the two AP-mode responders: 4,100 B of payload buffers, 400 B of packet metadata, and 3,920 B of task arenas (the DHCP and DNS scratch live in the arenas, not on a stack). **The TCP socket buffers are not in this line** — poller, HTTP ×2 and OTA are tasks #10/#11/#15 and bring their own. |
-| Provisioning (`net::bringup` arena) | 4,400 | **MEASURED** | The boot-time `Store` (2,880 B) plus the scan's 64-entry BSSID table and the credentials. Task-arena, so it is statically allocated but has no reader after the boot. |
+| Provisioning (`net::bringup` arena) | 1,528 | **MEASURED** | The scan's 64-entry BSSID table and the credentials. It was 4,400 B until the poller landed: the boot-time `Store` was a local of this task, and making it a `static` that bringup borrows removed 2,872 B rather than paying for a second copy in the poller's arena. Task-arena, so it is statically allocated but has no reader after the boot. |
 | HTTP server — sockets, request buffers, task arenas | 50,114 | **MEASURED** | `scoreboard-app`, task #10. 43,968 B of task arena for the two connections (21,984 each: 1,536 B TCP receive + 2,920 B TCP send + 4,096 B request buffer, and picoserve's request-handling future around them) plus 6,146 B of pooled response scratch. **The arena figure is dominated by the future, not the buffers** — see the multiplier note below before adding a route. |
-| Receive/scratch buffers (wire, OTA chunk) | ~32,768 | ESTIMATE | Poller and OTA, tasks #11/#15. Unioned where phases cannot overlap. The HTTP share of SPEC §11's original 40,960 B guess has moved to its own line above, measured. |
+| Receive/scratch buffers (OTA chunk) | ~16,384 | ESTIMATE | Task #15's, all that is left of SPEC §11's 40,960 B guess: the HTTP server's share and the poller's have both moved to measured lines above. The poller's is 4,096 B, *one* buffer for every response — see the derivation note below. |
 | Glyph/font tables + compiled sprites | 0 | **MEASURED** | `crates/scoreboard-render`. **9,538 B of flash, 0 B of RAM** — read out of the crate's own object code, not asserted. Breakdown and the command below. |
-| Core-1 render-loop task arena | 1,392 | **MEASURED** | `scoreboard-app`. The loop's `LoopState` — frame rail, prepared view, skip memo, probe — plus the display and everything else held across the frame's await. It lives in the **task arena, not on the core-1 stack**: an embassy task's future is a static. See the correction below. |
-| Core-0 task arenas | ~24,576 | ESTIMATE | 3,120 B measured today for the three placeholder tasks, and 2,968 B of that is the demo feed's own `ScoreboardSnapshot`, which leaves with it. The real arenas are net/poller/server/OTA. |
+| Core-1 render-loop task arena | 1,384 | **MEASURED** | `scoreboard-app`. The loop's `LoopState` — frame rail, prepared view, skip memo, probe — plus the display and everything else held across the frame's await. It lives in the **task arena, not on the core-1 stack**: an embassy task's future is a static. See the correction below. The crest pool it now owns is a `static` it borrows, so it is the line above and not this one. |
+| Core-0 task arenas | ~4,096 | ESTIMATE | What is left to measure: the input, brightness and watchdog tasks (#12) and the OTA task (#15). Net, poller and server all have measured lines of their own now, and the demo feed's 2,968 B `ScoreboardSnapshot` left with the demo. |
 | Core-0 stack | — | **MEASURED (not a fixed line)** | With flip-link the stack is the whole remainder below the statics: **415,520 B** today, growing *down*, guarded by MSPLIM at the bottom of RAM. It is not a number to budget; it is what the rest of the table does not spend. |
-| Core-1 stack | 8,192 | **MEASURED** | Sized 8 KB by `scoreboard-app`; **high-water 2,480 B (30 %)** across every scenario the frame probe drives. The setup screen, which is the only QR encoder caller and therefore the deepest frame, is not among them yet. Guarded by MSPLIM at its bottom. See the core-1 notes below. |
+| Core-1 stack | 8,192 | **MEASURED** | Sized 8 KB by `scoreboard-app`; **high-water 3,348 B (41 %)** over a run of real backend data — up from 2,480 B under the demo, because the demo never drove the pregame screen. The setup screen, which is the only QR encoder caller and therefore the deepest frame, is still not among them. Guarded by MSPLIM at its bottom. See the core-1 notes below. |
 | Ring log | 28,812 | **MEASURED** | `crates/scoreboard-log`, task #10. 200 slots × 144 B — a `u32` sequence, a `u32` timestamp, a level byte and a 128-byte bounded message, padded. SPEC §11's ~8 KB guess assumed a shorter message; 128 B was chosen against the measured distribution of the 87 log call sites in `firmware/src` (median 43 B, max 116 B), where 64 B would have truncated real lines. It is `.bss`, not `.data` — see the note below. |
 | Misc statics | ~2,100 | **MEASURED** | embassy-rp's GPIO/DMA/PIO wakers, the time driver, the critical-section lock, the clock cache, the PAC singleton flags, and task #10's small publishers (`net::hosts`, `net::status`, the config cell, the stack-watermark atomics). |
-| **Projected total** | **238,363** | | **232.8 KiB** |
+| **Projected total** | **264,522** | | **258.3 KiB** |
 
-**Headroom: 55.2 %** (294,117 B free of 532,480 B). Against the 512 KiB the
-linker actually declares — see the caveat below — it is 54.5 %. The ≥ 40 %
-target holds: the remaining estimate may overrun by 80,117 B before it is
-breached.
+**Headroom: 50.3 %** (267,958 B free of 532,480 B). Against the 512 KiB the
+linker actually declares — see the caveat below — it is 49.5 %. The ≥ 40 %
+target holds: the remaining estimate may overrun by 55,000 B before it is
+breached, and only two lines of it are still estimates.
+
+The projection rose by 26,159 B when the poller landed, and 91 % of that is
+three measured lines that had no estimate at all: the poller's 13,824 B task
+arena, the 11,553 B crest pool and channel, and its 2,050 B socket. What it
+replaced was mostly guesswork — the receive-buffer estimate lost the poller's
+share (which turned out to be one 4 KB buffer, inside the arena) and the
+core-0-arena estimate lost everything but tasks #12 and #15.
 
 The projection rose by 34,014 B when the HTTP server landed, which is less than
 it looks: 50,114 B of it is the server, measured, against the 40,960 B estimate
@@ -53,24 +62,25 @@ they do.
 The projection *fell* by 42,520 B when Phase 3's networking landed, because two
 of SPEC §11's three network guesses were high. The stack and its AP-mode
 sockets measured 12,868 B against a 49,152 B estimate — the estimate was
-counting TCP socket buffers for the poller, the HTTP server and OTA, which are
-real but belong to tasks that have not landed and will be measured with them.
-Treat the remaining 61.6 % as provisional until they have.
+counting TCP socket buffers for the poller, the HTTP server and OTA. Two of the
+three have now landed and cost 2,050 B and 8,912 B respectively.
 
-`SnapshotChannel`'s 8,552 B is now a symbol in a real device ELF, and it came
-out byte-for-byte as the host predicted. `Store` and `Slate` are still host
-struct sizes — nothing links them until the poller lands — but the same argument
-applies: every bounded string in the snapshot carries a `u16` length prefix
-rather than a `usize`, so the layout is byte-identical on the host and on
-`thumbv8m.main-none-eabihf`.
+`SnapshotChannel`'s 8,552 B, `Store`'s 2,888 B and `Slate`'s 4,596 B are now
+symbols in a real device ELF, and all three came out byte-for-byte as the host
+predicted. That is the `u16` length prefix on every bounded string doing its
+job: the layout is identical on the host and on `thumbv8m.main-none-eabihf`, so
+`scoreboard-model`'s own budget test is a real check and not a coincidence.
 
-**Measured today: 223,728 B** (218.5 KiB, 58.0 % headroom) — the whole of
-`scoreboard-app`, which is the binary of record. That figure includes 4,150 B
-of dev-only defmt/RTT and 2,968 B of demo scaffolding, both of which leave.
-Networking added 35,848 B of it and the HTTP server 80,160 B.
+**Measured today: 248,180 B** (242.4 KiB, 53.4 % headroom) — the whole of
+`scoreboard-app`, which is the binary of record. That figure includes 4,150 B of
+dev-only defmt/RTT, which leaves. Networking added 35,848 B of it, the HTTP
+server 80,160 B and the poller 24,452 B — the last of which is 2,968 B less than
+its own lines, because the demo scaffolding it replaced left with it.
 
-**Flash: 793,916 B**, 50.5 % of the 1,536 KB active partition — up from
-127,948 B. Two single items account for most of it and neither costs any RAM:
+**Flash: 892,068 B**, 56.7 % of the 1,536 KB active partition — up 98,152 B for
+the poller, of which the HTTP client and the JSON codec for `/time` are the
+bulk. Two single items still account for most of the total and neither costs any
+RAM:
 **232,803 B is the CYW43's own firmware** (`43439A0.bin` 231,077 + CLM 984 +
 board NVRAM 742) and **54,528 B is the embedded settings SPA**, both
 `include_bytes!` into `.rodata`. Together that is 287 KB that every OTA image
@@ -105,6 +115,58 @@ Folding those together — mutating the publisher's back buffer in place and
 carrying forward from the just-published slot — would recover 2,848 B at the
 price of making the whole state machine borrow the channel. If RAM ever gets
 tight, that is the lever; at 53.6 % headroom it is not worth the coupling.
+
+### The crest pool is 11,553 B because the cheap arrangement is undefined behaviour
+
+`display.py`'s `LogoPool` was one pool of eight buffers: Core 0 filled them,
+Core 1 drew from them, and evicting a slot the displayed state referenced tore a
+crest for a frame. In Python that is a cosmetic race. In Rust a
+`&[LogoSlot]` handed to a renderer *asserts* those bytes do not change while the
+borrow lives, so the same arrangement is not a race but undefined behaviour, and
+no amount of care on core 0 makes it sound while core 0 can write them.
+
+Three ways out, priced:
+
+| | Bytes | |
+|---|---:|---|
+| Crest bytes in the snapshot | 18,432 | Four more copies (three channel slots + the `Store`) at 2,304 B each, plus 2,304 B copied on **every publish**. The `SnapshotChannel` docs reject it for exactly this reason. |
+| One shared pool, `UnsafeCell` per slot | 9,216 | Cheapest, and it does not work: forming the `&[LogoSlot]` the renderer wants covers a cell core 0 may be writing, whatever the eviction rule says. |
+| **Pixels on core 1, directory on core 0** | **11,553** | `CRESTS` 9,217 B, owned outright by the render loop, plus a 2,336 B channel. Core 0 keeps keys and LRU only. |
+
+The third is what is built. It costs 2,337 B over the unsound option and one
+1,152 B copy per crest *fetched* — a path that runs once per team per boot — and
+in exchange the renderer's borrow is exclusive, which is the only way it is
+sound at all. It also closed the tear on purpose rather than by luck: eviction
+never chooses a slot the published snapshot references, so the pixels behind a
+handle core 1 is drawing cannot be replaced.
+
+### The receive buffer is 4,096 B, and `api_client.py` derived it from the wrong body
+
+The constant is MicroPython's and it is right; the comment justifying it
+(`api_client.py:22-27`) is not. It sizes 4 KB as "~3.5× the largest body (a
+1,152 B logo)". The largest body is a **games list**, and it is the only one
+that scales with anything:
+
+| | Bytes |
+|---|---:|
+| List body at the wire format's ceiling: `2 + 255 × (2 + 9)` | 2,807 |
+| Response header block, measured against the deployed backend | 386 |
+| Worst case | 3,193 |
+| Buffer | 4,096 |
+| Spare | 903 |
+
+255 is the format's own limit (the count is a `u8`); 9 is the game-id length
+across every corpus fixture, asserted in `scoreboard-model::poll`'s tests so a
+backend that changed it fails a host test rather than a device. The header block
+counts because reqwless parses headers and body in the *same* caller-owned
+buffer, so the peak is their sum.
+
+One buffer, not two: a list refresh and a detail poll never overlap, so the list
+gets all 4,096 B, and the detail phase — which is the only time a decoded game
+and a crest are alive at once — splits it 2,048/2,048 with `split_at_mut`. The
+2,048 B detail half holds a corpus maximum of 148 B, a computed worst case near
+800 B, and the headers. Overflow is loud: reqwless answers `BufferTooSmall` and
+the panel shows `Network error / response too large`.
 
 ### The render tables are flash, and that is checked rather than assumed
 
