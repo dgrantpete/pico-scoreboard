@@ -6,6 +6,8 @@ workspace (embassy-rp is device-only), same arrangement as `hub75-diag` and
 `boot-spike`.
 
 ```
+cyw43-firmware/  the radio's own firmware, uploaded over SPI at every boot.
+                 Provenance and hashes in its README; 232 KB of flash, 0 RAM.
 layout/   scoreboard-layout — flash/RAM constants + memory.x generation.
           THE source: build.rs reads it, and Phase 4's OTA path will too.
 src/
@@ -17,17 +19,38 @@ src/
                     something to measure. Leaves with the real poller.
   supervise.rs      core-1 liveness + stack high-water. The watchdog feeds
                     from this signal once SPEC §12 lands.
+  net/
+    mod.rs          the resource map, cyw43 + embassy-net bringup, and the
+                    boot path that hands off to whichever mode won
+    wifi.rs         provisioning: three station attempts with main.py's exact
+                    retry rules, then the open AP
+    captive_dns.rs  the setup-mode DNS responder's socket loop
+    dhcp_server.rs  the setup-mode DHCP server (embassy-net has no server;
+                    MicroPython got lwIP's for free)
+    hosts.rs        where task #10 reads the names this device answers to
+    probe.rs        --features net-probe only: one plain-HTTP GET, to prove
+                    the stack moves bytes. Never in a shipped build.
 ```
 
-`net/`, `ota.rs`, `storage.rs` and `inputs.rs` from SPEC §2's tree are the
-remaining Phase 3 tasks and land beside these.
+The portal's pure half — DNS answer construction and the `Host`-header check —
+is `crates/scoreboard-portal`, so it is host-tested; the firmware keeps the
+sockets.
+
+`ota.rs`, `storage.rs`, `inputs.rs` and the HTTP server from SPEC §2's tree are
+the remaining Phase 3/4 tasks and land beside these.
 
 ## Build, flash, watch
 
 ```sh
 cargo build --release                       # standalone profile (Phase 3)
 cargo run --release                         # flash + attach, via probe-rs
+cargo run --release --features net-probe    # ...and fetch {api}/time once
 ```
+
+To join a real network on the bench, copy `dev.example.toml` to `dev.toml`
+(**gitignored — it holds a real passphrase**) and fill it in. With no such file
+the image boots into AP setup mode, which is the un-provisioned path a device
+out of the box takes. See `firmware-rs/TOOLCHAIN.md`.
 
 `cargo run` needs a Raspberry Pi Debug Probe on SWD. To capture a session
 instead of watching it:
@@ -44,11 +67,14 @@ the measured numbers are in `firmware-rs/BUDGET.md`.
 
 ## Two things that are contracts, not code
 
-**`hub75` owns PIO0 and DMA channels 12-15.** It reaches them through
-`rp235x-pac` while embassy-rp reaches everything else through `rp-pac`, and
-neither PAC can see the other's bookkeeping. `main` parks embassy's handles for
-that silicon in a binding that never releases, so taking them back is an edit
-to one visible line rather than a silent double-claim.
+**`hub75` owns PIO0 and DMA channels 12-15; the radio owns PIO2 and DMA CH0.**
+`hub75` reaches its silicon through `rp235x-pac` while embassy-rp reaches
+everything else through `rp-pac`, and neither PAC can see the other's
+bookkeeping. `main` parks embassy's handles for the panel's silicon in a binding
+that never releases, so taking them back is an edit to one visible line rather
+than a silent double-claim. The full map, including why `dma::Channel::new`
+writing `DMA.INTE0` is safe next to a driver that also drives DMA, is in
+`net`'s module docs. PIO1 is unclaimed and reserved for the buttons.
 
 **Nothing on core 1 mutates a `static`.** All cross-frame state is
 `display_core1`'s `LoopState`, a local; renderers receive `WallMs` and

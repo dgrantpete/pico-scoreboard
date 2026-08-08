@@ -125,12 +125,23 @@ jobs:
       # Both link profiles, because the whole point of generating memory.x from
       # one constants file is that the Phase 4 flip stays a switch. The
       # standalone build is second so it is the ELF the size report reads.
+      #
+      # No dev.toml exists here, and that is the point: build.rs falls back to
+      # an empty SSID, which is the un-provisioned device. CI must never need
+      # credentials to build the firmware.
       - name: Build scoreboard-app (device binary, both link profiles)
         working-directory: firmware-rs/app
         run: |
           cargo build --release --locked --target "$DEVICE_TARGET" \
             --no-default-features --features link-boot-integrated
           cargo build --release --locked --target "$DEVICE_TARGET"
+
+      # `net-probe` is a bench instrument that never ships, so it is checked
+      # rather than built — enough to keep it from rotting against the stack it
+      # pokes at, without paying for a third link.
+      - name: Check the net-probe bench feature
+        working-directory: firmware-rs/app
+        run: cargo clippy --release --locked --target "$DEVICE_TARGET" --features net-probe -- -D warnings
 
       - name: Size report — scoreboard-app
         working-directory: firmware-rs/app

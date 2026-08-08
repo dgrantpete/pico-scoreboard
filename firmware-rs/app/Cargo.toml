@@ -19,6 +19,12 @@ link-standalone = []
 # The active partition behind embassy-boot. Phase 4 flips to this.
 link-boot-integrated = []
 
+# Bench instrument, off in every shipped build: once station mode is up, fetch
+# `{DEV_API_URL}/time` over plain HTTP and log what came back. It exists to
+# prove the stack moves bytes in both directions against the real backend
+# without waiting for the client in task #11 — see `net::probe`.
+net-probe = ["dep:embedded-io-async"]
+
 [dependencies]
 scoreboard-layout = { path = "layout" }
 hub75 = { path = "../../crates/hub75" }
@@ -51,10 +57,14 @@ panic-probe = { version = "=1.0.0", features = ["print-defmt"] }
 #   dhcpv4         — the *client*, for station mode. The AP-mode server is ours.
 #   dhcpv4-hostname— sends option 12, which is what makes `<device_name>` resolve
 #                    on the LAN the way `network.hostname()` did in MicroPython
+#   dns            — the resolver. The backend is a `fly.dev` name whose address
+#                    is not stable, so there is no reachable-by-IP alternative.
+#                    Costs one socket slot, taken unconditionally by the stack.
 #   medium-ethernet— cyw43 presents an Ethernet-like device
-# `dns` is deliberately absent: the backend is reached by IP or through the
-# router's resolver, and the poller (#11) owns that decision.
-embassy-net = { version = "=0.9.1", features = ["defmt", "tcp", "udp", "dhcpv4", "dhcpv4-hostname", "proto-ipv4", "medium-ethernet"] }
+# `mdns` is *not* enabled: `<device_name>.local` resolves because DHCP option 12
+# tells the router, not because the device answers multicast queries. That
+# matches MicroPython, which also only set `network.hostname()`.
+embassy-net = { version = "=0.9.1", features = ["defmt", "tcp", "udp", "dns", "dhcpv4", "dhcpv4-hostname", "proto-ipv4", "medium-ethernet"] }
 # `firmware-logs` surfaces the CYW43's own console over defmt. It is how a join
 # failure inside the chip is diagnosed at all, and it costs flash, not RAM.
 cyw43 = { version = "=0.7.0", features = ["defmt", "firmware-logs"] }
@@ -65,6 +75,9 @@ cyw43-pio = { version = "=0.10.0", features = ["defmt"] }
 # never-die-on-a-bad-packet rule the same as the captive DNS responder's.
 edge-dhcp = { version = "=0.8.0", default-features = false, features = ["defmt"] }
 scoreboard-portal = { version = "0.1.0", path = "../../crates/scoreboard-portal" }
+# `net-probe` only — the `Read`/`Write` traits embassy-net's TcpSocket
+# implements. reqwless brings its own in task #11.
+embedded-io-async = { version = "=0.7.0", optional = true }
 
 [build-dependencies]
 scoreboard-layout = { path = "layout", features = ["std"] }

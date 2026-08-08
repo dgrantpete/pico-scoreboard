@@ -502,6 +502,32 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     another task's working tree. Copy the two lines and re-measure its BUDGET
     breakdown whenever that tree is quiet.
 
+65. **Report the `cyw43` scan bug upstream** — found on the bench 2026-08-08.
+    `ScanOptions::nprobes` is an `Option<u16>`; `Control::scan` turns `None`
+    into `!0u16` and widens it into `ScanParams::nprobes`, which is a `u32`
+    standing in for the firmware's `int32` field whose "use the default"
+    sentinel is `-1`. The chip therefore receives `nprobes = 65535`, rejects
+    it, and ends the scan in about a millisecond having found nothing — which
+    is indistinguishable from "there are no networks here", so the failure
+    reads as an empty neighbourhood rather than as a bug. Reproduced on cyw43
+    0.7.0 / Pico 2 W: `None` finds 0 every time, `Some(2)` finds 36 in 710 ms.
+    The firmware works around it in `net::wifi::scan` by always passing
+    `Some(2)`. The upstream fix is one line — either widen the sentinel or make
+    the field `Option<u32>` — and it is worth filing because every embassy user
+    who takes `ScanOptions::default()` has a scan that silently returns
+    nothing.
+
+66. **Advertise the captive portal with DHCP option 114 (RFC 8910)** — the
+    AP-mode DHCP server deliberately leaves `captive_url` unset. Modern clients
+    (iOS 14+, Android 11+, Windows) will follow that option straight to a setup
+    page instead of guessing from probe results, which is strictly better than
+    the DNS-lie-plus-redirect dance. It is not sent today because RFC 8910's
+    pointer is supposed to lead to an RFC 8908 JSON API, and a client that
+    follows it and finds HTML can end up worse off than one that falls back to
+    probing. Do this with task #10, which owns the HTTP surface: serve
+    `/api/captive-portal` returning `{"captive": true, "user-portal-url": …}`
+    and set `options.captive_url` to it in `net::dhcp_server`.
+
 ## Backend
 
 14. **Per-device API keys** — comma-separated key list in backend config →

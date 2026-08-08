@@ -238,7 +238,7 @@ async fn station(
                 return Ok(ip);
             }
             Err(AttemptError::BadAuth) => {
-                defmt::error!("wifi: authentication failed — wrong password for the configured ssid");
+                defmt::error!("wifi: authentication failed: wrong password for the configured ssid");
                 reason = SetupReason::BadAuth;
             }
             Err(AttemptError::Failed) => {}
@@ -378,24 +378,53 @@ async fn reset_radio(control: &mut Control<'static>, stack: Stack<'static>) {
         .await;
 }
 
-/// Scan, and report how many networks answered. `None` means the scan failed
-/// or timed out — diagnostic only, the join proceeds either way.
+/// How many distinct BSSIDs the count can distinguish before it saturates.
+///
+/// `network_cyw43_scan_cb` (`extmod/network_cyw43.c:156-191`) keeps an
+/// unbounded Python list; there is no unbounded list here, so the count stops
+/// climbing past this. 64 is well past what a dense neighbourhood puts on the
+/// 2.4 GHz band, and the number is a diagnostic on a boot screen — being told
+/// "64" when the true answer is 71 costs nothing.
+const SCAN_TABLE: usize = 64;
+
+/// Scan, and report how many distinct networks answered. `None` means the scan
+/// failed or timed out — diagnostic only, the join proceeds either way.
 ///
 /// Whether the configured SSID was among them is logged rather than acted on,
 /// matching `main.py:672-676`: a network that does not answer a probe can still
 /// be joined, so refusing to try on a miss would be a regression.
+///
+/// **The count is of distinct BSSIDs**, because MicroPython's is: its scan
+/// callback searches the accumulated list for the BSSID before appending, so
+/// `len(networks)` counts access points and not beacons. cyw43 hands every
+/// result through, and one AP answers several probes, so without the same
+/// de-duplication "Found N" would read about three times too high.
 async fn scan(control: &mut Control<'static>, ssid: &str) -> Option<u16> {
     let mut options = ScanOptions::default();
     // MicroPython's `wlan.scan()` transmits probes. Passive would be quieter
     // and slower, and would miss hidden networks entirely.
     options.scan_type = ScanType::Active;
+    // **Not `None`.** cyw43 0.7.0 turns a `None` here into `!0u16` and widens
+    // it to the `u32` field, so the chip receives `nprobes = 65535` — where the
+    // firmware's field is an `int32` whose "use the default" sentinel is `-1`.
+    // The CYW43 rejects it and ends the scan in about a millisecond with zero
+    // results, which is indistinguishable from "there are no networks here".
+    // Measured on the bench: `None` finds 0 every time, `Some(2)` finds 36 in
+    // 710 ms. Two probes per channel is the cyw43-driver default.
+    options.nprobes = Some(2);
 
-    let mut found = 0u16;
+    let mut seen = heapless::Vec::<[u8; 6], SCAN_TABLE>::new();
     let mut target_visible = false;
     let sweep = async {
         let mut scanner = control.scan(options).await;
+        // `Scanner::next` returns `None` both for "the scan is over" and for a
+        // result whose payload was not a BSS description. cyw43 offers no way
+        // to tell them apart, and treating the second as the end of the scan
+        // only ever under-counts a diagnostic.
         while let Some(bss) = scanner.next().await {
-            found += 1;
+            if !seen.contains(&bss.bssid) {
+                let _ = seen.push(bss.bssid);
+            }
             let length = (bss.ssid_len as usize).min(bss.ssid.len());
             if core::str::from_utf8(&bss.ssid[..length]) == Ok(ssid) {
                 target_visible = true;
@@ -404,15 +433,15 @@ async fn scan(control: &mut Control<'static>, ssid: &str) -> Option<u16> {
     };
 
     if with_timeout(SCAN_TIMEOUT, sweep).await.is_err() {
-        defmt::warn!("wifi: scan timed out after {} networks", found);
+        defmt::warn!("wifi: scan timed out after {} networks", seen.len());
         return None;
     }
     defmt::info!(
         "wifi: scan complete, found {}, target visible {}",
-        found,
+        seen.len(),
         target_visible
     );
-    Some(found)
+    Some(seen.len() as u16)
 }
 
 /// `start_ap_mode` (`main.py:561-582`): an **open** network named after the

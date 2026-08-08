@@ -78,6 +78,43 @@ symbols embassy-boot's `FirmwareUpdater` reads. Both stop below the storage
 region, so config written under one profile survives the switch to the other.
 CI builds both.
 
+### Bench credentials — `dev.toml`
+
+Device config storage lives in flash and is task #12's. Until it exists, a
+probe-flashed image learns a network from `firmware-rs/app/dev.toml`, which
+`build.rs` reads into compile-time env vars. **The file is gitignored and must
+stay that way** — it holds a real passphrase. `dev.example.toml` is the tracked
+template:
+
+```sh
+cd firmware-rs/app
+cp dev.example.toml dev.toml    # then fill in ssid / password
+cargo run --release
+```
+
+**With no `dev.toml` the image builds fine** and boots straight into AP setup
+mode, which is also the path a device out of the box takes — so its absence is
+a supported configuration and CI needs no file. An unknown key in the file is a
+build failure rather than a silently-ignored line, because a typo'd key and a
+missing file produce the same symptom (a device in setup mode) and only one of
+them is intentional.
+
+The one function this replaces is `net::wifi::Credentials::from_dev_build`.
+
+### `--features net-probe`
+
+A bench instrument, never in a shipped build. Once station mode is up it fetches
+`{DEV_API_URL}/time` over plain HTTP and logs the response, which is how the
+network stack was shown to move bytes end-to-end against the real backend
+before the client in task #11 existed.
+
+```sh
+cargo run --release --features net-probe
+```
+
+It is not the time sync: parsing the timestamp, setting the clock offset, and
+keeping `utc_offset: 0` distinct from "sync failed" are all task #11's.
+
 ## probe-rs — flash and debug
 
 The primary loop. Install the CLI:

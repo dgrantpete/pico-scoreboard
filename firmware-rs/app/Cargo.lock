@@ -1498,6 +1498,7 @@ dependencies = [
  "embassy-rp",
  "embassy-sync",
  "embassy-time",
+ "embedded-io-async 0.7.0",
  "heapless",
  "hub75",
  "panic-probe",

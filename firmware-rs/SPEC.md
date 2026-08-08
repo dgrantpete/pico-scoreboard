@@ -125,11 +125,51 @@ Mechanical port; largest volume, lowest risk:
 
 ### 7.1 Stack
 
-`cyw43` (with `cyw43-firmware` blobs checked in) + `embassy-net` (smoltcp). Buffer sizes are budget lines (§11): sockets for {poller, HTTP server ×2, DNS, OTA}. DHCP client in station mode; static 192.168.4.1/24 + DHCP server behavior in AP mode as today.
+`cyw43` (with firmware blobs checked in) + `embassy-net` (smoltcp). Buffer sizes are budget lines (§11): sockets for {poller, HTTP server ×2, DNS, OTA}. DHCP client in station mode; static 192.168.4.1/24 + DHCP server behavior in AP mode as today.
+
+**Built and measured on silicon, Phase 3.** The resource map, the socket table
+and the reasoning behind both live in `firmware-rs/app/src/net/`'s module docs;
+the sizes are BUDGET.md's. Three things this section did not anticipate:
+
+- **The radio takes PIO2 and DMA CH0.** PIO2 exists only on the RP2350, so
+  §1's RP2040 ban buys the panel an undivided PIO0 and leaves PIO1 for the
+  buttons. embassy's `dma::Channel::new` writes `DMA.INTE0`, which `hub75`
+  also drives through the other PAC — safe because the write goes through the
+  RP2350's atomic set alias and `hub75` never unmasks a DMA interrupt at all.
+- **`cyw43_pio::DEFAULT_CLOCK_DIVIDER` is wrong for this chip.** It lands the
+  GSPI clock at 37.5 MHz, which the RP2350 does not reliably survive
+  (embassy-rs/embassy#3960). Use `RM2_CLOCK_DIVIDER` (÷3 → 25 MHz), as
+  embassy's own rp235x example does.
+- **The firmware blobs are vendored, not a crate.** The one `cyw43-firmware`
+  crate on crates.io is a third-party republish that predates `cyw43` 0.7.0's
+  NVRAM argument and ships no NVRAM blob, so it cannot satisfy the API. The
+  three files, their upstream commit and their SHA-256s are in
+  `firmware-rs/app/cyw43-firmware/README.md`. They cost **232,803 B of flash**
+  and no RAM, and Phase 4 should count them in every OTA transfer.
 
 ### 7.2 Provisioning / captive portal
 
 Port of the `main.py` flow: try station with stored credentials (bounded retries, status-string mapping) → on failure, AP mode with SSID per current scheme, QR on panel, captive DNS answering all A queries with the AP IP (`captive_dns.rs`, ~100 lines on a UDP socket), HTTP catch-all redirecting hijacked Host headers to `/#/setup`, exactly mirroring today's semantics (legit Host → 404, foreign Host → 302).
+
+**Built and bench-validated, Phase 3**, with the AP-mode DHCP server that this
+section forgot MicroPython was getting free from lwIP (decision record in
+Appendix A). The retry semantics are `net::wifi`'s module docs, including the
+table that maps every `wlan.status()` code the state machine acted on onto a
+`cyw43::JoinError`, and the three deviations the change of mechanism forced.
+
+The portal's two *decisions about bytes* — what a DNS answer looks like, and
+whether a `Host` header names this device — live in `crates/scoreboard-portal`
+rather than in the firmware, so they are host-tested (§2's crate-boundary rule).
+The firmware keeps the sockets. Task #10 gets `MyHosts` ready-made; note the two
+deviations its docs record, one of which fixes a latent `main.py` bug where a
+station-mode request for an unknown path was answered with a redirect to
+192.168.4.1.
+
+**`.local` resolution is DHCP option 12, not mDNS.** embassy-net's `mdns`
+feature is deliberately off: MicroPython only ever called
+`network.hostname()`, so the name reaches clients through the router in both
+firmwares. A device on a network whose router does not register DHCP hostnames
+was never reachable by name, and still is not.
 
 ### 7.3 HTTP server (picoserve)
 
@@ -263,6 +303,22 @@ caller-owned?* — `n/a` means the crate holds no runtime buffer at all.
 | `defmt-rtt` | =1.3.0 | hub75-diag | yes | yes | own static | 1,024 B ring in `.uninit` + 48 B control block. Dev-only, out of the deployed budget. |
 | `panic-probe` | =1.0.0 | hub75-diag | yes | yes | n/a | `print-defmt`; one 1 B flag. |
 
+**Networking, pinned in Phase 3** (`firmware-rs/app`; measured sizes in BUDGET.md)
+
+| Crate | Ver | Used by | no_std | no-alloc | Buffers | Notes |
+|---|---|---|---|---|---|---|
+| `embassy-net` | =0.9.1 | scoreboard-app | yes¹ | yes | caller | ¹`no_std` unless `std`. Every buffer is caller-supplied: `StackResources<N>` is the socket table (4,584 B at N=8), and each socket's payload and metadata buffers are passed to its constructor. Features `tcp udp dns dhcpv4 dhcpv4-hostname proto-ipv4 medium-ethernet` — `mdns` deliberately off, see §7.2. |
+| `smoltcp` | 0.13.1 | via embassy-net | yes | yes | caller | The TCP/IP stack itself. Its default feature set *is* `std`+`alloc`; embassy-net turns defaults off and selects socket types individually, so the no_std build is not accidental. `Ipv4Address` is a re-export of `core::net::Ipv4Addr`, which is what lets it, embassy-net and edge-dhcp share one address type with no conversion. |
+| `cyw43` | =0.7.0 | scoreboard-app | yes | yes | inline | The radio driver. `State` is a caller-placed 12,696 B static; the packet path is an `embassy-net-driver-channel` with 4 buffers each way, inline in it. Features `defmt firmware-logs`; **`bluetooth` off**, which keeps `bt-hci` out of the tree. |
+| `cyw43-pio` | =0.10.0 | scoreboard-app | yes | yes | n/a | The GSPI bit-banger. Compile-time PIO program, one state machine, one DMA channel. Use `RM2_CLOCK_DIVIDER`, not the default — see §7.1. |
+| `edge-dhcp` | =0.8.0 | scoreboard-app | yes | yes | caller | The AP-mode DHCP server's packet codec and lease table. **`default-features = false`**, which drops its `io` module and with it `edge-nal`, `embassy-futures` and `embassy-time`; the socket loop is the firmware's. `Packet` borrows the decode buffer, options go into a caller-owned `[DhcpOption; 8]`, and leases live in a `heapless::LinearMap<_, _, 8>`. Audit row expanded below. |
+| `edge-raw` | 0.8.0 | via edge-dhcp | yes | yes | caller | Byte cursors (`BytesIn`/`BytesOut`). With default features off it has **zero dependencies**. |
+| `num_enum` | 0.7.6 | via edge-dhcp | yes | yes | n/a | Derives the DHCP option-code conversions. A proc macro plus a tiny trait crate; the macro half allocates on the *host*, nothing of it ships. |
+| `rand_core` | 0.10.1 | via edge-dhcp | yes | yes | n/a | Trait definitions only, `default-features = false`. Not actually reached by the server path. |
+| `scoreboard-portal` | path | scoreboard-app | yes | yes | caller | First-party. The captive portal's pure half — DNS answer construction and the `Host`-header check — so both are host-tested. `#![forbid(unsafe_code)]`, one dependency (`heapless`). |
+| `embedded-io-async` | =0.7.0 | scoreboard-app | yes | yes | caller | **Optional, `net-probe` only.** The `Write` trait behind `TcpSocket::write_all` for the bench probe. Not in a shipped build; reqwless brings its own in Phase 3's client task. |
+| `defmt` | 0.3.100 | via embassy-net, smoltcp, embassy-net-driver | yes | yes | caller | `cargo tree -d` reports defmt twice, and that is **expected, not drift**: 0.3.100 is upstream's compatibility shim, a crate whose only dependency is `defmt = "1"` and whose only content is re-exports of the 0.3 API. So there are two crate *versions* in the graph and one implementation, one wire format and one `.defmt` string table (147 B in the linked ELF) underneath. Re-check this on any defmt bump — two real defmts would silently split the string table and the decoder would reject the stream. |
+
 **Transitive, load-bearing**
 
 | Crate | Ver | Via | no_std | no-alloc | Buffers | Notes |
@@ -280,13 +336,31 @@ caller-owned?* — `n/a` means the crate holds no runtime buffer at all.
 |---|---|---|---|
 | `picoserve` | not yet pinned | 3 | HTTP server (§7.3) |
 | `reqwless` | not yet pinned | 3 | Backend client (§7.4) |
-| `embassy-net` + `smoltcp` | not yet pinned | 3 | Socket/buffer sizes are budget lines (§11) |
-| `cyw43`, `cyw43-pio` (+ firmware blobs) | not yet pinned | 3 | |
 | `sequential-storage` | not yet pinned | 3 | Persistence (§9) |
 | `serde` (+`derive`) | not yet pinned | 3 | Must deserialize to borrowed/bounded types only |
 | `embassy-boot`(-rp) | not yet pinned | 4 | OTA + signature verification (§8) |
 | `flip-link` | not yet pinned | 3 | Linker wrapper, §2. **Not yet in use** — `hub75-diag` links without it, so stack overflow currently corrupts `.bss` instead of faulting. |
 | `png-stream` deps | not yet pinned | S | Out of parity scope |
+
+**The AP-mode DHCP server — decision record.** embassy-net has a DHCP *client*
+and no server, and MicroPython got a server for free: `network.WLAN(AP_IF)
+.active(True)` starts lwIP's `shared/netutils/dhcpserver.c` inside the port. The
+behaviour is not optional — the captive portal works because a joining client is
+handed 192.168.4.1 as its DNS server, and a phone with an address but no DNS
+pointer sits on the setup network showing "no internet" and never opens a page.
+Three options were weighed against §10:
+
+| Option | Verdict |
+|---|---|
+| `edge-dhcp` with its `io` feature | **No.** `io` pulls `edge-nal`, which is a socket abstraction embassy-net does not implement — it would need `edge-nal-embassy` as well, three crates and an adapter layer to run a loop that is thirty lines. |
+| `edge-dhcp` protocol-only, own socket loop | **Adopted.** `default-features = false` links the packet codec and the lease table and nothing else: `no_std`, no allocation, `Packet` borrows the caller's decode buffer, options go into a caller-owned array, leases into a `heapless::LinearMap` whose capacity we choose. Owning the loop is what keeps the never-die-on-a-malformed-packet rule identical to the captive DNS responder's, and it is where RFC 2131 §4.1's reply-destination rules live. |
+| Hand-rolled, no dependency | Viable — the wire format is 236 fixed bytes plus TLV options, comparable in size to the captive DNS — but it would be a second BOOTP parser to get right and to test, for no reduction in the audit surface that matters. |
+
+The adopted split is ~120 lines in `net::dhcp_server`, matched to
+`dhcpserver.c` where MicroPython made a choice (pool `.16`–`.23`, 24 h lease,
+subnet, router and DNS all pointing at the AP) and to the RFC where it did not
+(MicroPython always broadcasts the reply; this unicasts a renewal to a client
+that already holds an address).
 
 **Findings.** No crate in the tree requires `alloc`, and no `#[global_allocator]`
 is linked — the §10 policy holds today. Two answers are not unconditionally
@@ -310,4 +384,18 @@ the chip is in use.
 
 ## Appendix B — Parity checklist (fill during Phase 3 from MicroPython feature inventory)
 
-Wi-Fi join/retry/status strings · AP fallback + QR + captive portal · SPA + every `api_routes.py` endpoint · poller ETag/backoff semantics · per-sport screens vs. golden corpus · menu + buttons + encoder · auto-brightness curve · watchdog behavior · OTA trigger endpoint · safe-mode semantics · time sync.
+| Item | State |
+|---|---|
+| Per-sport screens vs. golden corpus | **Done** — `firmware-rs/PARITY.md` |
+| Wi-Fi join / retry / status mapping | **Done, bench-validated** — `net::wifi` docs carry the status-code table and three deviations |
+| AP fallback + setup reason + QR | **Done, bench-validated** — all three reasons reachable; `no_network_configured` and `bad_auth` demonstrated on silicon |
+| Captive portal — DNS half | **Done** — `crates/scoreboard-portal::dns`, host-tested |
+| Captive portal — DHCP server | **Done** — new work; embassy-net has no server, `dhcpserver.c` matched (Appendix A) |
+| Captive portal — HTTP `Host` check | **Logic done and host-tested** (`scoreboard-portal::hosts`); wiring is task #10 |
+| SPA + every `api_routes.py` endpoint | Task #10 |
+| Poller ETag / backoff semantics | Task #11 |
+| Time sync (incl. `utc_offset: 0` ≠ `None`) | Task #11 — the endpoint is reachable, proved by `--features net-probe` |
+| Menu + buttons + encoder | Task #12 |
+| Auto-brightness curve | Task #12 |
+| Watchdog behaviour | Task #12 — core-1 liveness signal already published |
+| OTA trigger endpoint + safe-mode semantics | Task #15 |

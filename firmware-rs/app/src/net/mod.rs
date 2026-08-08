@@ -56,6 +56,8 @@
 pub mod captive_dns;
 pub mod dhcp_server;
 pub mod hosts;
+#[cfg(feature = "net-probe")]
+mod probe;
 pub mod wifi;
 
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
@@ -204,6 +206,8 @@ pub async fn bringup(spawner: Spawner, mut publisher: Publisher<'static>, p: Net
             // replaces it. It takes the publisher, so nothing here can publish
             // afterwards — which is the point: one writer.
             spawner.spawn(defmt::unwrap!(crate::demo::feed(publisher)));
+            #[cfg(feature = "net-probe")]
+            spawner.spawn(defmt::unwrap!(probe::fetch_time(stack)));
             MyHosts::station(credentials.device_name, &wifi::address_text(ip))
         }
         Provisioned::Ap { reason, ip } => {
@@ -240,9 +244,9 @@ pub async fn bringup(spawner: Spawner, mut publisher: Publisher<'static>, p: Net
             hosts.device_name(),
             hosts.address(),
             if hosts.captive() {
-                " — anything else redirects to the setup page"
+                ", anything else redirects to the setup page"
             } else {
-                " — anything else is served normally"
+                ", anything else is served normally"
             }
         );
     });

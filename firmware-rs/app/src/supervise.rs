@@ -75,7 +75,7 @@ pub async fn liveness(stack: StackProbe) -> ! {
         previous = current;
         let (used, total) = stack.high_water();
         if ticks == 0 {
-            defmt::error!("core 1 has not ticked in {} s — render loop stalled", PERIOD_S);
+            defmt::error!("core 1 has not ticked in {} s: render loop stalled", PERIOD_S);
         } else {
             defmt::info!(
                 "core 1: {} ticks in {} s ({} FPS), stack high-water {} of {} B",

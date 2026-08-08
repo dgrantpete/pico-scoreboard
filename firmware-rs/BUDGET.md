@@ -25,21 +25,29 @@ no heap to absorb a mistake.
 | Snapshot handoff — `SnapshotChannel` | 8,552 | **MEASURED** | `crates/scoreboard-model`. Three `ScoreboardSnapshot` slots of 2,848 B + 2 B of index + padding. Three, not two — see the correction below. |
 | `Store` (core-0 authoritative state) | 2,880 | **MEASURED** | One more snapshot plus the startup flag and the soccer stale-clock guard. Core 0 mutates this and publishes clones of it. |
 | `Slate` (merged games list + rotation) | 4,596 | **MEASURED** | 160 entries × (source, state, 20-byte game id) + the rotation order + 8 league descriptors. Sized for a college-football Saturday alongside a full MLB slate. |
-| embassy-net buffers + sockets | ~49,152 | ESTIMATE | Poller + HTTP server ×2 + DNS + OTA. |
-| cyw43 driver state | ~16,384 | ESTIMATE | |
+| cyw43 driver state | 17,928 | **MEASURED** | `CYW43_STATE` 12,696 B (the driver's ioctl state and its 4 + 4 packet channel) plus the runner task's 5,232 B arena. Came in 9 % over SPEC §11's 16 KB guess. |
+| embassy-net stack + captive-portal sockets | 12,868 | **MEASURED** | `StackResources<8>` 4,584 B + the net runner's 136 B arena, plus the two AP-mode responders: 4,100 B of payload buffers, 400 B of packet metadata, and 3,920 B of task arenas (the DHCP and DNS scratch live in the arenas, not on a stack). **The TCP socket buffers are not in this line** — poller, HTTP ×2 and OTA are tasks #10/#11/#15 and bring their own. |
+| Provisioning (`net::bringup` arena) | 4,400 | **MEASURED** | The boot-time `Store` (2,880 B) plus the scan's 64-entry BSSID table and the credentials. Task-arena, so it is statically allocated but has no reader after the boot. |
 | Receive/scratch buffers (wire, HTTP, OTA chunk) | ~40,960 | ESTIMATE | Unioned where phases cannot overlap (OTA vs. poll). |
 | Glyph/font tables + compiled sprites | 0 | **MEASURED** | `crates/scoreboard-render`. **9,538 B of flash, 0 B of RAM** — read out of the crate's own object code, not asserted. Breakdown and the command below. |
 | Core-1 render-loop task arena | 1,392 | **MEASURED** | `scoreboard-app`. The loop's `LoopState` — frame rail, prepared view, skip memo, probe — plus the display and everything else held across the frame's await. It lives in the **task arena, not on the core-1 stack**: an embassy task's future is a static. See the correction below. |
 | Core-0 task arenas | ~24,576 | ESTIMATE | 3,120 B measured today for the three placeholder tasks, and 2,968 B of that is the demo feed's own `ScoreboardSnapshot`, which leaves with it. The real arenas are net/poller/server/OTA. |
 | Core-0 stack | — | **MEASURED (not a fixed line)** | With flip-link the stack is the whole remainder below the statics: **415,520 B** today, growing *down*, guarded by MSPLIM at the bottom of RAM. It is not a number to budget; it is what the rest of the table does not spend. |
 | Core-1 stack | 8,192 | **MEASURED** | Sized 8 KB by `scoreboard-app`; **high-water 2,480 B (30 %)** across every scenario the frame probe drives. The setup screen, which is the only QR encoder caller and therefore the deepest frame, is not among them yet. Guarded by MSPLIM at its bottom. See the core-1 notes below. |
-| Ring log + misc statics | ~8,192 | ESTIMATE | Measured floor today is 517 B — embassy-rp GPIO wakers, the time driver, the critical-section lock, the clock cache, and the PAC singleton flags. The deployed RAM log (SPEC §9) is the bulk of this line. |
-| **Projected total** | **246,869** | | **241.1 KiB** |
+| Ring log + misc statics | ~8,192 | ESTIMATE | Measured floor today is 869 B — embassy-rp's GPIO/DMA/PIO wakers, the time driver, the critical-section lock, the clock cache, and the PAC singleton flags. The deployed RAM log (SPEC §9) is the bulk of this line. |
+| **Projected total** | **204,349** | | **199.6 KiB** |
 
-**Headroom: 53.6 %** (285,611 B free of 532,480 B). Against the 512 KiB the
-linker actually declares — see the caveat below — it is 52.9 %. Either way the
-≥ 40 % target holds with room to spare: the estimates above may overrun by a
-combined 72,619 B before the target is breached.
+**Headroom: 61.6 %** (328,131 B free of 532,480 B). Against the 512 KiB the
+linker actually declares — see the caveat below — it is 61.0 %. The ≥ 40 %
+target holds with room to spare: the remaining estimate may overrun by
+114,131 B before it is breached.
+
+The projection *fell* by 42,520 B when Phase 3's networking landed, because two
+of SPEC §11's three network guesses were high. The stack and its AP-mode
+sockets measured 12,868 B against a 49,152 B estimate — the estimate was
+counting TCP socket buffers for the poller, the HTTP server and OTA, which are
+real but belong to tasks that have not landed and will be measured with them.
+Treat the remaining 61.6 % as provisional until they have.
 
 `SnapshotChannel`'s 8,552 B is now a symbol in a real device ELF, and it came
 out byte-for-byte as the host predicted. `Store` and `Slate` are still host
@@ -48,10 +56,17 @@ applies: every bounded string in the snapshot carries a `u16` length prefix
 rather than a `usize`, so the layout is byte-identical on the host and on
 `thumbv8m.main-none-eabihf`.
 
-**Measured today: 107,720 B** (105.2 KiB, 79.8 % headroom) — the whole of
-`scoreboard-app`, which is now the binary of record. That figure includes
-4,150 B of dev-only defmt/RTT and 2,968 B of demo scaffolding, both of which
-leave. The estimate rows above are the network stack, which does not exist yet.
+**Measured today: 143,568 B** (140.2 KiB, 73.0 % headroom) — the whole of
+`scoreboard-app`, which is the binary of record. That figure includes 4,150 B
+of dev-only defmt/RTT and 2,968 B of demo scaffolding, both of which leave.
+Networking added 35,848 B of it.
+
+**Flash: 502,508 B**, 32.7 % of the 1,536 KB active partition — up from
+127,948 B, and **232,803 B of the increase is the CYW43's own firmware**
+(`43439A0.bin` 231,077 + CLM 984 + board NVRAM 742), which is `include_bytes!`
+into `.rodata` and costs no RAM. It is also 232 KB that every OTA image carries
+and every OTA transfer moves, which is worth knowing before Phase 4 sizes its
+download budget.
 
 ### Correction to SPEC §4 — the handoff needs three buffers, not two
 
@@ -134,10 +149,14 @@ the `Hub75Display` and the channel reader all sit in a 1,392 B arena that
 That is why 8 KB of stack turns out to be generous: with the cross-frame state
 elsewhere, the stack only carries renderer call frames and the one deep
 transient, `QrBitmap::encode`'s two 211 B Reed-Solomon buffers. Measured
-high-water is **2,480 B**, stable to within 4 B across every scenario. The 8 KB
-stays as sized — the setup screen (the only QR user) is not in the probe's
-rotation yet, and halving it to buy 4 KB against 285 KB of headroom is not a
-trade worth making.
+high-water is **2,480 B**, stable to within 4 B across every scenario.
+
+**The QR gap is now closed.** That figure was recorded with a caveat: the setup
+screen is the only caller of `QrBitmap::encode` and it was not in the probe's
+rotation. Phase 3's networking put it there — an un-provisioned device boots
+straight into it — and the setup screen measures **2,476 B**, four bytes *under*
+the deepest demo scenario. The QR encoder is not the deepest frame after all;
+the live game screens are. The 8 KB stays as sized regardless.
 
 ---
 
@@ -171,6 +190,35 @@ this port does not need.
 The `frame max` column for the two static scenarios is not a slow frame — it is
 the one frame in a hundred that actually drew, sitting next to ninety-nine that
 skipped. Read the `render` columns for what drawing costs.
+
+### Re-measured with the network stack up
+
+The numbers above were taken with core 0 running three placeholder tasks. The
+question Phase 3's networking has to answer is whether core 0's real load —
+cyw43's SPI runner, smoltcp's poll loop, DHCP, a TCP connection to the backend
+— starves core 1's executor. It does not:
+
+| Scenario | frame mean | frame max | render max | Δ frame max |
+|---|---:|---:|---:|---:|
+| Idle | 0.08 ms | 5.56 ms | 0.53 ms | −0.36 ms |
+| Startup | 0.39 ms | 6.03 ms | 0.93 ms | −0.33 ms |
+| Final line score | 6.35 ms | 6.72 ms | 1.48 ms | −0.12 ms |
+| Final + spinner toast | 6.68 ms | 7.20 ms | 2.18 ms | −0.10 ms |
+| Menu | 6.70 ms | 7.18 ms | 1.73 ms | −0.01 ms |
+| MLB live + 255-byte play flash | 6.72 ms | 7.15 ms | 1.98 ms | −0.26 ms |
+
+Every window reported exactly **200 ticks per 10 s — 20.0 FPS — with zero
+overruns**, across the station bench run, the AP-fallback run, and the
+un-provisioned run. The deltas are all *negative* and all within the build noise
+the section below warns about (flash placement moves the XIP cache under
+hub75's packing loop); the honest reading is not "networking made rendering
+faster" but "networking costs core 1 nothing that this instrument can see".
+
+That is the expected result rather than a lucky one. The two cores share no
+lock, no allocator and no data path except the snapshot channel's single atomic
+swap and the brightness atomic; the network lives entirely on core 0's
+executor, and core 1's frame is dominated (~76 %) by `show`, which is DMA setup
+and a pure-CPU repack that touches neither.
 
 ### Where a frame actually goes
 
@@ -218,25 +266,44 @@ and leaves with the real poller. Re-run it before it does.
 
 ## Measured breakdown — `scoreboard-app`, release, `thumbv8m.main-none-eabihf`
 
-Standalone link profile, with flip-link. **127,948 B flash** (8.1 % of the
-1,536 KB active partition), **8,616 B `.data`**, **95,008 B `.bss`**,
-**4,096 B `.uninit`** → **107,720 B of RAM statics**.
+Standalone link profile, with flip-link. **502,508 B flash** (32.7 % of the
+1,536 KB active partition), **9,080 B `.data`**, **130,392 B `.bss`**,
+**4,096 B `.uninit`** → **143,568 B of RAM statics**.
 
 | Symbol | Bytes | Owner |
 |---|---:|---|
 | `hub75::driver::FRAMEBUFFERS` | 65,536 | hub75 — the two BCM bitplane buffers |
 | `scoreboard_app::FRAME` | 16,385 | app — RGB565 drawing surface (16,384 + 1 B `ConstStaticCell` flag) |
+| `net::CYW43_STATE` | 12,696 | cyw43's ioctl state and its 4-deep packet channel in each direction |
 | `scoreboard_app::CHANNEL` | 8,552 | the three-slot snapshot handoff. **In `.data`, not `.bss`** — see below |
 | `scoreboard_app::CORE1_STACK` | 8,192 | core 1's stack; 2,480 B high-water |
+| `net::cyw43_runner::POOL` | 5,232 | the radio runner's arena — its SPI scratch dominates |
+| `net::STACK_RESOURCES` | 4,584 | `StackResources<8>` — smoltcp's `SocketSet` storage |
+| `net::bringup::POOL` | 4,400 | provisioning's arena: the boot `Store` (2,880 B) + the scan's BSSID table |
 | `defmt_rtt::BUFFER` | 4,096 | defmt ring, `.uninit`. **Dev-only** |
 | `demo::feed::POOL` | 2,968 | the demo task's own `ScoreboardSnapshot`. **Scaffolding**; leaves with the demo |
+| `net::dhcp_server::serve::POOL` | 2,752 | the DHCP task's two 1 KiB packet scratch buffers and its lease table |
 | `display_core1::render_loop::POOL` | 1,392 | core 1's task arena — the loop state |
+| `net::captive_dns::serve::POOL` | 1,168 | the DNS task's 512 B query and 528 B response scratch |
+| `net::{dhcp_server,captive_dns}::{RX,TX}_BUFFER` | 4,100 | 4 × 1,025 — the four UDP socket payload buffers |
+| `net::…::{RX,TX}_META` | 400 | UDP packet metadata: 8 slots each for DNS, 4 each for DHCP |
 | `embassy_rp::gpio::BANK0_WAKERS` | 240 | embassy-rp |
+| `net::net_runner::POOL` | 136 | smoltcp's driver arena |
+| `embassy_rp::dma::CHANNEL_WAKERS` | 128 | embassy-rp, for CH0 |
+| `embassy_rp::pio::…::WAKERS` | 96 | embassy-rp, for PIO2 |
+| `supervise::liveness::POOL` + `net::watch_link::POOL` + `demo::brightness::POOL` | 224 | |
 | `.L_MergedGlobals` | 120 | hub75 driver statics (73 B) + embassy/defmt/probe singletons |
-| `supervise::liveness::POOL` + `demo::brightness::POOL` | 152 | the other two core-0 placeholders |
 | `hub75::driver::TIMING_BUFFER` | 64 | the OE/BCM timing stream |
+| `net::hosts::HOSTS` | 64 | the names the HTTP server answers to |
 | `_SEGGER_RTT` + `defmt_rtt::NAME` | 54 | `.data`, RTT control block. Dev-only |
-| everything else (wakers, flags, padding) | ~30 | |
+| everything else (wakers, flags, padding) | ~490 | |
+
+**The flash number is mostly not code.** `.rodata` is 269,660 B, and 232,803 B
+of that is the CYW43's firmware, CLM and board NVRAM — `include_bytes!`
+(`firmware-rs/app/cyw43-firmware/`). The radio has no flash of its own, so the
+host uploads the image over SPI at every boot; there is no way to not carry it.
+Phase 4 should note that every OTA image and every OTA transfer includes those
+232 KB.
 
 **`CHANNEL` is initialized data, so it costs its 8,552 B twice** — once in RAM
 and once in flash, plus a boot-time copy. `ScoreboardSnapshot::new()` sets
@@ -296,9 +363,10 @@ arm-none-eabi-nm -C --size-sort -r -S -td "$ELF" | awk '$3 ~ /^[bBdD]$/'
   another way. `arm-none-eabi-size` reports statics only. Core 1's stack is an
   8,192 B static painted with 0xAA before the core starts, and
   `supervise::liveness` reports the deepest byte touched every 10 s — 2,480 B.
-  Core 0's is the remainder below the statics (415,520 B under flip-link) and
-  has no equivalent probe, because nothing sizes it: it is what is left.
-  `hub75-diag` still has neither.
+  Core 0's is the remainder below the statics (379,672 B under flip-link, down
+  35,848 B as networking took its share of the statics) and has no equivalent
+  probe, because nothing sizes it: it is what is left. `hub75-diag` still has
+  neither.
 - **`flip-link` is wired up for `firmware-rs/app`**, and the numbers above are
   measured with it. Core 0's stack sits below `.bss`/`.data`
   (`_stack_start = 0x2006_5b20`, `_stack_end = 0x2000_0000`) and
