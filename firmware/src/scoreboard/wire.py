@@ -19,7 +19,7 @@ MicroPython's fast path — no property descriptors.
 
 from .textfold import fold_text
 
-# Must match backend/src/wire.rs.
+# Must match crates/scoreboard-wire (the normative wire definition).
 WIRE_VERSION = 2
 STRUCT_CONTENT_TYPE = "application/x-scoreboard-struct"
 
