@@ -1,0 +1,6 @@
+# Built demo images, extracted .bins, signatures, command mailbox bytes.
+/demo/out/
+
+# The throwaway dev signing key. Only the PUBLIC key is committed; regenerate
+# the pair any time with `python demo/sign.py keygen`.
+/demo/keys/dev_priv.bin

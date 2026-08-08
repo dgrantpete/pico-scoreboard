@@ -1,0 +1,22 @@
+[package]
+name = "spike-boot"
+version = "0.1.0"
+edition = "2024"
+description = "embassy-boot bootloader for the RP2350 A/B trial-boot spike"
+
+[dependencies]
+spike-layout = { path = "../layout" }
+
+# Pre-1.0 ecosystem: pinned exactly (SPEC.md §14).
+embassy-boot-rp = { version = "=0.10.0", features = ["defmt"] }
+embassy-rp = { version = "=0.10.0", features = ["rt", "rp235xa", "critical-section-impl", "unstable-pac", "defmt"] }
+embassy-sync = "=0.8.0"
+embassy-time = "=0.5.1"
+cortex-m = { version = "=0.7.7", features = ["inline-asm"] }
+cortex-m-rt = "=0.7.6"
+defmt = "=1.1.1"
+defmt-rtt = "=1.3.0"
+panic-probe = { version = "=1.0.0", features = ["print-defmt"] }
+
+[build-dependencies]
+spike-layout = { path = "../layout", features = ["std"] }

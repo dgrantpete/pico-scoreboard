@@ -1,0 +1,14 @@
+# Standalone workspace: device-only binaries (embassy-rp does not build for
+# host targets), so this stays out of the root workspace's host builds — same
+# arrangement as firmware-rs/hub75-diag.
+[workspace]
+resolver = "2"
+members = ["layout", "boot", "app"]
+
+[profile.release]
+debug = 2
+lto = "fat"
+# "s", not 3: the bootloader must fit its 32 KB partition and neither binary
+# in this spike is performance-sensitive.
+opt-level = "s"
+codegen-units = 1

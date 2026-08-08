@@ -1,0 +1,10 @@
+[package]
+name = "spike-layout"
+version = "0.1.0"
+edition = "2024"
+description = "Flash partition layout for the embassy-boot A/B spike — single source of truth"
+
+[features]
+default = []
+# Host-side memory.x generation (used from the binaries' build scripts).
+std = []

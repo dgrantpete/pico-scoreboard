@@ -1,0 +1,22 @@
+[build]
+target = "thumbv8m.main-none-eabihf"
+
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+# probe-rs 0.32 wants RP235x ("RP2350" only matches via wildcard, with a
+# warning). --preverify skips sectors that already hold the right bytes, which
+# both speeds up re-runs and lets `cargo run` double as "reset + observe"
+# when the flash already matches the ELF.
+runner = "probe-rs run --chip RP235x --preverify"
+rustflags = [
+  "-C", "link-arg=--nmagic",
+  "-C", "link-arg=-Tlink.x",
+  "-C", "link-arg=-Tdefmt.x",
+]
+
+[env]
+# trace for embassy_boot so the bootloader's "Swapping"/"Reverting" decisions
+# (trace-level in the crate) land in the RTT transcript.
+DEFMT_LOG = "info,embassy_boot=trace,embassy_boot_rp=trace"
+# One boot phase's frames must fit without wrapping: the demo poller reads
+# the pinned ring (see spike-layout) passively and never advances RdOff.
+DEFMT_RTT_BUFFER_SIZE = "4096"
