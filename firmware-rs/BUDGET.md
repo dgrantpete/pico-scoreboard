@@ -22,7 +22,9 @@ no heap to absorb a mistake.
 | HUB75 BCM framebuffers ×2 + driver statics | 65,609 | **MEASURED** | `crates/hub75`. 2 × 32,768 B bitplane buffers + 64 B timing stream + 8 B DMA pointer words + 1 B construction guard. See the breakdown below. |
 | `Hub75Display` RGB565 frame buffer | 16,384 | **MEASURED** | 128 × 64 × 2 B. App-owned, not a driver static — the driver never allocates the drawing surface. Costs 16,385 B as linked (`ConstStaticCell` appends a 1 B taken flag). |
 | Gamma LUT | 256 | **MEASURED** | `[u8; 256]` **inside `Hub75Driver`**, not a separate static. It lands in whichever arena owns the driver — do not add it again to the core-1 line. |
-| Snapshot double buffer | ~8,192 | ESTIMATE | Bounded owned strings dominate; measure from `scoreboard-model` in Phase 2. |
+| Snapshot handoff — `SnapshotChannel` | 8,552 | **MEASURED** | `crates/scoreboard-model`. Three `ScoreboardSnapshot` slots of 2,848 B + 2 B of index + padding. Three, not two — see the correction below. |
+| `Store` (core-0 authoritative state) | 2,880 | **MEASURED** | One more snapshot plus the startup flag and the soccer stale-clock guard. Core 0 mutates this and publishes clones of it. |
+| `Slate` (merged games list + rotation) | 4,596 | **MEASURED** | 160 entries × (source, state, 20-byte game id) + the rotation order + 8 league descriptors. Sized for a college-football Saturday alongside a full MLB slate. |
 | embassy-net buffers + sockets | ~49,152 | ESTIMATE | Poller + HTTP server ×2 + DNS + OTA. |
 | cyw43 driver state | ~16,384 | ESTIMATE | |
 | Receive/scratch buffers (wire, HTTP, OTA chunk) | ~40,960 | ESTIMATE | Unioned where phases cannot overlap (OTA vs. poll). |
@@ -30,16 +32,46 @@ no heap to absorb a mistake.
 | Core-0 task arenas + stack | ~24,576 | ESTIMATE | |
 | Core-1 stack | 8,192 | ESTIMATE | Render loop only. |
 | Ring log + misc statics | ~8,192 | ESTIMATE | Measured floor today is 272 B — embassy-rp GPIO wakers, the time driver, the critical-section lock, and the PAC singleton flags. The deployed RAM log (SPEC §9) is the bulk of this line. |
-| **Projected total** | **237,641** | | **232.1 KiB** |
+| **Projected total** | **245,477** | | **239.7 KiB** |
 
-**Headroom: 55.4 %** (294,839 B free of 532,480 B). Against the 512 KiB that
-`hub75-diag/memory.x` actually declares — see the caveat below — it is 54.7 %.
+**Headroom: 53.9 %** (287,003 B free of 532,480 B). Against the 512 KiB that
+`hub75-diag/memory.x` actually declares — see the caveat below — it is 53.2 %.
 Either way the ≥ 40 % target holds with room to spare: the estimates above may
-overrun by a combined 81,847 B before the target is breached.
+overrun by a combined 74,011 B before the target is breached.
+
+The three `scoreboard-model` lines are **struct sizes measured on the host**,
+not symbols read out of a device ELF — no binary links them yet. They are exact
+anyway: every bounded string in the snapshot carries a `u16` length prefix
+rather than a `usize`, so the layout is byte-identical on the host and on
+`thumbv8m.main-none-eabihf`. Verified by compiling a deliberate type mismatch
+for the ARM target and reading the size out of the error.
 
 **Measured today: 84,120 B** (82.1 KiB, 84.2 % headroom) — that is the whole of
 `hub75-diag`, the only device binary that exists. Everything past the first
 three rows is still a seed estimate.
+
+### Correction to SPEC §4 — the handoff needs three buffers, not two
+
+SPEC §4 specifies `static SNAPSHOTS: [ScoreboardSnapshot; 2]`: core 0 fills the
+inactive buffer and publishes by storing its index. That is one buffer short of
+correct. Core 1 latches an index at the top of a frame and reads from it for the
+whole 50 ms frame, so the buffer it latched is still live *after* core 0 has
+published a newer one — and core 0's next publish targets exactly that buffer.
+Two publishes inside one frame is not a corner case: every live commit is
+followed immediately by the play-flash commit, microseconds later.
+
+Three slots is provably sufficient for one writer and one reader — one
+published, one possibly latched, the writer takes the third. That is what the
+MicroPython `TripleBufferedState` does (with a lock around the index
+bookkeeping); `scoreboard-model`'s `SnapshotChannel` reaches the same guarantee
+with one atomic swap per side and no lock, so core 0 never waits on core 1.
+
+The cost is one extra 2,848 B slot over the spec's shape. The `Store` line is a
+fourth copy: core 0 keeps the authoritative snapshot and publishes clones of it.
+Folding those together — mutating the publisher's back buffer in place and
+carrying forward from the just-published slot — would recover 2,848 B at the
+price of making the whole state machine borrow the channel. If RAM ever gets
+tight, that is the lever; at 53.9 % headroom it is not worth the coupling.
 
 ### Correction to SPEC §11
 
