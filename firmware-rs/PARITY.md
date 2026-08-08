@@ -122,8 +122,10 @@ on the setup screen and `Regions.update_for_qr`'s line narrowing around it.
 
 ## Accepted-diff classes
 
-Two classes were pre-approved for review rather than chasing. **Neither occurs
-anywhere in the corpus**, so the verdict above has no ACCEPTED-DIFF rows.
+Two items were pre-approved for review rather than chasing. **Neither costs the
+corpus anything**, so the verdict above has no ACCEPTED-DIFF rows: the
+brightening class is latent and does not occur, and the red-card fixture turned
+out to be fixable rather than a diff to accept.
 
 ### Team-color brightening — latent, does not occur
 
@@ -150,13 +152,24 @@ its own unit test (`the_accepted_diff_class_is_recognised_by_shape_and_nothing_e
 feeding it both a real brightening pair and a two-code difference that must be
 rejected.
 
-### `soccer/fifa.world/live_red_card.bin` — a fixture gap, not a diff
+### `soccer/fifa.world/live_red_card` — was a fixture gap, now fixed
 
-The file is byte-identical to `overtime.bin`; the corpus contains no real red
-card. Both stacks therefore render the overtime screen, and they agree. The case
-is carried because it costs nothing and will start testing something the day the
-fixture is regenerated — but until then it adds no coverage of the red-card
-event line. Tracked in BACKLOG.
+The fixture used to encode byte-identically to `overtime.bin`, and the standing
+diagnosis was "the corpus contains no red card". That was wrong in an
+instructive way. The fixture is a real ARG-SUI knockout match that *does* carry
+a 72' red card for B. Embolo — but it ran on to 120'+4', and
+`soccer::transform::last_event` surfaces only the latest goal-or-card. Three
+later goals buried the card, so the wire carried a goal, both stacks rendered a
+goal, and the red-card path was untested at every layer while the case looked
+covered.
+
+The fixture now stops just after the 72' card, which is the moment its name
+always claimed and exactly what the backend's own unit test had been
+constructing in memory. It renders `RED CARD 72'` over `B. Embolo` in the
+carded side's colour, at 1-1 in the second half — a screen genuinely distinct
+from `overtime`'s. `tools/extract_fixtures.py`'s selector was the root cause and
+now mirrors the same max-by-clock rule, so a re-capture cannot reintroduce a
+shadowed card.
 
 ## The bug this found
 

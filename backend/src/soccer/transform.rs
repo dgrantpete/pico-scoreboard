@@ -343,12 +343,24 @@ mod tests {
 
     #[test]
     fn red_card_is_surfaced_as_last_event() {
-        // Real ARG-SUI knockout details, truncated to the moment just after
-        // the 72' red card so it is the latest surfaced event (later goals
-        // would win the max otherwise).
-        let mut p = live_parts(fixture("fifa.world/live_red_card"));
-        p.details.retain(|d| d.clock.value <= 4278.0);
-        let event = to_live(p).last_event.expect("red card present");
+        // The real ARG-SUI knockout match, as of the moment just after the 72'
+        // red card. The fixture stops there on purpose: `last_event` takes the
+        // latest goal-or-card, so a fixture that ran on to the extra-time goals
+        // would encode a goal and leave the red-card branch untested all the
+        // way down the stack.
+        let game = to_live(live_parts(fixture("fifa.world/live_red_card")));
+        assert_eq!(game.clock, "72'");
+        assert_eq!(game.half, 2);
+        assert!(!game.on_break);
+        assert_eq!(
+            (game.home.abbreviation.as_str(), game.home.score),
+            ("ARG", 1)
+        );
+        assert_eq!(
+            (game.away.abbreviation.as_str(), game.away.score),
+            ("SUI", 1)
+        );
+        let event = game.last_event.expect("red card present");
         assert_eq!(event.kind, EventKind::RedCard);
         assert_eq!(event.athlete, "B. Embolo");
         assert_eq!(event.clock, "72'");
@@ -360,7 +372,7 @@ mod tests {
     fn overtime_live_parses_with_extended_clock() {
         // Knockout extra time serves as in-state with description "Overtime":
         // active play (not a break), running clock, period passed through.
-        let game = to_live(live_parts(fixture("fifa.world/live_red_card")));
+        let game = to_live(live_parts(fixture("fifa.world/overtime")));
         assert_eq!(game.clock, "120'+4'");
         assert!(!game.on_break);
         assert_eq!(
@@ -371,7 +383,8 @@ mod tests {
             (game.away.abbreviation.as_str(), game.away.score),
             ("SUI", 1)
         );
-        // Latest event is the 120'+1' goal, not the earlier red card.
+        // The same match run to its end: the latest event is the 120'+1' goal,
+        // so the earlier red card is correctly not the one surfaced.
         let event = game.last_event.expect("late goal present");
         assert_eq!(event.kind, EventKind::Goal);
         assert_eq!(event.athlete, "L. Martínez");

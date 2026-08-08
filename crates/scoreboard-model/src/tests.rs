@@ -481,9 +481,23 @@ fn a_goal_event_reads_as_a_label_over_the_scorer_in_the_scoring_color() {
     assert_eq!(view.event_color, Rgb888(0x74_ACDF));
 }
 
-/// The corpus has no red card — `soccer/fifa.world/live_red_card.json` is
-/// byte-identical to `overtime.json` and its `details` carry a goal and a
-/// yellow card. Until that fixture is fixed, this covers the branch.
+#[test]
+fn a_red_card_reads_as_its_own_label_over_the_carded_player() {
+    // The real ARG-SUI fixture, which stops just after the 72' card so the
+    // card is the latest event rather than a later goal.
+    let store = committed("soccer/fifa.world/live_red_card");
+    let view = &store.snapshot().soccer_live;
+    assert!(view.has_event);
+    assert_eq!(view.event_top.as_str(), "RED CARD 72'");
+    assert_eq!(view.event_name.as_str(), "B. Embolo");
+    // The carded side's colour, not the scoring one: SUI, who went down to ten.
+    assert_eq!(view.event_color, Rgb888(0xFF_0000));
+}
+
+/// The corpus covers an *attributed* red card (above); what it cannot reach is
+/// an event ESPN gives no team id for, which renders white rather than in a
+/// side's colour. Synthetic because no fixture carries one and inventing one
+/// would be inventing ESPN behaviour.
 #[test]
 fn a_red_card_labels_itself_and_an_unattributed_event_stays_white() {
     let mut store = Store::new();

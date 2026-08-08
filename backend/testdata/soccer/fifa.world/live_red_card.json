@@ -19,17 +19,17 @@
       "timeValid": true,
       "recent": true,
       "status": {
-        "clock": 7200.0,
-        "displayClock": "120'+4'",
-        "period": 4,
+        "clock": 4320.0,
+        "displayClock": "72'",
+        "period": 2,
         "type": {
-          "id": "24",
-          "name": "STATUS_OVERTIME",
+          "id": "26",
+          "name": "STATUS_SECOND_HALF",
           "state": "in",
           "completed": false,
-          "description": "Overtime",
-          "detail": "120'+4'",
-          "shortDetail": "120'+4'"
+          "description": "Second Half",
+          "detail": "72'",
+          "shortDetail": "72'"
         }
       },
       "venue": {
@@ -127,7 +127,7 @@
           "homeAway": "home",
           "winner": false,
           "form": "DWWWW",
-          "score": "3",
+          "score": "1",
           "team": {
             "id": "202",
             "uid": "s:600~t:202",
@@ -620,223 +620,6 @@
               "position": "F"
             }
           ]
-        },
-        {
-          "type": {
-            "id": "94",
-            "text": "Yellow Card"
-          },
-          "clock": {
-            "value": 5766.0,
-            "displayValue": "97'"
-          },
-          "team": {
-            "id": "202"
-          },
-          "scoreValue": 0,
-          "scoringPlay": false,
-          "redCard": false,
-          "yellowCard": true,
-          "penaltyKick": false,
-          "ownGoal": false,
-          "shootout": false,
-          "athletesInvolved": [
-            {
-              "id": "277208",
-              "displayName": "Thiago Almada",
-              "shortName": "T. Almada",
-              "fullName": "Thiago Almada",
-              "jersey": "16",
-              "team": {
-                "id": "202"
-              },
-              "headshot": "https://a.espncdn.com/i/headshots/soccer/players/full/277208.png",
-              "links": [
-                {
-                  "rel": [
-                    "playercard",
-                    "desktop",
-                    "athlete"
-                  ],
-                  "href": "https://www.espn.com/soccer/player/_/id/277208/thiago-almada",
-                  "isHidden": false
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "type": {
-            "id": "94",
-            "text": "Yellow Card"
-          },
-          "clock": {
-            "value": 5856.0,
-            "displayValue": "98'"
-          },
-          "team": {
-            "id": "202"
-          },
-          "scoreValue": 0,
-          "scoringPlay": false,
-          "redCard": false,
-          "yellowCard": true,
-          "penaltyKick": false,
-          "ownGoal": false,
-          "shootout": false,
-          "athletesInvolved": [
-            {
-              "id": "219713",
-              "displayName": "Lautaro Mart\u00ednez",
-              "shortName": "L. Mart\u00ednez",
-              "fullName": "Lautaro Mart\u00ednez",
-              "jersey": "22",
-              "team": {
-                "id": "202"
-              },
-              "links": [
-                {
-                  "rel": [
-                    "playercard",
-                    "desktop",
-                    "athlete"
-                  ],
-                  "href": "https://www.espn.com/soccer/player/_/id/219713/lautaro-martinez",
-                  "isHidden": false
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "type": {
-            "id": "70",
-            "text": "Goal"
-          },
-          "clock": {
-            "value": 6701.0,
-            "displayValue": "112'"
-          },
-          "team": {
-            "id": "202"
-          },
-          "scoreValue": 1,
-          "scoringPlay": true,
-          "redCard": false,
-          "yellowCard": false,
-          "penaltyKick": false,
-          "ownGoal": false,
-          "shootout": false,
-          "athletesInvolved": [
-            {
-              "id": "277206",
-              "displayName": "Juli\u00e1n \u00c1lvarez",
-              "shortName": "J. \u00c1lvarez",
-              "fullName": "Juli\u00e1n \u00c1lvarez",
-              "jersey": "9",
-              "team": {
-                "id": "202"
-              },
-              "links": [
-                {
-                  "rel": [
-                    "playercard",
-                    "desktop",
-                    "athlete"
-                  ],
-                  "href": "https://www.espn.com/soccer/player/_/id/277206/julian-alvarez",
-                  "isHidden": false
-                }
-              ],
-              "position": "CF-L"
-            }
-          ]
-        },
-        {
-          "type": {
-            "id": "94",
-            "text": "Yellow Card"
-          },
-          "clock": {
-            "value": 6825.0,
-            "displayValue": "114'"
-          },
-          "team": {
-            "id": "202"
-          },
-          "scoreValue": 0,
-          "scoringPlay": false,
-          "redCard": false,
-          "yellowCard": true,
-          "penaltyKick": false,
-          "ownGoal": false,
-          "shootout": false,
-          "athletesInvolved": [
-            {
-              "id": "311743",
-              "displayName": "Jos\u00e9 Manuel L\u00f3pez",
-              "shortName": "J. L\u00f3pez",
-              "fullName": "Jos\u00e9 Manuel L\u00f3pez",
-              "jersey": "21",
-              "team": {
-                "id": "202"
-              },
-              "links": [
-                {
-                  "rel": [
-                    "playercard",
-                    "desktop",
-                    "athlete"
-                  ],
-                  "href": "https://www.espn.com/soccer/player/_/id/311743/jose-manuel-lopez",
-                  "isHidden": false
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "type": {
-            "id": "70",
-            "text": "Goal"
-          },
-          "clock": {
-            "value": 7200.0,
-            "displayValue": "120'+1'"
-          },
-          "team": {
-            "id": "202"
-          },
-          "scoreValue": 1,
-          "scoringPlay": true,
-          "redCard": false,
-          "yellowCard": false,
-          "penaltyKick": false,
-          "ownGoal": false,
-          "shootout": false,
-          "athletesInvolved": [
-            {
-              "id": "219713",
-              "displayName": "Lautaro Mart\u00ednez",
-              "shortName": "L. Mart\u00ednez",
-              "fullName": "Lautaro Mart\u00ednez",
-              "jersey": "22",
-              "team": {
-                "id": "202"
-              },
-              "links": [
-                {
-                  "rel": [
-                    "playercard",
-                    "desktop",
-                    "athlete"
-                  ],
-                  "href": "https://www.espn.com/soccer/player/_/id/219713/lautaro-martinez",
-                  "isHidden": false
-                }
-              ]
-            }
-          ]
         }
       ],
       "odds": [
@@ -979,17 +762,17 @@
     }
   ],
   "status": {
-    "clock": 7200.0,
-    "displayClock": "120'+4'",
-    "period": 4,
+    "clock": 4320.0,
+    "displayClock": "72'",
+    "period": 2,
     "type": {
-      "id": "24",
-      "name": "STATUS_OVERTIME",
+      "id": "26",
+      "name": "STATUS_SECOND_HALF",
       "state": "in",
       "completed": false,
-      "description": "Overtime",
-      "detail": "120'+4'",
-      "shortDetail": "120'+4'"
+      "description": "Second Half",
+      "detail": "72'",
+      "shortDetail": "72'"
     }
   },
   "venue": {

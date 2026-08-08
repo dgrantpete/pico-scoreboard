@@ -101,12 +101,25 @@ def _football_pregame_ranked(_ev: dict, c: dict) -> bool:
     )
 
 
-def _has_red_card(c: dict) -> bool:
-    return any(d.get("redCard") for d in c.get("details") or [])
-
-
 def _soccer_live_red_card(_ev: dict, c: dict) -> bool:
-    return c["status"]["type"]["state"] == "in" and _has_red_card(c)
+    """A live match whose most recent goal-or-card IS the red card.
+
+    "Contains a red card somewhere" is not enough, and the 2026-07-15 capture
+    proved it: it matched an ARG-SUI match at 120'+4' whose 72' red card was
+    buried behind three later goals. The backend surfaces only the latest such
+    event (`soccer::transform::last_event` takes the max by clock), so that
+    fixture encoded a goal, rendered as a goal, and left the whole red-card
+    path — wire flag, event label, colour — untested while looking covered.
+    Mirror that max-by-clock rule here so a capture cannot repeat it.
+    """
+    if c["status"]["type"]["state"] != "in":
+        return False
+    surfaced = [
+        d for d in c.get("details") or [] if d.get("scoringPlay") or d.get("redCard")
+    ]
+    if not surfaced:
+        return False
+    return bool(max(surfaced, key=lambda d: d["clock"]["value"]).get("redCard"))
 
 
 def _soccer_home_multi_goal_final(_ev: dict, c: dict) -> bool:
