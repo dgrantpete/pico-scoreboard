@@ -30,7 +30,10 @@ fn defaults_match_the_micropython_defaults_dict() {
     assert_eq!(config.display.variants.mlb_final.as_str(), "C");
     assert_eq!(config.display.variants.soccer_live.as_str(), "A");
     assert!(config.display.show_dividers);
-    assert_eq!(config.display.scroll_speed_px_per_sec, 20);
+    assert_eq!(
+        config.display.scroll_speed_px_per_sec,
+        scoreboard_render::geometry::DEFAULT_SCROLL_SPEED
+    );
     assert_eq!(config.colors.accent, Rgb::new(255, 255, 0));
     assert!(config.sports.mlb.enabled);
     assert!(!config.sports.nba.enabled);
@@ -333,13 +336,13 @@ fn a_wrongly_typed_value_is_rejected_rather_than_stored() {
 fn render_settings_come_out_of_the_config() {
     let mut config = DeviceConfig::new();
     config.display.show_dividers = false;
-    config.display.scroll_speed_px_per_sec = 40;
+    config.display.scroll_speed_px_per_sec = 10;
     config.display.variants.soccer_live.clear();
     let _ = config.display.variants.soccer_live.push_str("B");
 
     let settings = config.render_settings();
     assert!(!settings.show_dividers);
-    assert_eq!(settings.scroll_px_per_second, 40);
+    assert_eq!(settings.scroll_px_per_second, 10);
     assert_ne!(
         settings.soccer_live_table(),
         scoreboard_render::RenderSettings::new().soccer_live_table()
@@ -349,9 +352,29 @@ fn render_settings_come_out_of_the_config() {
 #[test]
 fn an_illegal_scroll_speed_degrades_rather_than_being_rejected() {
     let mut config = DeviceConfig::new();
-    // Not a member of the smooth set; `set_scroll_speed` snaps it back.
+    // Not a member of the smooth set; `set_scroll_speed` snaps it back. The
+    // stored value is left alone — `watchdog_timeout_ms` clamps on read the
+    // same way, and a config file is a record of what was asked for.
     config.display.scroll_speed_px_per_sec = 37;
-    assert_eq!(config.render_settings().scroll_px_per_second, 20);
+    assert_eq!(
+        config.render_settings().scroll_px_per_second,
+        scoreboard_render::geometry::DEFAULT_SCROLL_SPEED
+    );
+    assert_eq!(config.display.scroll_speed_px_per_sec, 37, "nothing is rewritten");
+}
+
+#[test]
+fn the_speed_the_parity_release_stored_survives_the_upgrade_as_the_default() {
+    // The one real device carrying this config has 40 px/s stored, which 60 FPS
+    // made illegal. It must not stutter and it must not be rejected: it takes
+    // the ordinary degrade path to the nearest legal speed. The stored 40
+    // remains in the file until somebody saves the form again.
+    let mut config = DeviceConfig::new();
+    config.display.scroll_speed_px_per_sec = 40;
+    assert_eq!(
+        config.render_settings().scroll_px_per_second,
+        scoreboard_render::geometry::DEFAULT_SCROLL_SPEED
+    );
 }
 
 #[test]

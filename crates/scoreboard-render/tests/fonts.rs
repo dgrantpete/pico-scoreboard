@@ -7,7 +7,8 @@ use goldens::{FONTS, FontGolden, fnv1a64};
 use scoreboard_render::blit::Canvas;
 use scoreboard_render::font::{self, Align, FontFace, Scroll, Style};
 use scoreboard_render::generated::{SPLEEN_5X8, UNSCII_8, UNSCII_16};
-use scoreboard_render::time::Motion;
+use scoreboard_render::geometry::{FPS, SCROLL_SPEEDS};
+use scoreboard_render::time::{FrameElapsed, Motion, frame_ms};
 
 fn faces() -> [(&'static FontFace, &'static FontGolden); 3] {
     let by_name = |name: &str| FONTS.iter().find(|font| font.name == name).unwrap();
@@ -193,35 +194,93 @@ fn text_that_fits_never_scrolls() {
 }
 
 #[test]
-fn every_legal_speed_advances_by_a_whole_number_of_pixels_per_frame() {
-    // The divisibility constraint, exercised rather than asserted: walk one
-    // scroll cycle a frame at a time and check the step never changes size. A
-    // speed like 30 px/s alternates 1 px and 2 px here, which is the stutter the
-    // legal set exists to prevent.
-    const TRAVEL: i32 = 100;
-    const PAUSE_MS: u64 = 1000;
-    for speed in scoreboard_render::geometry::SCROLL_SPEEDS {
+fn every_legal_speed_steps_by_one_pixel_at_an_unchanging_interval() {
+    // The whole point of the frame rate: a speed is smooth when the pixel steps
+    // are the same size *and* evenly spaced. The size alone is not enough —
+    // 40 px/s at 60 FPS steps 1 px every time and dwells alternately one and
+    // two frames, which is exactly the judder the legal set excludes.
+    const TRAVEL: i32 = 120;
+    const PAUSE_MS: u64 = 1_000;
+    for speed in SCROLL_SPEEDS {
         let scroll = Scroll {
             pause_ms: PAUSE_MS,
             pixels_per_second: speed,
         };
-        let first = PAUSE_MS / 50;
-        let last = first + (TRAVEL as u64 * 1000 / speed as u64) / 50;
-        let mut steps = Vec::new();
-        let mut previous = 0;
+        // One full traverse, a frame at a time, from the frame the pause ends.
+        let first = PAUSE_MS * FPS as u64 / 1_000;
+        let last = first + (TRAVEL as u64 * FPS as u64).div_ceil(speed as u64);
+
+        let mut sizes = Vec::new();
+        let mut gaps = Vec::new();
+        let (mut previous_offset, mut previous_frame) = (0, first);
         for frame in first..=last {
-            let offset = font::scroll_offset(TRAVEL + 100, 100, Motion(frame * 50), scroll);
-            if offset != previous {
-                steps.push(offset - previous);
-                previous = offset;
+            let elapsed = frame_ms(frame);
+            let offset = font::scroll_offset(
+                TRAVEL + 100,
+                100,
+                FrameElapsed(elapsed).motion(),
+                scroll,
+            );
+            if offset != previous_offset {
+                sizes.push(offset - previous_offset);
+                gaps.push(frame - previous_frame);
+                previous_offset = offset;
+                previous_frame = frame;
             }
         }
-        assert_eq!(previous, TRAVEL, "{speed} px/s did not finish its travel");
+
+        assert_eq!(previous_offset, TRAVEL, "{speed} px/s did not finish its travel");
+        // The first gap is measured from the frame the pause ended rather than
+        // from a step, so it is the one entry that legitimately differs.
         assert!(
-            steps.windows(2).all(|pair| pair[0] == pair[1]),
-            "{speed} px/s produced uneven steps: {steps:?}"
+            sizes.windows(2).all(|pair| pair[0] == pair[1]),
+            "{speed} px/s produced uneven step sizes: {sizes:?}"
+        );
+        assert!(
+            gaps[1..].windows(2).all(|pair| pair[0] == pair[1]),
+            "{speed} px/s produced unevenly spaced steps: {gaps:?}"
         );
     }
+}
+
+#[test]
+fn the_speed_the_parity_release_stored_is_the_judder_this_set_excludes() {
+    // 40 px/s was legal at 20 FPS (2 px per frame, uniform but coarse) and is
+    // the reason `SCROLL_SPEEDS` had to be re-derived rather than extended: at
+    // 60 FPS it is 2/3 px per frame. Every column is shown — that is what makes
+    // it different from the 20 FPS 1.5 px/frame case — but each is held for
+    // alternately one and two frames, and the rhythm is what the eye catches.
+    //
+    // Spelt out so the guard above is known to have teeth, and so the answer to
+    // "why not just keep 40" is in the test suite rather than only in a doc.
+    assert!(!scoreboard_render::geometry::is_smooth(40));
+    let scroll = Scroll {
+        pause_ms: 0,
+        pixels_per_second: 40,
+    };
+    let offsets: Vec<i32> = (0..7)
+        .map(|frame| {
+            font::scroll_offset(200, 100, FrameElapsed(frame_ms(frame)).motion(), scroll)
+        })
+        .collect();
+    assert_eq!(offsets, [0, 0, 1, 2, 2, 3, 4], "one frame of dwell, then two");
+}
+
+#[test]
+fn the_speed_this_frame_rate_exists_for_is_one_pixel_every_two_frames() {
+    // 30 px/s is impossible at 20 FPS and the reason the loop moved to 60. Spelt
+    // out as a literal expectation, because "uniform" above would also be
+    // satisfied by a speed that quietly rounded to something else.
+    let scroll = Scroll {
+        pause_ms: 0,
+        pixels_per_second: 30,
+    };
+    let offsets: Vec<i32> = (0..8)
+        .map(|frame| {
+            font::scroll_offset(200, 100, FrameElapsed(frame_ms(frame)).motion(), scroll)
+        })
+        .collect();
+    assert_eq!(offsets, [0, 0, 1, 1, 2, 2, 3, 3]);
 }
 
 #[test]

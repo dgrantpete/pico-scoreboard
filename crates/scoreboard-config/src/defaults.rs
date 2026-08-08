@@ -55,8 +55,11 @@ pub(crate) fn show_dividers() -> bool {
     true
 }
 
+/// Deliberately the render crate's own degrade target rather than a repeated
+/// literal: a fresh device and a device whose stored speed is illegal have no
+/// business scrolling at different rates.
 pub(crate) fn scroll_speed() -> i32 {
-    20
+    scoreboard_render::geometry::DEFAULT_SCROLL_SPEED
 }
 
 pub(crate) fn variant_a() -> String<{ crate::MAX_VARIANT }> {

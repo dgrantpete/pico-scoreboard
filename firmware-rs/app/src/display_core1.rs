@@ -9,15 +9,30 @@
 //!
 //! # Pacing: deadline-based, and it never fast-forwards
 //!
-//! Each tick targets `deadline + FRAME_MS` and the sleep absorbs however long
-//! the frame took, so the wall-clock spacing between frames stays even. The
-//! older shape — render, then sleep a fixed 50 ms — let frame cost leak into
-//! the spacing and made scroll steps visibly uneven.
+//! Each tick targets the next frame slot and the sleep absorbs however long the
+//! frame took, so the wall-clock spacing between frames stays even. The older
+//! shape — render, then sleep a fixed period — let frame cost leak into the
+//! spacing and made scroll steps visibly uneven.
 //!
 //! An overrun **re-anchors**: the next deadline is measured from the moment the
 //! late frame finished, not from the slot it missed. Bursting to catch up would
 //! make a stalled display fast-forward through the animation it owed, which is
 //! worse than the stall. Overruns are counted, not corrected.
+//!
+//! ## The slot is computed, not accumulated
+//!
+//! At 60 FPS the period is 16⅔ ms, which is not a whole number of the
+//! microseconds `embassy_time` counts in. Adding a rounded per-frame duration
+//! would drift without bound — 16,667 µs per frame is 2 ppm fast, which is only
+//! a second a week, but 16,666 would be 8 ppm slow and there is no reason to
+//! pick either. So the loop keeps an anchor plus a frame index and targets
+//! `anchor + frame_us(index)`, the same exact-rational quantiser the frame rail
+//! uses ([`scoreboard_render::time::frame_us`]). The error against true time
+//! never exceeds one microsecond, at any uptime.
+//!
+//! Re-anchoring on overrun is what resets the index: the anchor moves to the
+//! moment the late frame finished and the count starts again, which is
+//! precisely "measured from the moment it finished".
 //!
 //! # The mutation contract, in Rust
 //!
@@ -51,15 +66,11 @@ use scoreboard_model::Reader;
 use scoreboard_render::blit::Canvas;
 use scoreboard_render::game::{Logos, Scene};
 use scoreboard_render::geometry::{HEIGHT, RenderSettings, WIDTH};
-use scoreboard_render::time::{FRAME_MS, FrameRail, WallMs};
+use scoreboard_render::time::{FPS, FrameRail, WallMs, frame_us};
 use scoreboard_render::{PreparedView, SkipMemo, frame};
 
 use crate::logos::CrestPool;
 use crate::probe::{FrameProbe, Lap, Screen};
-
-/// One frame period, from the render crate's own constant so the loop cannot
-/// pace at a rate the scroll speeds were not chosen for.
-const FRAME: Duration = Duration::from_millis(FRAME_MS);
 
 /// Panel brightness, 0..=255, mapped onto the driver's `[0.0, 1.0]`.
 ///
@@ -168,9 +179,13 @@ pub async fn render_loop(
         .sink_mut()
         .set_brightness(state.brightness as f64 / 255.0);
 
-    defmt::info!("core 1: render loop up at {} FPS", 1000 / FRAME_MS);
+    defmt::info!("core 1: render loop up at {} FPS", FPS);
 
-    let mut deadline = Instant::now() + FRAME;
+    // The slot index counts from `anchor`, and both reset together on an
+    // overrun. See the module docs for why the deadline is computed from the
+    // pair rather than accumulated.
+    let mut anchor = Instant::now();
+    let mut slot: u64 = 1;
     loop {
         let tick = Lap::start();
 
@@ -240,19 +255,21 @@ pub async fn render_loop(
         FRAME_SEQ.fetch_add(1, Ordering::Relaxed);
         state.probe.end_tick(tick.elapsed_us());
 
+        let deadline = anchor + Duration::from_micros(frame_us(slot));
         let finished = Instant::now();
         if finished >= deadline {
             // The frame ran past its slot. Re-anchor to now: a display never
             // fast-forwards through the frames it owed.
             state.probe.record_overrun();
-            deadline = finished + FRAME;
+            anchor = finished;
+            slot = 1;
             // No sleep to yield on, and core 1's executor has exactly one task
             // — but let it round the loop properly anyway, so adding a second
             // task here never turns into a starvation bug.
             yield_now().await;
         } else {
             Timer::at(deadline).await;
-            deadline += FRAME;
+            slot += 1;
         }
     }
 }

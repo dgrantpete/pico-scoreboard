@@ -815,3 +815,29 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     request log line, but it will still publish. Deliberate — a bench cycle
     against the staging channel should not need a commit — and worth
     reconsidering if `--channel stable` ever runs from anything but CI.
+
+83. **A finer toast dim ladder is now affordable** — deferred by task #17,
+    2026-08-08, after the 60 FPS change turned out *not* to need it. The fade
+    steps every 50 ms off the wall clock, not once per frame, so it was never
+    frame-coupled: 60 FPS shows the same four rungs (7/8, 3/4, 5/8, 1/2) for
+    three frames each instead of one, over the same 150 ms in and 150 ms out.
+    `tests/screens.rs::the_toast_fade_takes_the_same_time_at_any_frame_rate`
+    pins that, and `toast::FADE_STEP_MS`'s docs say why the coincidence looks
+    like coupling.
+
+    What *is* newly available is resolution: 150 ms is now nine frames rather
+    than three, so a finer ladder would actually be seen. The ceiling is the
+    dim's arithmetic, not the frame rate. `Canvas::dim` is a masked shift-add —
+    `w>>1` plus optional `w>>2` and `w>>3` — which spans 1/2 to 7/8 in eighths.
+    Adding a `w>>4` term doubles that to eight rungs in sixteenths (the mask is
+    `0x0861`, by the same per-field derivation as the existing three); a `w>>5`
+    term is where it stops, because at 1/32 the mask is `0x0020` and only the
+    6-bit green channel survives, so the frame would tint as it faded.
+
+    Eight rungs over eight frames is 133 ms against today's 150, which is the
+    natural landing spot. **The cost is a deliberate pixel divergence from the
+    MicroPython baseline**: `toast_lock` and `toast_spinner` are in the parity
+    corpus at `t0`, where rung 0 would go from 7/8 to 15/16, and the goldens
+    come from a firmware that will never grow the rung. So this needs an
+    accepted-divergence class in `parity_frames.rs` and a PARITY.md verdict
+    entry, which is why it is not a drive-by.

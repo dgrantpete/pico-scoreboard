@@ -2,8 +2,8 @@
 
 use scoreboard_model::Sport;
 use scoreboard_render::geometry::{
-    self, FINAL_A, FINAL_B, FINAL_C, FinalVariant, RenderSettings, SCROLL_SPEEDS,
-    SoccerLiveVariant, is_smooth,
+    self, DEFAULT_SCROLL_SPEED, FINAL_A, FINAL_B, FINAL_C, FinalVariant, RenderSettings,
+    SCROLL_SPEEDS, SoccerLiveVariant, is_smooth,
 };
 use scoreboard_render::menu::thumb;
 
@@ -78,16 +78,33 @@ fn the_b_variant_spells_the_period_out_instead_of_chipping_it() {
 }
 
 #[test]
-fn illegal_scroll_speeds_degrade_to_twenty() {
+fn illegal_scroll_speeds_degrade_to_the_default() {
     let mut settings = RenderSettings::new();
     for speed in SCROLL_SPEEDS {
         assert_eq!(settings.set_scroll_speed(speed), speed);
     }
-    // 30 px/s is the documented failure case: 1.5 px per frame, realised as
-    // alternating 1 and 2 px steps.
-    for speed in [0, -5, 1, 3, 30, 25, 60, 1000] {
-        assert_eq!(settings.set_scroll_speed(speed), 20, "{speed} px/s");
+    // 40 is the one that matters: it is what the parity release accepted and
+    // what a device upgraded from it has stored, and it is not smooth at 60 FPS.
+    // It degrades like any other illegal value rather than being special-cased,
+    // and `DEFAULT_SCROLL_SPEED` is chosen so that landing there is sensible.
+    for speed in [0, -5, 7, 8, 25, 40, 45, 1000] {
+        assert_eq!(
+            settings.set_scroll_speed(speed),
+            DEFAULT_SCROLL_SPEED,
+            "{speed} px/s"
+        );
     }
+}
+
+#[test]
+fn the_degrade_target_is_the_legal_speed_nearest_the_one_it_replaces() {
+    // Not arbitrary: a device carrying the parity release's 40 px/s has to land
+    // somewhere, and the nearest legal speed is the least surprising answer.
+    let nearest = SCROLL_SPEEDS
+        .into_iter()
+        .min_by_key(|speed| (speed - 40).abs())
+        .expect("the accepted set is not empty");
+    assert_eq!(DEFAULT_SCROLL_SPEED, nearest);
 }
 
 #[test]
@@ -95,10 +112,13 @@ fn the_smoothness_test_rejects_non_divisors() {
     for speed in SCROLL_SPEEDS {
         assert!(is_smooth(speed), "{speed} px/s is in the accepted set");
     }
-    for speed in [1, 2, 4, 5, 10, 20, 40, 60] {
-        assert!(is_smooth(speed));
+    // The divisors of 60, plus its multiples.
+    for speed in [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60, 120] {
+        assert!(is_smooth(speed), "{speed} px/s divides 60 or is a multiple");
     }
-    for speed in [0, 3, 6, 7, 12, 15, 30, 33] {
+    // 40 and 45 are the instructive rejections: both were plausible, neither
+    // divides 60 in either direction.
+    for speed in [0, 7, 8, 9, 11, 25, 40, 45, 70] {
         assert!(!is_smooth(speed), "{speed} px/s should be rejected");
     }
 }

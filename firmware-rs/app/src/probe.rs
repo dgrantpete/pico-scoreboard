@@ -11,8 +11,9 @@
 //! do inline, every frame (see `prepared`'s module docs). That thesis is a
 //! claim about real silicon, so this measures it on real silicon.
 //!
-//! Budget: **≤ 50 ms per frame is the hard ceiling** (SPEC §6); low single
-//! digits is what the thesis predicts.
+//! Budget: **one frame period is the hard ceiling** (SPEC §6) — 50 ms when the
+//! thesis was measured, 16.7 ms since the loop moved to 60 FPS. Low single
+//! digits is what the thesis predicted, and it is what the silicon said.
 //!
 //! # What it separates, and why
 //!
@@ -148,7 +149,7 @@ pub struct FrameProbe {
     show: Bucket,
     brightness: Bucket,
     /// Wall time from the top of a tick to the end of its work — what the
-    /// 50 ms deadline is actually spent against.
+    /// frame deadline is actually spent against.
     frame: Bucket,
 }
 
@@ -156,8 +157,10 @@ pub struct FrameProbe {
 /// does not change. A live game holds for `game_rotation_seconds` — 60 by
 /// default — and an idle scoreboard holds for as long as there are no games, so
 /// without this the probe would go silent for hours on exactly the case worth
-/// watching. 600 ticks is 30 s.
-const REPORT_EVERY: u32 = 600;
+/// watching. Derived from the frame rate rather than pinned to a tick count, so
+/// a report stays a report about half a minute and does not silently become one
+/// about ten seconds when the loop speeds up.
+const REPORT_EVERY: u32 = 30 * scoreboard_render::time::FPS;
 
 impl FrameProbe {
     pub const fn new() -> FrameProbe {

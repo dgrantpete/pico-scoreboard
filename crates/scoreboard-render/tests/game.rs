@@ -325,9 +325,10 @@ fn the_play_flash_expires_on_the_wall_rail() {
     harness.prepared.sync(&harness.snapshot, &harness.settings);
 
     // Fourteen unscii_16 glyphs is 112 px in a 76 px window, so 36 px of travel
-    // at the configured 20 px/s, between the two one-second dwells.
+    // at the configured speed, between the two one-second dwells.
+    let speed = harness.settings.scroll_px_per_second as u64;
     let window = harness.prepared.play_window_ms();
-    assert_eq!(window, 1_000 + 36 * 1_000 / 20 + 1_000);
+    assert_eq!(window, 1_000 + 36 * 1_000 / speed + 1_000);
 
     harness.now = WallMs(10_000 + window - 1);
     assert_eq!(sport_content(&harness.draw()), 0, "still flashing");

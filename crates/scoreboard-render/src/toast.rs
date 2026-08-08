@@ -29,7 +29,19 @@ use crate::{BLACK, WHITE, generated, pulse, rgb565};
 use scoreboard_model::snapshot::{TOAST_DISPLAY_MS, TOAST_STICKY_MAX_MS, ToastView};
 use scoreboard_model::{Millis, ScoreboardSnapshot, ToastKind};
 
-/// One ladder step per rendered frame at 20 FPS.
+/// How long one rung of the dim ladder holds.
+///
+/// **A duration, not a frame count** — it happens to equal the frame period the
+/// parity release ran at, which made it one rung per frame and makes it look
+/// frame-coupled. It is not: [`overlay`] divides a `WallMs` elapsed by this, so
+/// the fade is 150 ms in and 150 ms out at any frame rate, and a faster loop
+/// samples the same four rungs more often rather than racing through them.
+/// `tests/screens.rs` pins that.
+///
+/// Which also means a finer ladder is now *available* and was not before — 60
+/// FPS can show three times as many rungs in the same 150 ms. It would cost a
+/// deliberate pixel divergence from the MicroPython baseline the parity harness
+/// compares against, so it is BACKLOG 83 rather than part of this change.
 const FADE_STEP_MS: Millis = 50;
 /// Fade-out walks 5/8 → 3/4 → 7/8, then the frame is clean.
 const FADE_OUT_MS: Millis = FADE_STEP_MS * 3;
@@ -206,8 +218,10 @@ pub fn overlay(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: Wall
 ///
 /// The head advances in 1/256ths of a dot step, so the trail's brightness
 /// shifts every frame rather than stepping dot to dot — the fluidity is the
-/// point, it is what demonstrates the 20 FPS pipeline. Dots outside the trail
-/// get the key as their color, so the blit skips them entirely.
+/// point, and it is the one thing on the panel that visibly gains from the
+/// frame rate, since the ring is driven off the wall clock and simply gets
+/// three times as many samples per revolution. Dots outside the trail get the
+/// key as their color, so the blit skips them entirely.
 fn spinner(canvas: &mut Canvas<'_>, elapsed: Millis, dim: u8) {
     let sprite = layout::toast_spinner::SPRITE;
     let mut palette = layout::toast_spinner::PALETTE;

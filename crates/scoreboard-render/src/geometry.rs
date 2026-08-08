@@ -21,7 +21,6 @@
 
 use crate::blit::Slice;
 use crate::font::Scroll;
-use crate::time::FRAME_MS;
 use scoreboard_model::Sport;
 
 /// Panel width in pixels.
@@ -38,26 +37,44 @@ pub const HEIGHT: i32 = 64;
 // Scroll speeds
 // =============================================================================
 
-/// Frames per second the render loop runs at.
-pub const FPS: i32 = (1000 / FRAME_MS) as i32;
+/// Frames per second the render loop runs at, from [`crate::time::FPS`] — the
+/// one constant every frame-coupled number in this crate is derived from.
+pub const FPS: i32 = crate::time::FPS as i32;
 
 /// Speeds the config accepts for the game-description scrollers (the play
 /// flash and the soccer event/scorer lines).
 ///
 /// **Every speed must evenly divide the frame rate, in one direction or the
 /// other.** The scroll offset is derived from elapsed time, so a speed of `S`
-/// px/s advances `S / FPS` px per rendered frame. A non-integer px/frame — 30
-/// px/s is 1.5 — is realised by floor math as alternating 1 px and 2 px steps,
-/// which means every third pixel column of the scroll is never displayed. It
-/// reads as a rhythmic stutter on the panel, not as smooth motion.
+/// px/s advances `S / FPS` px per rendered frame. Neither a non-integer
+/// px/frame nor a non-integer frames/px is smooth: at 20 FPS, 30 px/s is
+/// 1.5 px per frame, realised by floor math as alternating 1 px and 2 px steps,
+/// so every third pixel column is never displayed. The mirror case is 40 px/s
+/// at 60 FPS — ⅔ px per frame, which shows every column but dwells on them for
+/// alternately one and two frames. Both read as a rhythmic stutter on the
+/// panel rather than as motion.
 ///
-/// The legal smooth values are the divisors of 20 (20, 10, 5, 4, 2, 1) plus its
-/// multiples (40 at 2 px/frame — uniform, but coarse). [`is_smooth`] is the
-/// test, and the const block below applies it to every member of this set.
-pub const SCROLL_SPEEDS: [i32; 4] = [5, 10, 20, 40];
+/// The legal values are therefore the divisors of [`FPS`] together with its
+/// multiples. At 60 that is a generous ladder — {1, 2, 3, 4, 5, 6, 10, 12, 15,
+/// 20, 30, 60} and up — and the set below is the slice of it worth offering in
+/// a dropdown: the three the parity release shipped that are still legal, the
+/// 30 px/s the whole 60 FPS change exists to make expressible, and 60 as the
+/// fast end. [`is_smooth`] is the test, and the const block below applies it to
+/// every member.
+///
+/// **40 px/s is no longer in the set.** It was uniform-but-coarse at 20 FPS
+/// (2 px per frame) and is the stutter case at 60, so it degrades like any
+/// other illegal value — see [`DEFAULT_SCROLL_SPEED`], which is chosen so that
+/// the degrade lands somewhere a device configured for 40 would want to be.
+pub const SCROLL_SPEEDS: [i32; 5] = [5, 10, 20, 30, 60];
 
 /// What an out-of-set configured speed degrades to.
-pub const DEFAULT_SCROLL_SPEED: i32 = 20;
+///
+/// 30 px/s: one pixel every two frames. It is the nearest legal speed to the
+/// 40 px/s the parity release accepted and stored, which makes it what a device
+/// carrying that value falls back to — a quarter slower rather than half — and
+/// it is the speed the panel was upgraded to 60 FPS to be able to draw.
+pub const DEFAULT_SCROLL_SPEED: i32 = 30;
 
 /// Whether `speed` px/s yields evenly spaced pixel steps at [`FPS`].
 pub const fn is_smooth(speed: i32) -> bool {
@@ -99,18 +116,39 @@ pub const fn scroll_speed(requested: i32) -> i32 {
 /// short lines do not flash by.
 pub const PREGAME_INFO_DWELL_MS: u64 = 4000;
 
-/// Scroll feel for the pregame info line (venue ↔ weather).
+/// Scroll feel for the pregame info line (venue ↔ weather). 20 px/s is one
+/// pixel every three frames.
 pub const PREGAME_SCROLL: Scroll = Scroll {
     pause_ms: 1000,
     pixels_per_second: 20,
 };
 
 /// Final line-score horizontal scroll: slow, long dwell — the score is the
-/// point and the scroll is a reveal of later innings. 10 px/s is exactly two
-/// frames per pixel; 12 showed every pixel but with uneven dwell.
+/// point and the scroll is a reveal of later innings. 10 px/s is exactly six
+/// frames per pixel; 12 was tried at 20 FPS and showed every pixel with uneven
+/// dwell, which is the same objection [`SCROLL_SPEEDS`] documents (12 is legal
+/// at 60 FPS, but the feel was chosen and 10 is the feel).
 pub const FINAL_LINESCORE_SCROLL: Scroll = Scroll {
     pause_ms: 1800,
     pixels_per_second: 10,
+};
+
+/// The two fixed scroll feels above and [`Scroll::DEFAULT`] are not
+/// configurable, so nothing degrades them and nothing would catch them drifting
+/// out of the legal set when the frame rate moves. This does.
+const _: () = {
+    assert!(
+        is_smooth(PREGAME_SCROLL.pixels_per_second),
+        "the pregame info line scrolls at a speed that stutters at this frame rate"
+    );
+    assert!(
+        is_smooth(FINAL_LINESCORE_SCROLL.pixels_per_second),
+        "the final line score scrolls at a speed that stutters at this frame rate"
+    );
+    assert!(
+        is_smooth(Scroll::DEFAULT.pixels_per_second),
+        "the default text scroll stutters at this frame rate"
+    );
 };
 
 /// Pause feel for the soccer last-event line and full-time scorer lists. The

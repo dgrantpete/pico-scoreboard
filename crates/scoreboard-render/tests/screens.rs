@@ -10,7 +10,7 @@ use scoreboard_model::{Millis, Rgb888, ScoreboardSnapshot, SetupReason, Text, To
 use scoreboard_render::blit::Canvas;
 use scoreboard_render::geometry::RenderSettings;
 use scoreboard_render::prepared::PreparedView;
-use scoreboard_render::time::WallMs;
+use scoreboard_render::time::{WallMs, frame_ms};
 use scoreboard_render::{BLACK, menu, pack, qr, screens, toast};
 
 const PRIMARY: Rgb888 = Rgb888::new(255, 0, 0);
@@ -340,6 +340,47 @@ fn an_icon_toast_dims_the_frame_and_draws_its_icon() {
     assert!(
         dimmed.lit_in(50..78, 19..45) > 0,
         "the padlock draws over the middle of the panel"
+    );
+}
+
+#[test]
+fn the_toast_fade_takes_the_same_time_at_any_frame_rate() {
+    // The ladder looks frame-coupled — it steps every 50 ms, which was one rung
+    // per frame at 20 FPS — but it is driven by `WallMs`, so 60 FPS samples the
+    // same 150 ms three times as finely and the fade neither speeds up nor
+    // gains rungs. Asserted rather than reasoned about, because the coincidence
+    // is exactly the kind that gets "fixed" during a frame-rate change.
+    let mut snapshot = snapshot();
+    snapshot.toast = toast_view(ToastKind::Lock, "", 1_000);
+
+    let sample = |now: Millis| {
+        let frame = render(|canvas| {
+            screens::idle(canvas, &snapshot);
+            toast::overlay(canvas, &snapshot, WallMs(now));
+        });
+        frame.0
+    };
+
+    // Walk the fade-in at both rates and collect the distinct frames each sees.
+    let distinct = |period: Millis| {
+        let mut seen: Vec<Vec<u8>> = Vec::new();
+        let mut at = 1_000;
+        while at <= 1_000 + 200 {
+            let frame = sample(at);
+            if seen.last() != Some(&frame) {
+                seen.push(frame);
+            }
+            at += period;
+        }
+        seen
+    };
+
+    let slow = distinct(1_000 / 20);
+    let fast = distinct(frame_ms(1));
+    assert_eq!(slow.len(), 4, "the ladder is four rungs at 20 FPS");
+    assert_eq!(
+        fast, slow,
+        "60 FPS sees the same rungs in the same order, just for three frames each"
     );
 }
 
