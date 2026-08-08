@@ -227,6 +227,11 @@ $RECYCLE.BIN/
 *.pem
 *.key
 .maxmind-key
+# The ed25519 private key that signs Rust firmware images (tools/fwsign.py).
+# It is the only thing that can produce an update every deployed device will
+# accept; the public half is compiled into the firmware. Committing it would
+# let anyone who can reach a device's backend install arbitrary code on it.
+.fw-signing-key
 secrets.json
 credentials.json
 
