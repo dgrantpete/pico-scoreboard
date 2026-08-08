@@ -8,6 +8,7 @@ use hub75::sim::SimulatorSink;
 use scoreboard_model::snapshot::{MenuRow, MenuView, ToastView};
 use scoreboard_model::{Millis, Rgb888, ScoreboardSnapshot, SetupReason, Text, ToastKind};
 use scoreboard_render::blit::Canvas;
+use scoreboard_render::geometry::RenderSettings;
 use scoreboard_render::prepared::PreparedView;
 use scoreboard_render::time::WallMs;
 use scoreboard_render::{BLACK, menu, pack, qr, screens, toast};
@@ -163,7 +164,7 @@ fn setup_snapshot() -> ScoreboardSnapshot {
 fn the_setup_screen_blits_its_qr_in_the_top_right() {
     let snapshot = setup_snapshot();
     let mut prepared = PreparedView::new();
-    assert!(prepared.sync(&snapshot));
+    assert!(prepared.sync(&snapshot, &RenderSettings::new()));
     let size = prepared.qr().size();
     assert!(size > 0, "the QR should have been built");
 
@@ -187,7 +188,7 @@ fn setup_lines_that_meet_the_qr_stop_short_of_it() {
     snapshot.setup.line_18 = text("XXXXXXXXXXXXXXXXXXXXXXXXX");
     snapshot.setup.line_54 = text("XXXXXXXXXXXXXXXXXXXXXXXXX");
     let mut prepared = PreparedView::new();
-    prepared.sync(&snapshot);
+    prepared.sync(&snapshot, &RenderSettings::new());
     let size = prepared.qr().size();
     let qr_x = WIDTH as i32 - size - 2;
 
@@ -207,7 +208,7 @@ fn setup_lines_that_meet_the_qr_stop_short_of_it() {
 fn a_failed_join_colors_the_title_as_a_warning() {
     let mut snapshot = setup_snapshot();
     let mut prepared = PreparedView::new();
-    prepared.sync(&snapshot);
+    prepared.sync(&snapshot, &RenderSettings::new());
     let normal = render(|canvas| screens::setup(canvas, &snapshot, &prepared, WallMs(0)));
 
     snapshot.setup.reason = SetupReason::BadAuth;
@@ -227,11 +228,17 @@ fn a_failed_join_colors_the_title_as_a_warning() {
 fn the_prepared_view_rebuilds_only_on_a_new_commit() {
     let mut snapshot = setup_snapshot();
     let mut prepared = PreparedView::new();
-    assert!(prepared.sync(&snapshot), "the first sync always builds");
-    assert!(!prepared.sync(&snapshot), "the same commit is a no-op");
+    assert!(
+        prepared.sync(&snapshot, &RenderSettings::new()),
+        "the first sync always builds"
+    );
+    assert!(
+        !prepared.sync(&snapshot, &RenderSettings::new()),
+        "the same commit is a no-op"
+    );
 
     snapshot.commit_seq += 1;
-    assert!(prepared.sync(&snapshot));
+    assert!(prepared.sync(&snapshot, &RenderSettings::new()));
     assert_eq!(prepared.commit_seq(), Some(snapshot.commit_seq));
 }
 
@@ -239,18 +246,18 @@ fn the_prepared_view_rebuilds_only_on_a_new_commit() {
 fn the_qr_follows_the_ssid_and_survives_an_unrelated_commit() {
     let mut snapshot = setup_snapshot();
     let mut prepared = PreparedView::new();
-    prepared.sync(&snapshot);
+    prepared.sync(&snapshot, &RenderSettings::new());
     let first: Vec<u8> = prepared.qr().source().data.to_vec();
 
     // A commit that does not change the SSID leaves the bitmap untouched.
     snapshot.commit_seq += 1;
-    prepared.sync(&snapshot);
+    prepared.sync(&snapshot, &RenderSettings::new());
     assert_eq!(prepared.qr().source().data, first.as_slice());
 
     // A different network gets a different code.
     snapshot.commit_seq += 1;
     snapshot.setup.ap_ssid = text("pico-scoreboard-2");
-    prepared.sync(&snapshot);
+    prepared.sync(&snapshot, &RenderSettings::new());
     assert_ne!(prepared.qr().source().data, first.as_slice());
 }
 

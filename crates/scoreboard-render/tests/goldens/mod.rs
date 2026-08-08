@@ -30,6 +30,11 @@ pub struct FontGolden {
     pub glyphs: &'static [GlyphGolden],
 }
 
+pub struct PulseCase {
+    pub step: u32,
+    pub packed: u16,
+}
+
 pub struct DimCase {
     /// Index into the fade ladder.
     pub step: usize,
@@ -331,6 +336,1041 @@ pub const DIM_CASES: &[DimCase] = &[
             0x46, 0x23, 0x67, 0x6a, 0x8e, 0x38, 0x60, 0x21, 0xa2, 0x22, 0xa4, 0x28, 0x61, 0x51,
             0xe5, 0x4a, 0x47, 0x41, 0x46, 0x78, 0xa0, 0x02,
         ],
+    },
+];
+
+/// The count-dot pulse, one entry per step of the triangle wave, as
+/// the preview's stand-in for `hub75.native.pack_hsv_to_rgb565` packs
+/// it. `step` is the triangle's value; the saturation and brightness
+/// the renderer derives from it are part of what is being checked.
+pub const PULSE_CASES: &[PulseCase] = &[
+    PulseCase {
+        step: 0,
+        packed: 0xbdf7,
+    },
+    PulseCase {
+        step: 1,
+        packed: 0xbdf7,
+    },
+    PulseCase {
+        step: 2,
+        packed: 0xbdf7,
+    },
+    PulseCase {
+        step: 3,
+        packed: 0xbdf7,
+    },
+    PulseCase {
+        step: 4,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 5,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 6,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 7,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 8,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 9,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 10,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 11,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 12,
+        packed: 0xc618,
+    },
+    PulseCase {
+        step: 13,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 14,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 15,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 16,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 17,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 18,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 19,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 20,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 21,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 22,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 23,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 24,
+        packed: 0xc618,
+    },
+    PulseCase {
+        step: 25,
+        packed: 0xc618,
+    },
+    PulseCase {
+        step: 26,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 27,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 28,
+        packed: 0xc618,
+    },
+    PulseCase {
+        step: 29,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 30,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 31,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 32,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 33,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 34,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 35,
+        packed: 0xc5f7,
+    },
+    PulseCase {
+        step: 36,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 37,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 38,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 39,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 40,
+        packed: 0xce18,
+    },
+    PulseCase {
+        step: 41,
+        packed: 0xce18,
+    },
+    PulseCase {
+        step: 42,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 43,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 44,
+        packed: 0xce18,
+    },
+    PulseCase {
+        step: 45,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 46,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 47,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 48,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 49,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 50,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 51,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 52,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 53,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 54,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 55,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 56,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 57,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 58,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 59,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 60,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 61,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 62,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 63,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 64,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 65,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 66,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 67,
+        packed: 0xcdf7,
+    },
+    PulseCase {
+        step: 68,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 69,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 70,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 71,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 72,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 73,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 74,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 75,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 76,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 77,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 78,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 79,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 80,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 81,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 82,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 83,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 84,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 85,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 86,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 87,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 88,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 89,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 90,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 91,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 92,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 93,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 94,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 95,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 96,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 97,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 98,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 99,
+        packed: 0xd5f7,
+    },
+    PulseCase {
+        step: 100,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 101,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 102,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 103,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 104,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 105,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 106,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 107,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 108,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 109,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 110,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 111,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 112,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 113,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 114,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 115,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 116,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 117,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 118,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 119,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 120,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 121,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 122,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 123,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 124,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 125,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 126,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 127,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 128,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 129,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 130,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 131,
+        packed: 0xddf7,
+    },
+    PulseCase {
+        step: 132,
+        packed: 0xe5f7,
+    },
+    PulseCase {
+        step: 133,
+        packed: 0xe5f7,
+    },
+    PulseCase {
+        step: 134,
+        packed: 0xe5f7,
+    },
+    PulseCase {
+        step: 135,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 136,
+        packed: 0xe5f7,
+    },
+    PulseCase {
+        step: 137,
+        packed: 0xe5f7,
+    },
+    PulseCase {
+        step: 138,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 139,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 140,
+        packed: 0xe5f7,
+    },
+    PulseCase {
+        step: 141,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 142,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 143,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 144,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 145,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 146,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 147,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 148,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 149,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 150,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 151,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 152,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 153,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 154,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 155,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 156,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 157,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 158,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 159,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 160,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 161,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 162,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 163,
+        packed: 0xe5d7,
+    },
+    PulseCase {
+        step: 164,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 165,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 166,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 167,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 168,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 169,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 170,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 171,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 172,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 173,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 174,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 175,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 176,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 177,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 178,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 179,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 180,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 181,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 182,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 183,
+        packed: 0xedb6,
+    },
+    PulseCase {
+        step: 184,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 185,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 186,
+        packed: 0xedb6,
+    },
+    PulseCase {
+        step: 187,
+        packed: 0xedb6,
+    },
+    PulseCase {
+        step: 188,
+        packed: 0xedd7,
+    },
+    PulseCase {
+        step: 189,
+        packed: 0xedb6,
+    },
+    PulseCase {
+        step: 190,
+        packed: 0xedb6,
+    },
+    PulseCase {
+        step: 191,
+        packed: 0xedb6,
+    },
+    PulseCase {
+        step: 192,
+        packed: 0xedb6,
+    },
+    PulseCase {
+        step: 193,
+        packed: 0xedb6,
+    },
+    PulseCase {
+        step: 194,
+        packed: 0xedb6,
+    },
+    PulseCase {
+        step: 195,
+        packed: 0xedb6,
+    },
+    PulseCase {
+        step: 196,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 197,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 198,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 199,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 200,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 201,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 202,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 203,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 204,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 205,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 206,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 207,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 208,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 209,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 210,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 211,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 212,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 213,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 214,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 215,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 216,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 217,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 218,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 219,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 220,
+        packed: 0xf5b6,
+    },
+    PulseCase {
+        step: 221,
+        packed: 0xf596,
+    },
+    PulseCase {
+        step: 222,
+        packed: 0xf596,
+    },
+    PulseCase {
+        step: 223,
+        packed: 0xf596,
+    },
+    PulseCase {
+        step: 224,
+        packed: 0xf596,
+    },
+    PulseCase {
+        step: 225,
+        packed: 0xf596,
+    },
+    PulseCase {
+        step: 226,
+        packed: 0xf596,
+    },
+    PulseCase {
+        step: 227,
+        packed: 0xf596,
+    },
+    PulseCase {
+        step: 228,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 229,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 230,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 231,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 232,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 233,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 234,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 235,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 236,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 237,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 238,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 239,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 240,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 241,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 242,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 243,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 244,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 245,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 246,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 247,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 248,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 249,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 250,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 251,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 252,
+        packed: 0xfd96,
+    },
+    PulseCase {
+        step: 253,
+        packed: 0xfd75,
+    },
+    PulseCase {
+        step: 254,
+        packed: 0xfd75,
+    },
+    PulseCase {
+        step: 255,
+        packed: 0xfd75,
+    },
+    PulseCase {
+        step: 256,
+        packed: 0xfd75,
     },
 ];
 

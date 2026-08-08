@@ -54,6 +54,8 @@
 
 pub mod blit;
 pub mod font;
+pub mod frame;
+pub mod game;
 pub mod generated;
 pub mod geometry;
 pub mod menu;
@@ -66,7 +68,9 @@ pub mod widgets;
 
 pub use blit::{Canvas, PixelFormat, Slice, Source, Sprite};
 pub use font::{Align, FontFace};
-pub use geometry::{HEIGHT, WIDTH};
+pub use frame::SkipMemo;
+pub use game::{Logos, Scene};
+pub use geometry::{HEIGHT, RenderSettings, WIDTH};
 pub use prepared::PreparedView;
 pub use time::{FrameElapsed, FrameRail, WallMs};
 
