@@ -1,0 +1,20 @@
+[package]
+name = "hub75"
+version = "0.1.0"
+edition = "2024"
+description = "CPU-free HUB75 LED-matrix driver for the RP2350: two-SM PIO, self-perpetuating DMA chains, 8-plane BCM"
+
+[features]
+# Host-side display backend: same drawing API, frames land in a plain
+# in-memory RGB565 buffer instead of the panel (scoreboard-render pixel tests).
+simulator = []
+
+[dependencies]
+# Pre-1.0 ecosystem: pinned exactly (SPEC.md §14).
+libm = "=0.2.16"
+pio = "=0.3.0"
+rp235x-pac = "=0.2.0"
+
+[dev-dependencies]
+# Self-dependency so `cargo test` builds the lib with the simulator available.
+hub75 = { path = ".", features = ["simulator"] }
