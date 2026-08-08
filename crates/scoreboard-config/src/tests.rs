@@ -409,3 +409,56 @@ fn serializing_into_too_small_a_buffer_reports_rather_than_truncating() {
     let mut out = [0u8; 32];
     assert_eq!(DeviceConfig::new().to_json(&mut out), Err(SerializeError));
 }
+
+#[test]
+fn a_maximally_full_config_fits_the_storage_and_response_buffers() {
+    // Both `scoreboard-app`'s `storage::BUFFER_BYTES` (3 KB) and its HTTP
+    // response scratch (3 KB) are sized against "about 1.3 KB with every league
+    // slot full". That is a claim about this type, so it is checked here rather
+    // than discovered on a device that quietly stops saving its configuration.
+    let mut config = DeviceConfig::new();
+    fill(&mut config.network.ssid);
+    fill(&mut config.network.password);
+    fill(&mut config.network.device_name);
+    fill(&mut config.api.url);
+    fill(&mut config.api.key);
+    config.display.gamma = GammaConfig {
+        kind: GammaKind::Power,
+        value: Some(2.2222222),
+    };
+    for variant in [
+        &mut config.display.variants.mlb_final,
+        &mut config.display.variants.nba_final,
+        &mut config.display.variants.football_final,
+        &mut config.display.variants.soccer_live,
+    ] {
+        fill(variant);
+    }
+    for sport in [&mut config.sports.football, &mut config.sports.soccer] {
+        while sport.leagues.len() < MAX_LEAGUES {
+            let mut slug = heapless::String::new();
+            fill(&mut slug);
+            let _ = sport.leagues.push(slug);
+        }
+    }
+    fill(&mut config.log.level);
+
+    let mut out = [0u8; 4096];
+    let len = config
+        .to_json(&mut out)
+        .expect("the largest possible document must serialize");
+    assert!(
+        len <= 3 * 1024,
+        "a full configuration is {len} B, over the 3 KB both buffers allow"
+    );
+    // And it must come back, because that is what a boot does with it.
+    let (parsed, complaint) = DeviceConfig::from_json(&out[..len]);
+    assert_eq!(complaint, None);
+    assert_eq!(parsed, config);
+}
+
+/// Pack a bounded string to its capacity with `'x'`.
+fn fill<const N: usize>(text: &mut heapless::String<N>) {
+    text.clear();
+    while text.push('x').is_ok() {}
+}

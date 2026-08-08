@@ -1,0 +1,27 @@
+[package]
+name = "scoreboard-input"
+version = "0.1.0"
+edition = "2024"
+description = "Everything the physical world tells the scoreboard: the debounced button driver's logic, the league menu session, and the ambient-light brightness curve"
+
+[dependencies]
+scoreboard-model = { path = "../scoreboard-model" }
+scoreboard-render = { path = "../scoreboard-render" }
+# Pre-1.0 ecosystem: pinned exactly (SPEC.md §14). Default features only —
+# `alloc` stays off (SPEC.md §10).
+heapless = "=0.9.3"
+# The PIO program the button driver runs, assembled at compile time. The macro
+# is a proc macro (host-side); what links is an `ArrayVec<u16, 32>` of
+# instruction words, which is why the program can live in a host-testable crate
+# and still be the exact bytes the device loads. Same version embassy-rp
+# re-exports as `embassy_rp::pio::program`, so the `Program` type is one type.
+pio = "=0.3.0"
+# `logf`, for the log-scale lux curve. `core` has no transcendentals. Same
+# version and for the same reason as `crates/hub75`, which needs `powf` for the
+# gamma LUT.
+libm = "=0.2.16"
+
+[dev-dependencies]
+# `tests/burst.rs` builds a slate to advance, which means feeding it decoded
+# list entries — `GameState` is the wire crate's.
+scoreboard-wire = { path = "../scoreboard-wire" }

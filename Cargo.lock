@@ -2069,6 +2069,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "scoreboard-input"
+version = "0.1.0"
+dependencies = [
+ "heapless 0.9.3",
+ "libm",
+ "pio",
+ "scoreboard-model",
+ "scoreboard-render",
+ "scoreboard-wire",
+]
+
+[[package]]
 name = "scoreboard-log"
 version = "0.1.0"
 dependencies = [
