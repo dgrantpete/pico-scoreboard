@@ -172,11 +172,13 @@ Port of the `main.py` flow: try station with stored credentials (bounded retries
 
 ## 11. RAM budget (living document, seeded here)
 
-Maintained as `firmware-rs/BUDGET.md`, checked against `cargo size` in CI. Seed estimates to be replaced by measured values in Phase 1–2:
+**`firmware-rs/BUDGET.md` is the authoritative table** — it is maintained per PR
+and checked against the size report in CI. What follows is the original seed;
+consult BUDGET.md for what is measured and what is still a guess.
 
 | Item | Est. | Notes |
 |---|---|---|
-| HUB75 BCM framebuffers (×2) | ~48 KB | 64×32×8 planes ×2 buffers — confirm vs. panel config |
+| HUB75 BCM framebuffers (×2) | 64 KB | **Measured, Phase 1**: 2 × 32,768 B. The seed read "~48 KB, 64×32" — the shipping panel is 128×64 |
 | Snapshot double buffer | ~8 KB | bounded strings dominate; measure from model |
 | embassy-net buffers + sockets | ~48 KB | poller + server×2 + DNS + OTA |
 | cyw43 driver state | ~16 KB | |
@@ -185,7 +187,7 @@ Maintained as `firmware-rs/BUDGET.md`, checked against `cargo size` in CI. Seed 
 | Core-0 task arenas + stack | ~24 KB | |
 | Core-1 stack | 8 KB | render loop only |
 | Ring log + misc statics | ~8 KB | |
-| **Total (headroom target ≥ 40 %)** | **~200 KB / 520 KB** | |
+| **Total (headroom target ≥ 40 %)** | **~232 KB / 520 KB** | 55 % headroom with the framebuffer line corrected — see BUDGET.md |
 
 Rule: any PR that adds a static ≥ 1 KB updates the table in the same PR.
 
@@ -227,11 +229,76 @@ Deliberate deviation from "smallest first": Phase 1 front-loads the riskiest har
 
 ---
 
-## Appendix A — Dependency audit table (fill at pin time)
+## Appendix A — Dependency audit table
 
-| Crate | Ver | no_std | no-alloc | Buffers | Notes |
-|---|---|---|---|---|---|
-| … | | | | | |
+Audited 2026-08-07 against the tree as it stands after Phase 1: `crates/scoreboard-wire`,
+`crates/hub75`, and `firmware-rs/hub75-diag`. Versions are read from the two committed
+lockfiles (root `Cargo.lock`; `firmware-rs/hub75-diag/Cargo.lock`, a standalone workspace).
+Everything embedded is exact-pinned per §14. "Buffers" answers *are the buffers
+caller-owned?* — `n/a` means the crate holds no runtime buffer at all.
+
+**Direct dependencies, pinned today**
+
+| Crate | Ver | Used by | no_std | no-alloc | Buffers | Notes |
+|---|---|---|---|---|---|---|
+| *(none)* | | scoreboard-wire | yes | yes | caller | The crate has **zero dependencies**. `#![no_std]`, decode borrows the caller's receive buffer, encode writes through a `Sink`. |
+| `libm` | =0.2.16 | hub75 | yes | yes | n/a | `pow`/`floor`/`fmod` behind `Gamma::Power`. Pure computation, no state. |
+| `pio` | =0.3.0 | hub75 | yes | yes | n/a | Compile-time only: `pio_asm!` assembles both PIO programs into a `Program<32>` (inline `ArrayVec`, no heap). Its `pio-proc` half is a proc macro — it allocates on the *host* at build time; nothing of it ships. `pio-core` pulls `arrayvec` with `default-features = false`. |
+| `rp235x-pac` | =0.2.0 | hub75, hub75-diag | yes | yes | n/a | Register definitions; the driver's PAC-level DMA chaining. hub75-diag enables `critical-section`. See the two-PAC note below. |
+| `embassy-executor` | =0.10.0 | hub75-diag | yes¹ | yes | n/a | Task arenas are statics (`POOL`, 768 B measured). ¹`no_std` unless `platform-std`/`platform-wasm` — host-test features, not enabled. Built with `platform-cortex-m`. |
+| `embassy-rp` | =0.10.0 | hub75-diag | yes | yes | n/a | Unconditionally `#![no_std]`. Clocks, GPIO, time driver. |
+| `embassy-time` | =0.5.1 | hub75-diag | yes¹ | yes | n/a | ¹`no_std` unless `std`/`wasm`. |
+| `cortex-m-rt` | =0.7.6 | hub75-diag | yes | yes | n/a | Reset vector, `.bss`/`.data` init, `link.x`. |
+| `static_cell` | =2.1.1 | hub75-diag | yes | yes | caller | `ConstStaticCell<FrameBytes>` backs the 16 KB frame static; adds a 1 B taken flag (BUDGET.md). |
+| `defmt` | =1.1.1 | hub75-diag | yes | yes² | caller | ²**Ships an off-by-default `alloc` feature** (`Format` impls for `String`/`Vec`). Not activated anywhere — verified with `cargo tree -e features`. |
+| `defmt-rtt` | =1.3.0 | hub75-diag | yes | yes | own static | 1,024 B ring in `.uninit` + 48 B control block. Dev-only, out of the deployed budget. |
+| `panic-probe` | =1.0.0 | hub75-diag | yes | yes | n/a | `print-defmt`; one 1 B flag. |
+
+**Transitive, load-bearing**
+
+| Crate | Ver | Via | no_std | no-alloc | Buffers | Notes |
+|---|---|---|---|---|---|---|
+| `heapless` | 0.9.3 | embassy-rp | yes | yes² | caller | ²**Off-by-default `alloc` feature.** Not activated. The bounded-capacity workhorse for Phases 2–3. |
+| `embassy-sync` | 0.8.0 | embassy-rp | yes¹ | yes | caller | ¹`no_std` unless `std`. |
+| `critical-section` | 1.2.0 | embassy-rp, PAC | yes | yes | n/a | Impl supplied by embassy-rp's `critical-section-impl`; exactly one in the binary. |
+| `cortex-m` | 0.7.8 | rp235x-pac | yes | yes | n/a | |
+| `arrayvec` | 0.7.8 | pio-core | yes | yes | inline | Its default feature *is* `std`; pio-core turns defaults off, so the no_std build is not accidental. |
+| `rp-pac` | 7.0.0 | embassy-rp | yes | yes | n/a | embassy-rp's own PAC, coexisting with `rp235x-pac`. See below. |
+
+**Not yet pinned** — audit when each lands.
+
+| Crate | Ver | Phase | Notes |
+|---|---|---|---|
+| `picoserve` | not yet pinned | 3 | HTTP server (§7.3) |
+| `reqwless` | not yet pinned | 3 | Backend client (§7.4) |
+| `embassy-net` + `smoltcp` | not yet pinned | 3 | Socket/buffer sizes are budget lines (§11) |
+| `cyw43`, `cyw43-pio` (+ firmware blobs) | not yet pinned | 3 | |
+| `sequential-storage` | not yet pinned | 3 | Persistence (§9) |
+| `serde` (+`derive`) | not yet pinned | 3 | Must deserialize to borrowed/bounded types only |
+| QR encoder (crate TBD) | not yet pinned | 2–3 | ~4 KB caller-owned scratch, or port the miqro subset (§6) |
+| `embassy-boot`(-rp) | not yet pinned | 4 | OTA + signature verification (§8) |
+| `flip-link` | not yet pinned | 3 | Linker wrapper, §2. **Not yet in use** — `hub75-diag` links without it, so stack overflow currently corrupts `.bss` instead of faulting. |
+| `png-stream` deps | not yet pinned | S | Out of parity scope |
+
+**Findings.** No crate in the tree requires `alloc`, and no `#[global_allocator]`
+is linked — the §10 policy holds today. Two answers are not unconditionally
+clean and are worth re-checking at every version bump: **`defmt` and `heapless`
+both carry an off-by-default `alloc` feature**, and Cargo feature unification is
+additive, so a future dependency that enables either one turns it on for the
+whole binary rather than for itself. The build would still fail (nothing links
+an allocator), which is the enforcement §10 relies on — but the failure would
+surface as a link error far from its cause, so the audit note is the early
+warning.
+
+Separately, `hub75-diag` links **two independent PACs**: `rp235x-pac` (hub75's
+DMA/PIO register access) and `rp-pac` (inside embassy-rp). Each has its own
+`Peripherals::take()` singleton guard — `DEVICE_PERIPHERALS` and
+`_EMBASSY_DEVICE_PERIPHERALS` are separate 1-byte statics — so taking a
+peripheral from one proves nothing about the other. `Hub75Driver::new`'s
+by-value PAC ownership is therefore a proof *within* `rp235x-pac` only; the
+"don't reconfigure RESETS/IO_BANK0/PADS_BANK0 concurrently" contract in its
+docs is what actually holds the line. Worth revisiting in Phase 3 when more of
+the chip is in use.
 
 ## Appendix B — Parity checklist (fill during Phase 3 from MicroPython feature inventory)
 

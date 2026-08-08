@@ -1,0 +1,132 @@
+name: rust
+
+# Host tests + clippy for the workspace, cross-builds for the device target,
+# and a size report on the only device binary that exists (hub75-diag). The
+# size numbers land in the job summary as the RAM/flash regression signal for
+# firmware-rs/BUDGET.md.
+#
+# Separate from firmware.yml on purpose: that one builds the MicroPython UF2
+# and needs the vendored micropython submodule plus an arm-gcc/cmake toolchain.
+# Nothing here does.
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "backend/**"
+      - "crates/**"
+      - "firmware-rs/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "crates/**"
+      - "firmware-rs/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/rust.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "rust-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  DEVICE_TARGET: thumbv8m.main-none-eabihf
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # No submodules: the micropython submodule is firmware.yml's business.
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add clippy
+          rustup target add "$DEVICE_TARGET"
+          rustc --version
+          cargo --version
+
+      # `size` and `nm` for the release ELF. cargo-binutils would work too but
+      # costs a from-source install; this is the same tool the BUDGET.md
+      # numbers were measured with, so CI and the doc cannot disagree.
+      - name: Install arm-none-eabi binutils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends binutils-arm-none-eabi
+
+      # Downloads only. target/ is deliberately not cached: the size report
+      # below is this job's product, and it should never depend on a restored
+      # artifact being fresh.
+      - name: Cache cargo downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: "cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'firmware-rs/hub75-diag/Cargo.lock') }}"
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      # --locked throughout: both lockfiles are committed and the embedded
+      # deps are exact-pinned (SPEC.md §14). A stale lockfile is a CI failure,
+      # not a silent update.
+      - name: Test (host)
+        run: cargo test --workspace --locked
+
+      - name: Clippy (host)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Build no_std crates for the device target
+        run: cargo build --locked -p scoreboard-wire -p hub75 --target "$DEVICE_TARGET"
+
+      # Standalone workspace (embassy-rp is device-only, so it stays out of the
+      # root workspace's host builds) — hence its own working-directory and its
+      # own Cargo.lock. Its .cargo/config.toml already sets build.target;
+      # passing --target keeps the artifact path unambiguous here.
+      - name: Build hub75-diag (device binary)
+        working-directory: firmware-rs/hub75-diag
+        run: cargo build --release --locked --target "$DEVICE_TARGET"
+
+      - name: Size report
+        working-directory: firmware-rs/hub75-diag
+        run: |
+          elf="target/$DEVICE_TARGET/release/hub75-diag"
+          arm-none-eabi-size -B -d "$elf"
+          {
+            echo "## hub75-diag - release, $DEVICE_TARGET"
+            echo
+            echo '```'
+            arm-none-eabi-size -B -d "$elf"
+            echo '```'
+            echo
+            echo "### Allocated sections"
+            echo
+            # The release profile keeps debug=2 for probe-rs, so -A also lists
+            # .debug_* and a Total that counts them. Neither is on the device;
+            # dropping them keeps the flash number from being misread.
+            echo '```'
+            arm-none-eabi-size -A -d "$elf" \
+              | awk '$1 !~ /^(\.debug|\.comment|\.ARM\.attributes|Total)/'
+            echo '```'
+            echo
+            echo "### Largest RAM symbols (.bss / .data)"
+            echo
+            echo '```'
+            arm-none-eabi-nm -C --size-sort -r -S -td "$elf" \
+              | awk '$3 ~ /^[bBdD]$/ { if (++n <= 15) printf "%10d  %s  %s\n", $2, $3, $4 }'
+            echo '```'
+            echo
+            echo "Budget of record: \`firmware-rs/BUDGET.md\`. Any PR adding a static >= 1 KB updates that table in the same PR."
+          } >> "$GITHUB_STEP_SUMMARY"
