@@ -12,6 +12,14 @@ build scripts, and its `const` asserts re-check every rule below on every
 build. Phase 4 lifts that crate (or its constants) wholesale — SPEC §8's
 "one constants file" is prototyped here.
 
+**Lifted, Phase 3.** The production copy is now
+`firmware-rs/app/layout` (`scoreboard-layout`): the same table and the same
+const asserts, without this spike's bench-only extras (the demo command
+mailbox, the pinned RTT rings). It adds the two link profiles the app needs —
+standalone at flash offset 0 for Phase 3, boot-integrated at the active
+partition for Phase 4. Change the table there; this file stays as the record of
+what the hardware confirmed.
+
 ## The table
 
 | offset      | size               | region  | notes |

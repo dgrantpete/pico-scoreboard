@@ -480,6 +480,28 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     (doc-commented in the handler) — revisit only if the rotation wants
     more games.
 
+## Rust firmware rewrite (firmware-rs)
+
+63. **`hub75`'s RGB565→bitplane pack is 76 % of a drawn frame** — measured on
+    silicon by the Phase 3 app shell's frame probe (2026-08-08,
+    `firmware-rs/BUDGET.md` "Core 1: measured frame times"): `load_rgb565` +
+    `flip` costs a flat **5.25 ms** regardless of content, against 0.48-1.96 ms
+    for the entire render path. Total worst frame is 7.4 ms of a 50 ms budget,
+    so **there is nothing to fix today** — logged because if frame time ever
+    has to come down, this is where it is, and the intuition that "drawing is
+    the expensive part" is wrong by 3×. ~96 cycles/pixel at 150 MHz for eight
+    bitplanes plus a gamma lookup; the obvious levers are a wider inner loop
+    and doing the pack in the same pass as the gamma LUT. Note the measurement
+    is XIP-placement sensitive (5.07 vs 5.25 ms across two builds differing by
+    120 B), so benchmark any change against a rebuild of its own baseline.
+
+64. **`hub75-diag` still links without flip-link** — the app got the
+    stack-overflow guard in Phase 3 (`firmware-rs/app/.cargo/config.toml`, two
+    lines, plus `cargo install flip-link` which CI now does). The bench binary
+    was left alone on purpose: one shallow task, 429.9 KiB of slack, and it is
+    another task's working tree. Copy the two lines and re-measure its BUDGET
+    breakdown whenever that tree is quiet.
+
 ## Backend
 
 14. **Per-device API keys** — comma-separated key list in backend config →
