@@ -9,6 +9,10 @@
 //! (SPEC §2's crate-boundary rule).
 //!
 //! - [`dns`] — the answer builder, port of `scoreboard/dns.py`.
+//! - [`mdns`] — the *other* name responder, and the one MicroPython never
+//!   needed: lwIP answered `<device_name>.local` for it, embassy-net does not,
+//!   and without it the settings page is reachable only by IP address. Same
+//!   wire format as [`dns`] and four rules that differ; see its docs.
 //! - [`hosts`] — the Host-header check, port of `main.py`'s `get_my_hosts`.
 //! - [`conditional`] — the `If-None-Match` check the SPA route makes before it
 //!   decides to send 54 KB, port of `main.py:319-336`. It is not part of the
@@ -25,5 +29,7 @@
 pub mod conditional;
 pub mod dns;
 pub mod hosts;
+pub mod mdns;
 
 pub use hosts::MyHosts;
+pub use mdns::Responder;
