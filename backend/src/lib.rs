@@ -18,6 +18,7 @@ pub mod config;
 pub mod error;
 pub mod espn;
 pub mod football;
+pub mod fw_update;
 pub mod logo;
 pub mod mlb;
 pub mod nba;
@@ -53,10 +54,14 @@ use espn::league::AnyLeague;
         soccer::handler::get_game,
         app_update::handler::get_app_manifest,
         app_update::handler::get_app_image,
+        fw_update::handler::get_fw_manifest,
+        fw_update::handler::get_fw_image,
     ),
     components(schemas(
         clock::TimeResponse,
         app_update::AppManifest,
+        fw_update::FwManifest,
+        fw_update::handler::Channel,
         error::ErrorResponse,
         logo::LogoQuery,
         logo::OutputFormat,
@@ -113,7 +118,8 @@ use espn::league::AnyLeague;
         (name = "nba", description = "NBA live game data (ESPN-backed)"),
         (name = "football", description = "Football live game data — NFL + NCAAF (ESPN-backed)"),
         (name = "soccer", description = "Soccer live game data (ESPN-backed)"),
-        (name = "app", description = "Device app OTA image + manifest"),
+        (name = "app", description = "Device app OTA image + manifest (MicroPython fleet)"),
+        (name = "fw", description = "Rust firmware OTA image + manifest"),
     )
 )]
 struct ApiDoc;
@@ -129,7 +135,7 @@ impl utoipa::Modify for SecurityAddon {
                     utoipa::openapi::security::ApiKey::Header(
                         utoipa::openapi::security::ApiKeyValue::with_description(
                             "X-Api-Key",
-                            "API key for the OTA endpoints (/app/*) only — game data, logos, and /time are unauthenticated (the scoreboard polls them over plain HTTP). When no key is configured on the server, authentication is disabled and this header is ignored.",
+                            "API key for the OTA endpoints only — game data, logos, and /time are unauthenticated (the scoreboard polls them over plain HTTP). /app/* (MicroPython fleet, fetched over TLS) and /fw/* (Rust firmware, fetched over plain HTTP) use SEPARATE keys — APP_API_KEY and APP_FW_API_KEY — so that the Rust firmware's cleartext key cannot reach the gift units' endpoint. When a key is not configured on the server, authentication is disabled for its endpoints and this header is ignored.",
                         ),
                     ),
                 ),
@@ -145,6 +151,8 @@ pub struct AppState {
     pub geoip_reader: Option<maxminddb::Reader<memmap2::Mmap>>,
     /// Current device app image for OTA (None when not published)
     pub app_image: Option<app_update::AppImage>,
+    /// Rust firmware images, per channel (None per channel when not published)
+    pub fw_images: fw_update::FwImages,
 }
 
 /// Initialize tracing, load config, build the router, and serve until shutdown.
@@ -178,11 +186,20 @@ pub async fn run() {
 
     if config.api_key.is_none() {
         tracing::warn!(
-            "No API key configured - authentication is disabled. \
+            "No API key configured - authentication is disabled for /app/*. \
              Set APP_API_KEY for production use."
         );
     } else {
-        tracing::info!("API key authentication is enabled");
+        tracing::info!("API key authentication is enabled for /app/*");
+    }
+
+    if config.fw_api_key.is_none() {
+        tracing::warn!(
+            "No firmware API key configured - authentication is disabled for /fw/*. \
+             Set APP_FW_API_KEY for production use."
+        );
+    } else {
+        tracing::info!("API key authentication is enabled for /fw/*");
     }
 
     let bind_address = config.bind_address();
@@ -208,6 +225,8 @@ pub async fn run() {
 
     // Load the device app image for OTA (optional — endpoints 404 if absent)
     let app_image = app_update::AppImage::load(&config.app.image_path);
+    // And the Rust firmware's, per channel, on the same terms.
+    let fw_images = fw_update::FwImages::load(&config.fw.stable_dir, &config.fw.dev_dir);
 
     // Create shared application state
     let app_state = Arc::new(AppState {
@@ -215,6 +234,7 @@ pub async fn run() {
         config,
         geoip_reader,
         app_image,
+        fw_images,
     });
 
     // Build CORS layer
@@ -236,6 +256,8 @@ pub async fn run() {
         .route("/{sport}/{league}/games/{game_id}", get(games_detail))
         .route("/app/manifest", get(app_update::get_app_manifest))
         .route("/app/image", get(app_update::get_app_image))
+        .route("/fw/manifest", get(fw_update::get_fw_manifest))
+        .route("/fw/image", get(fw_update::get_fw_image))
         .layer(cors)
         .with_state(app_state);
 

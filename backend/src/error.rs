@@ -42,6 +42,10 @@ pub enum AppError {
     InvalidTeamColor { team: String, raw: String },
     /// No device app image published on this deployment
     AppImageUnavailable,
+    /// No firmware image published on the requested channel.
+    FwImageUnavailable,
+    /// `?channel=` was something other than `stable` or `dev`.
+    InvalidFwChannel,
 }
 
 impl AppError {
@@ -152,6 +156,16 @@ impl IntoResponse for AppError {
                 StatusCode::NOT_FOUND,
                 "app_image_unavailable".to_string(),
                 "No device app image is published on this deployment".to_string(),
+            ),
+            AppError::FwImageUnavailable => (
+                StatusCode::NOT_FOUND,
+                "fw_image_unavailable".to_string(),
+                "No firmware image is published on this channel".to_string(),
+            ),
+            AppError::InvalidFwChannel => (
+                StatusCode::BAD_REQUEST,
+                "invalid_fw_channel".to_string(),
+                "Unknown firmware channel. Valid channels: stable, dev".to_string(),
             ),
         };
 

@@ -12,6 +12,7 @@ Usage:
     python tools/build.py run          # Build, flash, and open REPL
     python tools/build.py flash --no-build   # Flash without rebuilding
     python tools/build.py deploy       # Deploy backend to Fly.io
+    python tools/build.py publish-fw   # Build+sign the Rust firmware for OTA
 
 Prerequisites:
     pip install mpy-cross    # For .mpy compilation
@@ -542,6 +543,185 @@ def add_common_args(parser):
     )
 
 
+# --------------------------------------------------------------------------
+# publish-fw: the Rust firmware's release pipeline
+# --------------------------------------------------------------------------
+
+firmware_rs_directory = root_directory / 'firmware-rs'
+
+# The active partition, from the ONE constants file both binaries link against
+# (firmware-rs/layout/src/lib.rs). Parsed rather than hardcoded so this check
+# cannot drift from the linker script.
+_LAYOUT_SOURCE = firmware_rs_directory / 'layout' / 'src' / 'lib.rs'
+
+
+def _layout_consts() -> dict:
+    """Evaluate the `pub const NAME: u32 = expr;` table in the layout crate."""
+    import re
+
+    consts: dict[str, int] = {}
+    source = _LAYOUT_SOURCE.read_text()
+    for name, expr in re.findall(r'pub const (\w+): u32 = ([^;]+);', source):
+        try:
+            consts[name] = eval(expr, {'__builtins__': {}}, dict(consts))  # noqa: S307
+        except (NameError, TypeError, SyntaxError):
+            pass
+    return consts
+
+
+def _objcopy() -> Path:
+    """llvm-objcopy from the rust toolchain — no cargo-binutils needed."""
+    sysroot = subprocess.run(
+        ['rustc', '--print', 'sysroot'], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    matches = list(Path(sysroot).glob('lib/rustlib/*/bin/rust-objcopy*'))
+    if not matches:
+        raise SystemExit('rust-objcopy not found in the toolchain sysroot; '
+                         'install the llvm-tools component')
+    return matches[0]
+
+
+def _fw_version() -> str:
+    """`<UTC date>-<git short sha>`, with `-dirty` if the tree is not clean.
+
+    The version IS the OTA identity, and `build.rs` refuses anything starting
+    with `dev` — that prefix is what tells a device its image was never
+    published. A dirty tree still publishes, but says so: an artifact nobody
+    can reproduce from a commit should be visibly that.
+    """
+    stamp = time.strftime('%Y.%m.%d', time.gmtime())
+    try:
+        sha = subprocess.run(
+            ['git', 'rev-parse', '--short=7', 'HEAD'],
+            check=True, capture_output=True, text=True, cwd=root_directory,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ['git', 'status', '--porcelain'],
+            check=True, capture_output=True, text=True, cwd=root_directory,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return f'{stamp}-nogit'
+    return f'{stamp}-{sha}' + ('-dirty' if dirty else '')
+
+
+def build_firmware_image(version: str) -> tuple[Path, int]:
+    """Build the boot-integrated app and extract its raw image.
+
+    Returns (path, size). Raises SystemExit on anything that would produce an
+    artifact a device cannot install.
+    """
+    import os
+
+    app_directory = firmware_rs_directory / 'app'
+    env = dict(os.environ, SCOREBOARD_FW_VERSION=version)
+    print(f'Building the boot-integrated firmware as {version}...')
+    result = subprocess.run(
+        ['cargo', 'build', '--release', '--locked',
+         '--no-default-features', '--features', 'link-boot-integrated'],
+        cwd=app_directory, env=env, check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit('firmware build failed')
+
+    elf = app_directory / 'target' / 'thumbv8m.main-none-eabihf' / 'release' / 'scoreboard-app'
+    image_path = firmware_rs_directory / 'fw.bin'
+    subprocess.run([str(_objcopy()), '-O', 'binary', str(elf), str(image_path)], check=True)
+
+    layout = _layout_consts()
+    active = layout['ACTIVE_SIZE']
+    size = image_path.stat().st_size
+    print(f'Firmware image: {size:,} bytes '
+          f'({size * 100 // active}% of the {active // 1024} KB active partition)')
+    if size > active:
+        raise SystemExit(
+            f'image ({size:,} B) does not fit the active partition ({active:,} B). '
+            'It cannot be installed; shrink it or revisit the partition table in '
+            'firmware-rs/layout/src/lib.rs.'
+        )
+
+    _assert_boot_integrated(image_path, layout)
+    return image_path, size
+
+
+def _assert_boot_integrated(image_path: Path, layout: dict) -> None:
+    """Refuse to publish an image linked for the wrong address.
+
+    A standalone image links at flash offset 0. Swapped into the active
+    partition it would hard-fault on the first vector fetch, and every device
+    that took it would roll back — a fleet-wide outage from one wrong build
+    flag. The check is cheap and reads the bytes rather than trusting the flag:
+    the second word of a Cortex-M vector table is the reset handler's address,
+    and it has to point inside the active partition.
+    """
+    import struct
+
+    header = image_path.read_bytes()[:8]
+    if len(header) < 8:
+        raise SystemExit('image is too short to contain a vector table')
+    _stack, reset = struct.unpack('<II', header)
+    low = layout['FLASH_BASE'] + layout['ACTIVE_OFFSET']
+    high = low + layout['ACTIVE_SIZE']
+    if not low <= reset < high:
+        raise SystemExit(
+            f'image reset vector is {reset:#010x}, outside the active partition '
+            f'[{low:#010x}, {high:#010x}). This image was linked STANDALONE and '
+            'would hard-fault the moment the bootloader jumped into it. Build it '
+            'with --no-default-features --features link-boot-integrated.'
+        )
+    print(f'  reset vector {reset:#010x} is inside the active partition')
+
+
+def publish_fw(channel: str, deploy: bool) -> bool:
+    """Build, verify, sign and stage a Rust firmware image for OTA.
+
+    The signing key never leaves the machine this runs on: `fwsign.py` reads
+    backend/.fw-signing-key (gitignored) and only the 128-hex signature is
+    written into the artifact directory.
+    """
+    from fwsign import PRIVATE_KEY_PATH, sign_bytes, verify_bytes, _load_private
+
+    if not PRIVATE_KEY_PATH.exists():
+        print(f'Error: no signing key at {PRIVATE_KEY_PATH.relative_to(root_directory)}.')
+        print('  Generate one:  python tools/fwsign.py keygen')
+        print('  A published image that nothing can verify is worse than no image.')
+        return False
+
+    version = _fw_version()
+    if version.endswith('-dirty'):
+        print('WARNING: the working tree is dirty; this artifact cannot be')
+        print('  reproduced from a commit. The version says so.')
+
+    image_path, size = build_firmware_image(version)
+    image = image_path.read_bytes()
+
+    private = _load_private()
+    signature = sign_bytes(private, image)
+    if not verify_bytes(private.public_key(), image, signature):
+        print('Error: the signature did not verify against its own public key.')
+        return False
+
+    dist_dir = root_directory / 'backend' / 'fw_dist' / channel
+    dist_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(image_path, dist_dir / 'image.bin')
+    (dist_dir / 'manifest.json').write_text(json.dumps({
+        'version': version,
+        'signature': signature.hex(),
+    }, indent=2) + '\n')
+
+    sha = hashlib.sha256(image).hexdigest()
+    print(f'Published {version} to backend/fw_dist/{channel}/')
+    print(f'  {size:,} bytes, sha256 {sha[:16]}...')
+    print(f'  signed with {private.public_key().public_bytes_raw().hex()[:16]}...')
+    print('  (the backend recomputes the sha256 from the bytes it serves, so the')
+    print('   manifest cannot describe anything but this file)')
+
+    if deploy:
+        return deploy_backend(staging=(channel == 'dev'))
+    target = 'deploy --staging' if channel == 'dev' else 'deploy'
+    print(f"Run 'python tools/build.py {target}' (or re-run with --deploy) to ship it.")
+    return True
+
+
 def publish_app(output_dir: Path, deploy: bool) -> bool:
     """Publish the device app for OTA: build the ROMFS image into
     backend/app_dist/ (baked into the next backend deploy and served at
@@ -630,6 +810,24 @@ def main():
     )
     add_common_args(publish_parser)
 
+    # publish-fw subcommand (Rust firmware OTA)
+    publish_fw_parser = subparsers.add_parser(
+        'publish-fw',
+        help='Build, sign and stage the Rust firmware image for OTA'
+    )
+    publish_fw_parser.add_argument(
+        '--channel',
+        choices=['stable', 'dev'],
+        default='stable',
+        help='which artifact to publish (default: stable). Devices follow the '
+             'channel their ota.channel config names.',
+    )
+    publish_fw_parser.add_argument(
+        '--deploy',
+        action='store_true',
+        help='deploy the backend afterwards (--channel dev deploys staging)',
+    )
+
     def _add_deploy_mode_args(sub) -> None:
         """--release / --dev pair shared by flash and run.
 
@@ -697,6 +895,10 @@ def main():
     # deploy command (doesn't use output_dir or firmware args)
     if args.command == 'deploy':
         return 0 if deploy_backend(staging=args.staging) else 1
+
+    # publish-fw command (Rust firmware OTA)
+    if args.command == 'publish-fw':
+        return 0 if publish_fw(args.channel, args.deploy) else 1
 
     # publish-app command (OTA)
     if args.command == 'publish-app':

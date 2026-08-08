@@ -64,6 +64,15 @@ pico/
 # Published device app image for OTA (produced by tools/build.py publish-app)
 backend/app_dist/
 
+# Published Rust firmware images (produced by tools/build.py publish-fw). The
+# per-channel directories are tracked via .gitkeep so the Dockerfile's COPY
+# works on a clean checkout; the artifacts themselves never are — they are a
+# megabyte apiece and rebuilt from source.
+backend/fw_dist/*/image.bin
+backend/fw_dist/*/manifest.json
+# The raw image publish-fw extracts from the ELF on its way to fw_dist.
+/firmware-rs/fw.bin
+
 # ESPN sample store + generated schemas/specs (tools/espn)
 /data/
 

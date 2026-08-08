@@ -96,6 +96,9 @@ COPY --from=builder /app/backend/config /app/config
 # Own layer, after the binary, so app-image-only publishes reuse the cached
 # cargo build. The endpoints 404 gracefully if the image is absent.
 COPY backend/app_dist/ /app/app_dist/
+# The Rust firmware's signed images, per channel. The .gitkeep files are what
+# make this COPY succeed on a checkout where nothing has been published yet.
+COPY backend/fw_dist/ /app/fw_dist/
 
 # Download MaxMind GeoLite2-City database for IP-to-timezone resolution.
 # This executes at build time — the .mmdb file is baked into the image.

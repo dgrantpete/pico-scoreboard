@@ -23,6 +23,43 @@ pub struct AppConfig {
     /// Device app (OTA) configuration
     #[serde(default)]
     pub app: AppUpdateConfig,
+
+    /// API key for the Rust firmware's `/fw/*` endpoints. When None, auth is
+    /// disabled for them. Set via APP_FW_API_KEY.
+    ///
+    /// Deliberately NOT `api_key`: see `auth::FwApiKey`.
+    #[serde(default)]
+    pub fw_api_key: Option<String>,
+
+    /// Rust firmware (OTA) configuration
+    #[serde(default)]
+    pub fw: FwUpdateConfig,
+}
+
+/// Where `tools/build.py publish-fw` stages each channel's artifacts.
+#[derive(Debug, Deserialize)]
+pub struct FwUpdateConfig {
+    #[serde(default = "default_fw_stable_dir")]
+    pub stable_dir: String,
+    #[serde(default = "default_fw_dev_dir")]
+    pub dev_dir: String,
+}
+
+impl Default for FwUpdateConfig {
+    fn default() -> Self {
+        Self {
+            stable_dir: default_fw_stable_dir(),
+            dev_dir: default_fw_dev_dir(),
+        }
+    }
+}
+
+fn default_fw_stable_dir() -> String {
+    "fw_dist/stable".to_string()
+}
+
+fn default_fw_dev_dir() -> String {
+    "fw_dist/dev".to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -164,6 +201,7 @@ impl AppConfig {
         // Normalize empty string to None so APP_API_KEY="" is treated as unconfigured
         Self {
             api_key: config.api_key.filter(|k| !k.is_empty()),
+            fw_api_key: config.fw_api_key.filter(|k| !k.is_empty()),
             ..config
         }
     }
