@@ -1687,6 +1687,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcodegen-no-heap"
+version = "1.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0e2c0bf8be8a1c4a4f48973dabf26943f05da2bfc2d3180aae62409dbba6f0c"
+
+[[package]]
 name = "quinn"
 version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2044,6 +2050,16 @@ version = "0.1.0"
 dependencies = [
  "heapless",
  "scoreboard-wire",
+]
+
+[[package]]
+name = "scoreboard-render"
+version = "0.1.0"
+dependencies = [
+ "heapless",
+ "hub75",
+ "qrcodegen-no-heap",
+ "scoreboard-model",
 ]
 
 [[package]]

@@ -1,0 +1,21 @@
+[package]
+name = "scoreboard-render"
+version = "0.1.0"
+edition = "2024"
+description = "Fonts, sprites, screen geometry and the pixel path that turns a ScoreboardSnapshot into a 128x64 RGB565 frame"
+
+[dependencies]
+scoreboard-model = { path = "../scoreboard-model" }
+# Pre-1.0 ecosystem: pinned exactly (SPEC.md §14). Default features only —
+# `alloc` stays off (SPEC.md §10).
+heapless = "=0.9.3"
+# no_std, zero dependencies, `forbid(unsafe_code)`, every buffer caller-owned.
+# Audited in SPEC.md Appendix A.
+qrcodegen-no-heap = "=1.8.1"
+
+[dev-dependencies]
+# The render target for pixel assertions. A dev-dependency on purpose: the
+# shipping graph of this crate must not pull a PAC in (SPEC §2's crate
+# boundary rule). `geometry` pins its constants against hub75's under `cfg(test)`
+# so the two cannot drift.
+hub75 = { path = "../hub75", features = ["simulator"] }

@@ -94,7 +94,9 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Build no_std crates for the device target
-        run: cargo build --locked -p scoreboard-wire -p hub75 --target "$DEVICE_TARGET"
+        run: |
+          cargo build --locked --target "$DEVICE_TARGET" \
+            -p scoreboard-wire -p scoreboard-model -p hub75 -p scoreboard-render
 
       # Standalone workspace (embassy-rp is device-only, so it stays out of the
       # root workspace's host builds) — hence its own working-directory and its
