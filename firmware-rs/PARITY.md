@@ -778,3 +778,46 @@ evidence, and the evidence is all the gate can read.
 of flash. Nine host tests in `scoreboard-model`, covering both halves of the
 distinction, the boundary, the setup-mode exemption and the streak's
 irrelevance.
+
+
+## Phase 4: OTA, and one gap MicroPython never had to think about
+
+### `<device_name>.local` — a regression found, not a feature added
+
+MicroPython resolved it for free: `network.hostname()` sets the lwIP hostname
+and its port compiles lwIP with `LWIP_MDNS_RESPONDER`, so the network stack
+answered before any Python ran. embassy-net only sends the hostname in DHCP
+option 12, which teaches the **router** the name and does nothing for a client
+that goes straight to multicast — which is most of them. The Phase 3 app
+inherited that silently; `app/Cargo.toml` even wrote down that mDNS was not
+enabled "because DHCP option 12 tells the router", which turned out to be the
+bug rather than the justification.
+
+`scoreboard_portal::mdns` + `net::mdns` close it, in both station and setup
+mode. Four things differ from `dns.py`'s responder and each has its own
+argument in the module docs: no question section in a multicast response, the
+legacy-unicast shape for queries from a port other than 5353, the QU bit, and
+the cache-flush bit. **AAAA is deliberately not answered** — the captive portal
+lies to every query on purpose, and doing that here would hand a resolver a
+malformed answer.
+
+18 host tests, including every truncation of a query and a decompression bomb.
+
+### OTA, feature for feature against `ota.py` + `main.py`'s `ota_check_task`
+
+| MicroPython | Here | Status |
+|---|---|---|
+| daily check, hourly after failure, 120 s settle | same intervals, same settle | **ported** |
+| `POST /api/check-update` → status string | same six statuses, same SPA contract | **ported**, asynchronously — the handler signals the poll loop and waits, because the client and the display state are poller task locals |
+| progress screen, commit per percent change | `scoreboard_ota::Progress`, host-tested | **ported** |
+| 5→1 restart countdown | same | **ported** |
+| `/ota_dev` marker file | split: the rollback guard is a property of the image (`dev` version prefix), the staging pin is `ota.channel` | **improved** — a marker can be missed, a compiled-in constant cannot |
+| `apply_staged()` at early boot | embassy-boot swaps before the app runs at all | **replaced** |
+| `recover()` — re-download when the app will not import | *no counterpart, and none needed* | **retired** — the bootloader reverts to the last confirmed image, which is the case `recover()` existed for. A corrupt active partition is not reachable: the swap is atomic and resumable from the state partition's progress array. |
+| boot-fail counter in `main.py` | the OTA attempt record (SPEC §9's third key) | **relocated** — A/B handles the *boot* failure; the record handles the *re-download* loop, which A/B does not |
+| sha256 identity | build-stamped version + sha256 as an integrity check | **changed** — a running image cannot hash itself, so identity is stamped at build time and the hash goes back to being a checksum |
+| TLS + API key | plain HTTP, ed25519 on the artifact, separate API key | **changed**, SPEC §8 |
+
+**Not yet exercised on hardware.** Everything above is host-tested or
+build-verified; the swap, the revert, the trial-boot confirm and the timings
+are task #16's drill day.

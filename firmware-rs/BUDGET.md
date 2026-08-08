@@ -547,6 +547,64 @@ The same reasoning is why every boot-time flash read happens before
 
 ---
 
+## Phase 4: the three images, and the RAM the OTA path did not cost
+
+Measured 2026-08-08, `--release`, `thumbv8m.main-none-eabihf`, raw `.bin` via
+`rust-objcopy -O binary` (what actually occupies flash, not the ELF).
+
+| Image | Bytes | Of its partition | Notes |
+|---|---:|---:|---|
+| `scoreboard-boot` | 14,208 | 43.4% of 32 KB | `opt-level = "s"`, defmt + `embassy_boot=trace`. The spike's was 12.2 KB; the difference is logging kept on purpose — those trace lines are the only direct evidence of what a given boot decided, and drill day reads them. |
+| `scoreboard-app`, `link-boot-integrated` | 1,088,880 | 69.1% of 1536 KB | What `publish-fw` ships. |
+| `scoreboard-app`, `link-standalone` | 1,015,136 | — | The bench image. |
+
+**The boot-integrated image is 73,744 B larger**, and all of it is the OTA
+path: `ed25519-dalek` + `curve25519-dalek`, `sha2`, and `embassy-boot`. That is
+the price of the device being able to refuse an image, and it is paid only by
+the profile that can install one.
+
+**485,288 B of headroom** before an image stops fitting the active partition.
+Worth watching rather than worrying about: the DFU partition is one erase page
+larger than active by construction, so the ceiling is a single number and the
+const asserts in `firmware-rs/layout` fail the build rather than the swap.
+
+### The download costs zero RAM, which was not a given
+
+SPEC §11's table budgeted an OTA chunk buffer and hedged it as "unioned where
+phases can't overlap (OTA vs. poll)". The union turned out to be exact. Because
+an update is a *phase of the poll loop* rather than a task of its own
+(`app/src/ota`'s module docs argue why), the poller's 4,096 B receive buffer is
+idle for the whole download — so it splits into a 2,048 B header half and a
+2,048 B chunk half and nothing new is allocated. The updater's own state buffer
+is **one byte** (embassy-rp's `NorFlash::WRITE_SIZE` is 1).
+
+The same argument returned a socket. §7's budget reserved one for OTA; the
+poller's connection is free while an update runs, so the total is unchanged
+even though Phase 4 also added an mDNS responder — which took the slot.
+
+| Phase 4 addition | RAM | Where |
+|---|---:|---|
+| OTA chunk + header buffers | **0** | Split from the poller's existing 4,096 B |
+| `BlockingFirmwareUpdater` aligned buffer | 1 B | Stack, per call |
+| mDNS socket buffers | 2,048 B | 1,536 rx + 512 tx, `net::mdns` statics |
+| mDNS packet metadata | 12 slots | 8 rx + 4 tx |
+| `Responder` (name + address) | 40 B | Task argument |
+
+### What is *not* measured yet, and needs hardware
+
+Three numbers decide drill day and none of them can be had from a host build.
+They are all logged at ERROR so they survive the default log level:
+
+- **The DFU hash.** `ota: hashed N bytes of DFU in M ms`. The one figure that
+  says whether embassy-boot's own two-byte path would have been survivable
+  (see `scoreboard_ota::verify`). Estimated 1–3 s at 1.06 MB with a 4 KB
+  buffer; the un-feedable ceiling is the bootloader's 8 s watchdog.
+- **The swap.** The spike measured ~5 s with *mostly-erased* 1.5 MB partitions
+  and warned time scales with content. At 1.06 MB of programmed image, budget
+  **35–70 s of dark panel**, and the same again for a revert.
+- **The download.** ~1.06 MB over plain HTTP, interleaved with ~266 sector
+  erase-and-programs at ~45 ms each. Expect 30–60 s, of which ~12 s is flash.
+
 ## Caveats to close before the numbers can be trusted end to end
 
 - **Stacks are still not in `size`'s output**, but both are now measured

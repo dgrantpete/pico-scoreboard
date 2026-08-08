@@ -744,3 +744,65 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     with a serve-duration log line, consider raising
     `Response.send_file_buffer_size` (2 KB → 8 KB, fewer awrite
     round-trips), or serve with `Connection: close` semantics sooner.
+
+
+---
+
+## Phase 4 (OTA integration) — what it left open
+
+72. **The DFU hash has never been timed on hardware, and one design turns on
+    it.** `scoreboard_ota::verify` does not use embassy-boot's
+    `verify_and_mark_updated` because that call hashes through a hardcoded
+    two-byte buffer inside a single blocking call, and the bootloader's 8 s
+    watchdog cannot be disarmed — an overrun is a reboot loop on every update.
+    The app hashes with a 4 KB buffer instead and logs
+    `ota: hashed N bytes of DFU in M ms` at ERROR. **Drill day reads M**
+    (`firmware-rs/DRILL.md` step 1). If it is well under 8,000 ms the design
+    has margin and the note stands as recorded; if it is close, the boot
+    sequence needs a second look, because 4 KB is already ~30× fewer flash
+    reads than the path that was rejected.
+
+73. **Swap time at a real image size is a budget, not a measurement.** The
+    spike measured ~5 s with *mostly-erased* 1.5 MB partitions and said time
+    scales with content. The shipping image is 1.06 MB of programmed flash, so
+    BUDGET.md carries 35–70 s of dark panel as an estimate. Drill day replaces
+    it with a number.
+
+74. **The 600 s confirm deadline has only ever been reasoned about.** The
+    health gate confirms a trial image on the weaker evidence — boots, renders,
+    provisioned — if no backend answer has arrived in ten minutes, because an
+    unconfirmed image is *armed*: it reverts at the next unrelated power cut,
+    days later, and the owner sees an unexplained downgrade. Nothing has ever
+    exercised the path. `DRILL.md` step 6.
+
+75. **`/fw/*` sends its API key in cleartext.** Unavoidable given SPEC §8's
+    removal of device TLS, and mitigated by `APP_FW_API_KEY` being a *different*
+    key from the MicroPython fleet's — so the exposure cannot reach `/app/*`,
+    and what it buys is a download that is worthless without the signing key.
+    Worth revisiting only if the artifacts ever stop being freely downloadable
+    in principle, which they are today.
+
+76. **No NSEC for AAAA.** `scoreboard_portal::mdns` answers A and stays silent
+    on AAAA rather than sending a negative response saying "I own this name and
+    have no IPv6". Correct behaviour is silence-then-retry from the resolver;
+    a strictly-conforming responder would save a fraction of a second on the
+    first lookup. Related to item 18.
+
+77. **No known-answer suppression in the mDNS responder.** A query may carry
+    records the asker already holds, and RFC 6762 §7.1 says a responder should
+    stay quiet if its copy is not materially fresher. Skipped: the cost is one
+    redundant 66-byte datagram per query for one record, against parsing the
+    answer section of every query on a busy multicast group.
+
+78. **The signing key exists in exactly one place.** `backend/.fw-signing-key`,
+    gitignored, on one machine. Losing it means every deployed unit needs a
+    physical flash before it can ever be updated again — the public half is
+    compiled into each image. It needs a backup somewhere outside this
+    repository, and rotating it later is a two-release dance
+    (`app/src/ota/key.rs` documents the order).
+
+79. **`publish-fw` does not gate on a clean tree.** It warns and stamps
+    `-dirty` into the version, which is visible in `/api/status` and in every
+    request log line, but it will still publish. Deliberate — a bench cycle
+    against the staging channel should not need a commit — and worth
+    reconsidering if `--channel stable` ever runs from anything but CI.

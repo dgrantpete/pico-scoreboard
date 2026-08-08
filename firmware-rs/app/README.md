@@ -116,3 +116,29 @@ run meanwhile, and they do not — and why every boot-time read happens before
 `FrameElapsed` *values* and cannot name it. `FRAME_SEQ` and `BRIGHTNESS` are the
 two deliberate cross-core atomics. `scoreboard-render`'s crate docs carry the
 full table this comes from.
+
+
+## The two link profiles
+
+`link-standalone` (default) links at flash offset 0 with no bootloader.
+`cargo run` over a probe, nothing staged, nothing swapped — the Phase 3 world,
+and still the bench. **It has no OTA install path and never will**: the
+`__bootloader_*` symbols are deliberately not emitted for it, so building the
+updater against it is a link error, which is the intended outcome. It can still
+*check* for an update; it just answers that this build cannot take one.
+
+`link-boot-integrated` links at the active partition behind `firmware-rs/boot`.
+It is the only profile that can install an update, it carries ~74 KB more
+(ed25519, sha2, embassy-boot), and it inherits an 8 s watchdog that was already
+running before its first instruction.
+
+```sh
+cargo run --release                                                   # standalone
+cargo build --release --no-default-features --features link-boot-integrated
+python ../../tools/build.py publish-fw --channel dev --deploy         # the real path
+```
+
+Both profiles stop below the storage region, so a configuration written under
+one is read back under the other — which is what makes the flip, and the
+migration of the living-room unit, safe. `firmware-rs/layout`'s
+`neither profile reaches into storage` test is the guarantee.

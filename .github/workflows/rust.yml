@@ -80,7 +80,7 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: "cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'firmware-rs/hub75-diag/Cargo.lock', 'firmware-rs/app/Cargo.lock') }}"
+          key: "cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'firmware-rs/hub75-diag/Cargo.lock', 'firmware-rs/app/Cargo.lock', 'firmware-rs/boot/Cargo.lock') }}"
           restore-keys: |
             cargo-${{ runner.os }}-
 
@@ -112,15 +112,21 @@ jobs:
         working-directory: firmware-rs/hub75-diag
         run: cargo build --release --locked --target "$DEVICE_TARGET"
 
-      # The app is its own standalone workspace too, and `layout/` is a member
-      # of it. Those tests are host tests inside a device-targeted workspace,
-      # hence the explicit host triple.
-      - name: Test + clippy the app workspace
+      # `scoreboard-layout` moved to the ROOT workspace in Phase 4 — the
+      # bootloader needs the same table, so it belongs to neither device
+      # workspace. Its host tests therefore run in the plain `cargo test`
+      # above, and no explicit host triple is needed any more.
+      - name: Clippy the app workspace
         working-directory: firmware-rs/app
+        run: cargo clippy --release --locked --target "$DEVICE_TARGET" -- -D warnings
+
+      # The bootloader. Small, and it has to keep fitting its 32 KB partition —
+      # the size report below is the only thing watching that.
+      - name: Build + clippy scoreboard-boot (device binary)
+        working-directory: firmware-rs/boot
         run: |
-          host="$(rustc -vV | awk '/^host:/ { print $2 }')"
-          cargo test --locked -p scoreboard-layout --features std --target "$host"
           cargo clippy --release --locked --target "$DEVICE_TARGET" -- -D warnings
+          cargo build --release --locked --target "$DEVICE_TARGET"
 
       # Both link profiles, because the whole point of generating memory.x from
       # one constants file is that the Phase 4 flip stays a switch. The
@@ -139,9 +145,34 @@ jobs:
       # `net-probe` is a bench instrument that never ships, so it is checked
       # rather than built — enough to keep it from rotting against the stack it
       # pokes at, without paying for a third link.
+      # The OTA install path only exists under `link-boot-integrated`, so the
+      # default clippy run above never sees it. It is the code that writes
+      # flash and arms a swap; it does not get to be the unlinted half.
+      - name: Clippy the boot-integrated profile
+        working-directory: firmware-rs/app
+        run: |
+          cargo clippy --release --locked --target "$DEVICE_TARGET" \
+            --no-default-features --features link-boot-integrated -- -D warnings
+
       - name: Check the net-probe bench feature
         working-directory: firmware-rs/app
         run: cargo clippy --release --locked --target "$DEVICE_TARGET" --features net-probe -- -D warnings
+
+      # No signing key exists in CI and none is needed: the public half is a
+      # source constant and the private half never leaves the machine that
+      # publishes. This asserts that stays true — a build that started needing
+      # a secret would be a build nobody could reproduce.
+      # Two separate claims. First: no signing key is present, so a build that
+      # started needing one would fail here rather than in a release. (The file
+      # is gitignored, but `git add -f` is not.) Second: the signer and the
+      # device verifier still agree on the scheme — tests/signature.rs checks
+      # that from the Rust side and cannot catch a change to fwsign.py itself,
+      # which is what this covers.
+      - name: No secret is needed, and the signing scheme still matches
+        run: |
+          test ! -f backend/.fw-signing-key
+          python3 -m pip install --quiet cryptography
+          python3 tools/fwsign.py selftest
 
       - name: Size report — scoreboard-app
         working-directory: firmware-rs/app
@@ -160,6 +191,21 @@ jobs:
             echo '```'
             arm-none-eabi-nm -C --size-sort -r -S -td "$elf" \
               | awk '$3 ~ /^[bBdD]$/ { if (++n <= 15) printf "%10d  %s  %s\n", $2, $3, $4 }'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Size report — scoreboard-boot
+        working-directory: firmware-rs/boot
+        run: |
+          elf="target/$DEVICE_TARGET/release/scoreboard-boot"
+          arm-none-eabi-size -B -d "$elf"
+          {
+            echo "## scoreboard-boot - release, $DEVICE_TARGET"
+            echo
+            echo "Must fit the 32,768 B boot partition (firmware-rs/layout)."
+            echo
+            echo '```'
+            arm-none-eabi-size -B -d "$elf"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

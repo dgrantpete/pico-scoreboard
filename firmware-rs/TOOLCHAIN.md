@@ -79,6 +79,23 @@ cargo test -p scoreboard-layout --features std
 It moved out of `firmware-rs/app/layout` in Phase 4, when the bootloader
 started needing the same table.
 
+## Building the three binaries
+
+```sh
+cd firmware-rs/boot && cargo run --release                   # the bootloader
+cd firmware-rs/app  && cargo run --release                   # standalone, the bench image
+cd firmware-rs/app  && cargo build --release \
+    --no-default-features --features link-boot-integrated    # what OTA ships
+```
+
+The link profile is a build choice and stays one. `link-standalone` is the
+default and must never gain a bootloader dependency — it is what keeps
+`cargo run` a seconds-long loop over a probe with nothing staged or swapped.
+`link-boot-integrated` is the only profile that can install an update, and
+`tools/build.py publish-fw` is the only thing that should build it for release:
+it stamps the version, checks the reset vector really points into the active
+partition, signs the image and stages it. See `firmware-rs/DRILL.md`.
+
 All three lockfiles are committed and CI builds `--locked`. A stale lockfile is
 a CI failure, not a silent update.
 
