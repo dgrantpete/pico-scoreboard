@@ -188,7 +188,7 @@ impl MenuController {
         self.cursor = 0;
         self.scroll = 0;
         self.touch(now_ms);
-        self.publish(slate, store, now_ms);
+        self.stage(slate, store, now_ms);
     }
 
     /// Move the cursor one row down, wrapping through DONE.
@@ -201,7 +201,7 @@ impl MenuController {
         } else if self.cursor < self.count && self.cursor >= self.scroll + thumb::VISIBLE_ROWS {
             self.scroll = self.cursor - thumb::VISIBLE_ROWS + 1;
         }
-        self.publish(slate, store, now_ms);
+        self.stage(slate, store, now_ms);
     }
 
     /// Toggle the highlighted checkbox, or activate DONE.
@@ -214,7 +214,7 @@ impl MenuController {
             return Action::Handled;
         }
         self.checked[self.cursor] = !self.checked[self.cursor];
-        self.publish(slate, store, now_ms);
+        self.stage(slate, store, now_ms);
         Action::Handled
     }
 
@@ -253,13 +253,19 @@ impl MenuController {
         self.last_input_ms = now_ms;
     }
 
-    /// Build the visible window and publish it.
+    /// Build the visible window and STAGE it into the store.
+    ///
+    /// Staged, not published: this writes core 0's authoritative `Store`, and
+    /// nothing reaches core 1 until the caller pushes the store across the
+    /// snapshot channel. The app's poller does that on every `Action` this
+    /// controller returns — a `Handled` that skipped the push left the menu
+    /// running invisibly, which is the bug that earned this method its name.
     ///
     /// `menu.py` built fresh lists every time because core 1 may still be
     /// holding the previously published ones; here `Store::set_menu` copies
     /// into the snapshot it owns, so the wholesale-replacement contract is the
     /// snapshot channel's and this just passes a slice of borrowed labels.
-    fn publish(&self, slate: &Slate, store: &mut Store, now_ms: u64) {
+    fn stage(&self, slate: &Slate, store: &mut Store, now_ms: u64) {
         let mut rows: Vec<MenuRowInput<'_>, { thumb::VISIBLE_ROWS }> = Vec::new();
         let sources = slate.sources();
         for index in self.scroll..(self.scroll + thumb::VISIBLE_ROWS).min(self.count) {

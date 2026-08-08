@@ -638,7 +638,16 @@ impl Poller {
     fn route(&mut self, button: MenuButton, press: Press) -> Wake {
         let now = Instant::now().as_millis();
         match self.menu.press(button, press, &mut self.slate, self.store, now) {
-            Action::Handled => Wake::Later,
+            // `Handled` means the controller staged a menu change into the
+            // store — open, cursor, toggle, a timeout restamp, or a close that
+            // left the filter unchanged. None of it reaches the panel until
+            // the store crosses the channel, so publish unconditionally: the
+            // one arm that didn't left the menu running invisibly while every
+            // button drove it (found on the first hardware unit with buttons).
+            Action::Handled => {
+                self.publish();
+                Wake::Later
+            }
             Action::Skip => self.skip(SkipKind::Game),
             Action::SkipLeague => self.skip(SkipKind::League),
             Action::ToggleLock => {
