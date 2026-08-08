@@ -255,8 +255,11 @@ pub async fn render_loop(
         FRAME_SEQ.fetch_add(1, Ordering::Relaxed);
         state.probe.end_tick(tick.elapsed_us());
 
-        let deadline = anchor + Duration::from_micros(frame_us(slot));
+        // Stamp first, then work out what it should have been: the deadline is
+        // arithmetic on values that are already fixed, and reading the clock
+        // after it would charge this frame for computing it.
         let finished = Instant::now();
+        let deadline = anchor + Duration::from_micros(frame_us(slot));
         if finished >= deadline {
             // The frame ran past its slot. Re-anchor to now: a display never
             // fast-forwards through the frames it owed.
