@@ -1,2 +1,9 @@
 # Shell scripts must stay LF: they run in WSL/CI bash, which rejects CRLF.
 *.sh text eol=lf
+
+# Byte-exact fixtures and goldens. Git's own binary detection already gets
+# these right (they are full of NULs), but the whole point of a parity golden
+# is that not one byte moves, and `core.autocrlf` is on for this repo — so say
+# it rather than rely on a heuristic.
+*.bin binary
+*.rgb565 binary

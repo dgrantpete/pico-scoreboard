@@ -480,6 +480,16 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     (doc-commented in the handler) — revisit only if the rotation wants
     more games.
 
+63. **`soccer/fifa.world/live_red_card.bin` tests nothing** — the fixture
+    is byte-identical to `overtime.bin`, so no red card exists anywhere in
+    the corpus and the red-card event line (`"RED CARD …"` over the
+    player's name in the offending side's brightened color,
+    `set_soccer_live`) is unrendered by any test. Found by the pixel-parity
+    harness (firmware-rs/PARITY.md), which carries the case and gets an
+    overtime screen from both stacks. Regenerate it with a real red-card
+    body when one is available — the parity goldens then start covering the
+    event line with no harness change, since the case is already wired up.
+
 ## Backend
 
 14. **Per-device API keys** — comma-separated key list in backend config →
