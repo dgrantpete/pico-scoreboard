@@ -536,6 +536,32 @@ impl Hub75Driver {
         self.brightness
     }
 
+    /// Set the PIO data clock, in Hz. Returns the requested value.
+    ///
+    /// Port of driver.py `set_frequency` (`:416-442`), including its two
+    /// caveats. The divider is rewritten **without stopping the state
+    /// machine** — the running transfer finishes at the old rate and the next
+    /// one starts at the new rate, which is what makes this safe to call from
+    /// a config change while the panel is refreshing. And the refresh rate is
+    /// **not** re-balanced: the base-cycle count still encodes the old clock,
+    /// so a caller that cares about hitting a target rate follows this with
+    /// [`set_target_refresh_rate`](Self::set_target_refresh_rate). `PUT
+    /// /api/config` does exactly that, in that order, as `api_routes.py` did.
+    ///
+    /// The achieved clock differs slightly from the request: the divider is an
+    /// integer plus a 1/256 fraction, both truncated.
+    pub fn set_data_clock(&mut self, data_clock_hz: u32) -> u32 {
+        self.data_clock_hz = data_clock_hz;
+        // Twice the pixel clock: the data SM drives an edge per cycle.
+        let bits = self.clkdiv_bits(self.data_clock_hz * 2);
+        self.pio.sm(DATA_STATE_MACHINE).sm_clkdiv().write(|w| unsafe { w.bits(bits) });
+        self.data_clock_hz
+    }
+
+    pub fn data_clock_hz(&self) -> u32 {
+        self.data_clock_hz
+    }
+
     /// Set the dead time inserted around row switches (reduces ghosting at
     /// the cost of maximum refresh rate). Returns the applied value.
     pub fn set_blanking_time(&mut self, nanoseconds: u32) -> u32 {
