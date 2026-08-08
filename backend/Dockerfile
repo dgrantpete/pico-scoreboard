@@ -19,7 +19,10 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory inside the container
+# Set the working directory inside the container. The build context is the
+# REPO ROOT (the backend is a Cargo workspace member and depends on
+# crates/scoreboard-wire by path, which a backend-only context can't reach), so
+# this is the workspace root and paths below are repo-relative.
 WORKDIR /app
 
 # =============================================================================
@@ -28,28 +31,35 @@ WORKDIR /app
 # Docker caches each "layer" (each RUN/COPY command creates a layer).
 # If files don't change, Docker reuses the cached layer.
 #
-# Strategy: Copy only Cargo.toml/Cargo.lock first, build dependencies,
-# THEN copy source code. This way, if only your source code changes,
-# Docker reuses the cached dependency compilation (saving ~5 minutes).
+# Strategy: copy only the manifests first and build against stub sources, so
+# the third-party dependency compilation (~5 minutes) is reused whenever only
+# our own code changed. Every workspace member the backend pulls in needs its
+# manifest here; a new one shows up as a "failed to load manifest" build error.
 
 COPY Cargo.toml Cargo.lock ./
+COPY backend/Cargo.toml backend/
+COPY crates/scoreboard-wire/Cargo.toml crates/scoreboard-wire/
 
-# Create a dummy main.rs to build dependencies
-RUN mkdir src && \
-    echo "fn main() {}" > src/main.rs && \
-    cargo build --release && \
-    rm -rf src
+# Stub sources: enough for cargo to resolve the workspace and compile the
+# dependency graph. `-p backend` keeps future firmware-only members (which
+# don't build for this host) out of the picture.
+RUN mkdir -p backend/src crates/scoreboard-wire/src && \
+    echo "fn main() {}" > backend/src/main.rs && \
+    : > crates/scoreboard-wire/src/lib.rs && \
+    cargo build --release -p backend && \
+    rm -rf backend/src crates/scoreboard-wire/src
 
 # Now copy the actual source code
-COPY src/ src/
+COPY crates/scoreboard-wire/src/ crates/scoreboard-wire/src/
+COPY backend/src/ backend/src/
 
 # Copy the config directory (contains default.toml with non-secret defaults)
-COPY config/ config/
+COPY backend/config/ backend/config/
 
-# Touch main.rs to update its timestamp so Cargo knows to recompile it
-# (otherwise Cargo might think the dummy main.rs is still current)
-RUN touch src/main.rs && \
-    cargo build --release
+# Touch the stubbed-over roots so Cargo recompiles them (otherwise it might
+# think the stubs are still current)
+RUN touch backend/src/main.rs crates/scoreboard-wire/src/lib.rs && \
+    cargo build --release -p backend
 
 # =============================================================================
 # Stage 2: Runtime Stage
@@ -80,12 +90,12 @@ WORKDIR /app
 COPY --from=builder /app/target/release/backend /app/backend
 
 # Copy the configuration file (provides defaults; secrets come from env vars)
-COPY --from=builder /app/config /app/config
+COPY --from=builder /app/backend/config /app/config
 
 # Device app ROMFS image for OTA (produced by `tools/build.py publish-app`).
 # Own layer, after the binary, so app-image-only publishes reuse the cached
 # cargo build. The endpoints 404 gracefully if the image is absent.
-COPY app_dist/ /app/app_dist/
+COPY backend/app_dist/ /app/app_dist/
 
 # Download MaxMind GeoLite2-City database for IP-to-timezone resolution.
 # This executes at build time — the .mmdb file is baked into the image.

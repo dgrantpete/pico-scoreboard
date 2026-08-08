@@ -5,8 +5,13 @@
 app = "pico-scoreboard-api-staging-dgrantpete"
 primary_region = "iad"
 
+# Build context is the REPO ROOT (workspace member + path dependency on
+# crates/scoreboard-wire); deploy with `fly deploy . --config backend/fly.staging.toml`
+# from the root, which tools/build.py does. NOTE: these paths resolve relative
+# to THIS file, not the build context.
 [build]
 dockerfile = "Dockerfile"
+ignorefile = "Dockerfile.dockerignore"
 
 [env]
 RUST_LOG = "info"

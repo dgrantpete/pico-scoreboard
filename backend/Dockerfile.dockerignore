@@ -1,0 +1,27 @@
+# Build context for backend/Dockerfile, which is the REPO ROOT (the backend is
+# a workspace member and depends on crates/scoreboard-wire by path). Allowlist,
+# so the frontend, firmware, data/ and every local artifact stay out by default
+# — the repo is far larger than the image needs.
+#
+# fly.toml / fly.staging.toml name this file via `[build] ignorefile`; BuildKit
+# also picks it up automatically for a local `docker build -f backend/Dockerfile .`
+# because of the `<dockerfile>.dockerignore` convention. NOTE: .gitignore does
+# NOT apply to docker contexts — the re-exclusions at the bottom are what keep
+# local secrets and build output out of the image.
+*
+!Cargo.toml
+!Cargo.lock
+!crates/**
+!backend/Cargo.toml
+!backend/src/**
+!backend/config/**
+# The OTA image directory is COPYed whole and may legitimately be empty, so the
+# directory itself is re-included alongside its contents.
+!backend/app_dist
+!backend/app_dist/**
+
+**/target/
+backend/.maxmind-key
+backend/config/local.toml
+backend/config/local.toml.example
+**/*.md

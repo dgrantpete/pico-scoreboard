@@ -578,11 +578,18 @@ def deploy_backend(staging: bool = False):
         print(f"Error: {key_file.relative_to(root_directory)} is empty.")
         return False
 
-    command = ['fly', 'deploy', '--build-secret', f'MAXMIND_LICENSE_KEY={license_key}']
-    if staging:
-        command += ['--config', 'fly.staging.toml']
+    # Build context is the repo root: the backend is a Cargo workspace member
+    # and depends on crates/scoreboard-wire by path, which a backend/ context
+    # can't reach. The Dockerfile/ignorefile paths inside the fly config resolve
+    # relative to the config file, so they stay backend-relative.
+    config = 'fly.staging.toml' if staging else 'fly.toml'
+    command = [
+        'fly', 'deploy', '.',
+        '--config', f'backend/{config}',
+        '--build-secret', f'MAXMIND_LICENSE_KEY={license_key}',
+    ]
     print(f"Deploying {'staging' if staging else 'prod'} backend to Fly.io...")
-    result = subprocess.run(command, cwd=root_directory / 'backend', check=False)
+    result = subprocess.run(command, cwd=root_directory, check=False)
     if result.returncode != 0:
         print("Deploy failed!")
         return False
