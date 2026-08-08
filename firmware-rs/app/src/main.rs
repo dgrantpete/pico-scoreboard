@@ -40,6 +40,7 @@
 
 mod demo;
 mod display_core1;
+mod net;
 mod probe;
 mod supervise;
 
@@ -166,9 +167,28 @@ fn main() -> ! {
         });
     });
 
+    // The radio's silicon, decided here so the resource map lives in one place.
+    // PIO2 is RP2350-only, which is what lets the panel keep PIO0 whole and
+    // leaves PIO1 for the button driver (task #12). DMA CH0 is low on purpose:
+    // hub75 owns 12-15 through the other PAC and neither side can see the
+    // other's claim, so the two ranges are kept apart by convention and by
+    // `net`'s module docs, which is the only mechanism available.
+    let radio = net::NetPeripherals {
+        pio: peripherals.PIO2,
+        dma: peripherals.DMA_CH0,
+        pwr: peripherals.PIN_23,
+        cs: peripherals.PIN_25,
+        dio: peripherals.PIN_24,
+        clk: peripherals.PIN_29,
+    };
+
     let executor = EXECUTOR0.init(Executor::new());
     executor.run(|spawner| {
-        spawner.spawn(defmt::unwrap!(demo::feed(publisher)));
+        // Owns the publisher through the boot — it is what draws the startup
+        // screen — and hands it to whichever mode wins. On the station path
+        // that is `demo::feed`, the stand-in for the poller; in setup mode
+        // nothing publishes again, because the setup screen does not change.
+        spawner.spawn(defmt::unwrap!(net::bringup(spawner, publisher, radio)));
         spawner.spawn(defmt::unwrap!(demo::brightness()));
         spawner.spawn(defmt::unwrap!(supervise::liveness(stack_probe)));
     });

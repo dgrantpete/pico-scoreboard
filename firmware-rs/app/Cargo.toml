@@ -38,11 +38,33 @@ embassy-executor = { version = "=0.10.0", features = ["platform-cortex-m", "exec
 embassy-rp = { version = "=0.10.0", features = ["rt", "rp235xa", "critical-section-impl", "time-driver", "defmt"] }
 embassy-futures = "=0.1.2"
 embassy-time = { version = "=0.5.1", features = ["defmt"] }
+embassy-sync = { version = "=0.8.0", features = ["defmt"] }
 cortex-m-rt = "=0.7.6"
 static_cell = "=2.1.1"
+heapless = "=0.9.3"
 defmt = "=1.1.1"
 defmt-rtt = "=1.3.0"
 panic-probe = { version = "=1.0.0", features = ["print-defmt"] }
+
+# Networking (SPEC §7.1). Feature notes, because each one costs sockets or RAM:
+#   tcp/udp        — the socket types tasks #10/#11 and captive DNS/DHCP need
+#   dhcpv4         — the *client*, for station mode. The AP-mode server is ours.
+#   dhcpv4-hostname— sends option 12, which is what makes `<device_name>` resolve
+#                    on the LAN the way `network.hostname()` did in MicroPython
+#   medium-ethernet— cyw43 presents an Ethernet-like device
+# `dns` is deliberately absent: the backend is reached by IP or through the
+# router's resolver, and the poller (#11) owns that decision.
+embassy-net = { version = "=0.9.1", features = ["defmt", "tcp", "udp", "dhcpv4", "dhcpv4-hostname", "proto-ipv4", "medium-ethernet"] }
+# `firmware-logs` surfaces the CYW43's own console over defmt. It is how a join
+# failure inside the chip is diagnosed at all, and it costs flash, not RAM.
+cyw43 = { version = "=0.7.0", features = ["defmt", "firmware-logs"] }
+cyw43-pio = { version = "=0.10.0", features = ["defmt"] }
+# Protocol only — `default-features = false` drops the `io` feature and with it
+# edge-nal, so nothing but the packet codec and the lease table links. The
+# socket loop is ours (`net::dhcp_server`), which is what keeps the
+# never-die-on-a-bad-packet rule the same as the captive DNS responder's.
+edge-dhcp = { version = "=0.8.0", default-features = false, features = ["defmt"] }
+scoreboard-portal = { version = "0.1.0", path = "../../crates/scoreboard-portal" }
 
 [build-dependencies]
 scoreboard-layout = { path = "layout", features = ["std"] }
