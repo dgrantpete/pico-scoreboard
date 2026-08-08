@@ -172,9 +172,10 @@ impl<'a> Reader<'a> {
     /// a display font's repertoire is the renderer's job, and a borrow keeps
     /// decode allocation-free.
     pub(crate) fn string(&mut self, field: &'static str) -> Result<&'a str, DecodeError> {
-        let len = *self.buf.get(self.offset).ok_or_else(|| {
-            DecodeError::at(self.offset, DecodeErrorKind::TruncatedLength(field))
-        })? as usize;
+        let len =
+            *self.buf.get(self.offset).ok_or_else(|| {
+                DecodeError::at(self.offset, DecodeErrorKind::TruncatedLength(field))
+            })? as usize;
         self.offset += 1;
         let end = self.offset + len;
         let bytes = self.buf.get(self.offset..end).ok_or_else(|| {

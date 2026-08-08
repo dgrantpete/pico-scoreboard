@@ -1,11 +1,11 @@
 use axum::{http::HeaderMap, response::Response};
 
+use super::wire::encode_game;
 use crate::AppState;
 use crate::error::{AppError, ErrorResponse};
 use crate::espn::league::{self, SoccerLeague};
 use crate::shared::game::{GameListEntry, GameState};
 use crate::shared::handler::{self, EventParts};
-use crate::wire;
 
 use super::transform::{
     final_competition_to_game, latest_commentary, live_competition_to_game,
@@ -50,7 +50,7 @@ fn list_state(competition: &EspnCompetition) -> Option<GameState> {
     path = "/soccer/{league}/games",
     params(("league" = String, Path, description = "ESPN soccer league slug (fifa.world, usa.1, eng.1, mex.1)")),
     responses(
-        (status = 200, description = "Today's games with per-game state. Binary encoding available via `Accept: application/x-scoreboard-struct` (see backend/src/wire.rs)", body = Vec<GameListEntry>),
+        (status = 200, description = "Today's games with per-game state. Binary encoding available via `Accept: application/x-scoreboard-struct` (see crates/scoreboard-wire)", body = Vec<GameListEntry>),
         (status = 304, description = "Game set and states unchanged since client's If-None-Match"),
         (status = 404, description = "Unknown league", body = ErrorResponse),
         (status = 502, description = "ESPN upstream error", body = ErrorResponse),
@@ -80,7 +80,7 @@ pub async fn list_games(
         ("game_id" = String, Path, description = "ESPN event ID"),
     ),
     responses(
-        (status = 200, description = "Game state (pregame/live/final). Binary encoding available via `Accept: application/x-scoreboard-struct` (see backend/src/wire.rs)", body = SoccerGame),
+        (status = 200, description = "Game state (pregame/live/final). Binary encoding available via `Accept: application/x-scoreboard-struct` (see crates/scoreboard-wire)", body = SoccerGame),
         (status = 404, description = "Unknown league, or game not on today's scoreboard", body = ErrorResponse),
         (status = 502, description = "ESPN upstream error", body = ErrorResponse),
     ),
@@ -141,9 +141,5 @@ pub async fn get_game(
         ),
     };
 
-    Ok(handler::game_response(
-        headers,
-        &game,
-        wire::encode_soccer_game,
-    ))
+    Ok(handler::game_response(headers, &game, encode_game))
 }

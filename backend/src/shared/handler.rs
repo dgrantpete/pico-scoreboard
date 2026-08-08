@@ -17,7 +17,7 @@ use crate::error::AppError;
 use crate::espn::types::{EspnEvent, EspnWeather, RawScoreboard, find_event, parse_events};
 use crate::shared::etag::{games_response, wants_struct};
 use crate::shared::game::{GameListEntry, GameState};
-use crate::wire;
+use scoreboard_wire as wire;
 
 /// The parts of one event a detail handler needs, with the first competition
 /// already extracted (a no-competition event is `GameNotFound`, as today).
@@ -97,7 +97,7 @@ pub(crate) async fn fetch_game_parts<C: DeserializeOwned>(
 }
 
 /// Shared detail back half: content-negotiate JSON vs the packed binary wire
-/// format, always with `Vary: Accept`. `encode` is the sport's `wire::encode_*`.
+/// format, always with `Vary: Accept`. `encode` is the sport's `wire::encode_game`.
 pub(crate) fn game_response<G: Serialize>(
     headers: &HeaderMap,
     game: &G,

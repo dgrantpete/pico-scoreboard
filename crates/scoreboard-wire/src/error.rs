@@ -30,7 +30,10 @@ pub enum DecodeErrorKind {
     Truncated(&'static str),
     UnknownState(u8),
     /// The fixed numeric section runs past the end of the payload.
-    TruncatedFixed { need: usize, have: usize },
+    TruncatedFixed {
+        need: usize,
+        have: usize,
+    },
     /// No room left for a string's length byte.
     TruncatedLength(&'static str),
     TruncatedString {
@@ -39,10 +42,16 @@ pub enum DecodeErrorKind {
         have: usize,
     },
     InvalidUtf8(&'static str),
-    TruncatedLineScores { need: usize, have: usize },
+    TruncatedLineScores {
+        need: usize,
+        have: usize,
+    },
     /// An enum-valued byte outside its known set (inning half, live phase,
     /// soccer period, full-time flavor, game state).
-    InvalidCode { field: &'static str, code: u8 },
+    InvalidCode {
+        field: &'static str,
+        code: u8,
+    },
     /// A well-formed payload followed by bytes nothing claims.
     Trailing(usize),
 }
@@ -65,7 +74,10 @@ impl fmt::Display for DecodeError {
                 write!(f, "truncated before {field} length")
             }
             DecodeErrorKind::TruncatedString { field, need, have } => {
-                write!(f, "truncated inside {field}: need {need} bytes, have {have}")
+                write!(
+                    f,
+                    "truncated inside {field}: need {need} bytes, have {have}"
+                )
             }
             DecodeErrorKind::InvalidUtf8(field) => write!(f, "invalid UTF-8 in {field}"),
             DecodeErrorKind::TruncatedLineScores { need, have } => {

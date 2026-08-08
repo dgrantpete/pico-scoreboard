@@ -6,3 +6,4 @@ pub mod etag;
 pub mod game;
 pub mod handler;
 pub mod team;
+pub mod wire;

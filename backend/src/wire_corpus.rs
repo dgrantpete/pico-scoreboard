@@ -11,6 +11,7 @@
 //! Regenerate deliberately (and only alongside a `WIRE_VERSION` bump):
 //! `UPDATE_WIRE_GOLDENS=1 cargo test -p backend`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::football::FootballGame;
@@ -91,16 +92,13 @@ pub(crate) fn mlb_games() -> Vec<(String, MlbGame)> {
                     situation,
                     period,
                     short_detail,
-                } => match live_competition_to_game(
-                    id,
-                    competitors,
-                    situation,
-                    period,
-                    short_detail,
-                ) {
-                    Ok(live) => MlbGame::Live(live),
-                    Err(_) => return None,
-                },
+                } => {
+                    match live_competition_to_game(id, competitors, situation, period, short_detail)
+                    {
+                        Ok(live) => MlbGame::Live(live),
+                        Err(_) => return None,
+                    }
+                }
                 EspnCompetition::Final {
                     competitors,
                     period,
@@ -287,18 +285,179 @@ pub(crate) fn encoded_corpus() -> Vec<Encoded> {
         })
     };
     for (name, game) in mlb_games() {
-        push("mlb", name, crate::wire::encode_mlb_game(&game));
+        push("mlb", name, crate::mlb::wire::encode_game(&game));
     }
     for (name, game) in nba_games() {
-        push("nba", name, crate::wire::encode_nba_game(&game));
+        push("nba", name, crate::nba::wire::encode_game(&game));
     }
     for (name, game) in football_games() {
-        push("football", name, crate::wire::encode_football_game(&game));
+        push("football", name, crate::football::wire::encode_game(&game));
     }
     for (name, game) in soccer_games() {
-        push("soccer", name, crate::wire::encode_soccer_game(&game));
+        push("soccer", name, crate::soccer::wire::encode_game(&game));
     }
     out
+}
+
+/// Running per-class maximum. A struct rather than closures so the borrow
+/// checker lets the sport walks interleave string and team measurements.
+struct Maxima(BTreeMap<&'static str, usize>);
+
+impl Maxima {
+    fn note(&mut self, class: &'static str, text: &str) {
+        let entry = self.0.entry(class).or_default();
+        *entry = (*entry).max(text.len());
+    }
+
+    fn team(&mut self, team: &scoreboard_wire::TeamState<'_>) {
+        self.note("abbreviation", team.abbreviation);
+    }
+
+    fn final_team(&mut self, team: &scoreboard_wire::FinalTeam<'_>) {
+        self.note("abbreviation", team.abbreviation);
+        let entry = self.0.entry("line score").or_default();
+        *entry = (*entry).max(team.line_score.len());
+    }
+}
+
+/// The longest string of each class the corpus produces, keyed by class. The
+/// firmware's bounded snapshot fields (Phase 2) size themselves from these, so
+/// the harness measures rather than guesses.
+fn corpus_string_maxima() -> Vec<(&'static str, usize)> {
+    use scoreboard_wire as wire;
+
+    let mut max = Maxima(BTreeMap::new());
+
+    for (name, game) in mlb_games() {
+        let bytes = crate::mlb::wire::encode_game(&game);
+        match wire::mlb::decode(&bytes).unwrap_or_else(|e| panic!("mlb/{name}: {e}")) {
+            wire::mlb::Game::Live(live) => {
+                max.note("game id", live.game_id);
+                max.team(&live.away);
+                max.team(&live.home);
+                if let Some(at_bat) = live.at_bat {
+                    max.note("player name", at_bat.pitcher);
+                    max.note("player name", at_bat.batter);
+                }
+                max.note("play id", live.last_play.id);
+                max.note("play text", live.last_play.text);
+            }
+            wire::mlb::Game::Pregame(pregame) => {
+                max.note("game id", pregame.game_id);
+                max.note("venue", pregame.venue);
+                max.note("abbreviation", pregame.away.abbreviation);
+                max.note("abbreviation", pregame.home.abbreviation);
+                if let Some(weather) = pregame.weather {
+                    max.note("weather condition", weather.condition);
+                }
+                for pitcher in [pregame.away.probable_pitcher, pregame.home.probable_pitcher]
+                    .into_iter()
+                    .flatten()
+                {
+                    max.note("player name", pitcher);
+                }
+            }
+            wire::mlb::Game::Final(game) => {
+                max.note("game id", game.game_id);
+                max.final_team(&game.away);
+                max.final_team(&game.home);
+            }
+        }
+    }
+
+    for (name, game) in nba_games() {
+        let bytes = crate::nba::wire::encode_game(&game);
+        match wire::nba::decode(&bytes).unwrap_or_else(|e| panic!("nba/{name}: {e}")) {
+            wire::nba::Game::Live(live) => {
+                max.note("game id", live.game_id);
+                max.note("clock", live.clock);
+                max.team(&live.away);
+                max.team(&live.home);
+                if let Some(play) = live.last_play {
+                    max.note("play id", play.id);
+                    max.note("play text", play.text);
+                }
+            }
+            wire::nba::Game::Pregame(pregame) => {
+                max.note("game id", pregame.game_id);
+                max.note("venue", pregame.venue);
+                max.note("abbreviation", pregame.away.abbreviation);
+                max.note("abbreviation", pregame.home.abbreviation);
+            }
+            wire::nba::Game::Final(game) => {
+                max.note("game id", game.game_id);
+                max.final_team(&game.away);
+                max.final_team(&game.home);
+            }
+        }
+    }
+
+    for (name, game) in football_games() {
+        let bytes = crate::football::wire::encode_game(&game);
+        match wire::football::decode(&bytes).unwrap_or_else(|e| panic!("football/{name}: {e}")) {
+            wire::football::Game::Live(live) => {
+                max.note("game id", live.game_id);
+                max.note("clock", live.clock);
+                max.team(&live.away);
+                max.team(&live.home);
+                if let Some(play) = live.last_play {
+                    max.note("play id", play.id);
+                    max.note("play text", play.text);
+                }
+            }
+            wire::football::Game::Pregame(pregame) => {
+                max.note("game id", pregame.game_id);
+                max.note("venue", pregame.venue);
+                max.note("abbreviation", pregame.away.abbreviation);
+                max.note("abbreviation", pregame.home.abbreviation);
+                for rank in [pregame.away.rank_line, pregame.home.rank_line]
+                    .into_iter()
+                    .flatten()
+                {
+                    max.note("rank line", rank);
+                }
+            }
+            wire::football::Game::Final(game) => {
+                max.note("game id", game.game_id);
+                max.final_team(&game.away);
+                max.final_team(&game.home);
+            }
+        }
+    }
+
+    for (name, game) in soccer_games() {
+        let bytes = crate::soccer::wire::encode_game(&game);
+        match wire::soccer::decode(&bytes).unwrap_or_else(|e| panic!("soccer/{name}: {e}")) {
+            wire::soccer::Game::Live(live) => {
+                max.note("game id", live.game_id);
+                max.team(&live.away);
+                max.team(&live.home);
+                if let Some(event) = live.last_event {
+                    max.note("clock", event.clock);
+                    max.note("player name", event.athlete);
+                }
+                if let Some(commentary) = live.commentary {
+                    max.note("play id", commentary.id);
+                    max.note("play text", commentary.text);
+                }
+            }
+            wire::soccer::Game::Pregame(pregame) => {
+                max.note("game id", pregame.game_id);
+                max.note("venue", pregame.venue);
+                max.note("abbreviation", pregame.away.abbreviation);
+                max.note("abbreviation", pregame.home.abbreviation);
+            }
+            wire::soccer::Game::Final(game) => {
+                max.note("game id", game.game_id);
+                max.note("abbreviation", game.away.abbreviation);
+                max.note("abbreviation", game.home.abbreviation);
+                max.note("scorers", game.away.scorers);
+                max.note("scorers", game.home.scorers);
+            }
+        }
+    }
+
+    max.0.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -324,8 +483,9 @@ mod tests {
                 std::fs::write(&path, &entry.bytes).expect("write golden");
                 continue;
             }
-            let golden = std::fs::read(&path)
-                .unwrap_or_else(|e| panic!("read golden {path:?}: {e} (bless with UPDATE_WIRE_GOLDENS=1)"));
+            let golden = std::fs::read(&path).unwrap_or_else(|e| {
+                panic!("read golden {path:?}: {e} (bless with UPDATE_WIRE_GOLDENS=1)")
+            });
             assert_eq!(
                 hex::encode(&entry.bytes),
                 hex::encode(&golden),
@@ -350,6 +510,82 @@ mod tests {
         on_disk.sort();
         let mut expected: Vec<String> = corpus.iter().map(|e| e.name.clone()).collect();
         expected.sort();
-        assert_eq!(on_disk, expected, "golden files and corpus entries disagree");
+        assert_eq!(
+            on_disk, expected,
+            "golden files and corpus entries disagree"
+        );
+    }
+
+    /// Decode is only trustworthy if it is exact, so every corpus payload is
+    /// decoded and re-encoded: any field the decoder drops, mis-offsets or
+    /// rounds shows up as a byte diff.
+    #[test]
+    fn corpus_round_trips_through_decode() {
+        use scoreboard_wire as wire;
+
+        for entry in encoded_corpus() {
+            let bytes = &entry.bytes;
+            let mut out = Vec::with_capacity(bytes.len());
+            let sport = entry.name.split('/').next().expect("sport-prefixed name");
+            let decoded = match sport {
+                "mlb" => wire::mlb::decode(bytes).map(|g| wire::mlb::encode(&g, &mut out)),
+                "nba" => wire::nba::decode(bytes).map(|g| wire::nba::encode(&g, &mut out)),
+                "football" => {
+                    wire::football::decode(bytes).map(|g| wire::football::encode(&g, &mut out))
+                }
+                "soccer" => wire::soccer::decode(bytes).map(|g| wire::soccer::encode(&g, &mut out)),
+                other => panic!("unknown sport {other}"),
+            };
+            decoded
+                .unwrap_or_else(|e| panic!("{}: {e}", entry.name))
+                .expect("a Vec sink never fills");
+            assert_eq!(
+                hex::encode(&out),
+                hex::encode(bytes),
+                "{} does not survive a decode/encode round trip",
+                entry.name
+            );
+        }
+    }
+
+    /// What the corpus actually produces per string class, with the headroom the
+    /// firmware's bounded snapshot fields (Phase 2) will be sized from. The wire
+    /// itself caps strings at 255 bytes and decode borrows rather than copies,
+    /// so nothing here constrains the format — this is a budget tripwire: a
+    /// fixture that outgrows a line means the snapshot bound needs revisiting,
+    /// not that the payload is invalid.
+    #[test]
+    fn corpus_strings_fit_the_snapshot_budget() {
+        const BUDGET: &[(&str, usize)] = &[
+            ("abbreviation", 8),
+            ("clock", 12),
+            ("game id", 16),
+            ("line score", 16),
+            ("play id", 24),
+            ("play text", 128),
+            ("player name", 32),
+            ("rank line", 32),
+            ("scorers", 128),
+            ("venue", 48),
+            ("weather condition", 24),
+        ];
+
+        let observed = corpus_string_maxima();
+        for (class, longest) in &observed {
+            let (_, budget) = BUDGET
+                .iter()
+                .find(|(name, _)| name == class)
+                .unwrap_or_else(|| panic!("no budget line for {class}"));
+            assert!(
+                longest <= budget,
+                "{class}: corpus reaches {longest} bytes, budget is {budget}"
+            );
+        }
+        let measured: Vec<&str> = observed.iter().map(|(class, _)| *class).collect();
+        let budgeted: Vec<&str> = BUDGET.iter().map(|(class, _)| *class).collect();
+        assert_eq!(
+            measured, budgeted,
+            "every budget line must be exercised by the corpus"
+        );
     }
 }

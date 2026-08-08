@@ -8,6 +8,7 @@
 pub mod handler;
 pub mod transform;
 pub(crate) mod types;
+pub(crate) mod wire;
 
 pub use handler::{get_game, list_games};
 pub use types::{

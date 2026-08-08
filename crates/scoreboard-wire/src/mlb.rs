@@ -245,7 +245,11 @@ pub fn decode(buf: &[u8]) -> Result<Game<'_>, DecodeError> {
 }
 
 fn write_live<S: Sink + ?Sized>(out: &mut S, game: &Live<'_>) -> Result<(), BufferFull> {
-    out.u8(if game.at_bat.is_some() { FLAG_AT_BAT } else { 0 })?;
+    out.u8(if game.at_bat.is_some() {
+        FLAG_AT_BAT
+    } else {
+        0
+    })?;
     out.u8(game.inning.number)?;
     out.u8(game.inning.half.code())?;
     out.u8(game.count.balls)?;

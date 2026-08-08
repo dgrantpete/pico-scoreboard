@@ -6,7 +6,8 @@ use axum::{
 use sha1::{Digest, Sha1};
 
 use crate::shared::game::GameListEntry;
-use crate::wire;
+use crate::shared::wire::encode_game_list;
+use scoreboard_wire as wire;
 
 /// First 16 hex chars of SHA-1 over the sorted, comma-joined cache tokens.
 /// Tokens are `"{id}:{state_code}"` per game, so a state flip (pregame →
@@ -63,7 +64,7 @@ pub(crate) fn games_response(
                 (header::VARY, "Accept"),
                 (header::CONTENT_TYPE, wire::STRUCT_CONTENT_TYPE),
             ],
-            wire::encode_game_list(&entries),
+            encode_game_list(&entries),
         )
             .into_response()
     } else {

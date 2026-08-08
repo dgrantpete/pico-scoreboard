@@ -183,7 +183,10 @@ const GOLDEN_MLB_FINAL: &str = "020209090804000500562c0c005c5c00003930bd0040230c
 
 #[test]
 fn mlb_final_uneven_line_scores() {
-    assert_eq!(encoded(|out| mlb::encode(&mlb_final(), out)), GOLDEN_MLB_FINAL);
+    assert_eq!(
+        encoded(|out| mlb::encode(&mlb_final(), out)),
+        GOLDEN_MLB_FINAL
+    );
     assert_eq!(mlb::decode(&unhex(GOLDEN_MLB_FINAL)).unwrap(), mlb_final());
 }
 
@@ -300,7 +303,10 @@ fn soccer_halftime_with_home_goal() {
         encoded(|out| soccer::encode(&game, out)),
         GOLDEN_SOCCER_HALFTIME
     );
-    assert_eq!(soccer::decode(&unhex(GOLDEN_SOCCER_HALFTIME)).unwrap(), game);
+    assert_eq!(
+        soccer::decode(&unhex(GOLDEN_SOCCER_HALFTIME)).unwrap(),
+        game
+    );
 }
 
 const GOLDEN_SOCCER_QUIET: &str =
@@ -428,8 +434,7 @@ fn nba_live_with_last_play() {
     assert_eq!(nba::decode(&unhex(GOLDEN_NBA_LIVE)).unwrap(), game);
 }
 
-const GOLDEN_NBA_HALFTIME: &str =
-    "020100020134004a00a9765d0012b1f5008e004e001ba0f90009343031383131303336034d454d045554414803302e30";
+const GOLDEN_NBA_HALFTIME: &str = "020100020134004a00a9765d0012b1f5008e004e001ba0f90009343031383131303336034d454d045554414803302e30";
 
 #[test]
 fn nba_halftime_without_last_play() {
@@ -502,11 +507,13 @@ fn nba_pregame_without_records() {
         encoded(|out| nba::encode(&game, out)),
         GOLDEN_NBA_PRE_NO_RECORDS
     );
-    assert_eq!(nba::decode(&unhex(GOLDEN_NBA_PRE_NO_RECORDS)).unwrap(), game);
+    assert_eq!(
+        nba::decode(&unhex(GOLDEN_NBA_PRE_NO_RECORDS)).unwrap(),
+        game
+    );
 }
 
-const GOLDEN_NBA_FINAL: &str =
-    "0202040404760064008a421d002e10c800a88c000060111d001e1c1e1e19191919093430313831313032360344455403434841";
+const GOLDEN_NBA_FINAL: &str = "0202040404760064008a421d002e10c800a88c000060111d001e1c1e1e19191919093430313831313032360344455403434841";
 
 #[test]
 fn nba_final_regulation() {
@@ -559,8 +566,7 @@ fn football_live_with_situation() {
     );
 }
 
-const GOLDEN_FOOTBALL_LIVE_BREAK: &str =
-    "020100020100000000000a000e008d330000300cc6003718e3001cb8ff000934303137373235313103425546024b4304303a3030";
+const GOLDEN_FOOTBALL_LIVE_BREAK: &str = "020100020100000000000a000e008d330000300cc6003718e3001cb8ff000934303137373235313103425546024b4304303a3030";
 
 #[test]
 fn football_live_break_without_situation() {
@@ -680,8 +686,7 @@ fn football_pregame_ncaaf_home_ranked() {
     );
 }
 
-const GOLDEN_FOOTBALL_FINAL_OT: &str =
-    "020205050518001b008d330000300cc6003718e3001cb8ff0007030707000707000a030934303137373235313403425546024b43";
+const GOLDEN_FOOTBALL_FINAL_OT: &str = "020205050518001b008d330000300cc6003718e3001cb8ff0007030707000707000a030934303137373235313403425546024b43";
 
 #[test]
 fn football_final_overtime() {
@@ -701,8 +706,7 @@ fn football_final_overtime() {
     );
 }
 
-const GOLDEN_FOOTBALL_FINAL: &str =
-    "020204040418001b003718e3001cb8ff008d330000300cc60007030707000a070a09343031353437343137024b4303425546";
+const GOLDEN_FOOTBALL_FINAL: &str = "020204040418001b003718e3001cb8ff008d330000300cc60007030707000a070a09343031353437343137024b4303425546";
 
 #[test]
 fn football_final_regulation() {
@@ -796,7 +800,10 @@ fn empty_and_misversioned_payloads_are_rejected() {
         decode_err(b"{\"state\":\"live\"}").kind,
         DecodeErrorKind::UnsupportedVersion(b'{')
     );
-    assert_eq!(decode_err(&[1, 1]).kind, DecodeErrorKind::UnsupportedVersion(1));
+    assert_eq!(
+        decode_err(&[1, 1]).kind,
+        DecodeErrorKind::UnsupportedVersion(1)
+    );
 }
 
 #[test]
@@ -878,7 +885,10 @@ fn trailing_bytes_are_rejected() {
             kind: DecodeErrorKind::Trailing(3),
         }
     );
-    assert_eq!(format!("{error}"), format!("@{end}: 3 unexpected trailing bytes"));
+    assert_eq!(
+        format!("{error}"),
+        format!("@{end}: 3 unexpected trailing bytes")
+    );
 }
 
 #[test]

@@ -24,7 +24,6 @@ pub mod nba;
 pub mod shared;
 pub mod soccer;
 pub mod team;
-pub mod wire;
 #[cfg(test)]
 mod wire_corpus;
 

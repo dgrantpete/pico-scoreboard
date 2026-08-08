@@ -1,11 +1,11 @@
 use axum::{http::HeaderMap, response::Response};
 
+use super::wire::encode_game;
 use crate::AppState;
 use crate::error::{AppError, ErrorResponse};
 use crate::espn::league::{self, Mlb};
 use crate::shared::game::{GameListEntry, GameState};
 use crate::shared::handler::{self, EventParts};
-use crate::wire;
 
 use super::transform::{
     final_competition_to_game, live_competition_to_game, parse_inning_half,
@@ -35,7 +35,7 @@ fn list_state(competition: &EspnCompetition) -> Option<GameState> {
     get,
     path = "/baseball/mlb/games",
     responses(
-        (status = 200, description = "Today's MLB games with per-game state (pregame/live/final). Binary encoding available via `Accept: application/x-scoreboard-struct` (see backend/src/wire.rs)", body = Vec<GameListEntry>),
+        (status = 200, description = "Today's MLB games with per-game state (pregame/live/final). Binary encoding available via `Accept: application/x-scoreboard-struct` (see crates/scoreboard-wire)", body = Vec<GameListEntry>),
         (status = 304, description = "Game set and states unchanged since client's If-None-Match"),
         (status = 502, description = "ESPN upstream error", body = ErrorResponse),
     ),
@@ -57,7 +57,7 @@ pub async fn list_games(state: &AppState, headers: &HeaderMap) -> Result<Respons
     path = "/baseball/mlb/games/{game_id}",
     params(("game_id" = String, Path, description = "ESPN event ID")),
     responses(
-        (status = 200, description = "Game state (pregame/live/final). Binary encoding available via `Accept: application/x-scoreboard-struct` (see backend/src/wire.rs)", body = MlbGame),
+        (status = 200, description = "Game state (pregame/live/final). Binary encoding available via `Accept: application/x-scoreboard-struct` (see crates/scoreboard-wire)", body = MlbGame),
         (status = 404, description = "Not on today's scoreboard, or a non-displayable delay", body = ErrorResponse),
         (status = 502, description = "ESPN upstream error", body = ErrorResponse),
     ),
@@ -101,11 +101,7 @@ pub async fn get_game(
         ),
     };
 
-    Ok(handler::game_response(
-        headers,
-        &game,
-        wire::encode_mlb_game,
-    ))
+    Ok(handler::game_response(headers, &game, encode_game))
 }
 
 #[cfg(test)]
