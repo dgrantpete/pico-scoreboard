@@ -146,8 +146,20 @@ pub const FOOTBALL_PERSP_DEN: i32 = 63;
 
 /// Where a vertical field line whose bottom endpoint is at `x` meets the
 /// field's top row.
+///
+/// Rounds half away from zero, which is what `state._football_top_x` does and
+/// what the field sprite's own perspective was drawn to. Truncating instead
+/// puts the line — and the ball and possession arrow that hang off its top
+/// endpoint — one pixel short of the lean on 49 of the 100 yard positions,
+/// which is how the parity harness found this.
 pub const fn football_top_x(x: i32) -> i32 {
-    x + (FOOTBALL_VP_X - x) * FOOTBALL_PERSP_NUM / FOOTBALL_PERSP_DEN
+    let run = (FOOTBALL_VP_X - x) * FOOTBALL_PERSP_NUM;
+    let half = FOOTBALL_PERSP_DEN / 2;
+    if run >= 0 {
+        x + (run + half) / FOOTBALL_PERSP_DEN
+    } else {
+        x - (-run + half) / FOOTBALL_PERSP_DEN
+    }
 }
 
 // =============================================================================
