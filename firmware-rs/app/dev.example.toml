@@ -1,0 +1,35 @@
+# Bench credentials for a probe-flashed image.
+#
+# Copy to `dev.toml` (gitignored) and fill in. `build.rs` reads it and emits the
+# values as compile-time env vars, so a `cargo run` image joins a real network
+# without any device-side configuration existing yet.
+#
+# THIS IS A DEVELOPMENT SEAM, NOT THE PRODUCT. Device config storage
+# (sequential-storage over the flash region, SPEC §9) is task #12's, and
+# `net::wifi::Credentials::from_dev_build` is the one function it replaces:
+# storage wins when a record exists, this file is the fallback that lets the
+# bench work in the meantime.
+#
+# With no `dev.toml` present the image builds fine and boots straight into AP
+# setup mode — which is also the un-provisioned path a real device takes, so the
+# absence of this file is a supported configuration and not a broken build.
+
+[station]
+# The network to join. Leave `ssid` empty (or delete the file) to force the
+# no_network_configured setup path.
+ssid = "YOUR-SSID"
+password = "your-passphrase"
+
+# Sent as the DHCP client hostname and used for the AP SSID, matching
+# config.json's `network.device_name` on the MicroPython firmware.
+device_name = "scoreboard"
+
+# Per-attempt station timeout, before the LINK_NOIP extension.
+# config.json's `network.connect_timeout_seconds`.
+connect_timeout_seconds = 20
+
+[api]
+# Backend base URL, used by the bench HTTP probe and later by the poller.
+# Plain http on purpose: score polling is unauthenticated and TLS costs RAM
+# the device does not have (INVENTORY, api_client.py scheme downgrade).
+url = "http://api.example.com"

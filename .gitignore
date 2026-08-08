@@ -102,6 +102,12 @@ firmware/.micropico/
 
 firmware/src/config.json
 
+# Bench credentials for the Rust firmware. build.rs reads this into env vars so
+# a probe-flashed image can join a real network before device config storage
+# exists (task #12 replaces it). Real SSIDs and passwords live here and must
+# never be committed — dev.example.toml is the tracked template.
+firmware-rs/app/dev.toml
+
 # Python bytecode
 firmware/**/*.pyc
 firmware/**/__pycache__/
