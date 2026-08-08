@@ -544,6 +544,28 @@ applies there.
 **12. `SCB::sys_reset()` is not used anywhere.** It does not reset an RP2350 —
 see SPEC §12. Every reset goes through the watchdog's `TRIGGER` bit.
 
+**13. The rotary encoder is not ported, and that is not an omission.** It is
+wired to GPIO 2/3/4 on the board, `lib/rotary_encoder.py` is a genuinely nice
+PIO quadrature decoder, and **`main.py` never imports it** — INVENTORY confirms
+its only consumer is `hardware_diagnostic.py`, where it drives a 0–100
+brightness preference for bring-up. Parity is against the shipping firmware, so
+porting it would mean adding a feature the product does not have under cover of
+a parity release. SPEC §12 already routes the diagnostic tool to a
+`--features diag` build; the encoder belongs there, with it. Nothing in
+`scoreboard-input` or `inputs.rs` reserves PIO or pins for it, so adding it
+later costs a state machine and nothing else.
+
+**14. `ThreadHealth.healthy` has no counterpart, because it has nothing to
+describe.** MicroPython's feeder watched two core-1 signals: `frame_seq` for a
+hung thread, and a `healthy` boolean that the render thread's `except` handler
+cleared for a crashed one. That second state existed because the render loop
+caught its own exceptions and could die while the rest of the firmware kept
+running. Core 1 has no such handler here — a panic reaches the panic handler,
+which stashes a breadcrumb and resets the chip — so there is no window in which
+core 1 is dead and something is left alive to set a flag. The replacement is
+strictly more informative: the crash is *reported* at `/api/logs/previous`
+rather than inferred from a counter that stopped.
+
 ## Bench-validated
 
 Bench unit at 192.168.50.236, 2026-08-08, release image. **No light sensor and

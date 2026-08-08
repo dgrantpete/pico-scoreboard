@@ -32,6 +32,20 @@
 //! where there is no poller by design and gating on it would reset the device
 //! every eight seconds while somebody was typing their Wi-Fi password into it.
 //!
+//! # Where `ThreadHealth.healthy` went
+//!
+//! `main.py`'s feeder checked two things about core 1: `frame_seq` for a *hung*
+//! thread, and a `healthy` boolean the display thread's `except` handler cleared
+//! for a *crashed* one. Only the first is ported, because the second has no
+//! state left to describe. MicroPython's render thread wrapped its loop body in
+//! `try/except`, so a render bug could kill the thread and leave the rest of the
+//! firmware running — which is exactly the situation a flag is for. Core 1 here
+//! has no such handler: a panic goes to [`panic`], which stashes a breadcrumb
+//! and resets the chip. There is no window in which core 1 is dead and the
+//! device is alive to notice, so the flag would be a variable that is never
+//! false. What replaced it is strictly better — the crash is *reported*, at
+//! `/api/logs/previous`, rather than inferred from a counter that stopped.
+//!
 //! # Starving is not the same as crashing, and the difference is worth a write
 //!
 //! A watchdog reset looks exactly like a power cut from the far side: the ring
