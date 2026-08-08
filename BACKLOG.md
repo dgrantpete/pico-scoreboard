@@ -683,6 +683,43 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     confirm the panel glides to the 5 % floor and to full — the smoothed ramp
     (EMA + rate limit) is the one behaviour only eyes can sign off.
 
+73. **Better auto-brightness algorithm** — owner request, 2026-08-08. What
+    ships today is a deliberate parity port of `brightness.py`: EMA (α=0.08 at
+    5 Hz), log curve over 2–300 lux, the dual-lerp preference knob, ±0.04/tick
+    ramp, and the VEML7700 gain table pinned *including its two
+    wrong-vs-datasheet cells*. Known upgrade avenues, none started: hysteresis
+    or a deadband so the panel doesn't hunt when the room sits at a curve
+    knee; asymmetric response (fast brighten on lights-on, slow dim as evening
+    falls — the current ramp is symmetric); a perceptual mapping (CIE
+    lightness) instead of raw log-lux; auto-ranging integration time (the
+    sensor supports it, the driver deliberately doesn't); the Vishay high-lux
+    correction polynomial (deliberately absent). **Gate: post-parity-sign-off
+    only** — any curve change breaks visual parity with the MicroPython unit,
+    so it must not land while task #13's checklist is open.
+
+74. **Config storage write-granularity (owner asked: "minimize flash wear —
+    can we drop JSON?")** — analysis 2026-08-08; the wear half is already
+    solved *by construction* and the item exists so nobody re-solves it.
+    The store is `sequential-storage`, embedded Rust's append-only flash map
+    — the thing the owner half-remembered (its MicroPython cousin is
+    littlefs's dynamic wear leveling). A save never rewrites in place: it
+    appends to the current 4 KB page; a page is erased only when the 980 KB
+    / 245-page region wraps. The math: a 942 B JSON document = ~4 saves per
+    page ≈ 980 saves per full-region cycle; at the flash's 100 K
+    erase-cycle rating that is ~10⁸ saves, i.e. **~27,000 years at ten
+    config changes a day**. JSON's cost is bytes-per-append, not rewrites —
+    and it buys the schema-evolution story (serde defaults *are*
+    `config.py`'s deep merge; task #12's decision), where a packed format
+    (postcard) would make every added field a versioned migration to gain a
+    ~4× improvement on a meter that reads "geological". The genuinely
+    interesting refinement if write volume ever grows (e.g. sticky prefs
+    written per button press): **per-field keys** — the map is built for
+    many small records, so a brightness tweak would append ~16 B instead of
+    942 B (~60×). Trade-offs to work through at that point: boot assembles
+    the config from N keys, `reset-network` becomes key deletion rather
+    than document rewrite, and the one-flash-write-per-PUT-batch property
+    needs restating per key.
+
 ## Backend
 
 14. **Per-device API keys** — comma-separated key list in backend config →
