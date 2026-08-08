@@ -100,7 +100,7 @@ class LiveGame:
 
     @classmethod
     def from_struct(cls, buf) -> "LiveGame":
-        """Parse an NBA live payload (see backend/src/wire.rs)."""
+        """Parse an NBA live payload (see crates/scoreboard-wire)."""
         end = len(buf)
         check_version(buf, end)
         if end < HDR_SIZE + _LIVE_SIZE:
@@ -168,7 +168,7 @@ class PregameGame:
 
     @classmethod
     def from_struct(cls, buf) -> "PregameGame":
-        """Parse an NBA pregame payload (see backend/src/wire.rs)."""
+        """Parse an NBA pregame payload (see crates/scoreboard-wire)."""
         end = len(buf)
         check_version(buf, end)
         if end < HDR_SIZE + _PRE_SIZE:
@@ -246,7 +246,7 @@ class FinalGame:
 
     @classmethod
     def from_struct(cls, buf) -> "FinalGame":
-        """Parse an NBA final payload (see backend/src/wire.rs)."""
+        """Parse an NBA final payload (see crates/scoreboard-wire)."""
         end = len(buf)
         check_version(buf, end)
         if end < HDR_SIZE + _FINAL_SIZE:

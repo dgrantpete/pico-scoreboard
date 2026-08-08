@@ -156,7 +156,7 @@ class LiveGame:
 
     @classmethod
     def from_struct(cls, buf) -> "LiveGame":
-        """Parse a soccer live payload (see backend/src/wire.rs)."""
+        """Parse a soccer live payload (see crates/scoreboard-wire)."""
         end = len(buf)
         check_version(buf, end)
         if end < HDR_SIZE + _LIVE_SIZE:
@@ -242,7 +242,7 @@ class PregameGame:
 
     @classmethod
     def from_struct(cls, buf, league: str) -> "PregameGame":
-        """Parse a soccer pregame payload (see backend/src/wire.rs).
+        """Parse a soccer pregame payload (see crates/scoreboard-wire).
 
         `league` is the display name of the league this payload was polled
         from — the wire deliberately doesn't carry it (the device knows which
@@ -324,7 +324,7 @@ class FinalGame:
 
     @classmethod
     def from_struct(cls, buf) -> "FinalGame":
-        """Parse a soccer full-time payload (see backend/src/wire.rs)."""
+        """Parse a soccer full-time payload (see crates/scoreboard-wire)."""
         end = len(buf)
         check_version(buf, end)
         if end < HDR_SIZE + _FINAL_SIZE:

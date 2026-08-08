@@ -150,7 +150,7 @@ class LiveGame:
 
     @classmethod
     def from_struct(cls, buf) -> "LiveGame":
-        """Parse a v2 live payload (see backend/src/wire.rs for the spec)."""
+        """Parse a v2 live payload (see crates/scoreboard-wire for the spec)."""
         end = len(buf)
         check_version(buf, end)
         if end < HDR_SIZE + _LIVE_SIZE:
@@ -226,7 +226,7 @@ class PregameGame:
 
     @classmethod
     def from_struct(cls, buf) -> "PregameGame":
-        """Parse a v2 pregame payload (see backend/src/wire.rs for the spec)."""
+        """Parse a v2 pregame payload (see crates/scoreboard-wire for the spec)."""
         end = len(buf)
         check_version(buf, end)
         if end < HDR_SIZE + _PRE_SIZE:
@@ -308,7 +308,7 @@ class FinalGame:
 
     @classmethod
     def from_struct(cls, buf) -> "FinalGame":
-        """Parse a v2 final payload (see backend/src/wire.rs for the spec)."""
+        """Parse a v2 final payload (see crates/scoreboard-wire for the spec)."""
         end = len(buf)
         check_version(buf, end)
         if end < HDR_SIZE + _FINAL_SIZE:
