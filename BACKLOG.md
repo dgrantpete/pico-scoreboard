@@ -527,6 +527,29 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     probing. Do this with task #10, which owns the HTTP surface: serve
     `/api/captive-portal` returning `{"captive": true, "user-portal-url": …}`
     and set `options.captive_url` to it in `net::dhcp_server`.
+    **Not done in task #10** (2026-08-08): it is an improvement on the
+    MicroPython behaviour rather than parity with it, and the parity release
+    should not ship a captive-portal mechanism the old firmware never had and
+    the soak has never exercised. The HTTP half is now a ten-line route.
+
+67. **Bench-validate the AP-mode captive redirect from a phone** — the
+    station-mode half of the `Host` check is validated on hardware (foreign
+    `Host` → 404, which is also the MicroPython bug fixed), but the setup-mode
+    `302` to `http://<ap ip>/#/setup` has only host tests behind it: firing it
+    needs the test client associated to the device's own AP, which takes the
+    developer's machine off its network. Do it once during Phase 3's soak with
+    a phone — join the setup SSID, confirm the OS opens the setup page by
+    itself. That is the client the redirect exists for and the only one whose
+    behaviour matters.
+
+68. **The gamma LUT rebuild runs inside a core-1 frame (27.5 ms)** — a
+    `PUT /api/config` that changes gamma costs 256 `libm::pow` calls on core 1,
+    measured at 27,562 µs, which is over half a 50 ms frame. It fits today (no
+    overrun recorded, 20.0 FPS held) and it happens only on an explicit config
+    save, so it is not urgent. If a frame ever gets slower, the fix is to build
+    the LUT on core 0 and send the finished 256-byte table instead of the
+    `Gamma` value — the driver already stores the LUT, so it is a change of
+    what crosses the seam, not of the driver.
 
 ## Backend
 

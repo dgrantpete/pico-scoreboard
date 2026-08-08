@@ -177,6 +177,35 @@ was never reachable by name, and still is not.
 - SPA: `index.html.gz` embedded via `include_bytes!` in `build.rs` from `frontend/`'s build output; served with `Content-Encoding: gzip` and a build-time ETag (hash computed in `build.rs`, replacing the runtime `_compute_index_etag`). The `/rom/` fallback path disappears — there is no filesystem.
 - JSON request/response bodies: `serde` with `derive` into fixed/borrowed types (serde works no-alloc when deserializing to borrowed `&str`/bounded types); responses serialized into a caller-owned buffer.
 
+**Built and bench-validated, Phase 3** (picoserve `=0.19.0`, N=2 connections on
+the sockets §7.1 reserved). Every endpoint in `api_routes.py`'s table is served
+with its original status codes and body shapes; the deviations, all of them
+deliberate, are PARITY.md's. Four things this section did not anticipate:
+
+- **A buffer inside a request handler is not a buffer, it is a buffer times the
+  router's depth.** picoserve's router is a *type* — each `.route()` wraps the
+  previous one as its fallback — so the "handle a request" future contains
+  every layer's handler future and the whole fallback chain beneath it.
+  Measured: raising the JSON response buffer from 256 B to 3,072 B and the log
+  chunk from 256 B to 2,048 B grew the two server tasks' arenas by
+  **202,752 B**, a 22× multiplier on 4,608 B of buffer. Response buffers
+  therefore live in a pool (`http::scratch`) and handler futures hold an
+  8-byte lease. This is the single most important thing to know before adding
+  a route or a response type.
+- **`serde` deserialization is the flash cost, not the server.** One function
+  — `ConfigPatch::deserialize`'s generated visitor — is 35,582 B of the image.
+  Worth knowing before the config grows a section.
+- **The config's live-apply crosses a core boundary.** MicroPython called
+  `update_display_gamma(config)` directly because its driver was a global; here
+  core 1 owns the driver by value, so a change is *sent* (`settings`'s
+  `Signal`) and applied at the top of a frame. It carries the set of hooks to
+  run, not just the values, so a `PUT` that changes an SSID does not rebuild
+  the gamma LUT — which is visible on the panel and measurably expensive.
+- **A gamma change costs 27.5 ms on core 1** (256 `libm::pow` calls), over half
+  a 50 ms frame. It fits today — no overrun was recorded and the loop held
+  20.0 FPS — but it is the largest single thing that happens inside a frame,
+  and BUDGET.md carries the number.
+
 ### 7.4 Backend client (reqwless)
 
 - Port of `api_client.py` + `poller.py`: plain-HTTP as today (the https→http downgrade becomes simply configuring an http URL; keep the config-side https URL rewrite behavior so existing configs migrate), `Accept: application/x-scoreboard-struct`, ETag/backoff/jitter semantics copied from the Python, decode via `scoreboard-wire` straight out of the receive buffer, snapshot publish per §4.
@@ -319,6 +348,20 @@ caller-owned?* — `n/a` means the crate holds no runtime buffer at all.
 | `embedded-io-async` | =0.7.0 | scoreboard-app | yes | yes | caller | **Optional, `net-probe` only.** The `Write` trait behind `TcpSocket::write_all` for the bench probe. Not in a shipped build; reqwless brings its own in Phase 3's client task. |
 | `defmt` | 0.3.100 | via embassy-net, smoltcp, embassy-net-driver | yes | yes | caller | `cargo tree -d` reports defmt twice, and that is **expected, not drift**: 0.3.100 is upstream's compatibility shim, a crate whose only dependency is `defmt = "1"` and whose only content is re-exports of the 0.3 API. So there are two crate *versions* in the graph and one implementation, one wire format and one `.defmt` string table (147 B in the linked ELF) underneath. Re-check this on any defmt bump — two real defmts would silently split the string table and the decoder would reject the stream. |
 
+**HTTP server and configuration, pinned in Phase 3** (`firmware-rs/app`, `crates/scoreboard-config`, `crates/scoreboard-log`)
+
+| Crate | Ver | Used by | no_std | no-alloc | Buffers | Notes |
+|---|---|---|---|---|---|---|
+| `picoserve` | =0.19.0 | scoreboard-app | yes | yes¹ | caller | The HTTP server. ¹**`default-features = false` is load-bearing**: the default set includes `std`, which turns on `alloc`. Selected features are `embassy` (its embassy-time timer and embassy-net socket glue), `defmt` and `json`; `ws`, `log`, `tokio` and `std` stay off. Every buffer is the caller's — one request buffer and the two TCP buffers per connection, passed to `Server::new` and `listen_and_serve`. **MSRV 1.93**, which is what moved the toolchain (TOOLCHAIN.md). Its router is a type, not a table; see §7.3's first bullet before adding a route. |
+| `serde` | 1.0 | scoreboard-config, scoreboard-app | yes¹ | yes | caller | ¹`default-features = false`, so neither `std` nor `alloc` is on; `derive` only. The one caret rather than `=` pin in the embedded graph: serde is 1.0 and its compatibility promise is the reason §14's exact-pin rule exists at all. |
+| `serde-json-core` | =0.6.0 | scoreboard-config, scoreboard-app | yes | yes | caller | The JSON codec. `to_slice` writes into the caller's buffer and `from_slice` deserializes into the caller's bounded types — no intermediate document. Pulls `heapless` **0.8** and `ryu`. |
+| `heapless` | 0.8.0 | via picoserve, serde-json-core | yes | yes² | inline | ²Off-by-default `alloc`, not activated. **A second major version of `heapless` in the graph**, alongside the workspace's 0.9.3. Deliberate and harmless, but it has one consequence worth knowing: `heapless 0.8::Vec` and `heapless 0.9::Vec` are unrelated types, so picoserve's `Content` impl for its own `Vec` does not apply to ours — `http::routes::JsonBody` is the four-line bridge. Serialization is unaffected: both implement the *same* `serde` traits, from the one `serde` in the graph. |
+| `const-sha1` | =0.3.0 | scoreboard-app (**build-dependency**) | yes | yes | caller | Hashes the embedded SPA into its ETag at build time (`main.py:319-336`, moved from boot to build). Zero dependencies. Host-side only — nothing of it ships — and it is already in the target graph via picoserve, so it adds no new audit surface. |
+| `cortex-m` | =0.7.8 | scoreboard-app | yes | yes | n/a | Promoted from transitive to direct: `msp`/`msplim` for the core-0 stack watermark and the static-RAM figure `/api/status` reports, and `SCB::sys_reset` for `/api/reboot`. |
+| `picoserve_derive` / `pin-project` / `ryu` / `thiserror` | 0.1.4 / 1.1.13 / 1.0.23 / 2.0 | via picoserve | yes | yes | n/a | Proc macros and support crates. `thiserror` with default features off is `no_std`; the macro halves allocate on the *host* and nothing of them ships. |
+| `scoreboard-config` | path | scoreboard-app | yes | yes | caller | First-party. The merged config shape, the deep-merge (which is serde's `default` attributes), the `poll_interval < game_rotation` invariant, and the partial-update semantics `PUT /api/config` applies. `#![forbid(unsafe_code)]`, host-tested. |
+| `scoreboard-log` | path | scoreboard-config, scoreboard-app | yes | yes | caller | First-party. The RAM ring `/api/logs` serves and its NDJSON encoding, including the JSON string escaping that one unescaped quote in a play-by-play line would otherwise turn into a blank logs page. `#![forbid(unsafe_code)]`, host-tested. |
+
 **Transitive, load-bearing**
 
 | Crate | Ver | Via | no_std | no-alloc | Buffers | Notes |
@@ -334,10 +377,8 @@ caller-owned?* — `n/a` means the crate holds no runtime buffer at all.
 
 | Crate | Ver | Phase | Notes |
 |---|---|---|---|
-| `picoserve` | not yet pinned | 3 | HTTP server (§7.3) |
 | `reqwless` | not yet pinned | 3 | Backend client (§7.4) |
 | `sequential-storage` | not yet pinned | 3 | Persistence (§9) |
-| `serde` (+`derive`) | not yet pinned | 3 | Must deserialize to borrowed/bounded types only |
 | `embassy-boot`(-rp) | not yet pinned | 4 | OTA + signature verification (§8) |
 | `flip-link` | not yet pinned | 3 | Linker wrapper, §2. **Not yet in use** — `hub75-diag` links without it, so stack overflow currently corrupts `.bss` instead of faulting. |
 | `png-stream` deps | not yet pinned | S | Out of parity scope |
@@ -391,8 +432,10 @@ the chip is in use.
 | AP fallback + setup reason + QR | **Done, bench-validated** — all three reasons reachable; `no_network_configured` and `bad_auth` demonstrated on silicon |
 | Captive portal — DNS half | **Done** — `crates/scoreboard-portal::dns`, host-tested |
 | Captive portal — DHCP server | **Done** — new work; embassy-net has no server, `dhcpserver.c` matched (Appendix A) |
-| Captive portal — HTTP `Host` check | **Logic done and host-tested** (`scoreboard-portal::hosts`); wiring is task #10 |
-| SPA + every `api_routes.py` endpoint | Task #10 |
+| Captive portal — HTTP `Host` check | **Done, bench-validated** — `scoreboard-portal::hosts`, wired in `http::routes` |
+| SPA + every `api_routes.py` endpoint | **Done, bench-validated** — transcripts in the task #10 report; deviations in PARITY.md |
+| Captive portal — HTTP catch-all wiring | **Done**; station-mode 404 bench-validated, AP-mode 302 host-tested only (reaching it needs the test host on the setup AP) |
+| RAM ring log + `/api/logs` NDJSON | **Done** — `crates/scoreboard-log`, host-tested, tail-follow bench-validated |
 | Poller ETag / backoff semantics | Task #11 |
 | Time sync (incl. `utc_offset: 0` ≠ `None`) | Task #11 — the endpoint is reachable, proved by `--features net-probe` |
 | Menu + buttons + encoder | Task #12 |

@@ -28,19 +28,27 @@ no heap to absorb a mistake.
 | cyw43 driver state | 17,928 | **MEASURED** | `CYW43_STATE` 12,696 B (the driver's ioctl state and its 4 + 4 packet channel) plus the runner task's 5,232 B arena. Came in 9 % over SPEC §11's 16 KB guess. |
 | embassy-net stack + captive-portal sockets | 12,868 | **MEASURED** | `StackResources<8>` 4,584 B + the net runner's 136 B arena, plus the two AP-mode responders: 4,100 B of payload buffers, 400 B of packet metadata, and 3,920 B of task arenas (the DHCP and DNS scratch live in the arenas, not on a stack). **The TCP socket buffers are not in this line** — poller, HTTP ×2 and OTA are tasks #10/#11/#15 and bring their own. |
 | Provisioning (`net::bringup` arena) | 4,400 | **MEASURED** | The boot-time `Store` (2,880 B) plus the scan's 64-entry BSSID table and the credentials. Task-arena, so it is statically allocated but has no reader after the boot. |
-| Receive/scratch buffers (wire, HTTP, OTA chunk) | ~40,960 | ESTIMATE | Unioned where phases cannot overlap (OTA vs. poll). |
+| HTTP server — sockets, request buffers, task arenas | 50,114 | **MEASURED** | `scoreboard-app`, task #10. 43,968 B of task arena for the two connections (21,984 each: 1,536 B TCP receive + 2,920 B TCP send + 4,096 B request buffer, and picoserve's request-handling future around them) plus 6,146 B of pooled response scratch. **The arena figure is dominated by the future, not the buffers** — see the multiplier note below before adding a route. |
+| Receive/scratch buffers (wire, OTA chunk) | ~32,768 | ESTIMATE | Poller and OTA, tasks #11/#15. Unioned where phases cannot overlap. The HTTP share of SPEC §11's original 40,960 B guess has moved to its own line above, measured. |
 | Glyph/font tables + compiled sprites | 0 | **MEASURED** | `crates/scoreboard-render`. **9,538 B of flash, 0 B of RAM** — read out of the crate's own object code, not asserted. Breakdown and the command below. |
 | Core-1 render-loop task arena | 1,392 | **MEASURED** | `scoreboard-app`. The loop's `LoopState` — frame rail, prepared view, skip memo, probe — plus the display and everything else held across the frame's await. It lives in the **task arena, not on the core-1 stack**: an embassy task's future is a static. See the correction below. |
 | Core-0 task arenas | ~24,576 | ESTIMATE | 3,120 B measured today for the three placeholder tasks, and 2,968 B of that is the demo feed's own `ScoreboardSnapshot`, which leaves with it. The real arenas are net/poller/server/OTA. |
 | Core-0 stack | — | **MEASURED (not a fixed line)** | With flip-link the stack is the whole remainder below the statics: **415,520 B** today, growing *down*, guarded by MSPLIM at the bottom of RAM. It is not a number to budget; it is what the rest of the table does not spend. |
 | Core-1 stack | 8,192 | **MEASURED** | Sized 8 KB by `scoreboard-app`; **high-water 2,480 B (30 %)** across every scenario the frame probe drives. The setup screen, which is the only QR encoder caller and therefore the deepest frame, is not among them yet. Guarded by MSPLIM at its bottom. See the core-1 notes below. |
-| Ring log + misc statics | ~8,192 | ESTIMATE | Measured floor today is 869 B — embassy-rp's GPIO/DMA/PIO wakers, the time driver, the critical-section lock, the clock cache, and the PAC singleton flags. The deployed RAM log (SPEC §9) is the bulk of this line. |
-| **Projected total** | **204,349** | | **199.6 KiB** |
+| Ring log | 28,812 | **MEASURED** | `crates/scoreboard-log`, task #10. 200 slots × 144 B — a `u32` sequence, a `u32` timestamp, a level byte and a 128-byte bounded message, padded. SPEC §11's ~8 KB guess assumed a shorter message; 128 B was chosen against the measured distribution of the 87 log call sites in `firmware/src` (median 43 B, max 116 B), where 64 B would have truncated real lines. It is `.bss`, not `.data` — see the note below. |
+| Misc statics | ~2,100 | **MEASURED** | embassy-rp's GPIO/DMA/PIO wakers, the time driver, the critical-section lock, the clock cache, the PAC singleton flags, and task #10's small publishers (`net::hosts`, `net::status`, the config cell, the stack-watermark atomics). |
+| **Projected total** | **238,363** | | **232.8 KiB** |
 
-**Headroom: 61.6 %** (328,131 B free of 532,480 B). Against the 512 KiB the
-linker actually declares — see the caveat below — it is 61.0 %. The ≥ 40 %
-target holds with room to spare: the remaining estimate may overrun by
-114,131 B before it is breached.
+**Headroom: 55.2 %** (294,117 B free of 532,480 B). Against the 512 KiB the
+linker actually declares — see the caveat below — it is 54.5 %. The ≥ 40 %
+target holds: the remaining estimate may overrun by 80,117 B before it is
+breached.
+
+The projection rose by 34,014 B when the HTTP server landed, which is less than
+it looks: 50,114 B of it is the server, measured, against the 40,960 B estimate
+that was carrying the HTTP share all along, and the ring log's 28,812 B replaced
+an 8,192 B guess that had assumed 200-character messages would cost less than
+they do.
 
 The projection *fell* by 42,520 B when Phase 3's networking landed, because two
 of SPEC §11's three network guesses were high. The stack and its AP-mode
@@ -56,17 +64,24 @@ applies: every bounded string in the snapshot carries a `u16` length prefix
 rather than a `usize`, so the layout is byte-identical on the host and on
 `thumbv8m.main-none-eabihf`.
 
-**Measured today: 143,568 B** (140.2 KiB, 73.0 % headroom) — the whole of
+**Measured today: 223,728 B** (218.5 KiB, 58.0 % headroom) — the whole of
 `scoreboard-app`, which is the binary of record. That figure includes 4,150 B
 of dev-only defmt/RTT and 2,968 B of demo scaffolding, both of which leave.
-Networking added 35,848 B of it.
+Networking added 35,848 B of it and the HTTP server 80,160 B.
 
-**Flash: 502,508 B**, 32.7 % of the 1,536 KB active partition — up from
-127,948 B, and **232,803 B of the increase is the CYW43's own firmware**
-(`43439A0.bin` 231,077 + CLM 984 + board NVRAM 742), which is `include_bytes!`
-into `.rodata` and costs no RAM. It is also 232 KB that every OTA image carries
-and every OTA transfer moves, which is worth knowing before Phase 4 sizes its
-download budget.
+**Flash: 793,916 B**, 50.5 % of the 1,536 KB active partition — up from
+127,948 B. Two single items account for most of it and neither costs any RAM:
+**232,803 B is the CYW43's own firmware** (`43439A0.bin` 231,077 + CLM 984 +
+board NVRAM 742) and **54,528 B is the embedded settings SPA**, both
+`include_bytes!` into `.rodata`. Together that is 287 KB that every OTA image
+carries and every OTA transfer moves, which is worth knowing before Phase 4
+sizes its download budget.
+
+The largest single *function* in the image is 35,582 B: the visitor
+`serde_derive` generates for `ConfigPatch::deserialize`. That is the price of
+parsing `PUT /api/config` into bounded types with no allocator, and it scales
+with the number of config keys — worth a glance whenever the configuration
+grows a section.
 
 ### Correction to SPEC §4 — the handoff needs three buffers, not two
 
@@ -266,15 +281,18 @@ and leaves with the real poller. Re-run it before it does.
 
 ## Measured breakdown — `scoreboard-app`, release, `thumbv8m.main-none-eabihf`
 
-Standalone link profile, with flip-link. **502,508 B flash** (32.7 % of the
-1,536 KB active partition), **9,080 B `.data`**, **130,392 B `.bss`**,
-**4,096 B `.uninit`** → **143,568 B of RAM statics**.
+Standalone link profile, with flip-link. **793,916 B flash** (50.5 % of the
+1,536 KB active partition), **10,184 B `.data`**, **209,448 B `.bss`**,
+**4,096 B `.uninit`** → **223,728 B of RAM statics**.
 
 | Symbol | Bytes | Owner |
 |---|---:|---|
 | `hub75::driver::FRAMEBUFFERS` | 65,536 | hub75 — the two BCM bitplane buffers |
 | `scoreboard_app::FRAME` | 16,385 | app — RGB565 drawing surface (16,384 + 1 B `ConstStaticCell` flag) |
+| `http::serve::POOL` | 43,968 | the two HTTP connection tasks. **21,984 B each, and only 8,552 B of that is buffers** — see the multiplier note below |
+| `ringlog::RING` | 28,812 | the deployed log: 200 × 144 B slots. `.bss`, deliberately — see below |
 | `net::CYW43_STATE` | 12,696 | cyw43's ioctl state and its 4-deep packet channel in each direction |
+| `http::scratch::SLOTS` | 6,146 | two 3,072 B response buffers and their claim flags, pooled rather than held in handler futures |
 | `scoreboard_app::CHANNEL` | 8,552 | the three-slot snapshot handoff. **In `.data`, not `.bss`** — see below |
 | `scoreboard_app::CORE1_STACK` | 8,192 | core 1's stack; 2,480 B high-water |
 | `net::cyw43_runner::POOL` | 5,232 | the radio runner's arena — its SPI scratch dominates |
@@ -296,7 +314,67 @@ Standalone link profile, with flip-link. **502,508 B flash** (32.7 % of the
 | `hub75::driver::TIMING_BUFFER` | 64 | the OE/BCM timing stream |
 | `net::hosts::HOSTS` | 64 | the names the HTTP server answers to |
 | `_SEGGER_RTT` + `defmt_rtt::NAME` | 54 | `.data`, RTT control block. Dev-only |
+| `net::status::STATUS` | 88 | what provisioning decided, for `/api/status` |
 | everything else (wakers, flags, padding) | ~490 | |
+
+### A buffer in a picoserve handler costs its size times the router's depth
+
+The single most surprising number in this table is `http::serve::POOL`: 21,984 B
+per connection, of which the actual buffers — 1,536 B TCP receive, 2,920 B TCP
+send, 4,096 B request — are 8,552 B. The other 13,432 B is the future.
+
+picoserve's router is a **type**, not a dispatch table. Each `.route()` produces
+`Route<Path, Handler, Fallback>` wrapping the previous router as its fallback,
+so nine routes are nine layers of nested generics, and the future for "handle
+one request" contains, at every layer, that layer's handler future *and* the
+whole fallback chain beneath it. A `heapless::Vec` local to a handler is
+therefore instantiated once per layer it appears under.
+
+Measured directly, by building the same code twice:
+
+| Response buffer | Log chunk | `http::serve::POOL` |
+|---:|---:|---:|
+| 256 B | 256 B | 60,336 B |
+| 3,072 B | 2,048 B | 263,088 B |
+
+4,608 B of extra buffer, 202,752 B of extra arena — a **22× multiplier**. So
+response buffers live in `http::scratch`, a pool of one slot per connection, and
+a handler's future holds an eight-byte `Lease`. The pool is the 6,146 B line
+above, and it does not move when a route is added.
+
+**Before adding a route or a response type, check this number again.** The rule
+of thumb: anything larger than a pointer that lives across an `await` inside a
+handler should be in the pool, not in the handler.
+
+### The ring log is in `.bss`, and that was not free
+
+`Ring::new()` is 28,812 B of mostly zeros. Two non-zero fields would have put
+the whole thing in `.data` — where it costs its size *again* in flash, for an
+initializer image that is almost entirely zeros. Both were removed: the
+sequence counter tracks the last-used sequence (0 at boot) rather than the next
+one (1), and the level filter is stored as `2 - level` so that the default,
+`Debug`, is the zero value. `.data` fell from 38,992 B to 10,184 B when they
+were, which is 28,808 B of flash and of every OTA transfer.
+
+### A gamma change costs 27.5 ms on core 1
+
+`PUT /api/config` sends display settings to core 1, which applies them at the
+top of a frame. Measured on hardware, per hook:
+
+| Hook | Cost |
+|---|---:|
+| gamma (rebuilds the 256-entry LUT, 256 × `libm::pow`) | 27,562 µs |
+| data clock + refresh rate + blanking, together | included above |
+| render settings only (variants, dividers, scroll speed) | 10 µs |
+| boot, every hook at once | 2,017 µs |
+
+27.5 ms is over half a 50 ms frame. It fits — the frame itself is ~7 ms, no
+overrun was recorded, and the loop held 20.0 FPS across the whole config
+exercise — but it is the largest single thing that happens inside a frame, and
+it is why the settings message carries the *set of hooks to run* rather than
+just the values: a `PUT` that changes an SSID must not pay it. The boot figure
+is lower because the LUT it builds is sRGB, which is a `const` table copy rather
+than 256 calls to `pow`.
 
 **The flash number is mostly not code.** `.rodata` is 269,660 B, and 232,803 B
 of that is the CYW43's firmware, CLM and board NVRAM — `include_bytes!`

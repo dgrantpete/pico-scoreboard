@@ -13,11 +13,29 @@ add`. CI adds the same target and component explicitly anyway — idempotent, an
 it keeps the job working if the file is ever moved.
 
 Stable floats deliberately. The cost is that a compiler bump can shift the size
-numbers CI reports and can introduce clippy lints that fail an unrelated PR. If
-that becomes a nuisance, freeze it:
+numbers CI reports and can introduce clippy lints that fail an unrelated PR.
+
+**Both costs came due in Phase 3, task #10, and floating was the right call.**
+picoserve `0.19.0` declares `rust-version = "1.93"`, so `cargo` refused to build
+it against the 1.92.0 that happened to be installed locally — while CI, which
+materializes whatever `stable` currently is, had already moved to 1.97.1. The
+pin was not wrong; the local toolchain had simply gone stale, and `rustup update
+stable` was the whole fix. Two things then surfaced, both of which CI would have
+caught first:
+
+- `clippy::manual_checked_division` is new since 1.92 and failed `-D warnings`
+  on `probe.rs`'s frame-time mean. Fixed, not allowed.
+- The size numbers moved, which is why BUDGET.md is re-measured in the same
+  commit.
+
+The lesson for the next stale checkout: if `cargo` reports `rustc X is not
+supported by the following package`, the answer is almost always `rustup update
+stable` rather than pinning the dependency back.
+
+If floating does become a nuisance, freeze it:
 
 ```toml
-channel = "1.92.0"   # instead of "stable"
+channel = "1.97.1"   # instead of "stable"
 ```
 
 and re-measure BUDGET.md in the same PR, since the numbers are only comparable
