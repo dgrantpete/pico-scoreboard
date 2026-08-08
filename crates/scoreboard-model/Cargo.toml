@@ -1,0 +1,11 @@
+[package]
+name = "scoreboard-model"
+version = "0.1.0"
+edition = "2024"
+description = "Sport state models, the core0 -> core1 display snapshot, and the poller-facing update API"
+
+[dependencies]
+scoreboard-wire = { path = "../scoreboard-wire" }
+# Pre-1.0 ecosystem: pinned exactly (SPEC.md §14). Default features only —
+# `alloc` stays off (SPEC.md §10).
+heapless = "=0.9.3"
