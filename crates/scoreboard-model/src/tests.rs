@@ -1702,3 +1702,149 @@ fn the_logo_half_holds_a_crest_and_its_headers() {
     const CREST_BYTES: usize = 24 * 24 * 2;
     const { assert!(CREST_BYTES + poll::MAX_HEADER_BLOCK <= poll::LOGO_BYTES) };
 }
+
+// ---------------------------------------------------------------------------
+// The watchdog health gate (BACKLOG 69, refined by BACKLOG 70)
+// ---------------------------------------------------------------------------
+
+mod health_gate {
+    use crate::poll::{Health, SILENCE_INTERVALS, Unhealthy, gate};
+
+    /// The default cadence, so the numbers below read as the device's.
+    const INTERVAL: u32 = 30;
+    /// The point at which silence becomes a reset: 90 s.
+    const LIMIT: u32 = SILENCE_INTERVALS * INTERVAL;
+
+    /// A device that is polling happily.
+    fn healthy() -> Health {
+        Health {
+            streak: 0,
+            since_success_s: Some(1),
+            since_answer_s: Some(1),
+        }
+    }
+
+    #[test]
+    fn a_working_device_earns_its_feed() {
+        assert_eq!(gate(true, Some(INTERVAL), 1_000, &healthy()), None);
+    }
+
+    #[test]
+    fn a_stalled_render_loop_starves_whatever_the_network_is_doing() {
+        assert_eq!(
+            gate(false, Some(INTERVAL), 1_000, &healthy()),
+            Some(Unhealthy::RenderLoopStalled)
+        );
+        // Including in setup mode, where the network half does not apply.
+        assert_eq!(
+            gate(false, None, 1_000, &Health::new()),
+            Some(Unhealthy::RenderLoopStalled)
+        );
+    }
+
+    /// THE BACKLOG 70 DISTINCTION, half one: a backend that is answering and
+    /// failing must never starve the watchdog. A 404, a 500 and a body that
+    /// will not decode all reach the client as an *answer*, which proves DNS
+    /// resolved, TCP connected and bytes crossed both ways — the radio is on
+    /// the network, whatever the backend thinks of the request.
+    #[test]
+    fn a_backend_that_answers_and_fails_never_starves() {
+        let answering_but_broken = Health {
+            // Long past MAX_FAILURES, and deliberately irrelevant.
+            streak: 500,
+            // Nothing has *succeeded* for an hour.
+            since_success_s: Some(3_600),
+            // But something answered a second ago.
+            since_answer_s: Some(1),
+        };
+        assert_eq!(gate(true, Some(INTERVAL), 100_000, &answering_but_broken), None);
+    }
+
+    /// The same fact stated as the regression it guards: the streak is not an
+    /// input. This is what made the first version of the gate reboot-loop
+    /// through a backend outage.
+    #[test]
+    fn the_failure_streak_is_not_an_input_to_the_gate() {
+        for streak in [0, 1, crate::poll::MAX_FAILURES, 10_000] {
+            let health = Health {
+                streak,
+                since_success_s: None,
+                since_answer_s: Some(0),
+            };
+            assert_eq!(
+                gate(true, Some(INTERVAL), 100_000, &health),
+                None,
+                "streak {streak} must not starve a device whose link is answering"
+            );
+        }
+    }
+
+    /// THE BACKLOG 70 DISTINCTION, half two: silence starves. This is the
+    /// overnight failure — rendering perfectly, network gone, no link event.
+    #[test]
+    fn silence_past_three_poll_intervals_starves() {
+        let silent = Health {
+            streak: 2,
+            since_success_s: Some(LIMIT + 1),
+            since_answer_s: Some(LIMIT + 1),
+        };
+        assert_eq!(
+            gate(true, Some(INTERVAL), 100_000, &silent),
+            Some(Unhealthy::LinkSilent {
+                seconds: LIMIT + 1
+            })
+        );
+    }
+
+    #[test]
+    fn silence_exactly_at_the_limit_is_still_fed() {
+        // Strictly greater, so the boundary belongs to the healthy side — a
+        // poll that lands on its deadline is not late.
+        let health = Health {
+            streak: 0,
+            since_success_s: Some(LIMIT),
+            since_answer_s: Some(LIMIT),
+        };
+        assert_eq!(gate(true, Some(INTERVAL), 100_000, &health), None);
+    }
+
+    #[test]
+    fn a_device_that_has_never_been_answered_counts_from_boot() {
+        // Joining a network and pulling a lease is itself evidence it worked a
+        // moment ago, so the clock starts at boot rather than at negative
+        // infinity — otherwise a device would starve before its first poll.
+        let never = Health {
+            streak: 0,
+            since_success_s: None,
+            since_answer_s: None,
+        };
+        assert_eq!(gate(true, Some(INTERVAL), LIMIT, &never), None, "still booting");
+        assert_eq!(
+            gate(true, Some(INTERVAL), LIMIT + 1, &never),
+            Some(Unhealthy::LinkSilent { seconds: LIMIT + 1 }),
+            "but silence from boot eventually counts"
+        );
+    }
+
+    #[test]
+    fn setup_mode_ignores_the_network_entirely() {
+        // There is no poller in setup mode, so its health reads as "never
+        // answered" forever. Gating on it would reset the device every few
+        // seconds while somebody was typing a password into the settings page.
+        let never = Health::new();
+        assert_eq!(gate(true, None, 100_000, &never), None);
+    }
+
+    #[test]
+    fn the_interval_scales_the_patience() {
+        let health = Health {
+            streak: 0,
+            since_success_s: None,
+            since_answer_s: Some(200),
+        };
+        // A 30 s poller has run out of patience by 200 s...
+        assert!(gate(true, Some(30), 100_000, &health).is_some());
+        // ...and a 120 s one has not.
+        assert_eq!(gate(true, Some(120), 100_000, &health), None);
+    }
+}

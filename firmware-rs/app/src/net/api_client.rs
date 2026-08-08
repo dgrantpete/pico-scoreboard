@@ -50,11 +50,12 @@
 //! 30 s.
 
 use core::fmt::Write as _;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_net::Stack;
 use embassy_net::dns::DnsSocket;
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
-use embassy_time::{Duration, with_timeout};
+use embassy_time::{Duration, Instant, with_timeout};
 use reqwless::client::HttpClient;
 use reqwless::request::{Method, RequestBuilder as _};
 use scoreboard_model::poll::{self, MAX_HEADER_BLOCK, PollError, Transport};
@@ -79,6 +80,23 @@ pub type Etag = heapless::String<48>;
 /// exceptions. Without it a wedged TCP connection stalls the poller forever —
 /// the watchdog guards the render loop, not the network.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Uptime seconds at the last HTTP answer; [`NEVER`] until the first one.
+///
+/// Lives here rather than beside the poller's own counters because the client
+/// is the thing that observes it — the poller only assembles it into
+/// [`Health`](scoreboard_model::poll::Health) alongside its own clocks.
+static LAST_ANSWER_S: AtomicU32 = AtomicU32::new(NEVER);
+
+/// `LAST_ANSWER_S` before anything has answered. Not zero: zero is a real
+/// uptime, and "answered at boot" is the opposite of what this means.
+pub const NEVER: u32 = u32::MAX;
+
+/// Uptime seconds at the last HTTP answer, or `None` if nothing ever has.
+pub fn last_answer_uptime_s() -> Option<u32> {
+    let at = LAST_ANSWER_S.load(Ordering::Relaxed);
+    (at != NEVER).then_some(at)
+}
 
 /// Per-connection socket buffers. One connection, because
 /// [`net`](crate::net)'s socket budget reserves one slot for the poller and a
@@ -208,6 +226,9 @@ impl ApiClient {
     }
 
     /// The one request path. Everything above is a status-code policy over it.
+    ///
+    /// It is also where the *link's* liveness clock is stamped — see the note
+    /// inside, and [`Health::since_answer_s`](scoreboard_model::poll::Health).
     async fn get<'buf>(
         &mut self,
         url: &str,
@@ -224,6 +245,19 @@ impl ApiClient {
             .await
             .map_err(|_| PollError::Timeout)?;
         if let Ok(fetched) = &fetched {
+            // The link is alive, and this is the only place that can say so.
+            //
+            // Recorded here rather than at the six call sites because *every*
+            // request funnels through this function, so a seventh endpoint
+            // cannot forget it — and because it has to count the failures too.
+            // A 404 and a 500 both arrive here as `Ok` and become
+            // `PollError::Http` a few frames up; a body that arrives and does
+            // not decode becomes `PollError::Decode` further up still. All
+            // three prove DNS resolved, TCP connected and bytes crossed in both
+            // directions, which is the entire question
+            // `scoreboard_model::poll::Health::since_answer_s` asks.
+            LAST_ANSWER_S.store(Instant::now().as_secs() as u32, Ordering::Relaxed);
+
             // `_log_api` (`api_client.py:52-56`): every request, with its status
             // and elapsed time, at DEBUG. It goes to the ring as well as to
             // defmt because that is where it went in MicroPython, and because

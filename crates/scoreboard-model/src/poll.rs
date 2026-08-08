@@ -189,6 +189,145 @@ impl PollError {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Supervision: what the watchdog is allowed to conclude
+// ---------------------------------------------------------------------------
+
+/// Poll intervals of silence before the link is presumed dead.
+///
+/// Three, so a single missed poll and its retry both pass unremarked. At the
+/// default 30 s interval that is 90 s — long enough that a Wi-Fi hiccup or a
+/// backend restart never reaches it, short enough that a scoreboard which has
+/// genuinely fallen off the network is back within two minutes.
+pub const SILENCE_INTERVALS: u32 = 3;
+
+/// What the poller knows about the network, for the watchdog's health gate.
+///
+/// # The failure this exists for
+///
+/// BACKLOG 69: the bench unit fell off the Wi-Fi overnight and **kept rendering
+/// at a perfect 20 FPS**. No link-down event fired — embassy-net still believed
+/// its IPv4 configuration was up — so a frame counter, which is the obvious
+/// thing for a render-loop watchdog to read, proved nothing at all. The poller
+/// is the only part of the firmware that finds out, because it is the only part
+/// that talks to anything.
+///
+/// # Two clocks, and only one of them may starve a watchdog
+///
+/// [`since_answer_s`](Health::since_answer_s) is the *link's* clock and
+/// [`since_success_s`](Health::since_success_s) is the *backend's*. Conflating
+/// them was the first version of this gate and it was wrong in a way that took
+/// a live outage to see clearly: a backend that is up and returning 500s, or a
+/// path that 404s, is a **working network**, and rebooting the device over it
+/// gives a reboot loop for as long as the outage lasts. MicroPython showed the
+/// error screen and sat there, which is the better behaviour.
+///
+/// So the gate keys on `since_answer_s` alone. The streak still exists, still
+/// counts, and still puts [`ERROR_TITLE`] on the panel at [`MAX_FAILURES`] —
+/// it just never starves anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Health {
+    /// Consecutive failed ticks. Zero means the last tick succeeded. Drives the
+    /// error screen; deliberately **not** an input to [`gate`].
+    pub streak: u32,
+    /// Seconds since a poll last completed end to end — fetched, decoded and
+    /// committed. `None` if that has never happened.
+    pub since_success_s: Option<u32>,
+    /// Seconds since the backend last **answered at the HTTP layer**, whatever
+    /// it said. `None` if it never has.
+    ///
+    /// "Answered" means a response reached the client: any status, including a
+    /// 404 or a 500, and including a body that arrived and then failed to
+    /// decode. All three prove DNS resolved, TCP connected and bytes crossed in
+    /// both directions — which is the whole question the watchdog is asking.
+    ///
+    /// **Why the HTTP layer and not TCP.** A connection *refused* is, in
+    /// principle, equally good evidence: a RST came back, so something is alive
+    /// out there. It is not usable evidence here, for two measured reasons.
+    /// embassy-net answers `ConnectionReset` for a refused connect and for an
+    /// exhausted socket pool alike, so the firmware's `Transport::Connect`
+    /// already cannot tell them apart. And on the bench, pointing `api.url` at a
+    /// closed port produced a *timeout*, not a connect error at all — so a gate
+    /// keyed on "refused" would have starved in exactly the case it was written
+    /// to exempt. The discrimination is not there to key on.
+    ///
+    /// Against the deployed backend the distinction is nearly vacuous anyway: a
+    /// dead app behind Fly's edge answers 502, which is an HTTP answer. The
+    /// residual is a hand-typed `api.url` pointing at a reachable-but-refusing
+    /// address, which is read as link death — a misconfiguration, visible on
+    /// the error screen, and the watchdog is opt-in.
+    pub since_answer_s: Option<u32>,
+}
+
+impl Health {
+    /// Nothing has happened yet.
+    pub const fn new() -> Health {
+        Health {
+            streak: 0,
+            since_success_s: None,
+            since_answer_s: None,
+        }
+    }
+}
+
+impl Default for Health {
+    fn default() -> Health {
+        Health::new()
+    }
+}
+
+/// Why the health gate refused to feed the watchdog. `None` is a healthy
+/// device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unhealthy {
+    /// Core 1's frame counter did not move across a whole feed interval. A
+    /// *quiet* render loop is not a stalled one — an idle screen skips every
+    /// frame and still counts ticks — so this really is "the loop stopped".
+    RenderLoopStalled,
+    /// Nothing has answered over the network for [`SILENCE_INTERVALS`] poll
+    /// intervals. The BACKLOG 69 failure.
+    LinkSilent { seconds: u32 },
+}
+
+impl Unhealthy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Unhealthy::RenderLoopStalled => "render loop stalled",
+            Unhealthy::LinkSilent { .. } => "link silent",
+        }
+    }
+}
+
+/// Decide whether the watchdog has earned a feed.
+///
+/// `ticked` is whether core 1's frame counter moved since the last check.
+/// `poll_interval_s` is `None` in **setup mode**, where there is no poller by
+/// design — gating on its health there would reset the device every few seconds
+/// while somebody was typing a Wi-Fi password into the settings page, so only
+/// the render loop counts.
+///
+/// `uptime_s` is what a `None` clock falls back to: a device that has just
+/// joined a network and pulled a DHCP lease has evidence the network worked a
+/// moment ago, so the silence is measured from boot rather than from forever.
+pub fn gate(
+    ticked: bool,
+    poll_interval_s: Option<u32>,
+    uptime_s: u32,
+    health: &Health,
+) -> Option<Unhealthy> {
+    if !ticked {
+        return Some(Unhealthy::RenderLoopStalled);
+    }
+    let poll_interval_s = poll_interval_s?;
+    let silent_for = health.since_answer_s.unwrap_or(uptime_s);
+    if silent_for > SILENCE_INTERVALS * poll_interval_s {
+        return Some(Unhealthy::LinkSilent {
+            seconds: silent_for,
+        });
+    }
+    None
+}
+
 /// The two strings `_friendly_error` returns: what went wrong, and the detail
 /// under it.
 #[derive(Debug, Clone, PartialEq, Eq)]

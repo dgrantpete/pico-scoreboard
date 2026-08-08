@@ -623,6 +623,32 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     docs is the one that was reviewed and agreed, and changing it quietly while
     implementing it would have been the wrong way round.
 
+    **CLOSED 2026-08-08, approved after the failure recurred live.** The gate
+    now keys on `Health::since_answer_s` — seconds since anything answered at
+    the HTTP layer — and the failure streak is no longer an input to it. The
+    streak still counts and still raises the error screen at `MAX_FAILURES`; it
+    just never starves a watchdog.
+
+    **"Answer" means the HTTP layer, not TCP, and that was the one real design
+    question.** A refused connection is in principle equally good evidence of a
+    live link. It is not usable evidence here, for two reasons found by
+    measurement rather than argument: `api_client`'s own comment from task #11
+    records that embassy-net answers `ConnectionReset` for a refused connect and
+    an exhausted socket pool alike, so `Transport::Connect` already cannot tell
+    them apart — and the task #12 drill that pointed `api.url` at a *closed
+    port* produced `Timeout`, not a connect error at all. A gate keyed on
+    "refused" would therefore have starved in precisely the case it was written
+    to exempt. Against the deployed backend the distinction is nearly vacuous
+    anyway, because a dead app behind Fly's edge answers 502. The residual — an
+    `api.url` typed to a reachable-but-refusing address reads as link death — is
+    a misconfiguration, is visible on the error screen, and the watchdog is
+    opt-in.
+
+    Drilled in both directions with the streak deliberately on the wrong side
+    each time: 404s from the real backend reached a streak of **19**, nearly 4×
+    `MAX_FAILURES`, and were fed throughout with no reset; an unroutable address
+    starved at a streak of **2**, well below it. Transcripts in PARITY.md.
+
 71. **Nothing has ever pressed a button on the Rust firmware** — the bench unit
     has no switches wired to GPIO 10 or 22, and no VEML7700 on I²C0. Task #12
     built and tested both paths: the PIO debounce program is verified against

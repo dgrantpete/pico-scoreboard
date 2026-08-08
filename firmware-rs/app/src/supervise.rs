@@ -24,13 +24,22 @@
 //!   render loop. A *quiet* loop is not a hung one — an idle screen skips every
 //!   frame and still counts ticks — which is why the counter is bumped per
 //!   iteration and not per draw.
-//! * **the poller is reaching the backend**, from [`poller::health`]. Catches
-//!   the overnight failure, and nothing else in the firmware can: the poller is
-//!   the only thing that talks to anything.
+//! * **something on the network is still answering**, from
+//!   [`poller::health`]. Catches the overnight failure, and nothing else in the
+//!   firmware can: the poller is the only thing that talks to anything.
 //!
 //! Both must hold to earn a feed. The second half is skipped in setup mode,
 //! where there is no poller by design and gating on it would reset the device
 //! every eight seconds while somebody was typing their Wi-Fi password into it.
+//!
+//! **"Answering" is not "succeeding", and the difference is BACKLOG 70.** The
+//! first version of this gate also starved on a failure streak, which meant a
+//! backend outage rebooted the device every hundred seconds for as long as the
+//! outage lasted — where MicroPython showed the error screen and sat there. A
+//! 404 or a 500 proves the radio is on the network just as well as a 200 does,
+//! so only *silence* starves now. The whole decision, including why "answer"
+//! means the HTTP layer and not TCP, lives on
+//! [`Health`](scoreboard_model::poll::Health) where it can be host-tested.
 //!
 //! # Where `ThreadHealth.healthy` went
 //!
@@ -481,57 +490,13 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 // The watchdog
 // ---------------------------------------------------------------------------
 
-/// Why the health gate refused a feed. `None` is a healthy device.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Unhealthy {
-    /// [`FRAME_SEQ`] did not move across a whole feed interval.
-    RenderLoopStalled,
-    /// No successful poll for longer than three poll intervals — the BACKLOG 69
-    /// failure. Measured from boot when there has never been one, because
-    /// joining a network is itself evidence that it worked a moment ago.
-    BackendUnreachable { seconds: u32 },
-    /// [`MAX_FAILURES`](scoreboard_model::poll::MAX_FAILURES) polls in a row
-    /// failed — which is also the point at which the panel shows the error
-    /// screen, so the two agree about when something is wrong.
-    PollFailureStreak { streak: u32 },
-}
-
-impl Unhealthy {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Unhealthy::RenderLoopStalled => "render loop stalled",
-            Unhealthy::BackendUnreachable { .. } => "backend unreachable",
-            Unhealthy::PollFailureStreak { .. } => "poll failure streak",
-        }
-    }
-}
-
-/// The gate, as a pure function of the two liveness signals.
+/// The gate is [`scoreboard_model::poll::gate`], where it is host-tested.
 ///
-/// `poll_interval_s` of `None` means setup mode: no poller runs there, so only
-/// the render loop counts. `ticked` is whether [`FRAME_SEQ`] moved since the
-/// last check.
-fn gate(ticked: bool, poll_interval_s: Option<u32>, health: poller::Health) -> Option<Unhealthy> {
-    if !ticked {
-        return Some(Unhealthy::RenderLoopStalled);
-    }
-    let poll_interval_s = poll_interval_s?;
-    // "Since success" from boot when there has never been one. A device that
-    // has just joined a network and pulled a DHCP lease has evidence the
-    // network worked; the clock runs from there.
-    let quiet_for = health
-        .since_success_s
-        .unwrap_or(Instant::now().as_secs() as u32);
-    if quiet_for > 3 * poll_interval_s {
-        return Some(Unhealthy::BackendUnreachable { seconds: quiet_for });
-    }
-    if health.streak >= scoreboard_model::poll::MAX_FAILURES {
-        return Some(Unhealthy::PollFailureStreak {
-            streak: health.streak,
-        });
-    }
-    None
-}
+/// Nothing about it needs a peripheral: it is a decision over two numbers and a
+/// boolean, which is exactly the kind of thing SPEC §2's crate-boundary rule
+/// says belongs where a desktop can run it. What stays here is reading the
+/// signals and acting on the verdict.
+use scoreboard_model::poll::{Unhealthy, gate};
 
 /// Arm the hardware watchdog and feed it while the device is working.
 ///
@@ -569,7 +534,9 @@ pub async fn watchdog(
         let ticked = current != previous_frame;
         previous_frame = current;
 
-        let Some(reason) = gate(ticked, poll_interval_s, poller::health()) else {
+        let health = poller::health();
+        let uptime_s = Instant::now().as_secs() as u32;
+        let Some(reason) = gate(ticked, poll_interval_s, uptime_s, &health) else {
             hardware.feed(timeout);
             continue;
         };
@@ -581,11 +548,15 @@ pub async fn watchdog(
             Unhealthy::RenderLoopStalled => crumb.set_message(format_args!(
                 "watchdog starved: render loop stalled (frame_seq held at {previous_frame})"
             )),
-            Unhealthy::BackendUnreachable { seconds } => crumb.set_message(format_args!(
-                "watchdog starved: no successful poll in {seconds} s, over three poll intervals"
-            )),
-            Unhealthy::PollFailureStreak { streak } => crumb.set_message(format_args!(
-                "watchdog starved: {streak} consecutive failed polls"
+            // The failure streak rides along in the message even though it is
+            // not what starved anything: "silent for 91 s after 3 failed polls"
+            // and "silent for 91 s having never polled" are different faults
+            // and this is the only place the difference is recorded.
+            Unhealthy::LinkSilent { seconds } => crumb.set_message(format_args!(
+                "watchdog starved: nothing answered in {seconds} s, over {} poll intervals \
+                 (failure streak {})",
+                scoreboard_model::poll::SILENCE_INTERVALS,
+                health.streak
             )),
         }
         stash_breadcrumb(&crumb);

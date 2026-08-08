@@ -60,7 +60,7 @@ use scoreboard_input::button::Press;
 use scoreboard_input::menu::{Action, Button as MenuButton, MenuController};
 use scoreboard_model::feed::LeagueId;
 use scoreboard_model::poll::{
-    self, FailureTracker, PollError, SkipKind, SkipMachine, SkipVerdict,
+    self, FailureTracker, Health, PollError, SkipKind, SkipMachine, SkipVerdict,
 };
 use scoreboard_model::slate::MAX_SOURCES;
 use scoreboard_model::snapshot::Millis;
@@ -119,7 +119,7 @@ pub fn command(command: Command) {
 }
 
 // ---------------------------------------------------------------------------
-// Liveness, for task #12
+// Liveness, for the watchdog's health gate
 // ---------------------------------------------------------------------------
 
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -133,35 +133,22 @@ static LAST_SUCCESS_S: AtomicU32 = AtomicU32::new(NEVER);
 /// uptime, and "succeeded at boot" is the opposite of what this means.
 pub const NEVER: u32 = u32::MAX;
 
-/// What the poller knows about the network, for the health gate task #12's
-/// watchdog feeder needs.
+/// Assemble what the poller knows about the network.
 ///
-/// BACKLOG 69: the bench unit fell off the Wi-Fi overnight and kept rendering,
-/// with no link-down event to notice — embassy-net's IPv4 configuration stayed
-/// up because the association never formally dropped. The poller is the only
-/// thing in the firmware that finds out, because it is the only thing that
-/// talks to anything.
-///
-/// **The gate #12 should use** is `since_success_s > 3 × poll_interval` OR
-/// `streak >= MAX_FAILURES`, not `streak > 0`: a single failed poll is a
-/// backend restart, and a scoreboard that reboots itself over one is worse than
-/// one showing a stale score. Both halves are needed — the streak alone cannot
-/// distinguish a poller that is failing from one that has stopped ticking at
-/// all, and a task that has stopped is precisely what a watchdog is for.
-#[derive(Debug, Clone, Copy)]
-pub struct Health {
-    pub streak: u32,
-    /// Seconds since the last successful poll, or `None` if there has never
-    /// been one — a device that has not reached the backend since boot.
-    pub since_success_s: Option<u32>,
-}
-
+/// Two clocks from two places, and the split is the point:
+/// [`LAST_SUCCESS_S`] is the *backend's* — a tick that fetched, decoded and
+/// committed — and belongs to this loop, while the *link's* is stamped by
+/// [`api_client`](crate::net::api_client) on any HTTP answer at all. What each
+/// is allowed to conclude is [`Health`]'s documentation, and the gate that
+/// reads them is [`poll::gate`].
 pub fn health() -> Health {
-    let last = LAST_SUCCESS_S.load(Ordering::Relaxed);
+    let now = Instant::now().as_secs() as u32;
+    let last_success = LAST_SUCCESS_S.load(Ordering::Relaxed);
     Health {
         streak: FAILURE_STREAK.load(Ordering::Relaxed),
-        since_success_s: (last != NEVER)
-            .then(|| (Instant::now().as_secs() as u32).saturating_sub(last)),
+        since_success_s: (last_success != NEVER).then(|| now.saturating_sub(last_success)),
+        since_answer_s: crate::net::api_client::last_answer_uptime_s()
+            .map(|at| now.saturating_sub(at)),
     }
 }
 

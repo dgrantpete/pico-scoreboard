@@ -74,9 +74,10 @@ predicted. That is the `u16` length prefix on every bounded string doing its
 job: the layout is identical on the host and on `thumbv8m.main-none-eabihf`, so
 `scoreboard-model`'s own budget test is a real check and not a coincidence.
 
-**Measured today: 249,768 B** (243.9 KiB, 53.1 % headroom) — the whole of
-`scoreboard-app`, which is the binary of record: `.data` 10,272 + `.bss` 235,160
-+ `.uninit` 4,336. That figure includes 4,336 B of dev-only defmt/RTT and the
+**Measured today: 249,800 B** (243.9 KiB, 53.1 % headroom) — the whole of
+`scoreboard-app`, which is the binary of record: `.data` 10,280 + `.bss` 235,184
++ `.uninit` 4,336. (BACKLOG 70's link-liveness clock added 32 B of it — one
+atomic and the gate's move into `scoreboard-model`, where it is host-tested.) That figure includes 4,336 B of dev-only defmt/RTT and the
 breadcrumb cell, of which 4,096 B leaves with the probe build. Networking added
 35,848 B of it, the HTTP server 80,160 B and the poller 24,452 B.
 

@@ -536,10 +536,11 @@ timeout would only have been checked when the poller woke, up to a poll interval
 poller's sleep is capped by it.
 
 **11. The watchdog's health gate is mode-aware.** In setup mode there is no
-poller by design, so its health reads as "never reached the backend" forever;
-gating on it would reset the device every eight seconds while somebody was
-typing their Wi-Fi password into the settings page. Only the frame counter
-applies there.
+poller by design, so its health reads as "never answered" forever; gating on it
+would reset the device every eight seconds while somebody was typing their
+Wi-Fi password into the settings page. Only the frame counter applies there.
+*(The network half of this gate was revised by BACKLOG 70 — see the section at
+the end of this file. The mode-awareness described here is unchanged.)*
 
 **12. `SCB::sys_reset()` is not used anywhere.** It does not reset an RP2350 —
 see SPEC §12. Every reset goes through the watchdog's `TRIGGER` bit.
@@ -657,3 +658,123 @@ the present path is not.
 
 **The one-week soak.** Task #13. BACKLOG 69's blocker is cleared: a device that
 falls off the network now resets itself and leaves a record saying so.
+
+---
+
+# The health gate keys on answers, not successes (BACKLOG 70)
+
+Approved and implemented after the silent association-loss recurred live on the
+bench. Deviation 11 above described the gate as first shipped; this replaces it.
+
+## What changed
+
+The gate had two starving conditions — "no successful poll in three intervals"
+and "`MAX_FAILURES` consecutive failures". Both are now one: **"nothing has
+answered over the network in three poll intervals."** The failure streak still
+counts, still raises the error screen at `MAX_FAILURES`, and is no longer an
+input to the watchdog at all.
+
+The reason is the case the first version got wrong. A backend that is up and
+returning 500s, or a path that 404s, is a **working network** — and the old gate
+rebooted the device over it roughly every hundred seconds for as long as the
+outage lasted, where MicroPython showed the error screen and sat there. Only
+silence should starve, because only silence is evidence the radio is gone.
+
+The gate moved to `scoreboard_model::poll::gate` on the way, so it is host-tested
+rather than reachable only from a device: it is a decision over two numbers and
+a boolean, which is exactly what SPEC §2's crate-boundary rule is about.
+
+## "Answer" means the HTTP layer — the one real design question
+
+A connection *refused* is, in principle, equally good evidence of a live link: a
+RST came back, so something out there is alive. It is not usable evidence here,
+and both reasons are measurements rather than opinions.
+
+**`Transport::Connect` already cannot tell "refused" from "no socket".**
+`api_client`'s own comment, written in task #11 and unrelated to this change,
+records it: embassy-net answers `ConnectionReset` for a refused connect and for
+an exhausted socket pool alike, and separating them needs socket state the
+client does not have.
+
+**And on this stack a closed port does not even refuse.** Task #12's watchdog
+drill pointed `api.url` at a closed port and got `Timeout: backend not
+responding` — not a connect error. A gate keyed on "refused" would therefore
+have starved in precisely the case it was written to exempt. The discrimination
+is not there to key on.
+
+Against the deployed backend the distinction is nearly vacuous anyway: a dead
+app behind Fly's edge answers 502, which is an HTTP answer. So "answer" is
+defined as **a response reached the client** — any status, plus a body that
+arrived and then failed to decode, all three of which prove DNS resolved, TCP
+connected and bytes crossed in both directions.
+
+The residual is stated rather than hidden: an `api.url` typed to a
+reachable-but-refusing address reads as link death. That is a misconfiguration,
+it is visible on the error screen, and the watchdog is opt-in.
+
+The clock is stamped in `ApiClient::get`, the single function every request
+funnels through — not at the six call sites — so a seventh endpoint cannot
+forget it, and so the failures count too.
+
+## Bench-validated, in both directions, with the streak on the wrong side
+
+Deliberately arranged so that the *old* gate and the *new* one disagree in each
+drill.
+
+**A backend that answers and fails must not starve.** Watchdog armed at 8,000 ms,
+poll interval dropped to 10 s so the silence limit is 30 s, `api.url` pointed at
+the real backend with a bogus path so every request 404s:
+
+```
+[INFO ] watchdog: armed, timeout 8000 ms, feeding every 2000 ms
+[INFO ] api: GET /backlog70/baseball/mlb/games -> 404 in 145 ms
+[ERROR] poll: poll failed (1/5): HTTP 404: unknown_error
+...
+[ERROR] poll: poll failed (19/5): HTTP 404: unknown_error
+[WARN ] poll: no successful poll since boot, failure streak 19
+```
+
+Failure streak **19**, nearly four times `MAX_FAILURES`, across several minutes —
+**no starvation, no reset**, the streak climbing monotonically the whole time
+(which is itself the proof it never rebooted). The old gate would have starved
+this device twice over: once on the streak at 5, once on `since_success` at 30 s.
+
+**True silence must still starve.** `api.url` pointed at an unroutable address so
+nothing answers at any layer, poll interval back to 30 s:
+
+```
+[ERROR] time: sync failed, Timeout: backend not responding
+[ERROR] poll: baseball/mlb list refresh failed, keeping cached slate: Timeout: backend not responding
+[ERROR] poll: poll failed (2/5): Timeout: backend not responding
+[ERROR] watchdog: starving on purpose (link silent); hardware reset within 8000 ms
+```
+
+Starved at a failure streak of **2** — *below* `MAX_FAILURES`, so the streak
+demonstrably did not cause it — and the reset produced:
+
+```
+last abnormal shutdown: watchdog starved on core 0
+uptime: 91 s
+stack high-water: core 0 25816 of 266504 B, core 1 3348 of 8192 B
+
+watchdog starved: nothing answered in 91 s, over 3 poll intervals (failure streak 2)
+```
+
+The streak rides along in the message even though it starved nothing: "silent
+for 91 s after 2 failed polls" and "silent for 91 s having never polled" are
+different faults, and the breadcrumb is the only place that difference is
+recorded. Config restored inside the reboot cycle's window; the poll loop
+recovered to `poll: lists refreshed, sources 1, rotation 15`.
+
+**Link death itself** — the radio associated but off the network — is covered by
+the live recurrence that prompted this change plus the silence drill above,
+which produces the identical signal the poller sees: no HTTP answer, from the
+first request to the last. What differs between them is the cause, not the
+evidence, and the evidence is all the gate can read.
+
+## Cost
+
+32 B of RAM (one atomic, plus the gate's move into `scoreboard-model`) and 552 B
+of flash. Nine host tests in `scoreboard-model`, covering both halves of the
+distinction, the boundary, the setup-mode exemption and the streak's
+irrelevance.
