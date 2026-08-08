@@ -25,6 +25,8 @@ pub mod shared;
 pub mod soccer;
 pub mod team;
 pub mod wire;
+#[cfg(test)]
+mod wire_corpus;
 
 use config::AppConfig;
 use error::AppError;

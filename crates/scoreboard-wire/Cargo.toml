@@ -1,0 +1,13 @@
+[package]
+name = "scoreboard-wire"
+version = "0.1.0"
+edition = "2024"
+description = "Packed binary wire format shared by the scoreboard backend and firmware"
+
+[features]
+# Lets `alloc::vec::Vec<u8>` act as an encode sink. Off by default: the
+# firmware links no allocator (see firmware-rs/SPEC.md §10); the backend and
+# host tools turn it on.
+alloc = []
+
+[dependencies]
