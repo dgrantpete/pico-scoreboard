@@ -2053,6 +2053,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "scoreboard-portal"
+version = "0.1.0"
+dependencies = [
+ "heapless",
+]
+
+[[package]]
 name = "scoreboard-render"
 version = "0.1.0"
 dependencies = [

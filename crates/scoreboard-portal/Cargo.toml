@@ -1,0 +1,10 @@
+[package]
+name = "scoreboard-portal"
+version = "0.1.0"
+edition = "2024"
+description = "The captive portal's pure half: DNS answers and the Host-header check, with no socket in sight"
+
+[dependencies]
+# Pre-1.0 ecosystem: pinned exactly (SPEC.md §14). Default features only —
+# `alloc` stays off (SPEC.md §10).
+heapless = "=0.9.3"
