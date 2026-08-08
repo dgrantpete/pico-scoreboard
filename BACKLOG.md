@@ -649,6 +649,26 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     `MAX_FAILURES`, and were fed throughout with no reset; an unroutable address
     starved at a streak of **2**, well below it. Transcripts in PARITY.md.
 
+72. **`probe-rs run` reports "Exception" on a device that is running fine** —
+    a bench-workflow trap that cost an hour during BACKLOG 70 and will cost the
+    next person the same unless it is written down. Symptoms: `probe-rs run`
+    prints `Firmware exited unexpectedly: Exception`, then
+    `UNWIND: Tried to unwind RegisterRule at CFA = None`, then a backtrace
+    naming plausible-but-unrelated code (a football renderer frame and a
+    reqwless `unreachable!` in one case, both innocent). Killing a backgrounded
+    `probe-rs` mid-operation seems to make it more likely, and it leaves the
+    core halted afterwards, so the device really is dead *until the next flash*
+    — which is what makes the false positive convincing.
+
+    **The oracle is HTTP, not probe-rs.** `curl /api/status` answered within ten
+    seconds on a build that `probe-rs run` had just declared crashed, twice. Two
+    corroborating checks that cost nothing: the boot line
+    `supervise: stored record: …` will still name the *old* breadcrumb if no new
+    panic was recorded, and a genuine panic always leaves one — so
+    "probe-rs says Exception but the breadcrumb has not changed" means the
+    firmware did not panic. Prefer `probe-rs attach` for observation and reserve
+    `probe-rs run` for flashing; never background it and never `TaskStop` it.
+
 71. **Nothing has ever pressed a button on the Rust firmware** — the bench unit
     has no switches wired to GPIO 10 or 22, and no VEML7700 on I²C0. Task #12
     built and tested both paths: the PIO debounce program is verified against
