@@ -1,9 +1,9 @@
 name: rust
 
 # Host tests + clippy for the workspace, cross-builds for the device target,
-# and a size report on the only device binary that exists (hub75-diag). The
-# size numbers land in the job summary as the RAM/flash regression signal for
-# firmware-rs/BUDGET.md.
+# and size reports on the device binaries (the app, and the hub75-diag bench
+# binary). The size numbers land in the job summary as the RAM/flash regression
+# signal for firmware-rs/BUDGET.md.
 #
 # Separate from firmware.yml on purpose: that one builds the MicroPython UF2
 # and needs the vendored micropython submodule plus an arm-gcc/cmake toolchain.
@@ -80,11 +80,17 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: "cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'firmware-rs/hub75-diag/Cargo.lock') }}"
+          key: "cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'firmware-rs/hub75-diag/Cargo.lock', 'firmware-rs/app/Cargo.lock') }}"
           restore-keys: |
             cargo-${{ runner.os }}-
 
-      # --locked throughout: both lockfiles are committed and the embedded
+      # The app links with flip-link (SPEC §2's stack-overflow guard), so the
+      # linker has to exist before the app builds. It shells out to `rust-lld`,
+      # which rustc puts on the linker's PATH — no PATH setup needed here.
+      - name: Install flip-link
+        run: cargo install flip-link --locked
+
+      # --locked throughout: all three lockfiles are committed and the embedded
       # deps are exact-pinned (SPEC.md §14). A stale lockfile is a CI failure,
       # not a silent update.
       - name: Test (host)
@@ -106,7 +112,47 @@ jobs:
         working-directory: firmware-rs/hub75-diag
         run: cargo build --release --locked --target "$DEVICE_TARGET"
 
-      - name: Size report
+      # The app is its own standalone workspace too, and `layout/` is a member
+      # of it. Those tests are host tests inside a device-targeted workspace,
+      # hence the explicit host triple.
+      - name: Test + clippy the app workspace
+        working-directory: firmware-rs/app
+        run: |
+          host="$(rustc -vV | awk '/^host:/ { print $2 }')"
+          cargo test --locked -p scoreboard-layout --features std --target "$host"
+          cargo clippy --release --locked --target "$DEVICE_TARGET" -- -D warnings
+
+      # Both link profiles, because the whole point of generating memory.x from
+      # one constants file is that the Phase 4 flip stays a switch. The
+      # standalone build is second so it is the ELF the size report reads.
+      - name: Build scoreboard-app (device binary, both link profiles)
+        working-directory: firmware-rs/app
+        run: |
+          cargo build --release --locked --target "$DEVICE_TARGET" \
+            --no-default-features --features link-boot-integrated
+          cargo build --release --locked --target "$DEVICE_TARGET"
+
+      - name: Size report — scoreboard-app
+        working-directory: firmware-rs/app
+        run: |
+          elf="target/$DEVICE_TARGET/release/scoreboard-app"
+          arm-none-eabi-size -B -d "$elf"
+          {
+            echo "## scoreboard-app - release, $DEVICE_TARGET, standalone profile"
+            echo
+            echo '```'
+            arm-none-eabi-size -B -d "$elf"
+            echo '```'
+            echo
+            echo "### Largest RAM symbols (.bss / .data)"
+            echo
+            echo '```'
+            arm-none-eabi-nm -C --size-sort -r -S -td "$elf" \
+              | awk '$3 ~ /^[bBdD]$/ { if (++n <= 15) printf "%10d  %s  %s\n", $2, $3, $4 }'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Size report — hub75-diag
         working-directory: firmware-rs/hub75-diag
         run: |
           elf="target/$DEVICE_TARGET/release/hub75-diag"
