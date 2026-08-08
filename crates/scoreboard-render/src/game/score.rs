@@ -47,28 +47,15 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     // The variants that carry big scores beside the logos; C puts the totals
     // in the pinned column instead.
     if let (Some(away_slot), Some(home_slot)) = (table.score_away, table.score_home) {
-        for (slot, score, color) in [
-            (away_slot, view.away_score, away_color),
-            (home_slot, view.home_score, home_color),
-        ] {
-            font::integer(
-                canvas,
-                score,
-                slot.x,
-                slot.y,
-                slot.width,
-                Align::Center,
-                Style::new(&generated::UNSCII_16, color),
-            );
-        }
+        super::big_score(canvas, away_slot, view.away_score, away_color);
+        super::big_score(canvas, home_slot, view.home_score, home_color);
     }
 
-    let mut label = canvas.slice(table.final_label);
-    font::draw_unscrolled(
-        &mut label,
+    super::chip(
+        canvas,
+        table.final_label,
         &view.final_text,
-        Align::Center,
-        Style::new(&generated::UNSCII_8, pack(snapshot.ui_colors.accent)),
+        pack(snapshot.ui_colors.accent),
     );
 
     // One elapsed clock for all three rows: that is what keeps them locked.

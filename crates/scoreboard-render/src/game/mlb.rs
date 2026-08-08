@@ -71,32 +71,9 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
 
     count_block(canvas, scene, view);
 
-    font::integer(
-        canvas,
-        view.away_score,
-        table.score_away.x,
-        table.score_away.y,
-        table.score_away.width,
-        Align::Center,
-        Style::new(&generated::UNSCII_16, WHITE),
-    );
-    font::integer(
-        canvas,
-        view.home_score,
-        table.score_home.x,
-        table.score_home.y,
-        table.score_home.width,
-        Align::Center,
-        Style::new(&generated::UNSCII_16, WHITE),
-    );
-
-    let mut inning = canvas.slice(table.inning);
-    font::draw_unscrolled(
-        &mut inning,
-        &view.inning_text,
-        Align::Center,
-        Style::new(&generated::UNSCII_8, WHITE),
-    );
+    super::big_score(canvas, table.score_away, view.away_score, WHITE);
+    super::big_score(canvas, table.score_home, view.home_score, WHITE);
+    super::chip(canvas, table.inning, &view.inning_text, WHITE);
 
     for (slot, label) in [
         (table.ball_label, "B"),

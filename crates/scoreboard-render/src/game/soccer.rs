@@ -35,40 +35,16 @@ pub fn render_live(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     );
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
-    for (slot, score) in [
-        (table.score_away, view.away_score),
-        (table.score_home, view.home_score),
-    ] {
-        font::integer(
-            canvas,
-            score,
-            slot.x,
-            slot.y,
-            slot.width,
-            Align::Center,
-            Style::new(&generated::UNSCII_16, WHITE),
-        );
-    }
+    super::big_score(canvas, table.score_away, view.away_score, WHITE);
+    super::big_score(canvas, table.score_home, view.home_score, WHITE);
 
     // The period, in whichever form this variant asks for: a short chip in the
     // identity column, or spelled out under the clock.
     if let Some(slot) = table.phase.filter(|_| !view.phase_text.is_empty()) {
-        let mut region = canvas.slice(slot);
-        font::draw_unscrolled(
-            &mut region,
-            &view.phase_text,
-            Align::Center,
-            Style::new(&generated::UNSCII_8, WHITE),
-        );
+        super::chip(canvas, slot, &view.phase_text, WHITE);
     }
     if let Some(slot) = table.phase_long.filter(|_| !view.phase_long.is_empty()) {
-        let mut region = canvas.slice(slot);
-        font::draw_unscrolled(
-            &mut region,
-            &view.phase_long,
-            Align::Center,
-            Style::new(&generated::UNSCII_8, DIM_GRAY),
-        );
+        super::chip(canvas, slot, &view.phase_long, DIM_GRAY);
     }
 
     clock(canvas, table.clock, view, &snapshot.ui_colors, scene.now);
@@ -207,27 +183,13 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     }
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
-    for (slot, score, color) in [
-        (table.score_away, view.away_score, away_color),
-        (table.score_home, view.home_score, home_color),
-    ] {
-        font::integer(
-            canvas,
-            score,
-            slot.x,
-            slot.y,
-            slot.width,
-            Align::Center,
-            Style::new(&generated::UNSCII_16, color),
-        );
-    }
-
-    let mut label = canvas.slice(table.full_time_label);
-    font::draw_unscrolled(
-        &mut label,
+    super::big_score(canvas, table.score_away, view.away_score, away_color);
+    super::big_score(canvas, table.score_home, view.home_score, home_color);
+    super::chip(
+        canvas,
+        table.full_time_label,
         &view.ft_text,
-        Align::Center,
-        Style::new(&generated::UNSCII_8, pack(snapshot.ui_colors.accent)),
+        pack(snapshot.ui_colors.accent),
     );
 
     let scroll = scene.game_scroll(SOCCER_SCROLL_PAUSE_MS);

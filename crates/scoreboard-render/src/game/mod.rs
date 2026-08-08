@@ -146,6 +146,39 @@ pub fn bottom_strip(canvas: &mut Canvas<'_>, scene: &Scene<'_>) -> Strip {
     Strip::Play
 }
 
+/// A score in the headline font, centered in its slot.
+///
+/// Every game screen draws exactly two of these, and the alignment is what
+/// makes a slot's width meaningful — a three-digit score in a two-digit slot
+/// overhangs evenly rather than running off one end.
+pub fn big_score(canvas: &mut Canvas<'_>, slot: Slice, score: u16, color: u16) {
+    font::integer(
+        canvas,
+        score,
+        slot.x,
+        slot.y,
+        slot.width,
+        Align::Center,
+        Style::new(&generated::UNSCII_16, color),
+    );
+}
+
+/// A short static label centered in its slot: the period chip, the inning
+/// ordinal, "FINAL", "FULL TIME".
+///
+/// Nothing here scrolls. These are all short enough to fit by construction, and
+/// a chip that overflowed would be a geometry bug rather than something to
+/// animate around.
+pub fn chip(canvas: &mut Canvas<'_>, slot: Slice, text: &str, color: u16) {
+    let mut region = canvas.slice(slot);
+    font::draw_unscrolled(
+        &mut region,
+        text,
+        Align::Center,
+        Style::new(&generated::UNSCII_8, color),
+    );
+}
+
 /// Blit a crest, if there is one to blit.
 pub fn logo(canvas: &mut Canvas<'_>, scene: &Scene<'_>, handle: Option<LogoRef>, slot: Slice) {
     if let Some(source) = scene.logos.source(handle) {

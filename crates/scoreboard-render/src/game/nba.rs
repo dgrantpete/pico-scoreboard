@@ -29,29 +29,11 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     );
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
-    for (slot, score) in [
-        (table.score_away, view.away_score),
-        (table.score_home, view.home_score),
-    ] {
-        font::integer(
-            canvas,
-            score,
-            slot.x,
-            slot.y,
-            slot.width,
-            Align::Center,
-            Style::new(&generated::UNSCII_16, WHITE),
-        );
-    }
+    super::big_score(canvas, table.score_away, view.away_score, WHITE);
+    super::big_score(canvas, table.score_home, view.home_score, WHITE);
 
     if !view.phase_text.is_empty() {
-        let mut phase = canvas.slice(table.phase);
-        font::draw_unscrolled(
-            &mut phase,
-            &view.phase_text,
-            Align::Center,
-            Style::new(&generated::UNSCII_8, WHITE),
-        );
+        super::chip(canvas, table.phase, &view.phase_text, WHITE);
     }
 
     font::aligned_text(
