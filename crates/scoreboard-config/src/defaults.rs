@@ -10,8 +10,9 @@
 use heapless::String;
 
 use crate::{
-    ApiConfig, ColorsConfig, DisplayConfig, GammaConfig, LogConfig, NetworkConfig, OtaConfig, Rgb,
-    ServerConfig, SportLeagues, SportToggle, SportsConfig, VariantsConfig, WatchdogConfig,
+    ApiConfig, ColorsConfig, DisplayConfig, GammaConfig, LogConfig, MAX_CHANNEL, NetworkConfig,
+    OtaConfig, Rgb, ServerConfig, SportLeagues, SportToggle, SportsConfig, VariantsConfig,
+    WatchdogConfig,
 };
 
 fn text<const N: usize>(value: &str) -> String<N> {
@@ -107,6 +108,12 @@ pub(crate) fn watchdog_timeout_ms() -> u32 {
 /// themselves.
 pub(crate) fn ota_enabled() -> bool {
     true
+}
+
+/// The channel a device follows unless somebody deliberately moves it. Every
+/// gift unit is on this one and nothing in the settings page offers the other.
+pub(crate) fn ota_channel() -> String<MAX_CHANNEL> {
+    String::try_from("stable").expect("fits MAX_CHANNEL")
 }
 
 impl Default for NetworkConfig {
@@ -216,6 +223,7 @@ impl Default for OtaConfig {
     fn default() -> OtaConfig {
         OtaConfig {
             enabled: ota_enabled(),
+            channel: ota_channel(),
         }
     }
 }

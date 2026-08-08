@@ -17,16 +17,19 @@ description = "The scoreboard firmware binary: embassy on both cores, render loo
 # Where the image links. Exactly one; features are additive, so selecting the
 # other needs --no-default-features (build.rs rejects both and neither).
 default = ["link-standalone"]
-# Flash offset 0, probe-flashed, no bootloader. Phase 3.
+# Flash offset 0, probe-flashed, no bootloader. Phase 3, and still the bench:
+# `cargo run` over the probe, nothing staged or swapped. It must NEVER gain a
+# bootloader dependency — that is the whole point of it surviving Phase 4.
 link-standalone = []
-# The active partition behind embassy-boot. Phase 4 flips to this.
-link-boot-integrated = []
+# The active partition behind embassy-boot. What `tools/build.py publish-fw`
+# ships, and the only profile that can install an update.
+link-boot-integrated = ["dep:embassy-boot-rp", "dep:sha2"]
 
 # Bench instrument, off in every shipped build: once station mode is up, fetch
 # `{DEV_API_URL}/time` over plain HTTP and log what came back. It exists to
 # prove the stack moves bytes in both directions against the real backend
 # without waiting for the client in task #11 — see `net::probe`.
-net-probe = ["dep:embedded-io-async"]
+net-probe = []
 
 # Bench instrument, off in every shipped build: adds `POST /api/induce-panic`,
 # which panics on purpose. It exists so the crash path — breadcrumb, reset,
@@ -74,10 +77,17 @@ panic-probe = { version = "=1.0.0", features = ["print-defmt"] }
 #                    is not stable, so there is no reachable-by-IP alternative.
 #                    Costs one socket slot, taken unconditionally by the stack.
 #   medium-ethernet— cyw43 presents an Ethernet-like device
-# `mdns` is *not* enabled: `<device_name>.local` resolves because DHCP option 12
-# tells the router, not because the device answers multicast queries. That
-# matches MicroPython, which also only set `network.hostname()`.
-embassy-net = { version = "=0.9.1", features = ["defmt", "tcp", "udp", "dns", "dhcpv4", "dhcpv4-hostname", "proto-ipv4", "medium-ethernet"] }
+# `mdns` is *not* enabled, and Phase 4 found out why that mattered: DHCP option
+# 12 only teaches the *router* the name, so a client that goes straight to
+# multicast — which is most of them — never resolved it. MicroPython did not
+# have this problem because its lwIP was compiled with LWIP_MDNS_RESPONDER. The
+# responder is ours now (`net::mdns`, `scoreboard_portal::mdns`); embassy-net's
+# feature stays off because the socket loop being ours is what keeps the
+# never-die-on-a-bad-packet rule the same across all three responders.
+#   multicast      — smoltcp's group membership, so the interface accepts
+#                    traffic for 224.0.0.251. Without it `net::mdns` binds and
+#                    receives nothing, which looks exactly like "no queries"
+embassy-net = { version = "=0.9.1", features = ["defmt", "tcp", "udp", "dns", "dhcpv4", "dhcpv4-hostname", "proto-ipv4", "medium-ethernet", "multicast"] }
 # `firmware-logs` surfaces the CYW43's own console over defmt. It is how a join
 # failure inside the chip is diagnosed at all, and it costs flash, not RAM.
 cyw43 = { version = "=0.7.0", features = ["defmt", "firmware-logs"] }
@@ -94,12 +104,31 @@ scoreboard-log = { path = "../../crates/scoreboard-log" }
 # session, and the brightness curve — the pure half of task #12, host-tested
 # against `tools/pio_sim.py`'s scenarios and `brightness.py`'s values.
 scoreboard-input = { path = "../../crates/scoreboard-input" }
+# The OTA client's decisions and its signature check (SPEC §8), host-tested
+# there against a vector `tools/fwsign.py` produced.
+scoreboard-ota = { path = "../../crates/scoreboard-ota" }
 # Persistence (SPEC §9). `default-features = false` is the whole point: the
 # default set is empty here, but `alloc`, `std`, `arrayvec`, `postcard` and the
 # `heapless` value impls all exist and every one of them would add a dependency
 # for a convenience this crate does not need — the two values stored are a JSON
 # document and a hand-encoded breadcrumb, both `&[u8]`.
 sequential-storage = { version = "=8.0.1", default-features = false, features = ["defmt"] }
+# A/B OTA (SPEC §8). Only under `link-boot-integrated`: its
+# `from_linkerfile_blocking` resolves the `__bootloader_*` symbols, which the
+# standalone profile deliberately does not emit, so a standalone build that
+# reached the OTA path would fail to link — the intended outcome.
+#
+# NOT `features = ["ed25519-dalek"]`, and `scoreboard_ota::verify`'s module docs
+# carry the whole argument: that feature's `verify_and_mark_updated` hashes
+# through a hardcoded two-byte buffer in one un-feedable blocking call, and the
+# bootloader's 8 s watchdog cannot be disarmed.
+embassy-boot-rp = { version = "=0.10.0", features = ["defmt"], optional = true }
+# The `Digest` impl handed to `BlockingFirmwareUpdater::hash`. `asm` stays off:
+# it has no thumbv8m backend, and the pure-Rust one is what the measurement in
+# the ring log reports.
+sha2 = { version = "=0.10.9", default-features = false, optional = true }
+# `NorFlash`, for the one flash handle `storage` lends out.
+embedded-storage = "=0.3.1"
 # `adapter::BlockingAsync`, which is the only piece of it linked: embassy-rp's
 # Flash implements the *blocking* `NorFlash` traits and sequential-storage's map
 # API is async, so one of the two has to be adapted. See `storage`'s module docs
@@ -122,9 +151,10 @@ fixed = "=1.30.0"
 # `/api/status`, and `SCB::sys_reset` for `/api/reboot`. Already in the graph
 # under rp235x-pac; named here because this crate calls it directly.
 cortex-m = "=0.7.8"
-# `net-probe` only — the `Read`/`Write` traits embassy-net's TcpSocket
-# implements. The poller reaches them through reqwless instead.
-embedded-io-async = { version = "=0.7.0", optional = true }
+# `Read`, for streaming an OTA image out of reqwless's body reader a chunk at a
+# time — a ~700 KB image on a 512 KB device has no other shape. Also the
+# `Read`/`Write` traits `net-probe` uses against a raw TcpSocket.
+embedded-io-async = "=0.7.0"
 # The backend client (SPEC §7.4). `default-features = false` drops
 # `embedded-tls`, which is the whole reason the dependency is affordable: score
 # polling is plain HTTP by design (`api_client.py:94`), so the TLS stack, its

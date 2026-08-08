@@ -68,6 +68,8 @@ pub const MAX_LEAGUE: usize = 24;
 pub const MAX_LEAGUES: usize = 8;
 /// A screen-variant letter (`"A"`, `"B"`, `"C"`).
 pub const MAX_VARIANT: usize = 4;
+/// An OTA channel name: `stable` or `dev`, with room for one more.
+pub const MAX_CHANNEL: usize = 8;
 
 /// The RP2350's hardware watchdog tops out near 8.3 s; the floor keeps the
 /// feeder (timeout / 4) under roughly twice a second. `config.py`'s
@@ -316,10 +318,26 @@ pub struct WatchdogConfig {
     pub timeout_ms: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Not `Copy`, unlike its neighbours: [`channel`](OtaConfig::channel) is a
+/// string, and it is one rather than an enum because it reaches the device
+/// through `PUT /api/config` — a value the firmware does not recognise has to
+/// read as "the conservative channel" rather than as a rejected request that
+/// leaves the settings page unable to save anything else either.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OtaConfig {
     #[serde(default = "defaults::ota_enabled")]
     pub enabled: bool,
+    /// Which published artifact this device follows: `stable` or `dev`.
+    ///
+    /// SPEC §8's replacement for `ota.py`'s `/ota_dev` marker file — but only
+    /// half of it. The marker did two jobs, and the more important one (do not
+    /// roll a locally-built image back to the published one) is now a property
+    /// of the image rather than a setting: see
+    /// [`scoreboard_ota::decide`](https://docs.rs). This field is the other
+    /// job, pinning a bench unit to the staging artifact so the whole update
+    /// path can be exercised without publishing to the units that are gifts.
+    #[serde(default = "defaults::ota_channel")]
+    pub channel: String<MAX_CHANNEL>,
 }
 
 impl DeviceConfig {

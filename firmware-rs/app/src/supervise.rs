@@ -516,6 +516,7 @@ pub async fn watchdog(
 ) -> ! {
     let timeout = Duration::from_millis(timeout_ms as u64);
     hardware.start(timeout);
+    ARMED_TIMEOUT_MS.store(timeout_ms, Ordering::Relaxed);
     // embassy-rp's `feed` reloads the counter with the timeout it is given, so
     // the value has to be repeated on every feed rather than remembered from
     // `start`.
@@ -528,14 +529,45 @@ pub async fn watchdog(
 
     let mut ticker = Ticker::every(interval);
     let mut previous_frame = FRAME_SEQ.load(Ordering::Relaxed);
+    // A trial image has to earn `mark_booted`, and this task is where both
+    // halves of the evidence already arrive. Under `link-standalone` there is
+    // no bootloader, `needs_confirm` is false from the first line, and none of
+    // what follows costs anything.
+    let mut needs_confirm = crate::ota::needs_confirm();
+    let mut ever_stalled = false;
     loop {
         ticker.next().await;
         let current = FRAME_SEQ.load(Ordering::Relaxed);
         let ticked = current != previous_frame;
         previous_frame = current;
+        // Not "is ticking now" but "has never stopped": a trial image that
+        // stuttered once and recovered is not one to make permanent.
+        ever_stalled |= !ticked;
 
         let health = poller::health();
         let uptime_s = Instant::now().as_secs() as u32;
+
+        if needs_confirm && !ever_stalled && uptime_s >= CONFIRM_MIN_UPTIME_S {
+            // In setup mode there is no poller, so there is no answer to wait
+            // for — the same reason `poll_interval_s` is `None` there.
+            let answered = poll_interval_s.is_none() || health.since_answer_s.is_some();
+            let overdue = uptime_s >= CONFIRM_DEADLINE_S;
+            // `net::status` is published by whichever provisioning arm won, so
+            // it being set is exactly "the network phase resolved".
+            let provisioned = crate::net::status::read().is_some();
+            if provisioned && (answered || overdue) {
+                if answered {
+                    crate::error!("ota: health gate passed at {} s; image confirmed", uptime_s);
+                } else {
+                    crate::error!(
+                        "ota: confirming at {} s with no backend answer - the image boots, renders and has a network, and leaving it unconfirmed would revert it at the next power cut",
+                        uptime_s
+                    );
+                }
+                needs_confirm = !crate::ota::confirm();
+            }
+        }
+
         let Some(reason) = gate(ticked, poll_interval_s, uptime_s, &health) else {
             hardware.feed(timeout);
             continue;
@@ -573,6 +605,100 @@ pub async fn watchdog(
         unreachable!()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Feeding from somewhere that does not own the peripheral
+// ---------------------------------------------------------------------------
+
+/// The timeout [`watchdog`] armed, so [`feed_watchdog`] reloads with the same
+/// value rather than silently extending the window somebody configured.
+///
+/// Seeded with the bootloader's, because under `link-boot-integrated` a
+/// watchdog is already running before this program's first instruction and
+/// `firmware-rs/boot` set it to 8 s.
+static ARMED_TIMEOUT_MS: AtomicU32 = AtomicU32::new(BOOT_WATCHDOG_TIMEOUT_MS);
+
+/// What `firmware-rs/boot` arms before it jumps.
+///
+/// Duplicated rather than shared: the two binaries are separate workspaces and
+/// a flash-layout crate is the wrong home for a timing constant. The coupling
+/// is one-directional and safe in the direction that matters — feeding with a
+/// value **at or below** the bootloader's is always correct, and the RP2350's
+/// ceiling is 8.388 s, so this cannot drift upward without the hardware
+/// rejecting it.
+pub const BOOT_WATCHDOG_TIMEOUT_MS: u32 = 8_000;
+
+/// Feed the hardware watchdog once, from a caller that does not own it.
+///
+/// # Why stealing the peripheral is legitimate here
+///
+/// [`force_reset`] steals it too, and that case is easy — the only operation
+/// performed is the one that ends the program. This one runs on a live device,
+/// so it deserves its own argument.
+///
+/// Feeding is a **single write to the reload register**, and it is idempotent:
+/// the owner ([`watchdog`]) does exactly the same write on its next tick, with
+/// the same value, and neither can observe the other's. There is no read, no
+/// read-modify-write, and no state in the `Watchdog` handle that two of them
+/// could disagree about. Two writers of a reload register is what feeding *is*.
+///
+/// It exists for one caller: the OTA verify, which hashes the whole DFU
+/// partition in a single blocking call. The feeder is a *task*, so nothing
+/// feeds while that call runs, and it needs to start with a full window rather
+/// than with whatever is left of one.
+#[cfg_attr(
+    not(feature = "link-boot-integrated"),
+    allow(dead_code, reason = "reached only through the OTA install path, which needs a bootloader")
+)]
+pub fn feed_watchdog() {
+    // SAFETY: the only operation is one write to the watchdog's reload
+    // register, which is idempotent and is what the peripheral's real owner
+    // does on its own schedule. See the docs above.
+    let mut watchdog =
+        embassy_rp::watchdog::Watchdog::new(unsafe { embassy_rp::peripherals::WATCHDOG::steal() });
+    watchdog.feed(Duration::from_millis(
+        ARMED_TIMEOUT_MS.load(Ordering::Relaxed) as u64,
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Confirming a trial image
+// ---------------------------------------------------------------------------
+
+/// How long core 1 must have been ticking, without a gap, before a trial image
+/// is confirmed.
+///
+/// 30 s, and it is a floor rather than the binding constraint. On a healthy
+/// station-mode device the gate is satisfied by the *first poll answer*, which
+/// lands after provisioning (a join is <= 20 s by default) plus a tick — so
+/// this number really decides the AP-mode case, where there is no poller and no
+/// answer to wait for.
+///
+/// Three things set it:
+///
+/// * It is more than three times [`BOOT_WATCHDOG_TIMEOUT_MS`], so an image that
+///   feeds the watchdog for a while and *then* wedges still has to survive
+///   three full watchdog windows before it is called good.
+/// * It comfortably covers a normal join, so a healthy update is confirmed
+///   because it worked rather than because a timer expired.
+/// * It is short enough that the trial window does not straddle an ordinary
+///   evening's worth of opportunities to unplug the thing.
+const CONFIRM_MIN_UPTIME_S: u32 = 30;
+
+/// When to confirm on the weaker evidence, and why there is a deadline at all.
+///
+/// The strong gate wants a poll answer, and that is right — the failure worth
+/// catching is an image whose networking is broken. But "the backend is
+/// unreachable" and "this image is broken" look identical from here, and a
+/// device that never confirms is not neutral: it is **armed**. The next power
+/// cut, days later, silently reverts a perfectly good image, and the owner sees
+/// an unexplained downgrade with nothing in any log tying it to the outage.
+///
+/// So after ten minutes of an image that boots, renders and has brought its
+/// network up, this confirms on that evidence alone and says so at ERROR.
+/// Reverting would not have fixed an unreachable backend, and an update that
+/// quietly un-installs itself a week later is worse than one that is kept.
+const CONFIRM_DEADLINE_S: u32 = 600;
 
 /// `POST /api/reboot`'s signal.
 static REBOOT: Signal<CriticalSectionRawMutex, ()> = Signal::new();

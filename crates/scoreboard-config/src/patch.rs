@@ -20,8 +20,8 @@ use heapless::{String, Vec};
 use serde::Deserialize;
 
 use crate::{
-    CadenceError, DeviceConfig, GammaConfig, MAX_API_KEY, MAX_LEAGUE, MAX_LEAGUES, MAX_PASSWORD,
-    MAX_SSID, MAX_URL, MAX_VARIANT, Rgb, check_cadence,
+    CadenceError, DeviceConfig, GammaConfig, MAX_API_KEY, MAX_CHANNEL, MAX_LEAGUE, MAX_LEAGUES,
+    MAX_PASSWORD, MAX_SSID, MAX_URL, MAX_VARIANT, Rgb, check_cadence,
 };
 
 /// Which live-apply hooks a [`DeviceConfig::apply`] needs run.
@@ -183,6 +183,7 @@ pub struct WatchdogPatch {
 #[serde(default)]
 pub struct OtaPatch {
     pub enabled: Option<bool>,
+    pub channel: Option<String<MAX_CHANNEL>>,
 }
 
 impl ConfigPatch {
@@ -336,6 +337,7 @@ impl DeviceConfig {
 
         if let Some(ota) = &patch.ota {
             set(&mut self.ota.enabled, &ota.enabled);
+            set(&mut self.ota.channel, &ota.channel);
         }
 
         Ok(applied)

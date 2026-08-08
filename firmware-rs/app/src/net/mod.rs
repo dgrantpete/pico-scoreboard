@@ -43,20 +43,28 @@
 //! |---|:-:|:-:|---|
 //! | embassy-net's DNS resolver | 1 | 1 | embassy-net, always added |
 //! | DHCP *client* | 1 | — | embassy-net, while `ConfigV4::Dhcp` |
-//! | poller | 1 | — | task #11 |
-//! | OTA | 1 | — | task #15 |
+//! | poller **and OTA** | 1 | — | [`api_client`] |
 //! | HTTP server | 2 | 2 | task #10 |
+//! | mDNS responder | 1 | 1 | [`mdns`] |
 //! | captive DNS | — | 1 | [`captive_dns`] |
 //! | DHCP *server* | — | 1 | [`dhcp_server`] |
-//! | **total** | **6** | **5** | |
+//! | **total** | **6** | **6** | |
 //!
 //! Seven is the working ceiling; [`SOCKETS`] is 8 so that adding one consumer
 //! is a budget line rather than a rewrite.
+//!
+//! **The OTA slot this table used to reserve is gone**, and that is worth a
+//! line because it looks like an omission. An update is a *phase of the poll
+//! loop* rather than a task of its own ([`crate::ota`]'s module docs argue why),
+//! so the poller's connection is free for the whole download and the two can
+//! never want a socket at the same time. mDNS took the slot, which is how the
+//! table stayed the same size after Phase 4 added a responder.
 
 pub mod api_client;
 pub mod captive_dns;
 pub mod dhcp_server;
 pub mod hosts;
+pub mod mdns;
 #[cfg(feature = "net-probe")]
 mod probe;
 pub mod status;
@@ -242,6 +250,10 @@ pub async fn bringup(
             arm_watchdog(spawner, deferred.watchdog, true);
 
             let address = wifi::address_text(ip);
+            spawner.spawn(defmt::unwrap!(mdns::serve(
+                stack,
+                scoreboard_portal::mdns::Responder::new(&credentials.device_name, ip.octets()),
+            )));
             status::publish(status::NetStatus::Station {
                 ip: bounded(&address),
                 device_name: bounded(&credentials.device_name),
@@ -266,6 +278,13 @@ pub async fn bringup(
             );
             spawner.spawn(defmt::unwrap!(captive_dns::serve(stack, ip)));
             spawner.spawn(defmt::unwrap!(dhcp_server::serve(stack, ip)));
+            // Also in setup mode: a phone that has joined the AP can then reach
+            // the page by name as well as by address, and the socket is spare
+            // here.
+            spawner.spawn(defmt::unwrap!(mdns::serve(
+                stack,
+                scoreboard_portal::mdns::Responder::new(&credentials.device_name, ip.octets()),
+            )));
             arm_watchdog(spawner, deferred.watchdog, false);
 
             status::publish(status::NetStatus::Ap {

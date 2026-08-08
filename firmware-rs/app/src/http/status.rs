@@ -61,12 +61,16 @@ use crate::{ringlog, supervise};
 
 /// The version string `main.py` reported from `ota.current_version()`.
 ///
-/// That was the SHA of the deployed app bundle, or `None` on a dev littlefs
-/// deploy. There is no bundle here — the image is one artifact — so it is the
-/// crate version plus which partition it was linked for, which is the fact that
-/// actually distinguishes two images on a device (see `build.rs`). Task #15
-/// replaces it with the signed image's version when OTA lands.
-pub const APP_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("LINK_PROFILE"));
+/// That was the sha256 of the deployed ROMFS bundle, or `None` on a dev
+/// littlefs deploy. Here it is the version `build.rs` stamped in — `"dev"`
+/// unless `publish-fw` built the image — plus the profile it was linked for.
+///
+/// **The SPA compares this before and after an update** to decide whether one
+/// landed (`StatusCard.svelte` polls until it changes), so it has to be the
+/// thing that actually changes across an install. The link profile rides along
+/// because a probe-flashed image and an OTA'd one are otherwise indistinguishable
+/// from the settings page.
+pub const APP_VERSION: &str = concat!(env!("FW_VERSION"), "+", env!("LINK_PROFILE"));
 
 /// The response body. Field order is the response's; the SPA reads by name.
 #[derive(Debug, Serialize)]
@@ -78,6 +82,18 @@ pub struct Status {
     pub configured_ssid: Option<heapless::String<32>>,
     pub ip: Option<heapless::String<15>>,
     pub hostname: Option<heapless::String<39>>,
+    /// What the OTA client is doing: `idle`, `checking`, `downloading`,
+    /// `verifying`, `restarting`, `trial` or `rolled_back`.
+    ///
+    /// The last two are the ones worth having on a deployed unit. `trial` means
+    /// this boot has not yet earned `mark_booted` and a reset would roll it
+    /// back; `rolled_back` means one already did. Neither is visible anywhere
+    /// else once the ring log has wrapped.
+    pub ota_state: &'static str,
+    /// Download progress, 0..=100. Meaningful only while `ota_state` is
+    /// `downloading`; the settings page shows the panel's own bar rather than
+    /// this, and it is here so a browser can follow an update it cannot see.
+    pub ota_progress: u8,
     pub ap_ip: Option<heapless::String<15>>,
     pub ap_ssid: Option<heapless::String<32>>,
 
@@ -103,6 +119,7 @@ impl Status {
     pub fn read() -> Status {
         let memory = supervise::memory();
         let (log_entries, log_latest_seq) = ringlog::stats();
+        let (ota_state, ota_progress) = crate::ota::status();
 
         let mut status = Status {
             mode: "unknown",
@@ -125,6 +142,8 @@ impl Status {
             log_entries,
             log_latest_seq,
             app_version: APP_VERSION,
+            ota_state: ota_state.as_str(),
+            ota_progress,
         };
 
         match crate::net::status::read() {

@@ -49,6 +49,14 @@
 //! No exponential backoff, and none in `poller.py` either: the sleep is always
 //! `poll_interval_seconds`. Nothing else in the firmware retries at all, so a
 //! backend that comes back is on the panel within one interval.
+//!
+//! # The OTA check is a phase of this loop, not a task of its own
+//!
+//! [`crate::ota`]'s module docs carry the argument; the consequence here is one
+//! branch at the top of the loop. While an update runs, this loop is not
+//! polling — which is what stops a game commit painting over the progress bar,
+//! and is the same arrangement `main.py` got for free from a synchronous
+//! download freezing its event loop.
 
 use embassy_futures::select::{Either, select};
 use embassy_net::Stack;
@@ -260,6 +268,11 @@ struct Poller {
     /// the `Store`, and this task owns both — `menu.py`'s controller had the
     /// same two references for the same reason.
     menu: MenuController,
+    /// When the next update check is due. A local for the same reason
+    /// everything else here is one: the check borrows this task's client,
+    /// buffer, store and publisher, so its schedule belongs to the task that
+    /// runs it.
+    ota: crate::ota::Schedule,
     buffer: ResponseBuffer,
 }
 
@@ -283,6 +296,7 @@ pub async fn run(
         last_rotation_ms: None,
         next_time_sync: Instant::now(),
         menu: MenuController::new(),
+        ota: crate::ota::Schedule::new(),
         buffer: [0; poll::RESPONSE_BYTES],
     };
     poller.slate.set_sources(&sources);
@@ -299,6 +313,14 @@ pub async fn run(
 
     loop {
         let cadence = cadence();
+
+        // Before the tick, not after: an update that installs never returns
+        // from here, and doing it first means the panel goes from a live game
+        // to the progress bar rather than showing one more stale score first.
+        if poller.ota.due(Instant::now()) {
+            poller.check_for_update(&cadence).await;
+        }
+
         let now = Instant::now().as_millis();
         match poller.tick(&cadence, now).await {
             Ok(()) => {
@@ -332,6 +354,32 @@ pub async fn run(
 }
 
 impl Poller {
+    /// Run one OTA check, lending it everything it needs.
+    ///
+    /// The borrows are split out of `self` by hand because the check needs four
+    /// disjoint fields at once and `&mut self` would lend all of them together.
+    async fn check_for_update(&mut self, cadence: &Cadence) {
+        let Poller {
+            client,
+            store,
+            publisher,
+            buffer,
+            ota,
+            ..
+        } = self;
+        crate::ota::check(
+            crate::ota::Context {
+                client,
+                buffer,
+                base_url: cadence.base_url.as_str(),
+                store,
+                publisher,
+            },
+            ota,
+        )
+        .await;
+    }
+
     /// One tick. `poller.py:394-437`, including the `finally`.
     async fn tick(&mut self, cadence: &Cadence, now: Millis) -> Result<(), PollError> {
         // Before anything commits: a pregame card built without the offset

@@ -8,12 +8,23 @@
 //! be the *innermost* layer, and [`build`] starts from it with
 //! `Router::from_service`.
 //!
-//! # One seam that is deliberately unfinished
+//! # `POST /api/check-update`, and the one thing it does differently
 //!
-//! **`POST /api/check-update`** — `501 {"status": "unsupported"}`. This is not
-//! a placeholder: it is precisely the answer `api_routes.py` gave when
-//! `request.app.request_ota_check` was absent, which was its way of saying
-//! "this build has no on-demand update path". Task #15 gives it one.
+//! `api_routes.py` answered this synchronously: the handler itself fetched the
+//! manifest, blocking the asyncio loop for a second or two, and returned a
+//! verdict. That is not available here and the reason is structural rather than
+//! stylistic — the backend client and the display state are both owned by
+//! [`crate::poller`] as task locals, and a handler has no path to either.
+//!
+//! So the handler *asks* and waits: [`crate::ota::request_check`] signals the
+//! poll loop, which runs the check at the top of its next iteration and signals
+//! the verdict back. The status strings the SPA reads are unchanged, and the
+//! wait is bounded below the 25 s the settings page allows.
+//!
+//! The one case that cannot be answered this way is a device in setup mode,
+//! where there is no poll loop to ask. `api_routes.py` had the same hole and
+//! the same answer for it — `no_network`, which it returned when its OTA task
+//! had not started.
 //!
 //! # The two routes that touch flash
 //!
@@ -29,6 +40,9 @@
 //! otherwise only reachable by finding a real bug, and a recovery path that has
 //! never been exercised is a recovery path that does not work.
 
+use core::fmt::Write as _;
+
+use embassy_time::{Duration, with_timeout};
 use picoserve::request::Path;
 use picoserve::response::{IntoResponse, Response, StatusCode, chunked};
 use picoserve::routing::{get, post};
@@ -481,12 +495,70 @@ async fn get_previous_log() -> impl IntoResponse {
 // Actions
 // ---------------------------------------------------------------------------
 
-/// `POST /api/check-update` — `501` until task #15. See the module docs.
+/// How long the handler waits for the poll loop's verdict.
+///
+/// Under the SPA's own 25 s timeout, so a device that answers slowly still
+/// answers rather than looking dead. The poll loop reaches the check at the top
+/// of its next iteration, which is immediate when it is sleeping and up to one
+/// request (15 s) when it is mid-poll.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// `POST /api/check-update` — ask the poll loop, and tell the page what it
+/// said. See the module docs for why it is not answered here.
 async fn check_update() -> impl IntoResponse {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        r#"{"status":"unsupported","message":"This build has no on-demand update path"}"#,
+    // No poller, no check. Reading the published network status is how this
+    // knows: it is set by whichever provisioning arm won, and only the station
+    // arm spawns a poll loop.
+    let station = matches!(
+        crate::net::status::read(),
+        Some(crate::net::status::NetStatus::Station { .. })
+    );
+    if !station {
+        return Either::A(ok_json(
+            r#"{"status":"no_network","message":"The scoreboard is not on a network"}"#,
+        ));
+    }
+
+    crate::ota::request_check();
+    let Ok(answer) = with_timeout(CHECK_TIMEOUT, crate::ota::wait_for_answer()).await else {
+        // Not an error: the check is still running and will finish. The SPA
+        // already treats a dropped or slow response as "possibly updating" and
+        // starts watching `app_version`, which is exactly the right behaviour
+        // here — a download that started is a download that will finish.
+        crate::debug!("api: check-update did not answer within {} s", CHECK_TIMEOUT.as_secs() as u32);
+        return Either::A(ok_json(
+            r#"{"status":"updating","message":"The check is still running"}"#,
+        ));
+    };
+
+    Either::B(json(scratch::claim().and_then(|mut lease| {
+        let len = render_check_answer(&answer, lease.as_mut())?;
+        Some(JsonBody { lease, len })
+    })))
+}
+
+/// `{"status": ..., "version": ..., "message": ...}`.
+///
+/// Built by hand rather than through serde: the three fields are two static
+/// strings and one `&'static str`, and a derive would want an owned struct with
+/// lifetimes threaded through picoserve's response machinery to save nothing.
+fn render_check_answer(answer: &crate::ota::Answer, out: &mut [u8]) -> Option<usize> {
+    let mut body = heapless::String::<192>::new();
+    write!(
+        &mut body,
+        r#"{{"status":"{}","version":"{}""#,
+        answer.status,
+        crate::ota::VERSION
     )
+    .ok()?;
+    if let Some(message) = answer.message {
+        write!(&mut body, r#","message":"{message}""#).ok()?;
+    }
+    body.push('}').ok()?;
+
+    let bytes = body.as_bytes();
+    out.get_mut(..bytes.len())?.copy_from_slice(bytes);
+    Some(bytes.len())
 }
 
 /// `POST /api/reboot` — answer first, then reset.

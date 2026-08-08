@@ -55,6 +55,7 @@ mod probe;
 mod ringlog;
 mod settings;
 mod storage;
+mod ota;
 mod supervise;
 mod veml7700;
 
@@ -202,13 +203,32 @@ fn main() -> ! {
     // calls after the render loop is up cost the panel a frame, which is why
     // `storage`'s API is blocking and says so.
     storage::install(peripherals.FLASH);
+    storage::read_device_id();
     let has_previous_record = supervise::load_previous_record();
-    let boot_config = config::load();
+
+    // The watchdog comes out of `Peripherals` **before** the configuration is
+    // read, and that ordering is Phase 4's doing. Under `link-boot-integrated`
+    // the bootloader armed an 8 s watchdog before it jumped here and an RP2350
+    // watchdog cannot be disarmed, so every blocking step of this boot is on a
+    // clock. `config::load` is the one that can take real time: a storage
+    // region that does not parse is erased sector by sector, ~245 of them, and
+    // it feeds through this closure between each one.
+    let mut watchdog = Watchdog::new(peripherals.WATCHDOG);
+    let boot_config = config::load(&mut || {
+        watchdog.feed(embassy_time::Duration::from_millis(
+            supervise::BOOT_WATCHDOG_TIMEOUT_MS as u64,
+        ))
+    });
+
+    // What the bootloader did on the way in — a plain boot, a trial that has
+    // not been confirmed, or a rollback. Before core 1 starts, because a
+    // rollback writes the attempt record and a flash write is free until the
+    // render loop is up.
+    ota::read_boot_state();
 
     // Read before the watchdog task can arm it again, and logged because it is
     // the one fact that separates "somebody pulled the plug" from "this device
     // reset itself" — which is exactly the question BACKLOG 69 left open.
-    let watchdog = Watchdog::new(peripherals.WATCHDOG);
     match watchdog.reset_reason() {
         Some(embassy_rp::watchdog::ResetReason::TimedOut) => defmt::warn!(
             "boot: the previous run ended in a watchdog timeout{=str}",
@@ -227,7 +247,8 @@ fn main() -> ! {
     let pac = rp235x_pac::Peripherals::take().expect("rp235x-pac peripherals already taken");
     let driver = Hub75Driver::new(pac.PIO0, pac.DMA, Config::defaults(system_clock_hz));
     defmt::info!(
-        "scoreboard-app up ({=str} image): sys {} Hz, panel refresh {} Hz",
+        "scoreboard-app {=str} up ({=str} image): sys {} Hz, panel refresh {} Hz",
+        ota::VERSION,
         env!("LINK_PROFILE"),
         system_clock_hz,
         driver.refresh_rate() as u32

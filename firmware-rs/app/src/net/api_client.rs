@@ -154,9 +154,12 @@ impl ApiClient {
         if_none_match: Option<&str>,
         buf: &'buf mut [u8],
     ) -> Result<Fetched<'buf>, PollError> {
-        let fetched = self
-            .get(url, STRUCT_CONTENT_TYPE, if_none_match, buf)
-            .await?;
+        let mut headers: heapless::Vec<(&str, &str), 2> = heapless::Vec::new();
+        let _ = headers.push(("Accept", STRUCT_CONTENT_TYPE));
+        if let Some(etag) = if_none_match {
+            let _ = headers.push(("If-None-Match", etag));
+        }
+        let fetched = self.get(url, &headers, buf).await?;
         if fetched.status >= 400 {
             return Err(error_from_body(fetched.status, fetched.body));
         }
@@ -174,7 +177,7 @@ impl ApiClient {
         url: &str,
         buf: &'buf mut [u8],
     ) -> Result<Option<&'buf [u8]>, PollError> {
-        let fetched = self.get(url, STRUCT_CONTENT_TYPE, None, buf).await?;
+        let fetched = self.get(url, &[("Accept", STRUCT_CONTENT_TYPE)], buf).await?;
         if fetched.status == 404 {
             return Ok(None);
         }
@@ -195,7 +198,7 @@ impl ApiClient {
         url: &str,
         buf: &'buf mut [u8],
     ) -> Result<Option<&'buf [u8]>, PollError> {
-        let fetched = self.get(url, LOGO_CONTENT_TYPE, None, buf).await?;
+        let fetched = self.get(url, &[("Accept", LOGO_CONTENT_TYPE)], buf).await?;
         if fetched.status != 200 {
             crate::error!("logo: fetch failed, status {}", fetched.status);
             return Ok(None);
@@ -205,7 +208,7 @@ impl ApiClient {
 
     /// `GET /time`. JSON, not the struct format — the endpoint predates it.
     pub async fn time(&mut self, url: &str, buf: &mut [u8]) -> Result<BackendTime, PollError> {
-        let fetched = self.get(url, "application/json", None, buf).await?;
+        let fetched = self.get(url, &[("Accept", "application/json")], buf).await?;
         if fetched.status != 200 {
             return Err(error_from_body(fetched.status, fetched.body));
         }
@@ -225,6 +228,114 @@ impl ApiClient {
         })
     }
 
+    /// A `GET` against the OTA surface, with the headers that identify this
+    /// device to the backend.
+    ///
+    /// # The API key travels in cleartext, and that is the deal SPEC §8 made
+    ///
+    /// `ota.py` fetches `/app/*` over TLS. This firmware has no TLS at all —
+    /// SPEC §8 removed it, because authenticity comes from the ed25519
+    /// signature on the artifact rather than from the transport, and the
+    /// alternative was ~21 KB of standing mbedTLS record buffers on a device
+    /// that does not have them to spare. So whatever key goes out here is
+    /// visible to anything on the path.
+    ///
+    /// That is why `/fw/*` has a key of its **own**, separate from the one the
+    /// MicroPython fleet uses (`backend/src/auth.rs`). The exposure is real and
+    /// it is bounded: it cannot reach the endpoint the gift units depend on,
+    /// and it cannot install anything, because installing needs the signing
+    /// key.
+    ///
+    /// The device headers are the Rust fleet's equivalent of `ota.py`'s
+    /// `X-Ota-Proto` block — nothing routes on them today, and they are what
+    /// makes `fly logs` a fleet dashboard.
+    pub async fn fw_get<'buf>(
+        &mut self,
+        url: &str,
+        api_key: &str,
+        context: &str,
+        buf: &'buf mut [u8],
+    ) -> Result<Fetched<'buf>, PollError> {
+        let headers = [
+            ("Accept", "application/json"),
+            ("X-Api-Key", api_key),
+            ("X-Fw-Version", crate::ota::VERSION),
+            ("X-Device-Id", crate::storage::device_id()),
+            ("X-Ota-Context", context),
+        ];
+        self.get(url, &headers, buf).await
+    }
+
+    /// Stream `/fw/image` through `sink`, a chunk at a time.
+    ///
+    /// The body never exists in one piece anywhere: `chunk` is the only buffer
+    /// it passes through, and `sink` writes each piece to flash before the next
+    /// arrives. A ~700 KB image on a device with 512 KB of RAM has no other
+    /// shape available.
+    ///
+    /// `sink` is **synchronous**, and that is not a limitation — writing flash
+    /// is a blocking operation, so an async callback would only be a way to
+    /// pretend otherwise. Returning `false` aborts the transfer; the caller
+    /// keeps the reason, because a `bool` is all this layer needs to know.
+    ///
+    /// Every chunk stamps the link's liveness clock, for the reason the field
+    /// exists: bytes arriving *are* the evidence that something on the network
+    /// is answering. Without it a download longer than
+    /// `SILENCE_INTERVALS × poll_interval` — 90 s by default — would look
+    /// exactly like a device that had fallen off the wifi, and the watchdog
+    /// would reset the device in the middle of an update that was working.
+    #[cfg_attr(
+        not(feature = "link-boot-integrated"),
+        allow(dead_code, reason = "reached only through the OTA install path, which needs a bootloader")
+    )]
+    pub async fn download(
+        &mut self,
+        url: &str,
+        api_key: &str,
+        header_buf: &mut [u8],
+        chunk: &mut [u8],
+        mut sink: impl FnMut(&[u8]) -> bool,
+    ) -> Result<(), PollError> {
+        use embedded_io_async::Read as _;
+
+        let tcp = TcpClient::new(self.stack, self.state);
+        let dns = DnsSocket::new(self.stack);
+        let mut client = HttpClient::new(&tcp, &dns);
+
+        let headers = [
+            ("Accept", "application/octet-stream"),
+            ("X-Api-Key", api_key),
+            ("X-Fw-Version", crate::ota::VERSION),
+            ("X-Device-Id", crate::storage::device_id()),
+            ("X-Ota-Context", "install"),
+        ];
+        let mut request = client
+            .request(Method::GET, url)
+            .await
+            .map_err(transport_error)?
+            .headers(&headers);
+        let response = request.send(header_buf).await.map_err(transport_error)?;
+        if response.status.0 != 200 {
+            return Err(PollError::http(response.status.0, ""));
+        }
+
+        let mut reader = response.body().reader();
+        loop {
+            let read = reader.read(chunk).await.map_err(|_| {
+                PollError::Transport(scoreboard_model::poll::Transport::Io)
+            })?;
+            if read == 0 {
+                return Ok(());
+            }
+            LAST_ANSWER_S.store(Instant::now().as_secs() as u32, Ordering::Relaxed);
+            if !sink(&chunk[..read]) {
+                return Err(PollError::Transport(
+                    scoreboard_model::poll::Transport::Io,
+                ));
+            }
+        }
+    }
+
     /// The one request path. Everything above is a status-code policy over it.
     ///
     /// It is also where the *link's* liveness clock is stamped — see the note
@@ -232,8 +343,7 @@ impl ApiClient {
     async fn get<'buf>(
         &mut self,
         url: &str,
-        accept: &str,
-        if_none_match: Option<&str>,
+        headers: &[(&str, &str)],
         buf: &'buf mut [u8],
     ) -> Result<Fetched<'buf>, PollError> {
         let started = embassy_time::Instant::now();
@@ -241,7 +351,7 @@ impl ApiClient {
         // `TcpConnection::drop` closes the socket — `_with_timeout`'s
         // `session.close()`, arrived at by construction rather than by an
         // `except` arm.
-        let fetched = with_timeout(REQUEST_TIMEOUT, self.fetch(url, accept, if_none_match, buf))
+        let fetched = with_timeout(REQUEST_TIMEOUT, self.fetch(url, headers, buf))
             .await
             .map_err(|_| PollError::Timeout)?;
         if let Ok(fetched) = &fetched {
@@ -281,25 +391,18 @@ impl ApiClient {
     async fn fetch<'buf>(
         &mut self,
         url: &str,
-        accept: &str,
-        if_none_match: Option<&str>,
+        headers: &[(&str, &str)],
         buf: &'buf mut [u8],
     ) -> Result<Fetched<'buf>, PollError> {
         let tcp = TcpClient::new(self.stack, self.state);
         let dns = DnsSocket::new(self.stack);
         let mut client = HttpClient::new(&tcp, &dns);
 
-        let mut headers: heapless::Vec<(&str, &str), 2> = heapless::Vec::new();
-        let _ = headers.push(("Accept", accept));
-        if let Some(etag) = if_none_match {
-            let _ = headers.push(("If-None-Match", etag));
-        }
-
         let mut request = client
             .request(Method::GET, url)
             .await
             .map_err(transport_error)?
-            .headers(&headers);
+            .headers(headers);
         let response = request.send(buf).await.map_err(transport_error)?;
 
         let status = response.status.0;

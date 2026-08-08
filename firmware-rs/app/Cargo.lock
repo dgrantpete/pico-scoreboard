@@ -684,6 +684,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "embassy-boot"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73bfc955c9238df2ce9fecc6f18a64b13ecaa41a3cd42d940a09f304765d10db"
+dependencies = [
+ "defmt 1.1.1",
+ "digest",
+ "document-features",
+ "embassy-embedded-hal",
+ "embassy-sync",
+ "embedded-storage",
+ "embedded-storage-async",
+ "signature",
+]
+
+[[package]]
+name = "embassy-boot-rp"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fc17df4cf2a8ba86e8559a6515104e31ca7aa6b36221199310e244157935204"
+dependencies = [
+ "cfg-if",
+ "cortex-m",
+ "cortex-m-rt",
+ "defmt 1.1.1",
+ "embassy-boot",
+ "embassy-rp",
+ "embassy-sync",
+ "embassy-time",
+ "embedded-storage",
+ "embedded-storage-async",
+]
+
+[[package]]
 name = "embassy-embedded-hal"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2090,6 +2124,7 @@ dependencies = [
  "defmt 1.1.1",
  "defmt-rtt",
  "edge-dhcp",
+ "embassy-boot-rp",
  "embassy-embedded-hal",
  "embassy-executor",
  "embassy-futures",
@@ -2099,6 +2134,7 @@ dependencies = [
  "embassy-time",
  "embedded-io 0.7.1",
  "embedded-io-async 0.7.0",
+ "embedded-storage",
  "fixed",
  "heapless 0.9.3",
  "hub75",
@@ -2111,12 +2147,14 @@ dependencies = [
  "scoreboard-layout",
  "scoreboard-log",
  "scoreboard-model",
+ "scoreboard-ota",
  "scoreboard-portal",
  "scoreboard-render",
  "scoreboard-wire",
  "sequential-storage",
  "serde",
  "serde-json-core",
+ "sha2",
  "static_cell",
 ]
 
@@ -2160,6 +2198,16 @@ version = "0.1.0"
 dependencies = [
  "heapless 0.9.3",
  "scoreboard-wire",
+]
+
+[[package]]
+name = "scoreboard-ota"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "heapless 0.9.3",
+ "serde",
+ "serde-json-core",
 ]
 
 [[package]]

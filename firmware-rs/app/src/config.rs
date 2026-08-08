@@ -48,8 +48,15 @@ static CONFIG: Mutex<CriticalSectionRawMutex, RefCell<Option<DeviceConfig>>> =
 /// read free — see [`crate::storage::install`]. Never fails: a corrupt document
 /// falls back to defaults with a logged complaint, which is `config.py:_load`'s
 /// promise that a hand-edited file cannot brick a boot.
-pub fn load() -> DeviceConfig {
-    let stored = crate::storage::load_config();
+///
+/// `keep_alive` feeds the hardware watchdog. It is a parameter rather than
+/// something this module reaches for because only one path needs it — the
+/// one-time erase of an unreadable storage region, which takes about seven
+/// seconds and would otherwise overrun the watchdog the bootloader armed. A
+/// closure makes that dependency visible at the call site instead of hiding a
+/// peripheral access inside a config read.
+pub fn load(keep_alive: &mut impl FnMut()) -> DeviceConfig {
+    let stored = crate::storage::load_config(keep_alive);
     let mut config = stored.config;
 
     match stored.complaint {

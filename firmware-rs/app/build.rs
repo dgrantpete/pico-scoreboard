@@ -28,9 +28,35 @@ fn main() {
 
     emit_dev_config();
     emit_spa_etag();
+    emit_firmware_version();
 
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=../layout/src/lib.rs");
+}
+
+/// Stamp in the version this image answers to, which is also its OTA identity.
+///
+/// `tools/build.py publish-fw` sets `SCOREBOARD_FW_VERSION`; nothing else does.
+/// That asymmetry is the whole mechanism behind
+/// `scoreboard_ota::decide`'s `DevBuild` arm: a locally-built image carries
+/// `"dev"`, knows it was never published, and refuses to "update" itself to the
+/// published one — which would be a rollback, and was a real incident on
+/// 2026-07-11 under the MicroPython firmware's `/ota_dev` marker file.
+///
+/// A marker file could be missed. A constant compiled into the image cannot.
+fn emit_firmware_version() {
+    println!("cargo::rerun-if-env-changed=SCOREBOARD_FW_VERSION");
+    let version = env::var("SCOREBOARD_FW_VERSION").unwrap_or_default();
+    let version = if version.is_empty() {
+        String::from("dev")
+    } else {
+        assert!(
+            !version.starts_with("dev"),
+            "SCOREBOARD_FW_VERSION must not start with `dev` ({version:?}): that prefix is what              tells a device its image was never published, and an image carrying it will refuse              every future update"
+        );
+        version
+    };
+    println!("cargo::rustc-env=FW_VERSION={version}");
 }
 
 /// Hash the embedded web bundle into the ETag the SPA route serves it under.
