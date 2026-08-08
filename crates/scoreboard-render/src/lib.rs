@@ -32,7 +32,7 @@
 //! | MicroPython bucket | Rust form | What enforces it |
 //! |---|---|---|
 //! | `LoopState` — all cross-frame state | the app's loop-local struct (Phase 3), holding a [`FrameRail`] | it is a local; renderers take `WallMs`/`FrameElapsed` **values**, never the struct, so they cannot reach it |
-//! | Registered scratch (`scratch_buffers()`, `SCRATCH_PALETTE_ENTRIES`) | plain locals: a `[u16; 2]` palette in [`font::text_into`], a copied sprite palette in [`toast::spinner`] | a local cannot outlive the call, so "scratch silently promoted to cross-frame state" is not expressible |
+//! | Registered scratch (`scratch_buffers()`, `SCRATCH_PALETTE_ENTRIES`) | plain locals: a `[u16; 2]` palette in [`font::text_into`], a copied sprite palette in [`toast::overlay`] | a local cannot outlive the call, so "scratch silently promoted to cross-frame state" is not expressible |
 //! | Draw targets | [`Canvas`], holding `&mut [u8]` | the borrow checker: exactly one canvas over a given region at a time |
 //! | `ThreadHealth.frame_seq` | an `AtomicU32` the app owns (Phase 3) | not this crate's business |
 //!

@@ -218,7 +218,7 @@ pub fn error(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
 ///
 /// Text is drawn first and the QR blitted on top, so the QR stays readable even
 /// where a long line ran under it. The lines whose vertical range meets the QR
-/// are narrowed to stop [`QR_TEXT_GAP`] pixels short of its left edge; lines
+/// are narrowed to stop four pixels short of its left edge; lines
 /// entirely below it keep the full width. `display.Regions.update_for_qr` did
 /// that narrowing on core 0 whenever the QR was regenerated — here the QR's size
 /// is right there in the prepared view, so the widths are computed where they

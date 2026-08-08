@@ -135,7 +135,7 @@ pub fn render(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: WallM
 /// "must mirror display.py's menu constants" — two copies of one geometry, kept
 /// in step by hand. Here the track is drawn from the same constants the thumb is
 /// computed from, so there is one copy: the menu controller (Phase 3) calls
-/// [`compute`] and hands the result to `Store::set_menu`.
+/// [`thumb::compute`] and hands the result to `Store::set_menu`.
 pub mod thumb {
     use super::{ROW_HEIGHT, SEPARATOR_Y, TOP};
 

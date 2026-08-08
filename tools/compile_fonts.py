@@ -151,9 +151,9 @@ RUST_MODULE_TEMPLATE = '''\
 //!
 //! Two blobs, byte-identical to the MicroPython module's:
 //!
-//! * [`HEAP`] — per-glyph records, each a `u16`-LE width followed by
+//! * `HEAP` — per-glyph records, each a `u16`-LE width followed by
 //!   `ceil(width / 8) * {height}` bytes of rows.
-//! * [`INDEX`] — `u16`-LE offsets into the heap. Slot 0 is the default glyph
+//! * `INDEX` — `u16`-LE offsets into the heap. Slot 0 is the default glyph
 //!   (`'?'`); slots `1..={char_count}` are codepoints {minchar}..{maxchar};
 //!   `0xFFFF` marks a codepoint the source font has no glyph for, which
 //!   resolves to the default.
