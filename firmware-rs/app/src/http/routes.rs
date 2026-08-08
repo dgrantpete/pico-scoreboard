@@ -38,7 +38,7 @@ use scoreboard_config::ConfigPatch;
 
 use crate::http::scratch::{self, Lease};
 use crate::http::{spa, status::Status};
-use crate::{config, ringlog, settings, supervise};
+use crate::{config, poller, ringlog, settings, supervise};
 
 /// Build the router. See the module docs for why the catch-all comes first.
 pub fn build() -> picoserve::Router<impl picoserve::routing::PathRouter> {
@@ -339,6 +339,13 @@ async fn put_config(body: ConfigBody) -> impl IntoResponse {
     }
     if let Some(colors) = colors {
         settings::publish_ui_colors(colors);
+        // And nudge the snapshot's owner, because colours ride *in* the
+        // snapshot: without this they would wait for the next commit, which on
+        // an idle scoreboard is a poll interval away, on a screen the render
+        // loop is skipping every frame. `update_ui_colors` wrote into a module
+        // the renderers read directly and the change appeared on the next
+        // frame; this is what keeps that promise across the core boundary.
+        poller::command(poller::Command::ColorsChanged);
     }
     if let Some(level) = level {
         ringlog::set_level(level);

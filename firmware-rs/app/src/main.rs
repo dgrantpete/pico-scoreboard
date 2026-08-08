@@ -6,10 +6,10 @@
 //! wire format, state machine, pixels — lives in `crates/*` and never imports
 //! embassy (SPEC §2's crate-boundary rule).
 //!
-//! What core 0 does *today* is [`demo`]: a placeholder that pushes hard frames
-//! through the snapshot channel so the render loop can be measured. Wi-Fi, the
-//! poller, the HTTP server, storage and inputs are the remaining Phase 3 tasks
-//! and land beside it.
+//! Core 0's work is [`net::bringup`] through the boot and [`poller`] after it:
+//! the poller owns the display state, publishes every snapshot, and is the only
+//! thing that talks to the backend. Storage, inputs and supervision are the
+//! remaining Phase 3 tasks and land beside it.
 //!
 //! # Two PACs, one chip, and a contract that cannot be compiled
 //!
@@ -44,10 +44,11 @@
 #![recursion_limit = "256"]
 
 mod config;
-mod demo;
 mod display_core1;
 mod http;
+mod logos;
 mod net;
+mod poller;
 mod probe;
 mod ringlog;
 mod settings;
@@ -63,8 +64,7 @@ use hub75::display::{FrameBytes, Hub75Display};
 use hub75::driver::{Config, Hub75Driver};
 use hub75::geometry::RGB565_FRAME_BYTES;
 use panic_probe as _;
-use scoreboard_model::SnapshotChannel;
-use scoreboard_render::game::{LOGO_BYTES, LogoSlot};
+use scoreboard_model::{SnapshotChannel, Store};
 use static_cell::{ConstStaticCell, StaticCell};
 
 /// Core 1's stack.
@@ -100,13 +100,17 @@ static FRAME: ConstStaticCell<FrameBytes> = ConstStaticCell::new([0; RGB565_FRAM
 /// The core-0 → core-1 handoff: three snapshot slots and an atomic index.
 static CHANNEL: SnapshotChannel = SnapshotChannel::new();
 
-/// Stand-in team crests, until the poller downloads real ones.
+/// The team crests core 1 draws from, and the authoritative display state core
+/// 0 publishes.
 ///
-/// `const`-built and never written, so all 2,304 B live in flash — the crest
-/// pool the renderer borrows is the one thing a snapshot deliberately does not
-/// carry (it holds a `LogoRef` handle instead, because the pool outlives any
-/// one commit and copying two crests per publish would double the handoff).
-static CRESTS: [LogoSlot; 2] = [flat_crest(0xF800), flat_crest(0x001F)];
+/// Both are `StaticCell` rather than task-arena locals for the same reason:
+/// they are handed to exactly one owner, once, and that owner is not the
+/// function that creates them. The crest pool goes to core 1 (see
+/// [`logos`]'s module docs for why the pixels live there and the bookkeeping
+/// does not); the store is lent to [`net::bringup`] for the boot screen and
+/// then moves to the poller.
+static CRESTS: StaticCell<logos::CrestPool> = StaticCell::new();
+static STORE: StaticCell<Store> = StaticCell::new();
 
 /// Paint core 0's stack so its high-water mark can be measured, and record how
 /// much RAM the statics took.
@@ -151,18 +155,6 @@ fn paint_core0_stack() -> supervise::StackProbe {
 
     // SAFETY: just painted, and `StackProbe` only ever reads, through atomics.
     unsafe { supervise::StackProbe::new(floor as *mut u8, len) }
-}
-
-const fn flat_crest(color: u16) -> LogoSlot {
-    let [low, high] = color.to_le_bytes();
-    let mut slot = [0u8; LOGO_BYTES];
-    let mut index = 0;
-    while index < LOGO_BYTES {
-        slot[index] = low;
-        slot[index + 1] = high;
-        index += 2;
-    }
-    slot
 }
 
 #[entry]
@@ -214,11 +206,12 @@ fn main() -> ! {
     // Every task below has a pool of one, so `unwrap` can only fire on a second
     // spawn of the same task — which would be a bug in this function, not a
     // condition to handle.
+    let crests = CRESTS.init(logos::CrestPool::new());
     spawn_core1(peripherals.CORE1, stack, move || {
         let executor = EXECUTOR1.init(Executor::new());
         executor.run(|spawner| {
             spawner.spawn(defmt::unwrap!(display_core1::render_loop(
-                reader, display, &CRESTS
+                reader, display, crests
             )))
         });
     });
@@ -247,14 +240,17 @@ fn main() -> ! {
     // so it is sent once here, with every hook on.
     settings::publish_display(settings::DisplayUpdate::boot(&boot_config));
 
+    let store = STORE.init(Store::new());
+
     let executor = EXECUTOR0.init(Executor::new());
     executor.run(|spawner| {
-        // Owns the publisher through the boot — it is what draws the startup
-        // screen — and hands it to whichever mode wins. On the station path
-        // that is `demo::feed`, the stand-in for the poller; in setup mode
-        // nothing publishes again, because the setup screen does not change.
-        spawner.spawn(defmt::unwrap!(net::bringup(spawner, publisher, radio)));
-        spawner.spawn(defmt::unwrap!(demo::brightness()));
+        // Owns the store and the publisher through the boot — together they are
+        // what draws the startup screen — and hands both to whichever mode
+        // wins. On the station path that is the poller; in setup mode nothing
+        // publishes again, because the setup screen does not change.
+        spawner.spawn(defmt::unwrap!(net::bringup(
+            spawner, store, publisher, radio
+        )));
         spawner.spawn(defmt::unwrap!(supervise::liveness(stack_probe, core0_stack)));
         spawner.spawn(defmt::unwrap!(supervise::reboot_on_request()));
     });

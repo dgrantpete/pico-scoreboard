@@ -7,6 +7,13 @@
 //! to read it, or the counter is a fact nobody checks. When the watchdog task
 //! lands it feeds from exactly this signal — a stalled loop stops the counter,
 //! a *quiet* loop (an idle screen skipping every frame) does not.
+//!
+//! It also reads [`poller::health`], which is the *network's* liveness and a
+//! genuinely different question — BACKLOG 69's bench unit fell off the Wi-Fi
+//! and kept rendering at a perfect 20 FPS all night. The gate task #12's
+//! watchdog feeder should use is documented on
+//! [`Health`](crate::poller::Health); this reports it every tick so the number
+//! is visible before anything depends on it.
 
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
@@ -15,6 +22,7 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Ticker, Timer};
 
 use crate::display_core1::FRAME_SEQ;
+use crate::poller;
 
 /// The byte the core-1 stack is painted with before core 1 is started.
 ///
@@ -212,6 +220,23 @@ pub async fn liveness(core1: StackProbe, core0: StackProbe) -> ! {
                 core0_used,
                 core0_total,
             );
+        }
+
+        // The other half of liveness, and the half BACKLOG 69 is about: core 1
+        // ticking proves the *renderer* is alive, which the bench unit
+        // demonstrated is entirely compatible with having silently fallen off
+        // the network. The poller is the only thing that finds that out.
+        let health = poller::health();
+        match health.since_success_s {
+            Some(since) => defmt::info!(
+                "poll: {} s since the last success, failure streak {}",
+                since,
+                health.streak
+            ),
+            None => defmt::warn!(
+                "poll: no successful poll since boot, failure streak {}",
+                health.streak
+            ),
         }
     }
 }

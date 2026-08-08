@@ -33,64 +33,63 @@
 //!
 //! # Attribution
 //!
-//! Core 0 announces which scenario it is driving through [`enter`]; core 1
-//! reads it at the top of each frame and flushes its counters when it changes,
-//! so every reported line belongs to exactly one scenario with no reliance on
-//! log ordering between two cores. The demo owns the scenario sequence; when
-//! the real poller replaces it, this hook goes with it.
-
-use core::sync::atomic::{AtomicU8, Ordering};
+//! A report belongs to one screen, because blending an idle screen's skipped
+//! frames with a scrolling line score's would hide exactly the number this
+//! exists to find. Which screen is **read off the latched snapshot** — the
+//! frame's own input — so it needs no announcement from core 0 and cannot
+//! disagree with what was drawn. Before the poller existed, a demo module
+//! published a scenario through an atomic and this read that instead; the
+//! snapshot was always the better source, and it became available when the demo
+//! went away.
 
 use embassy_time::Instant;
+use scoreboard_model::{Mode, ScoreboardSnapshot};
 
-/// What core 0 is currently putting on the panel.
+/// What a frame drew, for attribution. [`Mode`], plus the one thing that is not
+/// a mode: the league menu preempts the mode dispatch entirely, so a menu frame
+/// is nothing like the frame the mode underneath would have produced.
 #[derive(Clone, Copy, PartialEq, Eq, defmt::Format)]
-#[repr(u8)]
-pub enum Scenario {
-    /// Boot progress: static screen, redrawn only on a commit.
-    Startup = 0,
-    /// Static screen, no commits — the skip path, and the cheapest frame there
-    /// is.
-    Idle = 1,
-    /// Live MLB with a play flash at the wire's 255-byte cap scrolling through
-    /// the bottom strip. The play-line worst case.
-    MlbPlayFlash = 2,
-    /// Final line score with three overflowing rows scrolling in lockstep. The
-    /// case that measured ~41 ms in MicroPython.
-    FinalLinescore = 3,
-    /// The same final screen under a sticky toast overlay: an icon blit plus a
-    /// dim pass over all 8,192 pixels.
-    ToastOverlay = 4,
-    /// The league menu, which preempts the mode dispatch and marquees every
-    /// frame, so nothing is ever skipped.
-    Menu = 5,
+pub enum Screen {
+    Menu,
+    Mode(ModeName),
 }
 
-impl Scenario {
-    const ALL: [Scenario; 6] = [
-        Scenario::Startup,
-        Scenario::Idle,
-        Scenario::MlbPlayFlash,
-        Scenario::FinalLinescore,
-        Scenario::ToastOverlay,
-        Scenario::Menu,
-    ];
-
-    fn from_index(index: u8) -> Scenario {
-        Scenario::ALL[index as usize % Scenario::ALL.len()]
+impl Screen {
+    pub fn of(snapshot: &ScoreboardSnapshot) -> Screen {
+        if snapshot.menu.active {
+            return Screen::Menu;
+        }
+        Screen::Mode(ModeName(snapshot.mode))
     }
 }
 
-static SCENARIO: AtomicU8 = AtomicU8::new(Scenario::Startup as u8);
+/// [`Mode`], printable. The model has no defmt dependency by design — it is a
+/// host-tested crate — so the name is spelled here.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ModeName(Mode);
 
-/// Core 0: announce the scenario every subsequent frame belongs to.
-pub fn enter(scenario: Scenario) {
-    SCENARIO.store(scenario as u8, Ordering::Relaxed);
-}
-
-/// Core 1: which scenario this frame belongs to.
-pub fn current() -> Scenario {
-    Scenario::from_index(SCENARIO.load(Ordering::Relaxed))
+impl defmt::Format for ModeName {
+    fn format(&self, formatter: defmt::Formatter<'_>) {
+        defmt::write!(
+            formatter,
+            "{=str}",
+            match self.0 {
+                Mode::Idle => "idle",
+                Mode::Startup => "startup",
+                Mode::NoGames => "no_games",
+                Mode::Setup => "setup",
+                Mode::Error => "error",
+                Mode::Updating => "updating",
+                Mode::MlbLive => "mlb_live",
+                Mode::Pregame => "pregame",
+                Mode::Final => "final",
+                Mode::SoccerLive => "soccer_live",
+                Mode::SoccerFinal => "soccer_final",
+                Mode::NbaLive => "nba_live",
+                Mode::FootballLive => "football_live",
+            }
+        )
+    }
 }
 
 /// A running stopwatch. `embassy_time`'s tick is 1 µs on RP2350, so the
@@ -140,7 +139,7 @@ impl Bucket {
 /// The probe itself. Lives in the render loop's loop-local state, like every
 /// other piece of cross-frame state on core 1.
 pub struct FrameProbe {
-    scenario: Scenario,
+    screen: Screen,
     ticks: u32,
     drawn: u32,
     overruns: u32,
@@ -153,16 +152,17 @@ pub struct FrameProbe {
     frame: Bucket,
 }
 
-/// A backstop, not the normal trigger: scenario changes are what flush the
-/// counters, and the demo's scenarios are 100 ticks each. This only fires if
-/// core 0 stops advancing them, at which point 30 s of silence from the probe
-/// would itself be the confusing part.
+/// A screen change flushes the counters; this is what reports a screen that
+/// does not change. A live game holds for `game_rotation_seconds` — 60 by
+/// default — and an idle scoreboard holds for as long as there are no games, so
+/// without this the probe would go silent for hours on exactly the case worth
+/// watching. 600 ticks is 30 s.
 const REPORT_EVERY: u32 = 600;
 
 impl FrameProbe {
     pub const fn new() -> FrameProbe {
         FrameProbe {
-            scenario: Scenario::Startup,
+            screen: Screen::Mode(ModeName(Mode::Startup)),
             ticks: 0,
             drawn: 0,
             overruns: 0,
@@ -174,12 +174,12 @@ impl FrameProbe {
         }
     }
 
-    /// Call at the top of every tick. Flushes and resets when core 0 has moved
-    /// on to a different scenario, so a report never blends two of them.
-    pub fn begin_tick(&mut self, scenario: Scenario) {
-        if scenario != self.scenario {
+    /// Call at the top of every tick. Flushes and resets when the snapshot has
+    /// moved on to a different screen, so a report never blends two of them.
+    pub fn begin_tick(&mut self, screen: Screen) {
+        if screen != self.screen {
             self.report();
-            self.scenario = scenario;
+            self.screen = screen;
         }
         self.ticks += 1;
     }
@@ -213,7 +213,7 @@ impl FrameProbe {
         }
     }
 
-    /// Emit one line per scenario and start counting again.
+    /// Emit one line per screen and start counting again.
     fn report(&mut self) {
         if self.ticks == 0 {
             return;
@@ -223,7 +223,7 @@ impl FrameProbe {
              frame mean {} us max {} | render mean {} us max {} (n={}) | \
              show mean {} us max {} | rebuild mean {} us max {} (n={}) | \
              brightness mean {} us max {} (n={})",
-            self.scenario,
+            self.screen,
             self.ticks,
             self.drawn,
             self.ticks - self.drawn,

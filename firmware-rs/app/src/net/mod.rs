@@ -53,12 +53,14 @@
 //! Seven is the working ceiling; [`SOCKETS`] is 8 so that adding one consumer
 //! is a budget line rather than a rewrite.
 
+pub mod api_client;
 pub mod captive_dns;
 pub mod dhcp_server;
 pub mod hosts;
 #[cfg(feature = "net-probe")]
 mod probe;
 pub mod status;
+pub mod timesync;
 pub mod wifi;
 
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
@@ -127,15 +129,22 @@ async fn net_runner(mut runner: NetRunner<'static, cyw43::NetDriver<'static>>) -
 
 /// Bring the radio up, provision, and hand off to whichever mode won.
 ///
-/// Owns the [`Store`] for the whole boot, which is what makes the startup
+/// Borrows the [`Store`] for the whole boot, which is what makes the startup
 /// screen work without a lock: `main.py` published progress from the same
-/// single-threaded context that did the joining, and so does this. Where the
-/// authoritative `Store` lives *after* the boot is task #11's call — the seam
-/// is that [`wifi::provision`] takes it by `&mut`, so whoever ends up owning it
-/// only has to lend it.
+/// single-threaded context that did the joining, and so does this.
+///
+/// The `&'static mut` is the handover. On the station path it moves into
+/// [`crate::poller::run`], which owns the display state from then on and is the
+/// only thing that publishes; in setup mode nothing publishes again, because
+/// the setup screen does not change. Either way there is exactly one owner at
+/// every instant, and the type says so.
 #[embassy_executor::task]
-pub async fn bringup(spawner: Spawner, mut publisher: Publisher<'static>, p: NetPeripherals) {
-    let mut store = Store::new();
+pub async fn bringup(
+    spawner: Spawner,
+    store: &'static mut Store,
+    mut publisher: Publisher<'static>,
+    p: NetPeripherals,
+) {
     // Step 1 of 5. `main.py` commits this from its display-init block, before
     // core 1 starts; here core 1 is already running, so this is the first thing
     // it has to render that is not the empty snapshot.
@@ -180,19 +189,15 @@ pub async fn bringup(spawner: Spawner, mut publisher: Publisher<'static>, p: Net
     let (stack, runner) = embassy_net::new(device, Default::default(), resources, seed);
     spawner.spawn(defmt::unwrap!(net_runner(runner)));
 
-    let outcome = wifi::provision(
-        &mut control,
-        stack,
-        &mut store,
-        &mut publisher,
-        &credentials,
-    )
-    .await;
+    let outcome =
+        wifi::provision(&mut control, stack, &mut *store, &mut publisher, &credentials).await;
 
     let hosts = match outcome {
         Provisioned::Station { ip } => {
-            // `main.py` syncs time here (step 5 covers both) before it starts
-            // any service. Time sync is task #11's, on the same seam.
+            // `main.py` syncs the clock here, inside step 5, before it starts
+            // any service. The sync is the poller's first phase now — see
+            // `net::timesync`'s docs for why it is a step and not a task — so
+            // this step covers spawning it.
             store.set_startup_step(5, wifi::STARTUP_STEPS, "Starting", "Services", 0, 0);
             publisher.publish(store.snapshot());
             store.finish_startup(StartupExit::Mode(Mode::Idle));
@@ -203,10 +208,10 @@ pub async fn bringup(spawner: Spawner, mut publisher: Publisher<'static>, p: Net
                 ip,
                 credentials.device_name
             );
-            // The placeholder core-0 producer, until the poller (task #11)
-            // replaces it. It takes the publisher, so nothing here can publish
-            // afterwards — which is the point: one writer.
-            spawner.spawn(defmt::unwrap!(crate::demo::feed(publisher)));
+            // The handover. The poller takes both the store and the publisher,
+            // so nothing here can touch either afterwards — which is the
+            // point: one owner, and the borrow checker enforcing it.
+            spawner.spawn(defmt::unwrap!(crate::poller::run(store, publisher, stack)));
             #[cfg(feature = "net-probe")]
             spawner.spawn(defmt::unwrap!(probe::fetch_time(stack)));
 
@@ -275,8 +280,8 @@ pub async fn bringup(spawner: Spawner, mut publisher: Publisher<'static>, p: Net
 
     // The radio and `control` outlive this function either way — the runner
     // task owns the hardware. What ends here is the *boot*, which is why this
-    // task returns instead of parking: nothing it holds, the `Store` included,
-    // has a reader once the handoff above is done.
+    // task returns instead of parking: the `Store` and the `Publisher` have
+    // moved to whoever owns them next, and nothing else it holds has a reader.
 }
 
 /// Copy into a bounded string, truncating. Every caller passes a value already

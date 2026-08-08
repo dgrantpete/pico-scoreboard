@@ -18,8 +18,10 @@
 //!
 //! # Where the stored configuration comes from
 //!
-//! Nowhere, yet. This starts at `_DEFAULTS` on every boot, so a `PUT` changes
-//! the running device and does not survive a reset. Task #12 fills two seams:
+//! Nowhere, yet. This starts at `_DEFAULTS` on every boot — plus the one field
+//! a bench image cannot do without, the backend URL, which comes from
+//! `dev.toml` the same way the Wi-Fi credentials do. So a `PUT` changes the
+//! running device and does not survive a reset. Task #12 fills two seams:
 //! [`load`] here, and `http::routes::persist` there.
 
 use core::cell::RefCell;
@@ -41,7 +43,17 @@ pub fn load() -> DeviceConfig {
     // No storage yet, so there is no document to parse and defaults are the
     // whole answer. When #12 lands, the read goes here and the complaint it
     // returns gets logged exactly as `config.py:_load` logged it.
-    let config = DeviceConfig::new();
+    let mut config = DeviceConfig::new();
+    // The bench seam, and the same one `net::wifi::Credentials::from_dev_build`
+    // uses: `_DEFAULTS` has no backend URL, because a device out of the box is
+    // configured through the settings page. Until storage exists there is
+    // nowhere for that page's answer to survive, so a probe-flashed image takes
+    // the URL from the gitignored `dev.toml` instead. With no `dev.toml` this
+    // is empty, the poller's first request fails as `Network error / api url is
+    // not valid`, and that is the honest state of an unconfigured device.
+    if config.api.url.is_empty() {
+        let _ = config.api.url.push_str(env!("DEV_API_URL"));
+    }
     CONFIG.lock(|slot| *slot.borrow_mut() = Some(config.clone()));
     crate::ringlog::set_level(config.log_level());
     config

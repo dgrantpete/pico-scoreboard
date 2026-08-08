@@ -49,12 +49,13 @@ use hub75::display::Hub75Display;
 use hub75::driver::Hub75Driver;
 use scoreboard_model::Reader;
 use scoreboard_render::blit::Canvas;
-use scoreboard_render::game::{LogoSlot, Logos, Scene};
+use scoreboard_render::game::{Logos, Scene};
 use scoreboard_render::geometry::{HEIGHT, RenderSettings, WIDTH};
 use scoreboard_render::time::{FRAME_MS, FrameRail, WallMs};
 use scoreboard_render::{PreparedView, SkipMemo, frame};
 
-use crate::probe::{FrameProbe, Lap};
+use crate::logos::CrestPool;
+use crate::probe::{FrameProbe, Lap, Screen};
 
 /// One frame period, from the render crate's own constant so the loop cannot
 /// pace at a rate the scroll speeds were not chosen for.
@@ -147,7 +148,7 @@ fn apply_settings(
 pub async fn render_loop(
     mut reader: Reader<'static>,
     mut display: Hub75Display<'static, Hub75Driver>,
-    logos: &'static [LogoSlot],
+    crests: &'static mut CrestPool,
 ) -> ! {
     let mut state = LoopState {
         rail: FrameRail::new(),
@@ -166,12 +167,6 @@ pub async fn render_loop(
 
     let mut deadline = Instant::now() + FRAME;
     loop {
-        // Before the stopwatch starts, because this is where the probe emits
-        // its per-scenario report and defmt formatting is dev-only cost that
-        // should not land in a frame-time number. The deadline check at the
-        // bottom still sees it — it works in absolute time — so an overrun
-        // caused by logging is still counted as one.
-        state.probe.begin_tick(crate::probe::current());
         let tick = Lap::start();
 
         // Acquire-ordered: everything core 0 wrote before publishing is visible
@@ -179,7 +174,19 @@ pub async fn render_loop(
         // the frame renders from one consistent state however many times core 0
         // publishes underneath it.
         let snapshot = reader.latch();
+        // **After** the latch, never before. A snapshot naming a crest slot was
+        // published *after* that slot's pixels were sent, so latching it first
+        // guarantees the update is already in the channel — see `logos`'s
+        // module docs.
+        crests.apply_pending();
         let now = WallMs(Instant::now().as_millis());
+
+        // Before the stopwatch would matter, because this is where the probe
+        // emits its per-screen report and defmt formatting is dev-only cost
+        // that should not land in a frame-time number. The deadline check at
+        // the bottom still sees it — it works in absolute time — so an overrun
+        // caused by logging is still counted as one.
+        state.probe.begin_tick(Screen::of(snapshot));
 
         let requested = BRIGHTNESS.load(Ordering::Relaxed);
         if requested != state.brightness {
@@ -206,7 +213,7 @@ pub async fn render_loop(
             snapshot,
             prepared: &state.prepared,
             settings: &state.settings,
-            logos: Logos::new(logos),
+            logos: Logos::new(crests.slots()),
             now,
             view: state.rail.view_elapsed(),
             play: state.rail.play_elapsed(),

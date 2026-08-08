@@ -30,6 +30,10 @@ scoreboard-layout = { path = "layout" }
 hub75 = { path = "../../crates/hub75" }
 scoreboard-model = { path = "../../crates/scoreboard-model" }
 scoreboard-render = { path = "../../crates/scoreboard-render" }
+# The `Accept` value that selects the packed format, and the decoders behind
+# `GameFeed`. Already in the graph under `scoreboard-model`; named here because
+# `net::api_client` sends the header itself.
+scoreboard-wire = { path = "../../crates/scoreboard-wire" }
 
 # Pre-1.0 ecosystem: pinned exactly (SPEC.md §14).
 #
@@ -91,8 +95,23 @@ serde-json-core = "=0.6.0"
 # under rp235x-pac; named here because this crate calls it directly.
 cortex-m = "=0.7.8"
 # `net-probe` only — the `Read`/`Write` traits embassy-net's TcpSocket
-# implements. reqwless brings its own in task #11.
+# implements. The poller reaches them through reqwless instead.
 embedded-io-async = { version = "=0.7.0", optional = true }
+# The backend client (SPEC §7.4). `default-features = false` drops
+# `embedded-tls`, which is the whole reason the dependency is affordable: score
+# polling is plain HTTP by design (`api_client.py:94`), so the TLS stack, its
+# 21 KB of record buffers and its certificate machinery never link. reqwless
+# still *names* `p256` and `rand_chacha` unconditionally, but every use of them
+# is behind `cfg(feature = "embedded-tls")`, so LTO strips the lot — verified in
+# the size report, where the image grew by the HTTP codec and nothing else.
+#
+# `defmt` here resolves to the `0.3.100` shim, which re-exports `defmt` 1.x, so
+# there is one defmt runtime in the image and not two.
+reqwless = { version = "=0.14.0", default-features = false, features = ["defmt"] }
+# reqwless's error type carries an `embedded_io::ErrorKind`, which the poller
+# maps onto its own transport vocabulary. Same crate embassy-net and picoserve
+# already pull in.
+embedded-io = "=0.7.1"
 
 [build-dependencies]
 scoreboard-layout = { path = "layout", features = ["std"] }
