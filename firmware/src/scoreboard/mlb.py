@@ -2,9 +2,8 @@
 MLB game data model and binary wire-format deserialization.
 
 Firmware mirror of the backend's `MlbGame` domain model and its wire
-encoding — the NORMATIVE spec is the MLB section of `backend/src/wire.rs`'s
-doc comment; `tools/wire_format_check.py` cross-checks this parser against
-the Rust encoder's golden bytes. Parsing allocates only the model objects
+encoding — the NORMATIVE spec is the `scoreboard_wire::mlb` module of
+`crates/scoreboard-wire`. Parsing allocates only the model objects
 and their strings — no intermediate dict tree, no json module. Each fixed
 numeric section is decoded in a single C-level `struct.unpack_from`; the
 strings section is a bounds-checked length-prefixed walk over the response

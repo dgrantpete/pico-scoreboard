@@ -2,7 +2,7 @@
 //!
 //! The hex constants are the byte-identity contract: they were produced by the
 //! encoder the deployed MicroPython firmware decodes, and several were shared
-//! verbatim with the retired `tools/wire_format_check.py` cross-check. Every
+//! verbatim with the Python cross-check this crate retired. Every
 //! one is asserted in both directions — encode must produce it, decode must
 //! reproduce the value — so the two halves cannot drift apart.
 

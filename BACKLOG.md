@@ -311,7 +311,7 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
 
 Landed 2026-07-09: soccer wire encodings in `wire.rs` (clock as elapsed
 seconds u16, floor-minute convention matching ESPN's displayClock) +
-firmware `soccer.py` parsers cross-checked by `wire_format_check.py`;
+firmware `soccer.py` parsers cross-checked against the Rust golden bytes;
 backend serves all three states with struct negotiation (`SoccerGame::Final`
 carries scores + scorer strings); `GamePoller` (`scoreboard/poller.py`)
 merges MLB + configured soccer leagues into one live-first rotation with
@@ -420,8 +420,8 @@ transforms on the `status.type.state` DU, `LivePhase` from
 can't be extrapolated; 7 live-captured fixtures + transform tests;
 combined spec promoted, genuinely mlb+nba+world-cup) and outbound
 (`nba/handler.rs` + `/basketball/nba/games[/{id}]` routes + OpenAPI
-entries; `wire.rs` NBA encodings + goldens, cross-checked by
-`wire_format_check.py`; firmware `nba.py` parser, `sports.nba.enabled`
+entries; NBA wire encodings + goldens, cross-checked against the
+firmware parser; firmware `nba.py` parser, `sports.nba.enabled`
 config (default off) + poller source + play-flash commit; `nba_live`
 screen (single design, soccer-A silhouette widened for 3-digit
 scores, HT/END accent breaks, sub-minute warning clock) and the final
@@ -449,7 +449,7 @@ settings Sports card). Same change unified the outbound enum style
 Landed 2026-07-18 as a full sibling sport (NFL + NCAAF, soccer-style
 multi-league): backend `football/` module + `FootballLeague` registry rows +
 wire encodings with goldens; firmware `football.py` parser (cross-pinned to
-the Rust bytes by `wire_format_check.py`), `football_live` screen (broadcast
+the Rust bytes), `football_live` screen (broadcast
 corners over the sprite field strip — endzones palette-tinted to team
 colors, Core-0-projected scrimmage/first-down perspective lines, ball at
 the LOS, timeout bars, possession arrow, red-zone warning colors; first

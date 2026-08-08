@@ -3,9 +3,8 @@ NBA game data model and binary wire-format deserialization.
 
 Firmware mirror of the backend's `NbaGame` domain model
 (`backend/src/nba/types.rs`) and its wire encoding — the NORMATIVE spec is
-the "NBA game detail" section of `backend/src/wire.rs`'s doc comment;
-`tools/wire_format_check.py` cross-checks this parser against the Rust
-encoder's golden bytes. Model classes are plain-attribute value types,
+the `scoreboard_wire::nba` module of `crates/scoreboard-wire`.
+Model classes are plain-attribute value types,
 treated as immutable after construction, read by the display thread at
 20 FPS — same contract as scoreboard/mlb.py.
 
