@@ -2,9 +2,9 @@
 target = "thumbv8m.main-none-eabihf"
 
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
-# Adjust the chip name to the local probe-rs version if it complains
-# (RP2350A / RP235x on older releases).
-runner = "probe-rs run --chip RP2350"
+# probe-rs 0.32 wants RP235x ("RP2350" only matches via wildcard, with a
+# warning). Adjust if the local probe-rs version complains.
+runner = "probe-rs run --chip RP235x"
 rustflags = [
   "-C", "link-arg=--nmagic",
   "-C", "link-arg=-Tlink.x",
