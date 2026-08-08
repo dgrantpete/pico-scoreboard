@@ -1,0 +1,20 @@
+[package]
+name = "scoreboard-config"
+version = "0.1.0"
+edition = "2024"
+description = "The device configuration: the merged JSON shape /api/config serves, its cross-key invariant, and the partial update PUT applies"
+
+[dependencies]
+scoreboard-log = { path = "../scoreboard-log" }
+scoreboard-render = { path = "../scoreboard-render" }
+scoreboard-model = { path = "../scoreboard-model" }
+# Pre-1.0 ecosystem: pinned exactly (SPEC.md §14). `serde` is the one 1.0
+# dependency, so it takes a caret.
+#
+# NO-ALLOC WATCH (SPEC.md §10): `serde`'s `std`/`alloc` features are both off
+# (`default-features = false`), and `heapless/serde` pulls only `serde_core`.
+# `serde-json-core` never allocates — it writes into the caller's slice and
+# deserializes into the caller's bounded types.
+heapless = { version = "=0.9.3", features = ["serde"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde-json-core = "=0.6.0"
