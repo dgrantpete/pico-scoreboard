@@ -46,6 +46,10 @@ pico-scoreboard/
 │   ├── scoreboard-wire/      # no_std, no-alloc. THE wire format. Shared.
 │   ├── scoreboard-model/     # no_std. Sport state models + display-facing view logic
 │   ├── scoreboard-render/    # no_std. Layout, textfold, geometry, menu, glyph blitting
+│   ├── scoreboard-input/     # no_std. Button PIO program + fold, league menu, brightness curve
+│   ├── scoreboard-config/    # no_std. The config document, its merge and its invariant
+│   ├── scoreboard-log/       # no_std. The RAM ring, and the crash breadcrumb's encoding
+│   ├── scoreboard-portal/    # no_std. Captive-portal DNS answers + the Host check
 │   ├── hub75/                # no_std. The driver: PIO programs, BCM, DMA chaining
 │   └── png-stream/           # (Phase S) no_std streaming PNG→sprite decoder
 ├── firmware-rs/
@@ -57,10 +61,12 @@ pico-scoreboard/
 │           ├── main.rs           # init, task spawning, core-1 launch
 │           ├── net/              # wifi.rs (provisioning), captive_dns.rs,
 │           │                     # api_client.rs (reqwless), server.rs (picoserve)
-│           ├── ota.rs            # FirmwareUpdater glue, manifest client
-│           ├── storage.rs        # sequential-storage keys, config load/save
-│           ├── supervise.rs      # watchdog, ThreadHealth, boot-fail counter
-│           ├── inputs.rs         # buttons, rotary encoder, light sensor
+│           ├── ota.rs            # FirmwareUpdater glue, manifest client (Phase 4)
+│           ├── storage.rs        # the flash map: config document + breadcrumb
+│           ├── config.rs         # the running configuration, behind one lock
+│           ├── supervise.rs      # watchdog + health gate, panic handler, reset
+│           ├── inputs.rs         # PIO1 and the 50 ms button drain
+│           ├── brightness.rs     # the 5 Hz loop; veml7700.rs is its I2C half
 │           └── display_core1.rs  # core-1 executor: render loop @ 20 FPS
 └── firmware/                 # MicroPython tree, kept until Phase 4 sign-off
 ```
@@ -262,9 +268,10 @@ this section did not anticipate:
 
 `sequential-storage` (map API) over a dedicated flash region:
 
-- Keys: wifi credentials, device config (port of `config.py` fields), OTA channel/dev flag, sticky user prefs (brightness lock, team follows — per current config surface).
-- Writes are rare (config changes); reads happen once at boot into a `static` config struct — no steady-state flash traffic.
-- **Logging changes shape:** `logger.py`'s file-flush model is replaced by defmt over RTT for development and a RAM ring buffer (fixed `heapless` deque) exposed via a `/api/logs` endpoint for deployed units — pull, not persist. Persistent crash breadcrumbs: a single small sequential-storage record written from the panic handler (panic message + snapshot of task watermarks), read and reported at next boot.
+- Keys: **two, not four** — Phase 3 built this and the list above did not survive contact. The device configuration is one JSON document (`app/src/storage.rs`'s `Key::Config`), and it *contains* the wifi credentials, because `config.json` did and `GET /api/config` returns them; a separate credentials record would be a second source of truth for the same four fields. There are no sticky user prefs: the rotation lock and the league filter are deliberately session state (`menu.py` says so), and brightness is `display.brightness`, which is config. The OTA channel/dev flag is Phase 4's and §8 already says it becomes a *config* flag, so it needs no key of its own. The second key is the crash breadcrumb.
+- Writes are rare (config changes); reads happen once at boot into a `static` config struct — no steady-state flash traffic. **Every write stops the panel**: a flash program runs from RAM with XIP disabled, so embassy-rp parks core 1 for the duration. Measured at one 942 B config save: the affected frame took 14.5 ms against a 50 ms budget, and no frame was dropped.
+- **Logging changes shape:** `logger.py`'s file-flush model is replaced by defmt over RTT for development and a RAM ring buffer (fixed `heapless` deque) exposed via a `/api/logs` endpoint for deployed units — pull, not persist. Persistent crash breadcrumbs: a single small sequential-storage record carrying the panic message and a snapshot of both stacks' watermarks, read and reported at next boot through `/api/logs/previous`.
+  **Correction from Phase 3: the panic handler does not write it.** It cannot. A flash write parks core 1 through the multicore FIFO and waits for an answer, so a write from core 1 is refused outright and a write from core 0 *while core 1 is the core that panicked* hangs forever — which is exactly the crash most worth recording. The handler instead writes the record to a `.uninit` RAM cell (240 B, survives both `SYSRESETREQ` and a watchdog reset) and resets; the next boot promotes it to flash **before core 1 starts**, where the write is free. Same guarantee, plus one the original shape did not have.
 - Migration: first Rust boot finds no storage region → runs the normal "unprovisioned" path. No attempt to read MicroPython's littlefs; gift units get reprovisioned once. (Documented, acceptable.)
 
 ---
@@ -303,8 +310,10 @@ Rule: any PR that adds a static ≥ 1 KB updates the table in the same PR.
 
 ## 12. Supervision and health
 
-- Hardware watchdog fed by a core-0 task gated on a `ThreadHealth`-equivalent: core 1 publishes a frame counter (atomic); net supervisor publishes liveness; feeder starves the watchdog if either stalls — port of today's semantics.
-- Panic path: defmt + panic-probe in dev; in release, panic handler writes the breadcrumb (§9) then resets into the watchdog/trial-boot machinery, which is what ultimately triggers rollback after a bad OTA.
+- Hardware watchdog fed by a core-0 task gated on a `ThreadHealth`-equivalent: core 1 publishes a frame counter (atomic); the *poller* publishes network liveness (which is the half BACKLOG 69 proved a frame counter cannot see); the feeder starves the watchdog if either stalls — port of today's semantics. Opt-in via `watchdog.enabled` and armed only after the network phase, both as `main.py` had it.
+- **`main.py`'s boot-fail counter is deliberately not ported.** It counted resets in `/boot_fails` and called `ota.recover()` at five, which is a hand-rolled rollback; §8 replaces it with embassy-boot's trial-boot revert, whose one app-side duty is a health-gated `mark_booted()`. Under the Phase 3 standalone profile there is no bootloader, so a device that crash-loops simply keeps resetting — with a breadcrumb each time saying why, which the counter never gave. Phase 4 wires the revert; nothing in Phase 3 should grow a counter in the meantime.
+- Panic path: defmt + panic-probe in dev; in release, the panic handler stashes the breadcrumb (§9) then resets into the watchdog/trial-boot machinery, which is what ultimately triggers rollback after a bad OTA. It deliberately does **not** log: defmt's logger takes a lock, and a panic raised from inside a log statement would deadlock on it and turn a crash that reboots into a device that hangs.
+- **`SCB::sys_reset()` does not reset an RP2350** — measured 2026-08-08. `AIRCR.SYSRESETREQ` never reaches the power-on state machine; the requesting context spins in cortex-m's post-request loop and the chip carries on. Every reset in the firmware goes through the watchdog's `TRIGGER` bit instead (`supervise::force_reset`). This was a live bug in `POST /api/reboot` from Phase 3's HTTP task until the induced-panic drill found it.
 - `hardware_diagnostic.py`'s role becomes a `--features diag` build of the app (test patterns, input echo) rather than a separate script.
 
 ---
@@ -420,12 +429,21 @@ caller-owned?* — `n/a` means the crate holds no runtime buffer at all.
 | `arrayvec` | 0.7.8 | pio-core | yes | yes | inline | Its default feature *is* `std`; pio-core turns defaults off, so the no_std build is not accidental. |
 | `rp-pac` | 7.0.0 | embassy-rp | yes | yes | n/a | embassy-rp's own PAC, coexisting with `rp235x-pac`. See below. |
 
+**Storage, inputs and supervision, pinned in Phase 3**
+
+| Crate | Ver | Used by | no_std | no-alloc | Buffers | Notes |
+|---|---|---|---|---|---|---|
+| `sequential-storage` | =8.0.1 | scoreboard-app | yes | yes² | caller | The map over the storage region (§9). `default-features = false`: ²`alloc`, `std`, `arrayvec`, `postcard` and the `heapless` value impls all exist and every one would add a dependency for a convenience not needed — the two stored values are a JSON document and a hand-encoded breadcrumb, both `&[u8]`. Every operation takes the caller's data buffer; the map itself holds only a flash range and an `Uncached` cache marker. |
+| `embassy-embedded-hal` | =0.6.0 | scoreboard-app | yes | yes | n/a | Exactly one item is linked: `adapter::BlockingAsync`, which lifts embassy-rp's blocking `NorFlash` impls to the async traits sequential-storage's map requires. Its futures never return `Pending`, which is why `storage.rs` drives them with `block_on` and exposes a blocking API — see that module. |
+| `scoreboard-input` | path | scoreboard-app | yes | yes | inline | First-party. The button PIO program plus its whole consumer side, the league menu session, and the brightness curve. Depends on `scoreboard-model`, `scoreboard-render`, `heapless`, `pio`, `libm`. |
+| `pio` | =0.3.0 | scoreboard-input | yes | yes | n/a | Same crate and version `hub75` uses, and the same version embassy-rp re-exports as `embassy_rp::pio::program` — so the assembled `Program<32>` the host tests interpret is the same type the device loads. |
+| `libm` | =0.2.16 | scoreboard-input | yes | yes | n/a | `logf`, for the log-scale lux curve. Already in the graph under `hub75`. |
+| `fixed` | =1.30.0 | scoreboard-app | yes | yes | n/a | The PIO clock divider's 16.8 fixed-point type. embassy-rp takes it by value in `pio::Config` and does not re-export the crate; already in the graph under embassy-rp and cyw43-pio. |
+
 **Not yet pinned** — audit when each lands.
 
 | Crate | Ver | Phase | Notes |
 |---|---|---|---|
-| `reqwless` | not yet pinned | 3 | Backend client (§7.4) |
-| `sequential-storage` | not yet pinned | 3 | Persistence (§9) |
 | `embassy-boot`(-rp) | not yet pinned | 4 | OTA + signature verification (§8) |
 | `flip-link` | not yet pinned | 3 | Linker wrapper, §2. **Not yet in use** — `hub75-diag` links without it, so stack overflow currently corrupts `.bss` instead of faulting. |
 | `png-stream` deps | not yet pinned | S | Out of parity scope |

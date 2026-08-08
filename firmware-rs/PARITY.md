@@ -443,6 +443,195 @@ verified for all four sports (above), so what is unexercised on hardware is the
 worth of teams. Worth a deliberate run in task #13's soak with football and
 soccer enabled, once their seasons overlap.
 
-**The skip machine on real buttons.** Host-tested exhaustively, and unreachable
-today because task #12 owns the input loop. The first thing #12 should check is
-that a burst of presses advances the rotation exactly once.
+**The skip machine on real buttons.** Host-tested exhaustively, and the burst
+rule now has an integration test of its own —
+`crates/scoreboard-input/tests/burst.rs` folds eight taps through the tracker,
+the menu controller and the skip machine and asserts one advance. **Still
+unexercised on real hardware**: the bench unit has no buttons attached. Task #13
+needs a unit with buttons wired, or this path ships untested against a physical
+switch's bounce.
+
+---
+
+# Storage, inputs, brightness and supervision (task #12)
+
+## Deviations, all deliberate
+
+**1. Two storage keys, not four.** SPEC §9 listed wifi credentials, device
+config, an OTA channel/dev flag and sticky user prefs. Only two of those are
+records. The credentials are the config document's `network` section, because
+that is where `config.json` had them and where `GET /api/config` returns them
+from; splitting them would give the same four fields two owners and make
+`reset-network` clear both. There are no sticky prefs — the rotation lock and
+the league filter are deliberately session state, which `menu.py` states
+outright, and brightness is `display.brightness`. The OTA dev flag is Phase 4's
+and SPEC §8 already says it becomes a config field, so reserving a flash key for
+it now would be guessing at Phase 4's shape in a storage format.
+
+**2. `dev.toml` seeds only when no document exists at all.** The bench seam
+survives storage, with a precedence rule chosen against the tempting one.
+Field-level fallback — "fill in anything empty" — would undo
+`POST /api/reset-network` at the next boot, because that route's whole job is to
+leave the SSID empty. Document-level is also what makes "delete `dev.toml`,
+rebuild, reboot" a real test that storage alone brings the device up; both
+halves are bench-validated below.
+
+**3. The configuration is stored as JSON, not as a packed struct.** It is
+larger — 942 B for the bench unit's config — and it is the reason a document
+written by a firmware with one fewer key still reads correctly, because
+`DeviceConfig`'s serde defaults are the same deep merge `config.py` performed by
+hand. A packed struct would make every added config field a storage migration.
+
+**4. `storage`'s API is blocking, and says so.** `sequential-storage`'s map is
+async, and it would have been one line to write `.await` at every call site.
+That would be a lie: the futures underneath are `BlockingAsync` and never return
+`Pending`, and the operation parks core 1 for its whole duration. An `async fn`
+tells the reader that other tasks run meanwhile. They do not.
+
+**5. The panic handler writes RAM, not flash.** SPEC §9 said flash; it cannot be
+done. See that section — a write from core 1 is refused and a write from core 0
+while core 1 has panicked hangs forever, which is the crash most worth
+recording. The record goes to a `.uninit` cell and the next boot promotes it,
+before core 1 starts, where the write is free.
+
+**6. `/api/logs/previous` says "last abnormal shutdown", not "previous boot".**
+MicroPython rotated the whole ring at every boot, so the file always described
+the immediately preceding session. One breadcrumb instead describes the most
+recent abnormal shutdown and survives however many clean boots follow — which is
+the more useful of the two, and means a device that has never crashed answers
+`404` forever. The rendered text carries uptime and wall-clock time so a reader
+can tell which boot it was. The endpoint's name is the SPA's and is unchanged.
+
+**7. The sensor logs transitions only, including its retries.**
+`LightSensor._try_init` logged an error on *every* attempt, and it retries every
+15 ticks — a line every three seconds, twenty a minute, which evicts the
+200-slot ring in ten minutes and takes the history worth reading with it. On the
+bench unit, which has no sensor at all, that is the difference between one line
+and 1,500. First failure logged, recovery logged, the thousands between silent.
+
+**8. A failed read drops the sensor handle and re-runs `init`.** `main.py` kept
+the object and retried only the read. Re-initialising is four register writes on
+a path that already runs once every three seconds, and it is what recovers a
+part that browned out — strictly more recovery for no measurable cost.
+
+**9. Button init cannot fail, so the non-fatal guard is gone.** `init_buttons`
+caught everything and returned `(None, None)`. Here `Pio::new` takes the block
+by ownership rather than looking one up, and the program's fit in instruction
+memory is a compile-time fact asserted by a test. What remains — and is
+supported, and is what the bench unit is — is a device with **no buttons
+physically attached**: the pins idle high, the state machines run, nothing is
+pushed, and nothing logs, because nothing is wrong.
+
+**10. Presses reach the poller between ticks.** The input task decodes and
+forwards; the poller owns the `Store`, the `Slate` and the skip machine, so the
+arm/reject decision stays where `poller.py` made it. The cost is that a press
+lands between ticks rather than the instant it arrives. Almost always the poller
+is asleep on the poll interval and the command wakes it immediately; when it is
+inside a request the press waits for that request — bench-measured at
+130–800 ms per request, bounded by the 15 s request timeout. MicroPython's
+button loop ran concurrently with the poller and had no such wait. **The menu is
+the case that would have been visibly worse**, because its 10 s inactivity
+timeout would only have been checked when the poller woke, up to a poll interval
+— 30 s by default — later. So the controller publishes a deadline and the
+poller's sleep is capped by it.
+
+**11. The watchdog's health gate is mode-aware.** In setup mode there is no
+poller by design, so its health reads as "never reached the backend" forever;
+gating on it would reset the device every eight seconds while somebody was
+typing their Wi-Fi password into the settings page. Only the frame counter
+applies there.
+
+**12. `SCB::sys_reset()` is not used anywhere.** It does not reset an RP2350 —
+see SPEC §12. Every reset goes through the watchdog's `TRIGGER` bit.
+
+## Bench-validated
+
+Bench unit at 192.168.50.236, 2026-08-08, release image. **No light sensor and
+no buttons are physically attached**, which is itself two of the tests.
+
+**Absent hardware.** `veml7700 init failed (no acknowledge); assuming a bright
+room, retrying every 3000 ms` — logged **once** across a 75 s capture, never
+repeated. The panel sat at the preference-derived level rather than the floor.
+Buttons initialised, and across every capture no spurious event was ever decoded
+from either idle pin.
+
+**Config persistence.** `PUT /api/config` → `storage: configuration saved,
+942 B` → hardware reset → `config: loaded from storage`, brightness 42 and
+rotation 45 s intact, and the device rejoined Wi-Fi from the stored credentials.
+Then `dev.toml` deleted, image rebuilt (every `DEV_*` empty), reflashed: still
+`config: loaded from storage`, still joined. Storage alone brings the device up.
+
+**Reset to setup and back.** `POST /api/reset-network` → `storage: configuration
+saved, 919 B` → reboot → `wifi: no ssid configured, going straight to setup
+mode`, AP up on 192.168.4.1 with the captive DNS and DHCP servers, and the rest
+of the document intact (brightness still 42) — a targeted clear, not a wipe. The
+input task was **not** started, matching `main.py`'s station-only task table.
+*The re-provisioning `PUT` was not sent over the AP*: this host has one Wi-Fi
+adapter and it is its only network link, so joining the device's AP would have
+taken the machine off the network. Recovery was `probe-rs erase` plus a reflash
+with `dev.toml` restored, which exercises the same seam from the other side.
+What is therefore untested on hardware is the AP-side transport, which tasks #9
+and #10 already validated and which this task did not touch; what *is* tested is
+the half this task added, that the write persists.
+
+**The watchdog drill (BACKLOG 69).** Watchdog enabled, `api.url` pointed at a
+closed port. `watchdog: armed, timeout 8000 ms, feeding every 2000 ms` → polls
+time out, streak climbs → at 91 s of uptime, over three 30 s poll intervals,
+`watchdog: starving on purpose (backend unreachable); hardware reset within
+8000 ms` → the chip reset → the next boot served:
+
+```
+last abnormal shutdown: watchdog starved on core 0
+uptime: 91 s
+stack high-water: core 0 18036 of 266536 B, core 1 3348 of 8192 B
+
+watchdog starved: no successful poll in 91 s, over three poll intervals
+```
+
+Note the absent `unix time` line: the backend was unreachable, so the clock
+never synced, and the record says nothing rather than claiming the epoch. It
+also proves the `.uninit` cell survives a **watchdog** reset, not just a
+software one. The config was restored inside the reboot cycle's window and the
+poll loop recovered to `poll: lists refreshed, sources 1, rotation 15`.
+
+**The panic drill.** `POST /api/induce-panic` (feature-gated) → the device reset
+itself and was answering again before the next 2 s poll → `/api/logs/previous`:
+
+```
+last abnormal shutdown: panic on core 0
+uptime: 7 s
+unix time: 1786187303
+stack high-water: core 0 0 of 0 B, core 1 0 of 0 B
+
+panicked at src\http\routes.rs:61: induced by POST /api/induce-panic
+```
+
+The zeroed watermarks are the design working: the device died at 7 s, before the
+10 s scan that publishes them, so it reports nothing rather than a stale guess.
+
+**The frame hitch.** One 942 B save takes its frame to 14,544 µs against a 50 ms
+budget and drops nothing. Full table and derivation in BUDGET.md.
+
+**Core 1 held 20.0 FPS throughout** — every `supervise::liveness` line in every
+capture above reads `200 ticks in 10 s (20 FPS)`, including the reports either
+side of the flash write and through the watchdog drill.
+
+## Not yet bench-validated
+
+**Physical buttons and the league menu.** Nothing is attached to GPIO 10 or 22
+on the bench unit, so the debounce program has never seen a real switch, the
+menu has never been opened by hand, and the burst rule has only been proved
+against synthetic events. The PIO program itself is verified against
+`tools/pio_sim.py`'s scenarios by a cycle-accurate interpreter in
+`crates/scoreboard-input`, which is a stronger check of the *timing* than a
+finger would be — but it cannot tell you the pull-ups are right or that the pins
+are the ones on the board. **This is the largest untested surface task #12
+leaves**, and task #13 should not sign off without a unit that has buttons.
+
+**A real VEML7700.** Same shape: the driver's register writes and the lux scale
+are transcribed and the curve is host-tested against the Python's values, but no
+part has ever acknowledged on this bench. The absent path is thoroughly tested;
+the present path is not.
+
+**The one-week soak.** Task #13. BACKLOG 69's blocker is cleared: a device that
+falls off the network now resets itself and leaves a record saying so.

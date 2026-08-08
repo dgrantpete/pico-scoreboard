@@ -11,14 +11,22 @@ cyw43-firmware/  the radio's own firmware, uploaded over SPI at every boot.
 layout/   scoreboard-layout — flash/RAM constants + memory.x generation.
           THE source: build.rs reads it, and Phase 4's OTA path will too.
 src/
-  main.rs           init, the two-PAC ownership contract, spawning both cores
+  main.rs           init, the two-PAC ownership contract, spawning both cores.
+                    Every flash access happens here, before spawn_core1 — see
+                    storage.rs for why that is free and why it is not later
   display_core1.rs  the render loop: 20 FPS deadline pacing, snapshot latch,
                     prepared-view rebuild, static-screen skip, frame_seq
   probe.rs          the frame-time probe (the Phase 3 acceptance instrument)
-  demo.rs           PLACEHOLDER core 0 — cycles six scenarios so the probe has
-                    something to measure. Leaves with the real poller.
-  supervise.rs      core-1 liveness + stack high-water. The watchdog feeds
-                    from this signal once SPEC §12 lands.
+  storage.rs        sequential-storage over the 980 KB region: the config
+                    document and the crash breadcrumb. Blocking, on purpose
+  config.rs         the running configuration, and where dev.toml still fits
+  inputs.rs         PIO1, two state machines, a 50 ms drain. The decisions are
+                    in crates/scoreboard-input
+  brightness.rs     the 5 Hz auto-brightness loop, sole owner of the panel's
+                    brightness
+  veml7700.rs       the light sensor's four register writes and one read
+  supervise.rs      core-1 liveness + stack high-water, the watchdog and its
+                    health gate, the panic handler, and force_reset
   net/
     mod.rs          the resource map, cyw43 + embassy-net bringup, and the
                     boot path that hands off to whichever mode won
@@ -32,20 +40,39 @@ src/
                     the stack moves bytes. Never in a shipped build.
 ```
 
-The portal's pure half — DNS answer construction and the `Host`-header check —
-is `crates/scoreboard-portal`, so it is host-tested; the firmware keeps the
-sockets.
+Two subsystems keep their decisions in host-tested crates and leave only the
+hardware here. The portal's pure half — DNS answer construction and the
+`Host`-header check — is `crates/scoreboard-portal`. The input half — the button
+debounce **program itself**, the timestamp reconstruction, the short/long fold,
+the league menu session and the brightness curve — is
+`crates/scoreboard-input`, where the PIO program is replayed against
+`tools/pio_sim.py`'s scenarios by a cycle-accurate interpreter.
 
-`ota.rs`, `storage.rs`, `inputs.rs` and the HTTP server from SPEC §2's tree are
-the remaining Phase 3/4 tasks and land beside these.
+`ota.rs` from SPEC §2's tree is the remaining Phase 4 task and lands beside
+these.
 
 ## Build, flash, watch
 
 ```sh
-cargo build --release                       # standalone profile (Phase 3)
-cargo run --release                         # flash + attach, via probe-rs
-cargo run --release --features net-probe    # ...and fetch {api}/time once
+cargo build --release                        # standalone profile (Phase 3)
+cargo run --release                          # flash + attach, via probe-rs
+cargo run --release --features net-probe     # ...and fetch {api}/time once
+cargo run --release --features induce-panic  # ...and add POST /api/induce-panic
 ```
+
+**Release, not debug, is the profile that exercises the crash path.** A debug
+build keeps `panic-probe` (print over RTT, trap for the debugger); a release
+build installs `supervise::panic`, which stashes a breadcrumb in `.uninit` RAM
+and resets, and the next boot serves it at `GET /api/logs/previous`.
+
+**`dev.toml` is only read when the storage region holds no configuration.** Once
+the device has saved one — the first `PUT /api/config`, or a provisioning save —
+the build's values are out of the picture, which is the point. To get back to a
+device that reads `dev.toml` again, erase the region: `probe-rs erase --chip
+RP235x`, then reflash.
+
+Cargo compares `dev.toml`'s mtime, so restoring a file you moved aside needs a
+`touch` or the build will keep the values from the run that did not see it.
 
 To join a real network on the bench, copy `dev.example.toml` to `dev.toml`
 (**gitignored — it holds a real passphrase**) and fill it in. With no such file
@@ -75,6 +102,14 @@ that never releases, so taking them back is an edit to one visible line rather
 than a silent double-claim. The full map, including why `dma::Channel::new`
 writing `DMA.INTE0` is safe next to a driver that also drives DMA, is in
 `net`'s module docs. PIO1 is unclaimed and reserved for the buttons.
+
+**Every flash access is a frame the panel does not draw.** A program or erase
+runs from RAM with XIP disabled, and embassy-rp arranges that by parking core 1
+for the duration. Measured: one 942 B config save takes its frame to 14.5 ms
+against a 50 ms budget and drops nothing (BUDGET.md). That is why `storage`'s
+API is blocking rather than `async` — an `async fn` would suggest other tasks
+run meanwhile, and they do not — and why every boot-time read happens before
+`spawn_core1`, where parking core 1 costs nothing because there is no core 1.
 
 **Nothing on core 1 mutates a `static`.** All cross-frame state is
 `display_core1`'s `LoopState`, a local; renderers receive `WallMs` and

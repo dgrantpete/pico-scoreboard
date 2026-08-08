@@ -588,6 +588,52 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     failing from one that has stopped ticking, and a task that has stopped is
     what a watchdog is for.
 
+    **CLOSED by task #12, 2026-08-08.** `supervise::watchdog` feeds the hardware
+    watchdog only while `FRAME_SEQ` advances *and* that gate passes, and starves
+    it deliberately otherwise. Drilled on the bench by pointing `api.url` at a
+    closed port: starvation at 91 s of uptime, hardware reset, and the next boot
+    served the reason at `/api/logs/previous`. Two things came out of building
+    it that are worth carrying forward:
+
+    - **A watchdog reset used to be indistinguishable from a power cut.** The
+      ring log is RAM. So the feeder writes a breadcrumb to a `.uninit` RAM cell
+      *before* it stops feeding, and the next boot promotes it to flash — the
+      cell survives a watchdog reset, which the drill demonstrates.
+    - **The watchdog is still opt-in and still defaults off**, which bounds the
+      one pathology below. Task #13's soak has to turn it on, or the soak is not
+      testing the thing that unblocks it.
+
+70. **The health gate cannot tell a dead network from a dead backend** — the
+    known cost of closing item 69, worth fixing before the watchdog is ever
+    defaulted on. With `watchdog.enabled`, a backend outage longer than
+    `3 × poll_interval` (90 s by default) resets the device, and keeps resetting
+    it every ~100 s until the backend returns. MicroPython showed the error
+    screen and sat there. The device recovers on its own either way, so this is
+    a nuisance rather than a hazard, and it only affects units whose owner
+    deliberately enabled the watchdog.
+
+    The fix is to gate on *reachability* rather than on poll success: record a
+    timestamp whenever the backend answers at the HTTP layer **at all**,
+    including a 500, because an answer proves the link works — and let only that
+    clock feed the "backend unreachable" half. A poll that fails to decode, or
+    fails with an HTTP status, would then keep the device alive; only a
+    transport failure (DNS, connect, timeout) would eventually starve it. That
+    is a small change in `poller.rs` where errors are recorded, plus one more
+    atomic in `Health`. Left undone because the gate as specified in `Health`'s
+    docs is the one that was reviewed and agreed, and changing it quietly while
+    implementing it would have been the wrong way round.
+
+71. **Nothing has ever pressed a button on the Rust firmware** — the bench unit
+    has no switches wired to GPIO 10 or 22, and no VEML7700 on I²C0. Task #12
+    built and tested both paths: the PIO debounce program is verified against
+    `tools/pio_sim.py`'s scenarios by a cycle-accurate interpreter that runs the
+    *assembled* program, the press fold and menu session are host-tested, and
+    the brightness curve is pinned to `brightness.py`'s values. What none of
+    that can tell you is whether the pull-ups are right, whether the pins match
+    the board, or how the debounce window behaves against a real switch. **Task
+    #13 should not sign the parity checklist without a unit that has buttons and
+    a sensor attached.**
+
 ## Backend
 
 14. **Per-device API keys** — comma-separated key list in backend config →

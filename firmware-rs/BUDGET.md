@@ -34,17 +34,20 @@ no heap to absorb a mistake.
 | Receive/scratch buffers (OTA chunk) | ~16,384 | ESTIMATE | Task #15's, all that is left of SPEC §11's 40,960 B guess: the HTTP server's share and the poller's have both moved to measured lines above. The poller's is 4,096 B, *one* buffer for every response — see the derivation note below. |
 | Glyph/font tables + compiled sprites | 0 | **MEASURED** | `crates/scoreboard-render`. **9,538 B of flash, 0 B of RAM** — read out of the crate's own object code, not asserted. Breakdown and the command below. |
 | Core-1 render-loop task arena | 1,384 | **MEASURED** | `scoreboard-app`. The loop's `LoopState` — frame rail, prepared view, skip memo, probe — plus the display and everything else held across the frame's await. It lives in the **task arena, not on the core-1 stack**: an embassy task's future is a static. See the correction below. The crest pool it now owns is a `static` it borrows, so it is the line above and not this one. |
-| Core-0 task arenas | ~4,096 | ESTIMATE | What is left to measure: the input, brightness and watchdog tasks (#12) and the OTA task (#15). Net, poller and server all have measured lines of their own now, and the demo feed's 2,968 B `ScoreboardSnapshot` left with the demo. |
-| Core-0 stack | — | **MEASURED (not a fixed line)** | With flip-link the stack is the whole remainder below the statics: **415,520 B** today, growing *down*, guarded by MSPLIM at the bottom of RAM. It is not a number to budget; it is what the rest of the table does not spend. |
+| Input, brightness and watchdog task arenas | 856 | **MEASURED** | `scoreboard-app`, task #12. `supervise::watchdog` 328 B, `inputs::run` 264 B, `brightness::auto_brightness` 264 B. All three are small because the state that could have been large is not theirs: the button fold is two 24 B structs, the brightness chain is three floats, and the watchdog holds a counter. The 3 KB storage buffer is a **stack** local of a plain `fn`, deliberately — see the note below. |
+| Crash breadcrumb — RAM cell + served copy | 468 | **MEASURED** | `supervise::CELL` 240 B in `.uninit` (magic, length, checksum and a 226 B encoded record; the section the startup code does not clear, which is what makes it survive a reset) plus `PREVIOUS` 228 B, the decoded copy `/api/logs/previous` serves so that opening the logs page does not park core 1 to read flash. |
+| Storage map | ~32 | **MEASURED** | `sequential-storage`'s `MapStorage` over an `Uncached` cache: a flash range, a `PhantomData`, and embassy-rp's `Flash` (which is itself a `PhantomData` plus an optional DMA channel). Under the 512 B reporting floor. The 3 KB scratch every operation needs is a stack local. |
+| Core-0 task arenas (remaining) | ~2,048 | ESTIMATE | The OTA task (#15). Everything else on core 0 now has a measured line. |
+| Core-0 stack | — | **MEASURED (not a fixed line)** | With flip-link the stack is the whole remainder below the statics: **266,536 B** today, growing *down*, guarded by MSPLIM at the bottom of RAM. It is not a number to budget; it is what the rest of the table does not spend. **High-water 25,816 B (9.7 %)** over a run that included a config save, whose 3 KB buffer is a stack local. The 415,520 B this line read before task #12 was stale — it predated the HTTP server's 50 KB and the poller's 13 KB, and 415,520 + 248,180 is more RAM than the chip has. |
 | Core-1 stack | 8,192 | **MEASURED** | Sized 8 KB by `scoreboard-app`; **high-water 3,348 B (41 %)** over a run of real backend data — up from 2,480 B under the demo, because the demo never drove the pregame screen. The setup screen, which is the only QR encoder caller and therefore the deepest frame, is still not among them. Guarded by MSPLIM at its bottom. See the core-1 notes below. |
 | Ring log | 28,812 | **MEASURED** | `crates/scoreboard-log`, task #10. 200 slots × 144 B — a `u32` sequence, a `u32` timestamp, a level byte and a 128-byte bounded message, padded. SPEC §11's ~8 KB guess assumed a shorter message; 128 B was chosen against the measured distribution of the 87 log call sites in `firmware/src` (median 43 B, max 116 B), where 64 B would have truncated real lines. It is `.bss`, not `.data` — see the note below. |
 | Misc statics | ~2,100 | **MEASURED** | embassy-rp's GPIO/DMA/PIO wakers, the time driver, the critical-section lock, the clock cache, the PAC singleton flags, and task #10's small publishers (`net::hosts`, `net::status`, the config cell, the stack-watermark atomics). |
-| **Projected total** | **264,522** | | **258.3 KiB** |
+| **Projected total** | **264,222** | | **258.0 KiB** |
 
-**Headroom: 50.3 %** (267,958 B free of 532,480 B). Against the 512 KiB the
-linker actually declares — see the caveat below — it is 49.5 %. The ≥ 40 %
-target holds: the remaining estimate may overrun by 55,000 B before it is
-breached, and only two lines of it are still estimates.
+**Headroom: 50.4 %** (268,258 B free of 532,480 B). Against the 512 KiB the
+linker actually declares — see the caveat below — it is 49.6 %. The ≥ 40 %
+target holds with room: two lines are still estimates and together they claim
+18,432 B, so they could overrun by 55,000 B before the target is breached.
 
 The projection rose by 26,159 B when the poller landed, and 91 % of that is
 three measured lines that had no estimate at all: the poller's 13,824 B task
@@ -71,15 +74,28 @@ predicted. That is the `u16` length prefix on every bounded string doing its
 job: the layout is identical on the host and on `thumbv8m.main-none-eabihf`, so
 `scoreboard-model`'s own budget test is a real check and not a coincidence.
 
-**Measured today: 248,180 B** (242.4 KiB, 53.4 % headroom) — the whole of
-`scoreboard-app`, which is the binary of record. That figure includes 4,150 B of
-dev-only defmt/RTT, which leaves. Networking added 35,848 B of it, the HTTP
-server 80,160 B and the poller 24,452 B — the last of which is 2,968 B less than
-its own lines, because the demo scaffolding it replaced left with it.
+**Measured today: 249,768 B** (243.9 KiB, 53.1 % headroom) — the whole of
+`scoreboard-app`, which is the binary of record: `.data` 10,272 + `.bss` 235,160
++ `.uninit` 4,336. That figure includes 4,336 B of dev-only defmt/RTT and the
+breadcrumb cell, of which 4,096 B leaves with the probe build. Networking added
+35,848 B of it, the HTTP server 80,160 B and the poller 24,452 B.
 
-**Flash: 892,068 B**, 56.7 % of the 1,536 KB active partition — up 98,152 B for
-the poller, of which the HTTP client and the JSON codec for `/time` are the
-bulk. Two single items still account for most of the total and neither costs any
+**Storage, inputs, brightness and supervision added 1,588 B**, which is the
+smallest any Phase 3 task has cost and worth one sentence on why: the two things
+that could have been large are not statics. The map's 3 KB scratch is a stack
+local of a plain `fn` — `storage`'s functions are blocking and are called from
+async handlers, so the buffer lives on core 0's stack for one call instead of
+inside a picoserve handler future, where the nested-router generics would
+instantiate it once per layer (`http::scratch` measured that multiplier at 22×).
+And the button driver's state is two 24 B folds, because the PIO holds the
+timing and the CPU holds only an anchor.
+
+**Flash: 993,760 B**, 63.1 % of the 1,536 KB active partition — up 101,692 B for
+task #12. The bulk of that increase is `sequential-storage`'s map (its item
+iteration, page-state machine, CRC and auto-repair paths all instantiate against
+one concrete flash type) and `DeviceConfig::serialize`, which is the *write*
+half of the serde pair whose read half was already the image's largest function.
+Two single items still account for most of the total and neither costs any
 RAM:
 **232,803 B is the CYW43's own firmware** (`43439A0.bin` 231,077 + CLM 984 +
 board NVRAM 742) and **54,528 B is the embedded settings SPA**, both
@@ -495,6 +511,39 @@ arm-none-eabi-size -A -d "$ELF"   # per-section; ignore .debug_* and its Total
 arm-none-eabi-nm -C --size-sort -r -S -td "$ELF" | awk '$3 ~ /^[bBdD]$/'
 ```
 
+### What a flash write costs the panel — measured
+
+A flash program on the RP2350 runs from RAM with XIP disabled, and embassy-rp
+arranges that by parking core 1 through the multicore FIFO. Core 1 executes the
+render loop from XIP, so **every config save stops the display**. The question is
+only how long, and the frame probe answers it directly.
+
+Measured on the bench unit, `PUT /api/config` with a 942 B document, against
+`Mode(final)` reports either side of it:
+
+| | frame mean | frame max | render max | show max | overruns |
+|---|---:|---:|---:|---:|---:|
+| baseline (600 ticks) | 6,642 µs | 7,259 µs | 1,331 µs | 6,341 µs | 0 |
+| baseline (600 ticks) | 6,654 µs | 9,657 µs | 4,130 µs | 7,152 µs | 0 |
+| **containing the save** | 6,669 µs | **14,544 µs** | 7,639 µs | 7,022 µs | **0** |
+
+So one save costs the frame it lands in about **5–7 ms**, taking it to 14.5 ms
+against the 50 ms budget, and **drops nothing**. The mean does not move, because
+one frame in six hundred is not a rate. The hitch shows up in `render` or in
+`show` depending on where core 1 happened to be when it was parked, which is why
+both maxima rise.
+
+That is an *append*, not an erase. `sequential-storage` only erases when a page
+fills and the region wraps: at ~942 B per save into 4 KB pages across a 980 KB
+region, the first erase is about a thousand saves away. An erase is roughly
+30 ms per sector and would overrun a frame; it is not on the normal path, and
+the one place it *is* deliberate — a storage region that does not read as a map
+at all, erased once and only ever once — runs at boot before core 1 starts,
+where parking core 1 is a no-op and the cost is zero frames.
+
+The same reasoning is why every boot-time flash read happens before
+`spawn_core1`.
+
 ---
 
 ## Caveats to close before the numbers can be trusted end to end
@@ -502,11 +551,13 @@ arm-none-eabi-nm -C --size-sort -r -S -td "$ELF" | awk '$3 ~ /^[bBdD]$/'
 - **Stacks are still not in `size`'s output**, but both are now measured
   another way. `arm-none-eabi-size` reports statics only. Core 1's stack is an
   8,192 B static painted with 0xAA before the core starts, and
-  `supervise::liveness` reports the deepest byte touched every 10 s — 2,480 B.
-  Core 0's is the remainder below the statics (379,672 B under flip-link, down
-  35,848 B as networking took its share of the statics) and has no equivalent
-  probe, because nothing sizes it: it is what is left. `hub75-diag` still has
-  neither.
+  `supervise::liveness` reports the deepest byte touched every 10 s — 3,348 B
+  against real backend data. Core 0's stack is now painted and probed the same
+  way: 266,536 B of it, high-water 25,816 B (9.7 %). It is the remainder below
+  the statics, so it is not a line to budget — but the watermark is worth
+  watching, because the two 3 KB buffers that live on it (the storage scratch
+  and a config save) are the deepest transients in the firmware.
+  `hub75-diag` still has neither.
 - **`flip-link` is wired up for `firmware-rs/app`**, and the numbers above are
   measured with it. Core 0's stack sits below `.bss`/`.data`
   (`_stack_start = 0x2006_5b20`, `_stack_end = 0x2000_0000`) and
