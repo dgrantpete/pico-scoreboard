@@ -4,7 +4,7 @@
 #[path = "goldens/mod.rs"]
 mod goldens;
 
-use hub75::gamma::Gamma;
+use hub75::gamma::{Gamma, GammaTable};
 
 #[test]
 fn srgb_matches_python() {
@@ -27,6 +27,24 @@ fn identity_matches_python() {
 fn power_one_short_circuits_to_identity() {
     assert_eq!(Gamma::Power(1.0).build_lut(), goldens::GAMMA_POWER_1_0);
     assert_eq!(Gamma::Power(1.0).build_lut(), goldens::GAMMA_IDENTITY);
+}
+
+#[test]
+fn the_table_that_crosses_the_core_seam_is_the_one_the_driver_would_have_built() {
+    // BACKLOG 68 moved the expansion from the driver to the config handler.
+    // That is only a change of *where* the work happens if the bytes are
+    // identical, and "identical" is the entire content of the claim.
+    for gamma in [
+        Gamma::Srgb,
+        Gamma::Identity,
+        Gamma::Power(2.2),
+        Gamma::Power(0.5),
+        Gamma::Power(1.0),
+    ] {
+        let table = GammaTable::new(gamma);
+        assert_eq!(*table.lut(), gamma.build_lut(), "{gamma:?}");
+        assert_eq!(table.gamma(), gamma, "the mode survives so the driver can report it");
+    }
 }
 
 #[test]

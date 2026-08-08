@@ -110,6 +110,11 @@ struct LoopState {
 /// caches a scroll window measured against the old speed, and the skip memo
 /// would otherwise let a static screen keep showing the old dividers until the
 /// next commit — which, on an idle scoreboard, could be minutes.
+///
+/// Every branch here is a store or a small register restamp. The one that was
+/// not is gamma: expanding a `Power` LUT is 27.6 ms, which does not fit a
+/// 16.7 ms frame, so [`crate::settings::DisplayUpdate`] carries the finished
+/// table and this only copies it.
 fn apply_settings(
     state: &mut LoopState,
     driver: &mut Hub75Driver,

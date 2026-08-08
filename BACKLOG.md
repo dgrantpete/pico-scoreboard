@@ -551,6 +551,15 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     `Gamma` value — the driver already stores the LUT, so it is a change of
     what crosses the seam, not of the driver.
 
+    **CLOSED by task #17, 2026-08-08**, and the frame did get shorter: 60 FPS
+    makes the budget 16.7 ms, so 27.6 ms went from "over half a frame" to a
+    guaranteed overrun on every gamma save. Fixed exactly as written above —
+    `hub75::gamma::GammaTable` is a mode plus its finished 256 bytes,
+    `DisplayUpdate` carries one, and `Hub75Driver::set_gamma` takes one. There
+    is deliberately **no** entry point left that hands the driver a bare `Gamma`
+    to expand, so the cost cannot come back by accident; the message is 256
+    bytes wider and core 1's share is a `copy_from_slice`.
+
 69. **A station that loses its association never comes back** — observed
     2026-08-08 on the Rust bench unit during task #10: after roughly half an
     hour of idle uptime the device stopped answering entirely — no HTTP, and

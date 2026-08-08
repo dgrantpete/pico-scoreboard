@@ -37,7 +37,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering, compiler_fence};
 
 use rp235x_pac as pac;
 
-use crate::gamma::Gamma;
+use crate::gamma::{Gamma, GammaTable};
 use crate::geometry::{
     BITPLANE_BUFFER_BYTES, RGB565_FRAME_BYTES, RGB888_FRAME_BYTES, SHIFT_REGISTER_DEPTH,
     TIMING_WORDS,
@@ -574,11 +574,15 @@ impl Hub75Driver {
         self.blanking_time_ns
     }
 
-    /// Switch gamma mode and rebuild the LUT. Applies to subsequent
-    /// `load_*` calls; the displayed frame is not retroactively corrected.
-    pub fn set_gamma(&mut self, gamma: Gamma) -> Gamma {
-        self.gamma = gamma;
-        self.gamma_lut = gamma.build_lut();
+    /// Install an already-built gamma table. Applies to subsequent `load_*`
+    /// calls; the displayed frame is not retroactively corrected.
+    ///
+    /// Takes a [`GammaTable`] rather than a [`Gamma`] so that building it —
+    /// 27.6 ms for a `Power` curve — cannot land inside a frame. See
+    /// [`GammaTable`]'s docs.
+    pub fn set_gamma(&mut self, table: GammaTable) -> Gamma {
+        self.gamma = table.gamma();
+        self.gamma_lut = *table.lut();
         self.gamma
     }
 

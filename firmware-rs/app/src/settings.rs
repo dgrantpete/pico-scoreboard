@@ -12,10 +12,22 @@
 //!
 //! [`crate::display_core1::BRIGHTNESS`] is an atomic because it moves at 5 Hz
 //! and a dropped update is the next update. This moves once per config save,
-//! carries an `f64` and an enum, and every one of them matters — so it is a
-//! `Signal`, which holds exactly one pending value, overwrites it if a second
-//! `PUT` lands first, and costs nothing when idle. Core 1 drains it at the top
-//! of a frame with `try_take`, so the render loop never waits on core 0.
+//! carries an `f64`, an enum and a 256-byte gamma table, and every one of them
+//! matters — so it is a `Signal`, which holds exactly one pending value,
+//! overwrites it if a second `PUT` lands first, and costs nothing when idle.
+//! Core 1 drains it at the top of a frame with `try_take`, so the render loop
+//! never waits on core 0.
+//!
+//! # Why the gamma LUT is expanded on this side
+//!
+//! The obvious message carries the [`Gamma`] mode and lets the driver expand
+//! it, which is what shipped through Phase 3. Expanding a `Power` curve is 256
+//! `libm::pow` calls, measured at 27,562 µs — it fit inside the 50 ms frame the
+//! parity release paced at and does not fit inside a 16.7 ms one, so at 60 FPS
+//! a gamma save would guarantee an overrun. The work belongs on core 0 anyway:
+//! it is per-request, not per-frame, and this is the core the request arrives
+//! on. So the message is 256 bytes wider and core 1's share of a gamma change
+//! is a `copy_from_slice`. That is BACKLOG 68.
 //!
 //! # Why it carries the flags too
 //!
@@ -36,7 +48,7 @@
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
-use hub75::gamma::Gamma;
+use hub75::gamma::{Gamma, GammaTable};
 use scoreboard_config::{Applied, DeviceConfig, GammaKind};
 use scoreboard_model::UiColors;
 use scoreboard_render::RenderSettings;
@@ -49,23 +61,32 @@ pub struct DisplayUpdate {
     pub render: RenderSettings,
     pub data_clock_hz: u32,
     pub target_refresh_rate_hz: f64,
-    pub gamma: Gamma,
+    /// The **finished** gamma LUT, not the mode that describes it.
+    ///
+    /// Expanding a `Power` curve is 256 `libm::pow` calls and measured 27.6 ms
+    /// on this chip — over a frame and a half at 60 FPS. Building it here, on
+    /// the core that handles the request, is what keeps it out of a frame; core
+    /// 1 only copies 256 bytes into the driver. That is BACKLOG 68, and it is
+    /// why this message is 256 bytes wider than it looks like it needs to be.
+    pub gamma: GammaTable,
     pub blanking_time_ns: u32,
 }
 
 impl DisplayUpdate {
     /// The update `config` describes, running the hooks `applied` names.
+    ///
+    /// **Core 0 only.** The gamma LUT is expanded here; see the field's docs.
     pub fn new(config: &DeviceConfig, applied: Applied) -> DisplayUpdate {
         DisplayUpdate {
             applied,
             render: config.render_settings(),
             data_clock_hz: config.display.data_frequency_khz.saturating_mul(1_000),
             target_refresh_rate_hz: config.display.target_refresh_rate,
-            gamma: match config.display.gamma.kind {
+            gamma: GammaTable::new(match config.display.gamma.kind {
                 GammaKind::Srgb => Gamma::Srgb,
                 GammaKind::None => Gamma::Identity,
                 GammaKind::Power => Gamma::Power(config.display.gamma.power_exponent()),
-            },
+            }),
             blanking_time_ns: config.display.blanking_time_ns,
         }
     }
