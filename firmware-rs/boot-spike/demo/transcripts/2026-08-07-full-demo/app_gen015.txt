@@ -1,0 +1,10 @@
+=== app_gen015.raw (83 bytes, decoded with a_stager.elf)
+INFO  app B: entry (boot #2)
+INFO  app B: embassy_rp::init done
+INFO  app B: up at t=0.700309 (confirm=true stage=true verify=false)
+TRACE DFU: 0x18a000 - 0x30b000
+TRACE STATE: 0x8000 - 0xa000
+INFO  app B: bootloader state Revert
+WARN  app B: bootloader state Revert — a trial image failed and was ROLLED BACK to this one
+INFO  app B: state cleaned back to Boot
+INFO  app B: idle, feeding watchdog

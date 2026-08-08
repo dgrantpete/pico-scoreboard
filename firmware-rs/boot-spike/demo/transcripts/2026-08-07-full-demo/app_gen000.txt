@@ -1,0 +1,10 @@
+=== app_gen000.raw (87 bytes, decoded with a_stager.elf)
+INFO  app B: entry (boot #2)
+INFO  app B: embassy_rp::init done
+INFO  app B: up at t=0.700306 (confirm=true stage=true verify=false)
+TRACE DFU: 0x18a000 - 0x30b000
+TRACE STATE: 0x8000 - 0xa000
+INFO  app B: bootloader state Swap
+INFO  app B: TRIAL boot — health gate 2000 ms, then mark_booted()
+INFO  app B: mark_booted() written — this image is now permanent
+INFO  app B: idle, feeding watchdog

@@ -1,0 +1,8 @@
+=== app_gen017.raw (67 bytes, decoded with a_bad.elf)
+INFO  app A: entry (boot #1)
+INFO  app A: embassy_rp::init done
+INFO  app A: up at t=0.700317 (confirm=false stage=false verify=false)
+TRACE DFU: 0x18a000 - 0x30b000
+TRACE STATE: 0x8000 - 0xa000
+INFO  app A: bootloader state Swap
+WARN  app A: TRIAL boot — playing broken image: no mark_booted(), no watchdog feeding; expect watchdog reset then bootloader revert

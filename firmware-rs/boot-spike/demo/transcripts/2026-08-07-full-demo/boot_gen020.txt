@@ -1,0 +1,2 @@
+=== boot_gen020.raw (12 bytes, decoded with boot.elf)
+INFO  spike-boot: boot #1 nonce 0x99cc, arming watchdog (8 s) and reading state

@@ -1,0 +1,6 @@
+=== boot_gen017.raw (42 bytes, decoded with boot.elf)
+INFO  spike-boot: boot #2 nonce 0x1999, arming watchdog (8 s) and reading state
+TRACE ACTIVE: 0xa000 - 0x18a000
+TRACE DFU: 0x18a000 - 0x30b000
+TRACE STATE: 0x8000 - 0xa000
+TRACE Swapping

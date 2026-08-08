@@ -1,0 +1,11 @@
+=== app_gen002.raw (94 bytes, decoded with a_stager.elf)
+INFO  app A: entry (boot #1)
+INFO  app A: embassy_rp::init done
+INFO  app A: up at t=0.700308 (confirm=true stage=true verify=false)
+TRACE DFU: 0x18a000 - 0x30b000
+TRACE STATE: 0x8000 - 0xa000
+INFO  app A: bootloader state Boot
+INFO  app A: mailbox command 0x01
+INFO  app A: staging payload (26356 bytes) to DFU
+INFO  app A: payload staged
+INFO  app A: mark_updated() — bootloader swaps on next boot; resetting
