@@ -107,13 +107,24 @@ const _: () = {
     assert!(2 + 4 * (ACTIVE_SIZE / ERASE_SIZE) <= STATE_SIZE / FLASH_WRITE_SIZE);
 };
 
-/// Which of the two addresses the app links at.
+/// Which binary, and therefore which address, a `memory.x` is being generated
+/// for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Profile {
-    /// Flash offset 0, no bootloader. Phase 3.
+    /// The app at flash offset 0, no bootloader. Phase 3, and still how the
+    /// bench works — `cargo run` over the probe, nothing staged or swapped.
     Standalone,
-    /// The active partition, behind embassy-boot. Phase 4.
+    /// The app at the active partition, behind embassy-boot. Phase 4, and what
+    /// `tools/build.py publish-fw` ships.
     BootIntegrated,
+    /// `firmware-rs/boot` itself, at flash offset 0.
+    ///
+    /// It shares an origin with [`Profile::Standalone`] and nothing else: it is
+    /// bounded by [`BOOT_SIZE`] rather than by the storage region, because
+    /// everything above it belongs to a partition somebody else manages. An
+    /// overlong bootloader would otherwise link straight over the state
+    /// partition it is about to read.
+    Bootloader,
 }
 
 impl Profile {
@@ -122,7 +133,19 @@ impl Profile {
         match self {
             Profile::Standalone => (FLASH_BASE + BOOT_OFFSET, STANDALONE_SIZE),
             Profile::BootIntegrated => (FLASH_BASE + ACTIVE_OFFSET, ACTIVE_SIZE),
+            Profile::Bootloader => (FLASH_BASE + BOOT_OFFSET, BOOT_SIZE),
         }
+    }
+
+    /// Whether this binary reaches the partition table at runtime.
+    ///
+    /// The bootloader reads all three partitions; the boot-integrated app reads
+    /// the state partition and writes DFU. [`Profile::Standalone`] has no
+    /// bootloader in the picture at all, and a resolved `__bootloader_*` symbol
+    /// there would be an invitation to write a partition nothing manages — so
+    /// it deliberately gets a link error instead.
+    pub const fn needs_partition_symbols(self) -> bool {
+        matches!(self, Profile::BootIntegrated | Profile::Bootloader)
     }
 }
 
@@ -139,16 +162,16 @@ pub fn memory_x(profile: Profile) -> String {
     let (origin, length) = profile.flash_region();
     // embassy-boot's `from_linkerfile_blocking()` hands these straight to
     // embassy-rp's Flash driver, which addresses flash from 0 — so they are
-    // BYTE OFFSETS, not XIP addresses. Only the integrated profile emits them:
-    // under Standalone there is no bootloader, and a symbol that resolved
-    // would be an invitation to write a partition nothing manages.
-    let bootloader_symbols = match profile {
-        Profile::Standalone => String::from(
+    // BYTE OFFSETS, not XIP addresses. The bootloader and the integrated app
+    // both read them; see `Profile::needs_partition_symbols`.
+    let bootloader_symbols = if !profile.needs_partition_symbols() {
+        String::from(
             "/* Standalone profile: no bootloader, so no __bootloader_* symbols.\n\
              \x20  Building the OTA path against this profile is a link error, which is\n\
              \x20  the intended outcome. */\n",
-        ),
-        Profile::BootIntegrated => format!(
+        )
+    } else {
+        format!(
             "__bootloader_state_start = {STATE_OFFSET:#x};\n\
              __bootloader_state_end = {state_end:#x};\n\
              __bootloader_active_start = {ACTIVE_OFFSET:#x};\n\
@@ -158,7 +181,7 @@ pub fn memory_x(profile: Profile) -> String {
             state_end = STATE_OFFSET + STATE_SIZE,
             active_end = ACTIVE_OFFSET + ACTIVE_SIZE,
             dfu_end = DFU_OFFSET + DFU_SIZE,
-        ),
+        )
     };
 
     format!(
@@ -216,7 +239,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_two_profiles_link_at_the_documented_addresses() {
+    fn the_three_profiles_link_at_the_documented_addresses() {
         assert_eq!(
             Profile::Standalone.flash_region(),
             (0x1000_0000, 0x30_B000),
@@ -227,22 +250,55 @@ mod tests {
             (0x1000_A000, 0x18_0000),
             "integrated links at the active partition"
         );
+        assert_eq!(
+            Profile::Bootloader.flash_region(),
+            (0x1000_0000, 0x00_8000),
+            "the bootloader links at flash offset 0 and stops at the state partition"
+        );
     }
 
     #[test]
-    fn only_the_integrated_profile_offers_the_bootloader_symbols() {
+    fn the_standalone_profile_alone_lacks_the_bootloader_symbols() {
         assert!(!memory_x(Profile::Standalone).contains("__bootloader_active_start"));
         assert!(memory_x(Profile::BootIntegrated).contains("__bootloader_active_start = 0xa000;"));
+        // The bootloader reads all three partitions, so it needs them too —
+        // `BootLoaderConfig::from_linkerfile_blocking` resolves exactly these.
+        assert!(memory_x(Profile::Bootloader).contains("__bootloader_active_start = 0xa000;"));
+        assert!(memory_x(Profile::Bootloader).contains("__bootloader_dfu_start = 0x18a000;"));
     }
 
     #[test]
-    fn neither_profile_reaches_into_storage() {
-        for profile in [Profile::Standalone, Profile::BootIntegrated] {
+    fn no_profile_reaches_into_storage() {
+        for profile in [
+            Profile::Standalone,
+            Profile::BootIntegrated,
+            Profile::Bootloader,
+        ] {
             let (origin, length) = profile.flash_region();
             assert!(
                 origin - FLASH_BASE + length <= STORAGE_OFFSET,
                 "{profile:?} overlaps the storage region"
             );
         }
+    }
+
+    #[test]
+    fn the_bootloader_cannot_link_over_the_state_partition() {
+        // The failure this catches is silent and total: a bootloader that grew
+        // past 32 KB would overwrite the swap-progress array it reads at every
+        // boot, and would do so only for images past a size nobody is watching.
+        let (origin, length) = Profile::Bootloader.flash_region();
+        assert_eq!(origin - FLASH_BASE + length, STATE_OFFSET);
+    }
+
+    #[test]
+    fn the_two_app_profiles_agree_about_where_storage_starts() {
+        // The property that makes the standalone/boot-integrated flip safe: a
+        // configuration written under one profile is read back under the other.
+        // It holds because neither profile's region reaches STORAGE_OFFSET,
+        // which the test above checks, and because `storage`'s region is
+        // derived from these constants rather than from a literal.
+        assert_eq!(STORAGE_OFFSET, DFU_OFFSET + DFU_SIZE);
+        assert_eq!(STORAGE_OFFSET, 0x30_B000);
     }
 }

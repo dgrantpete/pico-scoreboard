@@ -2188,6 +2188,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "scoreboard-layout"
+version = "0.1.0"
+
+[[package]]
 name = "scoreboard-log"
 version = "0.1.0"
 dependencies = [

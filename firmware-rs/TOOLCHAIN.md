@@ -58,24 +58,26 @@ revisiting if the backend ever starts depending on a newer language feature.
 | `cargo build --release` | `firmware-rs/app` | **the firmware** |
 | `cargo build --release` | `firmware-rs/hub75-diag` | the panel bench binary |
 
-`firmware-rs/app` and `firmware-rs/hub75-diag` are **standalone workspaces** (an
-empty `[workspace]` table in each `Cargo.toml`) with their own `Cargo.lock`.
-They have to be: they depend on embassy-rp, which only builds for the device, so
-they cannot be members of a root workspace that also builds on the host. Their
-`.cargo/config.toml` sets `build.target`, so `--target` is optional there — CI
-passes it anyway to keep the artifact path unambiguous.
+`firmware-rs/app`, `firmware-rs/boot` and `firmware-rs/hub75-diag` are
+**standalone workspaces** (an empty `[workspace]` table in each `Cargo.toml`)
+with their own `Cargo.lock`. They have to be: they depend on embassy-rp, which
+only builds for the device, so they cannot be members of a root workspace that
+also builds on the host. Their `.cargo/config.toml` sets `build.target`, so
+`--target` is optional there — CI passes it anyway to keep the artifact path
+unambiguous.
 
-`firmware-rs/app/layout` (`scoreboard-layout`) is a path dependency *inside* the
-app's workspace directory, so cargo makes it a member automatically. It holds
-the flash/RAM constants and generates `memory.x` from them, and it is the one
-crate in that workspace with host tests:
+`firmware-rs/layout` (`scoreboard-layout`) holds the flash/RAM constants and
+generates each binary's `memory.x` from them. It is shared by the app and the
+bootloader, so it belongs to neither of their workspaces; it is a **root**
+workspace member instead, which is also what puts its host tests in the
+ordinary run:
 
 ```sh
-cd firmware-rs/app
-cargo test -p scoreboard-layout --features std --target x86_64-pc-windows-msvc
+cargo test -p scoreboard-layout --features std
 ```
 
-The explicit `--target` is needed because `build.target` points at the device.
+It moved out of `firmware-rs/app/layout` in Phase 4, when the bootloader
+started needing the same table.
 
 All three lockfiles are committed and CI builds `--locked`. A stale lockfile is
 a CI failure, not a silent update.

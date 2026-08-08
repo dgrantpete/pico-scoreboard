@@ -30,7 +30,7 @@ fn main() {
     emit_spa_etag();
 
     println!("cargo::rerun-if-changed=build.rs");
-    println!("cargo::rerun-if-changed=layout/src/lib.rs");
+    println!("cargo::rerun-if-changed=../layout/src/lib.rs");
 }
 
 /// Hash the embedded web bundle into the ETag the SPA route serves it under.

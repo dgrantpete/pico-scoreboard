@@ -1,0 +1,22 @@
+[build]
+target = "thumbv8m.main-none-eabihf"
+
+[target.thumbv8m.main-none-eabihf]
+# No flip-link, unlike the app: this binary has no framebuffers below its
+# statics to protect and every kilobyte of the 32 KB partition is accounted
+# for. probe-rs 0.32 wants RP235x; --preverify turns a re-run of an unchanged
+# image into a reset rather than a full flash.
+runner = "probe-rs run --chip RP235x --preverify"
+rustflags = [
+  "-C", "link-arg=--nmagic",
+  "-C", "link-arg=-Tlink.x",
+  "-C", "link-arg=-Tdefmt.x",
+]
+
+[env]
+# `embassy_boot` logs its "Swapping"/"Reverting" decisions at trace. They are
+# the only direct evidence of what the bootloader chose on a given boot, and
+# drill day reads them off RTT — so they are on, at the cost of a few hundred
+# bytes in a partition with 20 KB spare.
+DEFMT_LOG = "info,embassy_boot=trace,embassy_boot_rp=trace"
+DEFMT_RTT_BUFFER_SIZE = "1024"

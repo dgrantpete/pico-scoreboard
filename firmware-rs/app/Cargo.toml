@@ -6,8 +6,11 @@ description = "The scoreboard firmware binary: embassy on both cores, render loo
 
 # Standalone workspace: this binary only builds for thumbv8m (embassy-rp is
 # device-only), so it must stay out of the root workspace's host builds — same
-# arrangement as firmware-rs/hub75-diag. `layout/` is a path dependency inside
-# this directory, so cargo makes it a member automatically.
+# arrangement as firmware-rs/hub75-diag. `../layout` used to live in here and
+# be a member automatically; it moved out when `firmware-rs/boot` started
+# needing the same table, because a bootloader depending on a crate inside the
+# app reads as a mistake forever. It is a root-workspace member now, which is
+# also what lets its host tests run in the ordinary `cargo test`.
 [workspace]
 
 [features]
@@ -32,7 +35,7 @@ net-probe = ["dep:embedded-io-async"]
 induce-panic = []
 
 [dependencies]
-scoreboard-layout = { path = "layout" }
+scoreboard-layout = { path = "../layout" }
 hub75 = { path = "../../crates/hub75" }
 scoreboard-model = { path = "../../crates/scoreboard-model" }
 scoreboard-render = { path = "../../crates/scoreboard-render" }
@@ -139,7 +142,7 @@ reqwless = { version = "=0.14.0", default-features = false, features = ["defmt"]
 embedded-io = "=0.7.1"
 
 [build-dependencies]
-scoreboard-layout = { path = "layout", features = ["std"] }
+scoreboard-layout = { path = "../layout", features = ["std"] }
 # Host-side only: hashes the embedded web bundle into its ETag. Zero
 # dependencies, and already in the target graph via picoserve, so it adds no
 # new audit surface.

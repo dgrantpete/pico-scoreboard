@@ -1,3 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["backend", "crates/*"]
+# `firmware-rs/layout` is here rather than in a device workspace because it is
+# shared by two of them — `firmware-rs/app` and `firmware-rs/boot` are each
+# standalone (embassy-rp does not build for the host) and both generate their
+# `memory.x` from its constants. It is pure `no_std` arithmetic with host tests
+# behind a `std` feature, so it belongs where `cargo test` already runs.
+members = ["backend", "crates/*", "firmware-rs/layout"]
