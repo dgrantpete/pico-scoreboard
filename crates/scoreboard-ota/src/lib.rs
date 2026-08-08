@@ -31,11 +31,13 @@ pub mod attempt;
 pub mod decide;
 pub mod manifest;
 pub mod progress;
+pub mod verify;
 
 pub use attempt::{Attempt, MAX_ATTEMPTS};
 pub use decide::{Decision, Local, decide};
 pub use manifest::{Channel, MAX_VERSION, Manifest, ManifestError, Version};
 pub use progress::Progress;
+pub use verify::{SignatureError, Verified, verify};
 
 /// The version string a locally-built image carries.
 ///
