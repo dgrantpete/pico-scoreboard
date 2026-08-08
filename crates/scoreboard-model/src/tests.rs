@@ -1469,3 +1469,236 @@ fn the_snapshot_stays_inside_its_budget_line() {
     assert_eq!(crate::SnapshotChannel::SIZE, 8_552);
     assert_eq!(Slate::SIZE, 4_596);
 }
+
+// =========================================================================
+// The poller's pure half (`poll`)
+// =========================================================================
+
+use crate::poll::{
+    self, DETAIL_LINE_CHARS, ErrorScreen, FailureTracker, Friendly, MAX_FAILURES, PollError,
+    SkipKind, SkipMachine, SkipVerdict, Transport,
+};
+
+fn error_lines(screen: &ErrorScreen) -> Vec<String> {
+    screen.lines().map(ToString::to_string).collect()
+}
+
+#[test]
+fn every_error_maps_to_the_kind_and_detail_poller_py_showed() {
+    fn shown(error: &PollError) -> (String, String) {
+        let Friendly { kind, detail } = poll::friendly(error);
+        (kind.as_str().to_string(), detail.as_str().to_string())
+    }
+
+    assert_eq!(
+        shown(&PollError::Timeout),
+        ("Timeout".to_string(), "backend not responding".to_string())
+    );
+    assert_eq!(
+        shown(&PollError::http(503, "upstream_unavailable")),
+        ("HTTP 503".to_string(), "upstream_unavailable".to_string())
+    );
+    assert_eq!(
+        shown(&PollError::Transport(Transport::Dns)),
+        (
+            "Network error".to_string(),
+            "cannot resolve backend".to_string()
+        )
+    );
+
+    // The decode arm leads with the byte offset, which on a device is often the
+    // only clue available.
+    let error = mlb::decode(&[9, 1]).expect_err("version 9 is not the wire format");
+    let (kind, detail) = shown(&PollError::Decode(error));
+    assert_eq!(kind, "Bad response");
+    assert!(
+        detail.starts_with("@0: unsupported wire version 9"),
+        "{detail}"
+    );
+}
+
+/// `_raise_api_error` defaulted `error` to `unknown_error` when the body was
+/// not a JSON object, and the panel showed that word rather than a blank line.
+#[test]
+fn an_error_body_with_no_code_still_names_something() {
+    let Friendly { kind, detail } = poll::friendly(&PollError::http(500, ""));
+    assert_eq!(kind.as_str(), "HTTP 500");
+    assert_eq!(detail.as_str(), "unknown_error");
+}
+
+#[test]
+fn the_error_screen_appears_on_the_fifth_failure_and_not_before() {
+    let mut tracker = FailureTracker::new();
+    for expected in 1..MAX_FAILURES {
+        let failure = tracker.record_failure(1_000, &PollError::Timeout);
+        assert_eq!(failure.streak, expected);
+        assert!(failure.screen.is_none(), "streak {expected} showed a screen");
+    }
+    let failure = tracker.record_failure(1_000, &PollError::Timeout);
+    assert_eq!(failure.streak, MAX_FAILURES);
+    let screen = failure.screen.expect("the fifth failure shows the screen");
+    assert_eq!(
+        error_lines(&screen),
+        vec!["Timeout", "backend not responding", "failing for 0m"]
+    );
+}
+
+/// Every failure past the fifth rebuilds the screen, so the age line keeps
+/// counting rather than freezing at the minute the streak crossed.
+#[test]
+fn the_age_line_counts_from_the_first_failure_of_the_streak() {
+    let mut tracker = FailureTracker::new();
+    for _ in 0..MAX_FAILURES {
+        tracker.record_failure(60_000, &PollError::Timeout);
+    }
+    let failure = tracker.record_failure(60_000 + 7 * 60_000, &PollError::Timeout);
+    let screen = failure.screen.expect("still failing, still showing");
+    assert_eq!(error_lines(&screen).last().unwrap(), "failing for 7m");
+}
+
+#[test]
+fn a_long_detail_takes_two_lines_and_the_screen_still_fits() {
+    let error = soccer::decode(&[2, 1, 4]).expect_err("truncated soccer live game");
+    let mut tracker = FailureTracker::new();
+    let mut failure = tracker.record_failure(0, &PollError::Decode(error));
+    for _ in 1..MAX_FAILURES {
+        failure = tracker.record_failure(0, &PollError::Decode(error));
+    }
+    let screen = failure.screen.expect("the fifth failure shows the screen");
+    let shown = error_lines(&screen);
+    assert_eq!(shown.len(), snapshot::ERROR_LINES);
+    assert_eq!(shown[0], "Bad response");
+    assert!(
+        shown[1].chars().count() <= DETAIL_LINE_CHARS,
+        "first detail line overflows: {:?}",
+        shown[1]
+    );
+    // The two detail lines are consecutive slices of one string, not two
+    // independent renderings of it.
+    let rejoined = format!("{}{}", shown[1], shown[2]);
+    let Friendly { detail, .. } = poll::friendly(&PollError::Decode(error));
+    assert!(detail.as_str().starts_with(&rejoined), "{rejoined:?}");
+    assert_eq!(shown[3], "failing for 0m");
+}
+
+#[test]
+fn a_success_reports_the_streak_it_ended_exactly_once() {
+    let mut tracker = FailureTracker::new();
+    assert_eq!(tracker.record_success(), None);
+    tracker.record_failure(0, &PollError::Timeout);
+    tracker.record_failure(0, &PollError::Timeout);
+    assert_eq!(tracker.record_success(), Some(2));
+    assert_eq!(tracker.record_success(), None);
+    assert_eq!(tracker.streak(), 0);
+}
+
+#[test]
+fn the_error_screen_reaches_the_panel_under_the_api_error_title() {
+    let mut tracker = FailureTracker::new();
+    let mut failure = tracker.record_failure(0, &PollError::Timeout);
+    for _ in 1..MAX_FAILURES {
+        failure = tracker.record_failure(0, &PollError::Timeout);
+    }
+    let mut store = Store::new();
+    store.finish_startup(StartupExit::Mode(Mode::Idle));
+    failure.screen.expect("shown by now").commit(&mut store);
+
+    let snapshot = store.snapshot();
+    assert_eq!(snapshot.mode, Mode::Error);
+    assert_eq!(snapshot.error.title.as_str(), poll::ERROR_TITLE);
+    assert_eq!(snapshot.error.lines[0].as_str(), "Timeout");
+}
+
+// -- The skip machine -----------------------------------------------------
+
+#[test]
+fn a_press_that_lands_on_an_armed_skip_is_rejected_not_queued() {
+    let mut machine = SkipMachine::new();
+    assert_eq!(machine.request(SkipKind::Game), SkipVerdict::Armed);
+    assert_eq!(machine.request(SkipKind::Game), SkipVerdict::Rejected);
+    assert_eq!(machine.request(SkipKind::League), SkipVerdict::Rejected);
+    // One advance, however many presses landed.
+    assert_eq!(machine.consume(), Some(SkipKind::Game));
+    assert_eq!(machine.consume(), None);
+}
+
+#[test]
+fn a_press_that_lands_during_the_tick_it_started_is_also_rejected() {
+    let mut machine = SkipMachine::new();
+    machine.request(SkipKind::League);
+    assert_eq!(machine.consume(), Some(SkipKind::League));
+    // The tick is now in flight — `_poll_current`'s awaits are where a burst
+    // of presses actually lands.
+    assert_eq!(machine.request(SkipKind::Game), SkipVerdict::Rejected);
+    assert!(machine.finish(), "the spinner is owed a teardown");
+    assert_eq!(machine.request(SkipKind::Game), SkipVerdict::Armed);
+}
+
+#[test]
+fn a_tick_with_no_skip_owes_no_teardown() {
+    let mut machine = SkipMachine::new();
+    assert_eq!(machine.consume(), None);
+    assert!(!machine.finish());
+}
+
+// -- Receive buffer sizing ------------------------------------------------
+
+/// [`poll::RESPONSE_BYTES`]'s derivation, checked against the corpus rather
+/// than asserted in a comment. The binding case is a games list at the wire
+/// format's own ceiling — not the logo `api_client.py` sized against.
+#[test]
+fn the_receive_buffer_holds_the_largest_list_the_wire_format_can_encode() {
+    let longest = corpus()
+        .iter()
+        .map(|(name, bytes)| {
+            let league = league_of(name);
+            let detail = WireFeed
+                .detail(league.sport, bytes)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            detail.game_id().len()
+        })
+        .max()
+        .expect("corpus is not empty");
+    assert_eq!(
+        longest,
+        poll::MAX_GAME_ID_BYTES,
+        "game ids changed length; re-derive poll::RESPONSE_BYTES"
+    );
+
+    // `u8 version` + `u8 count`, then per entry `u8 state` + `u8 length` + id.
+    let worst_list = 2 + scoreboard_wire::MAX_GAMES * (2 + poll::MAX_GAME_ID_BYTES);
+    assert!(
+        worst_list + poll::MAX_HEADER_BLOCK <= poll::RESPONSE_BYTES,
+        "a full games list plus its headers is {} B, over the {} B buffer",
+        worst_list + poll::MAX_HEADER_BLOCK,
+        poll::RESPONSE_BYTES
+    );
+}
+
+/// The detail half of the split, against what the corpus actually contains and
+/// against the worst case the format allows for the sport with the most text.
+#[test]
+fn the_detail_half_holds_every_corpus_payload_with_room_for_the_wire_maximum() {
+    let largest = corpus()
+        .iter()
+        .map(|(_, bytes)| bytes.len())
+        .max()
+        .expect("corpus is not empty");
+    assert!(
+        largest + poll::MAX_HEADER_BLOCK <= poll::DETAIL_BYTES,
+        "corpus maximum {largest} B plus headers does not fit {} B",
+        poll::DETAIL_BYTES
+    );
+    // Headroom for the text-heavy case the corpus has no fixture for: a live
+    // game carrying a play line at the wire's 255-byte cap, on top of the
+    // largest payload measured.
+    assert!(
+        largest + scoreboard_wire::MAX_STRING_BYTES + poll::MAX_HEADER_BLOCK <= poll::DETAIL_BYTES
+    );
+}
+
+#[test]
+fn the_logo_half_holds_a_crest_and_its_headers() {
+    const CREST_BYTES: usize = 24 * 24 * 2;
+    const { assert!(CREST_BYTES + poll::MAX_HEADER_BLOCK <= poll::LOGO_BYTES) };
+}
