@@ -29,26 +29,29 @@ no heap to absorb a mistake.
 | cyw43 driver state | ~16,384 | ESTIMATE | |
 | Receive/scratch buffers (wire, HTTP, OTA chunk) | ~40,960 | ESTIMATE | Unioned where phases cannot overlap (OTA vs. poll). |
 | Glyph/font tables + compiled sprites | 0 | **MEASURED** | `crates/scoreboard-render`. **9,538 B of flash, 0 B of RAM** — read out of the crate's own object code, not asserted. Breakdown and the command below. |
-| Core-0 task arenas + stack | ~24,576 | ESTIMATE | |
-| Core-1 stack | 8,192 | ESTIMATE | Render loop only. |
-| Ring log + misc statics | ~8,192 | ESTIMATE | Measured floor today is 272 B — embassy-rp GPIO wakers, the time driver, the critical-section lock, and the PAC singleton flags. The deployed RAM log (SPEC §9) is the bulk of this line. |
-| **Projected total** | **245,477** | | **239.7 KiB** |
+| Core-1 render-loop task arena | 1,392 | **MEASURED** | `scoreboard-app`. The loop's `LoopState` — frame rail, prepared view, skip memo, probe — plus the display and everything else held across the frame's await. It lives in the **task arena, not on the core-1 stack**: an embassy task's future is a static. See the correction below. |
+| Core-0 task arenas | ~24,576 | ESTIMATE | 3,120 B measured today for the three placeholder tasks, and 2,968 B of that is the demo feed's own `ScoreboardSnapshot`, which leaves with it. The real arenas are net/poller/server/OTA. |
+| Core-0 stack | — | **MEASURED (not a fixed line)** | With flip-link the stack is the whole remainder below the statics: **415,520 B** today, growing *down*, guarded by MSPLIM at the bottom of RAM. It is not a number to budget; it is what the rest of the table does not spend. |
+| Core-1 stack | 8,192 | **MEASURED** | Sized 8 KB by `scoreboard-app`; **high-water 2,480 B (30 %)** across every scenario the frame probe drives. The setup screen, which is the only QR encoder caller and therefore the deepest frame, is not among them yet. Guarded by MSPLIM at its bottom. See the core-1 notes below. |
+| Ring log + misc statics | ~8,192 | ESTIMATE | Measured floor today is 517 B — embassy-rp GPIO wakers, the time driver, the critical-section lock, the clock cache, and the PAC singleton flags. The deployed RAM log (SPEC §9) is the bulk of this line. |
+| **Projected total** | **246,869** | | **241.1 KiB** |
 
-**Headroom: 53.9 %** (287,003 B free of 532,480 B). Against the 512 KiB that
-`hub75-diag/memory.x` actually declares — see the caveat below — it is 53.2 %.
-Either way the ≥ 40 % target holds with room to spare: the estimates above may
-overrun by a combined 74,011 B before the target is breached.
+**Headroom: 53.6 %** (285,611 B free of 532,480 B). Against the 512 KiB the
+linker actually declares — see the caveat below — it is 52.9 %. Either way the
+≥ 40 % target holds with room to spare: the estimates above may overrun by a
+combined 72,619 B before the target is breached.
 
-The three `scoreboard-model` lines are **struct sizes measured on the host**,
-not symbols read out of a device ELF — no binary links them yet. They are exact
-anyway: every bounded string in the snapshot carries a `u16` length prefix
+`SnapshotChannel`'s 8,552 B is now a symbol in a real device ELF, and it came
+out byte-for-byte as the host predicted. `Store` and `Slate` are still host
+struct sizes — nothing links them until the poller lands — but the same argument
+applies: every bounded string in the snapshot carries a `u16` length prefix
 rather than a `usize`, so the layout is byte-identical on the host and on
-`thumbv8m.main-none-eabihf`. Verified by compiling a deliberate type mismatch
-for the ARM target and reading the size out of the error.
+`thumbv8m.main-none-eabihf`.
 
-**Measured today: 84,120 B** (82.1 KiB, 84.2 % headroom) — that is the whole of
-`hub75-diag`, the only device binary that exists. Everything past the first
-three rows is still a seed estimate.
+**Measured today: 107,720 B** (105.2 KiB, 79.8 % headroom) — the whole of
+`scoreboard-app`, which is now the binary of record. That figure includes
+4,150 B of dev-only defmt/RTT and 2,968 B of demo scaffolding, both of which
+leave. The estimate rows above are the network stack, which does not exist yet.
 
 ### Correction to SPEC §4 — the handoff needs three buffers, not two
 
@@ -71,7 +74,7 @@ fourth copy: core 0 keeps the authoritative snapshot and publishes clones of it.
 Folding those together — mutating the publisher's back buffer in place and
 carrying forward from the just-published slot — would recover 2,848 B at the
 price of making the whole state machine borrow the channel. If RAM ever gets
-tight, that is the lever; at 53.9 % headroom it is not worth the coupling.
+tight, that is the lever; at 53.6 % headroom it is not worth the coupling.
 
 ### The render tables are flash, and that is checked rather than assumed
 
@@ -119,11 +122,145 @@ follow from the 64×32 geometry it cited either (that pairing works out to
 — four times what the seed's own stated geometry implies, and the largest single
 item in the budget.
 
+### Correction to SPEC §11 — the core-1 loop state is arena, not stack
+
+SPEC §11 budgets a "Core-1 stack, 8 KB, render loop only" and says nothing about
+where the loop's own state lives. On embassy it is not the stack: a task's
+future is a `static` in the task's pool, so `LoopState` — the frame rail, the
+`PreparedView` with its 343 B QR bitmap, the skip memo, the frame probe — plus
+the `Hub75Display` and the channel reader all sit in a 1,392 B arena that
+`arm-none-eabi-nm` reports as `render_loop::POOL`.
+
+That is why 8 KB of stack turns out to be generous: with the cross-frame state
+elsewhere, the stack only carries renderer call frames and the one deep
+transient, `QrBitmap::encode`'s two 211 B Reed-Solomon buffers. Measured
+high-water is **2,480 B**, stable to within 4 B across every scenario. The 8 KB
+stays as sized — the setup screen (the only QR user) is not in the probe's
+rotation yet, and halving it to buy 4 KB against 285 KB of headroom is not a
+trade worth making.
+
+---
+
+## Core 1: measured frame times
+
+**The Phase 3 acceptance measurement.** `scoreboard-render` dropped
+MicroPython's strip pre-rendering on the thesis that a compiled glyph blit is
+cheap enough to do inline every frame. On silicon (Pico 2 W, 150 MHz, release
+profile, `firmware-rs/app`'s frame probe, 100 frames per scenario), it is:
+
+| Scenario | frame mean | frame max | render mean | render max | rebuild |
+|---|---:|---:|---:|---:|---:|
+| Idle — static screen, every frame skipped | 0.07 ms | 5.92 ms | 0.48 ms | 0.48 ms | 15 µs |
+| Startup — static screen, 6 commits in 5 s | 0.39 ms | 6.36 ms | 0.79 ms | 0.89 ms | 14 µs |
+| **Final line score, three rows scrolling** | 6.46 ms | 6.84 ms | 1.17 ms | 1.31 ms | 15 µs |
+| Final + sticky spinner toast (full-frame dim) | 6.81 ms | 7.30 ms | 1.51 ms | 1.81 ms | 15 µs |
+| Menu — 5 rows, marquee every frame | 6.85 ms | 7.19 ms | 1.57 ms | 1.69 ms | 14 µs |
+| **MLB live + 255-byte play flash scrolling** | 6.90 ms | 7.41 ms | 1.59 ms | 1.96 ms | 116 µs |
+
+**Worst frame measured: 7.41 ms of the 50 ms budget — 15 %.** Zero overruns in
+any scenario; core 1 held 20 FPS exactly (200 ticks per 10 s window) through a
+5-minute soak, 58 consecutive scenario reports.
+
+The thesis holds by a wide margin. The two cases MicroPython could not draw
+inline are the two in bold: three line-score rows measured ~41 ms there and
+**1.17 ms** here; a long play line measured over 50 ms there and **1.96 ms**
+here (worst case, at the wire format's 255-byte ceiling). The strip pool, its
+capacity invariants and its per-glyph fallback bought about 35× of something
+this port does not need.
+
+The `frame max` column for the two static scenarios is not a slow frame — it is
+the one frame in a hundred that actually drew, sitting next to ninety-nine that
+skipped. Read the `render` columns for what drawing costs.
+
+### Where a frame actually goes
+
+`show` — `load_rgb565` + `flip`, repacking 8,192 RGB565 pixels into eight BCM
+bitplanes — costs **5.25 ms** and is flat across every scenario, because it does
+not depend on what was drawn. That is **~76 % of a drawn frame**, and it is
+`crates/hub75`, not the render path. Two consequences:
+
+- The render budget question is settled and needs no further work. If frame time
+  ever has to come down, the driver's packer is where the time is, not the
+  glyphs (BACKLOG item 63). Nothing today justifies touching it — 7.41 ms
+  against 50 ms is not a problem to solve.
+- A *skipped* frame costs 0.07 ms, two orders of magnitude less than a drawn
+  one. The static-screen skip is worth every line it costs.
+
+`rebuild` (the prepared view, on commit frames only) is 14–16 µs for everything
+except the 255-byte play line, where measuring 255 glyphs to size the flash
+window takes **116 µs** — still a rounding error, and it happens once per
+commit, not once per frame.
+
+`brightness` — core 0 moving the atomic, core 1 re-deriving the driver's OE
+timing stream — costs **112–138 µs mean, 190 µs worst**, and only on the frames
+where the value actually changed (25 of every 100 ticks under the demo's
+deliberately brisk sweep; a real light sensor moves far slower). It is not a
+per-frame cost and it is not hiding in the render number.
+
+One caution on precision: `show` moved from 5.07 to 5.25 ms across two builds
+that differed only by a reordered statement and 120 B of code. Flash placement
+moves the XIP cache under the hot packing loop, so treat the third significant
+figure as build noise and compare orders of magnitude, not percentages.
+
+Reproduce: flash `firmware-rs/app` and capture a full 30 s scenario cycle —
+
+```sh
+cd firmware-rs/app
+cargo build --release --locked --target thumbv8m.main-none-eabihf
+probe-rs download --chip RP235x target/thumbv8m.main-none-eabihf/release/scoreboard-app
+timeout 80 probe-rs run --chip RP235x target/thumbv8m.main-none-eabihf/release/scoreboard-app > session.log 2>&1
+```
+
+The demo task that drives those scenarios is scaffolding for this measurement
+and leaves with the real poller. Re-run it before it does.
+
+---
+
+## Measured breakdown — `scoreboard-app`, release, `thumbv8m.main-none-eabihf`
+
+Standalone link profile, with flip-link. **127,948 B flash** (8.1 % of the
+1,536 KB active partition), **8,616 B `.data`**, **95,008 B `.bss`**,
+**4,096 B `.uninit`** → **107,720 B of RAM statics**.
+
+| Symbol | Bytes | Owner |
+|---|---:|---|
+| `hub75::driver::FRAMEBUFFERS` | 65,536 | hub75 — the two BCM bitplane buffers |
+| `scoreboard_app::FRAME` | 16,385 | app — RGB565 drawing surface (16,384 + 1 B `ConstStaticCell` flag) |
+| `scoreboard_app::CHANNEL` | 8,552 | the three-slot snapshot handoff. **In `.data`, not `.bss`** — see below |
+| `scoreboard_app::CORE1_STACK` | 8,192 | core 1's stack; 2,480 B high-water |
+| `defmt_rtt::BUFFER` | 4,096 | defmt ring, `.uninit`. **Dev-only** |
+| `demo::feed::POOL` | 2,968 | the demo task's own `ScoreboardSnapshot`. **Scaffolding**; leaves with the demo |
+| `display_core1::render_loop::POOL` | 1,392 | core 1's task arena — the loop state |
+| `embassy_rp::gpio::BANK0_WAKERS` | 240 | embassy-rp |
+| `.L_MergedGlobals` | 120 | hub75 driver statics (73 B) + embassy/defmt/probe singletons |
+| `supervise::liveness::POOL` + `demo::brightness::POOL` | 152 | the other two core-0 placeholders |
+| `hub75::driver::TIMING_BUFFER` | 64 | the OE/BCM timing stream |
+| `_SEGGER_RTT` + `defmt_rtt::NAME` | 54 | `.data`, RTT control block. Dev-only |
+| everything else (wakers, flags, padding) | ~30 | |
+
+**`CHANNEL` is initialized data, so it costs its 8,552 B twice** — once in RAM
+and once in flash, plus a boot-time copy. `ScoreboardSnapshot::new()` sets
+`UiColors` to white, so the initializer is not all-zero and the linker cannot
+put it in `.bss`. Harmless at 0.5 % of the active partition, and noted here so
+the flash number is not a surprise later.
+
+Reproduce (needs `binutils-arm-none-eabi`; CI runs exactly this):
+
+```sh
+cd firmware-rs/app
+cargo build --release --locked --target thumbv8m.main-none-eabihf
+ELF=target/thumbv8m.main-none-eabihf/release/scoreboard-app
+arm-none-eabi-size -B -d "$ELF"
+arm-none-eabi-nm -C --size-sort -r -S -td "$ELF" | awk '$3 ~ /^[bBdD]$/'
+```
+
 ---
 
 ## Measured breakdown — `hub75-diag`, release, `thumbv8m.main-none-eabihf`
 
-The reference point every future measurement is compared against.
+The panel-driver reference point, kept so the hub75 numbers stay comparable
+across commits. Links plain (no flip-link), which is why its symbol addresses
+are not comparable with the app's.
 **32,512 B flash** (`.text` + `.rodata` + vector/boot blocks), **56 B `.data`**,
 **83,040 B `.bss`**, **1,024 B `.uninit`** → **84,120 B of RAM statics**.
 
@@ -155,24 +292,33 @@ arm-none-eabi-nm -C --size-sort -r -S -td "$ELF" | awk '$3 ~ /^[bBdD]$/'
 
 ## Caveats to close before the numbers can be trusted end to end
 
-- **Stacks are not in this measurement.** `arm-none-eabi-size` reports statics
-  only. `hub75-diag` has no explicit stack sizing: `cortex-m-rt` puts
-  `_stack_start` at the top of RAM and it grows down toward the statics, which
-  end at `0x2001_4898`, leaving 440,168 B (429.9 KiB) unclaimed between the two.
-  The core-0/core-1 stack lines above are the spec's intent, not anything the
-  linker enforces yet.
-- **`flip-link` is not wired up.** SPEC §2 calls for it precisely so a stack
-  overflow faults instead of quietly eating `.bss`; `hub75-diag/.cargo/config.toml`
-  passes only `--nmagic`, `-Tlink.x`, `-Tdefmt.x`. Until it is added, a deep
-  call chain corrupts `FRAMEBUFFERS` silently. TOOLCHAIN.md has the two-line
-  change; it moves symbol addresses, so it lands with a re-measure of this
-  table. Scheduled for Phase 3 with the app shell.
+- **Stacks are still not in `size`'s output**, but both are now measured
+  another way. `arm-none-eabi-size` reports statics only. Core 1's stack is an
+  8,192 B static painted with 0xAA before the core starts, and
+  `supervise::liveness` reports the deepest byte touched every 10 s — 2,480 B.
+  Core 0's is the remainder below the statics (415,520 B under flip-link) and
+  has no equivalent probe, because nothing sizes it: it is what is left.
+  `hub75-diag` still has neither.
+- **`flip-link` is wired up for `firmware-rs/app`**, and the numbers above are
+  measured with it. Core 0's stack sits below `.bss`/`.data`
+  (`_stack_start = 0x2006_5b20`, `_stack_end = 0x2000_0000`) and
+  `install_core0_stack_guard()` arms MSPLIM at the bottom, so overflow faults
+  rather than eating `FRAMEBUFFERS`. Core 1 gets the same protection by a
+  different route: `spawn_core1` arms MSPLIM at the bottom of the static stack
+  it is handed. `hub75-diag` still links plain — a bench binary with one shallow
+  task and 429.9 KiB of slack, where the guard buys little.
 - **512 KiB vs. 520 KiB.** `memory.x` declares `RAM : LENGTH = 512K` — the
   contiguous striped banks. The RP2350's other 8 KiB (two non-striped 4 KiB
   banks) is not in the linker's map, so it cannot be spent without a
   deliberate section placement. The headroom target is stated against 520 KiB
   per the spec; the 512 KiB figure is what is actually reachable today, and
   both clear 40 %.
-- **defmt/RTT is dev-only.** The 1,078 B of `defmt_rtt` + `_SEGGER_RTT` above
-  leave the release image; the deployed build spends its logging RAM on the
-  ring buffer in the "Ring log + misc statics" line instead.
+- **defmt/RTT is dev-only.** 4,150 B in the app (a 4 KB ring, raised from the
+  default because two cores log into it, plus the control block) and 1,078 B in
+  `hub75-diag`. Both leave the release image; the deployed build spends its
+  logging RAM on the ring buffer in the "Ring log + misc statics" line instead.
+- **The demo feed is scaffolding.** 2,968 B of the app's arena is a
+  `ScoreboardSnapshot` inside the placeholder core-0 task that exists to drive
+  the frame probe. It leaves when the real poller lands, and the poller will
+  want a `Store` (2,880 B) in roughly the same place — so treat it as a
+  placeholder for that line rather than as a saving.

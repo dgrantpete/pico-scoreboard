@@ -1,0 +1,11 @@
+[package]
+name = "scoreboard-layout"
+version = "0.1.0"
+edition = "2024"
+description = "Flash and RAM layout for the scoreboard firmware — the single source both link profiles and the OTA path read"
+
+[features]
+default = []
+# Host-side `memory.x` generation, used from the app's build script. Off for
+# the device build, where this crate is plain `no_std` constants.
+std = []

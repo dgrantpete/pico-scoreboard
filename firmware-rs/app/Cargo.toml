@@ -1,0 +1,54 @@
+[package]
+name = "scoreboard-app"
+version = "0.1.0"
+edition = "2024"
+description = "The scoreboard firmware binary: embassy on both cores, render loop on core 1 driving the HUB75 panel"
+
+# Standalone workspace: this binary only builds for thumbv8m (embassy-rp is
+# device-only), so it must stay out of the root workspace's host builds — same
+# arrangement as firmware-rs/hub75-diag. `layout/` is a path dependency inside
+# this directory, so cargo makes it a member automatically.
+[workspace]
+
+[features]
+# Where the image links. Exactly one; features are additive, so selecting the
+# other needs --no-default-features (build.rs rejects both and neither).
+default = ["link-standalone"]
+# Flash offset 0, probe-flashed, no bootloader. Phase 3.
+link-standalone = []
+# The active partition behind embassy-boot. Phase 4 flips to this.
+link-boot-integrated = []
+
+[dependencies]
+scoreboard-layout = { path = "layout" }
+hub75 = { path = "../../crates/hub75" }
+scoreboard-model = { path = "../../crates/scoreboard-model" }
+scoreboard-render = { path = "../../crates/scoreboard-render" }
+
+# Pre-1.0 ecosystem: pinned exactly (SPEC.md §14).
+#
+# NO-ALLOC WATCH (SPEC.md §10): `defmt` and `heapless` both carry an
+# off-by-default `alloc` feature. Cargo unifies features across the whole
+# graph, so one new dependency asking for `defmt/alloc` would make this binary
+# demand a `#[global_allocator]` that does not exist, and the failure surfaces
+# as an undefined `__rust_alloc` at link time with no hint as to who asked.
+# Anything added here gets `cargo tree -f "{p} {f}"` run over it first.
+rp235x-pac = { version = "=0.2.0", features = ["critical-section"] }
+embassy-executor = { version = "=0.10.0", features = ["platform-cortex-m", "executor-thread", "defmt"] }
+embassy-rp = { version = "=0.10.0", features = ["rt", "rp235xa", "critical-section-impl", "time-driver", "defmt"] }
+embassy-futures = "=0.1.2"
+embassy-time = { version = "=0.5.1", features = ["defmt"] }
+cortex-m-rt = "=0.7.6"
+static_cell = "=2.1.1"
+defmt = "=1.1.1"
+defmt-rtt = "=1.3.0"
+panic-probe = { version = "=1.0.0", features = ["print-defmt"] }
+
+[build-dependencies]
+scoreboard-layout = { path = "layout", features = ["std"] }
+
+[profile.release]
+debug = 2
+lto = "fat"
+opt-level = 3
+codegen-units = 1

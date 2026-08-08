@@ -1,0 +1,31 @@
+[build]
+target = "thumbv8m.main-none-eabihf"
+
+# One table keyed on the triple rather than hub75-diag's `cfg(...)` form: the
+# `linker` key is only honoured on a triple table, and splitting linker and
+# rustflags across two tables invites the two to disagree about which one wins.
+[target.thumbv8m.main-none-eabihf]
+# SPEC §2's stack-overflow guard for core 0. flip-link inverts the RAM layout
+# so the stack sits *below* the statics and an overflow runs off the bottom of
+# RAM into a fault instead of quietly eating .bss — which, with 64 KB of hub75
+# framebuffers down there, would corrupt the panel rather than crash.
+# `cargo install flip-link`; it shells out to `rust-lld`, which rustc puts on
+# the linker's PATH for us. Core 1's stack is guarded separately, by the MSPLIM
+# register embassy-rp's spawn_core1 programs (see main.rs).
+linker = "flip-link"
+# probe-rs 0.32 wants RP235x ("RP2350" only matches via wildcard, with a
+# warning). --preverify skips sectors that already hold the right bytes, so a
+# re-run of an unchanged image is a reset rather than a full flash.
+runner = "probe-rs run --chip RP235x --preverify"
+rustflags = [
+  "-C", "link-arg=--nmagic",
+  "-C", "link-arg=-Tlink.x",
+  "-C", "link-arg=-Tdefmt.x",
+]
+
+[env]
+DEFMT_LOG = "info"
+# The SWD capture driver (tools/rtt_capture.py) reads the defmt ring passively
+# and never advances RdOff, so everything logged between two polls has to fit.
+# 4 KB is dev-only RAM and leaves the deployed image (SPEC §9's RAM log).
+DEFMT_RTT_BUFFER_SIZE = "4096"
