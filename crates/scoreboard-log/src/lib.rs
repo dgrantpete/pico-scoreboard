@@ -27,12 +27,22 @@
 //! time sync sets the wall-clock offset and the numbers become Unix seconds
 //! with no client change — [`Entry::ts`] is just what the caller passed.
 
+//! # Two surfaces, one crate
+//!
+//! The ring is what a *running* device tells you. [`breadcrumb`] is what a
+//! device tells you about the boot it did not survive — one record, written to
+//! flash when something dies, served by `/api/logs/previous`. They are in one
+//! crate because they answer the same question at two timescales, and because
+//! the truncating formatter is the same in both.
+
 #![no_std]
 #![forbid(unsafe_code)]
 
 use core::fmt::Write as _;
 
 use heapless::String;
+
+pub mod breadcrumb;
 
 /// The longest message a slot holds.
 ///
@@ -452,7 +462,7 @@ impl core::fmt::Write for Truncating<'_> {
 
 /// The longest prefix of `text` that fits in `limit` bytes without splitting a
 /// character.
-fn truncate_on_boundary(text: &str, limit: usize) -> &str {
+pub(crate) fn truncate_on_boundary(text: &str, limit: usize) -> &str {
     if text.len() <= limit {
         return text;
     }
