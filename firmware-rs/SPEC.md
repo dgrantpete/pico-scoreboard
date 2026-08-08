@@ -29,7 +29,10 @@
 
 ### Toolchain
 
-- Stable Rust, `thumbv8m.main-none-eabihf` target.
+Install/flash/logging instructions are `firmware-rs/TOOLCHAIN.md`; what follows
+is the rationale.
+
+- Stable Rust, `thumbv8m.main-none-eabihf` target — pinned in `rust-toolchain.toml`.
 - `probe-rs` + Raspberry Pi Debug Probe for flash/debug; `defmt` + `defmt-rtt` for logging; `panic-probe` for panics; `flip-link` for stack-overflow protection (stack placed below `.bss`/`.data` so overflow faults instead of corrupting statics).
 - `picotool`/UF2 remains available as the probe-less fallback and is the format OTA images are built from (bin, not UF2, for the OTA path).
 - CI: `cargo build` for the firmware target, `cargo test` on host for all logic crates, `cargo size` output tracked per commit (budget regression check).

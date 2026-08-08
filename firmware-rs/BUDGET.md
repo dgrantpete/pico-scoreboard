@@ -95,8 +95,9 @@ arm-none-eabi-nm -C --size-sort -r -S -td "$ELF" | awk '$3 ~ /^[bBdD]$/'
 - **`flip-link` is not wired up.** SPEC §2 calls for it precisely so a stack
   overflow faults instead of quietly eating `.bss`; `hub75-diag/.cargo/config.toml`
   passes only `--nmagic`, `-Tlink.x`, `-Tdefmt.x`. Until it is added, a deep
-  call chain corrupts `FRAMEBUFFERS` silently. Fix when the app shell lands
-  (Phase 3).
+  call chain corrupts `FRAMEBUFFERS` silently. TOOLCHAIN.md has the two-line
+  change; it moves symbol addresses, so it lands with a re-measure of this
+  table. Scheduled for Phase 3 with the app shell.
 - **512 KiB vs. 520 KiB.** `memory.x` declares `RAM : LENGTH = 512K` — the
   contiguous striped banks. The RP2350's other 8 KiB (two non-striped 4 KiB
   banks) is not in the linker's map, so it cannot be spent without a

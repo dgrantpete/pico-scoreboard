@@ -18,6 +18,7 @@ on:
       - "firmware-rs/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - ".github/workflows/rust.yml"
   pull_request:
     paths:
@@ -26,6 +27,7 @@ on:
       - "firmware-rs/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - ".github/workflows/rust.yml"
   workflow_dispatch:
 
@@ -48,10 +50,13 @@ jobs:
         uses: actions/checkout@v4
         # No submodules: the micropython submodule is firmware.yml's business.
 
+      # rust-toolchain.toml pins the channel and already declares the device
+      # target and clippy, so rustup materializes all of it here. The explicit
+      # adds are idempotent no-ops that keep this job honest if that file ever
+      # moves or loses a line.
       - name: Install Rust toolchain
         run: |
-          rustup update stable --no-self-update
-          rustup default stable
+          rustup show active-toolchain
           rustup component add clippy
           rustup target add "$DEVICE_TARGET"
           rustc --version

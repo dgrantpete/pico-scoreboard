@@ -1,0 +1,17 @@
+# Applies repo-wide: rustup walks up from the working directory, so this covers
+# `cargo` at the root (backend, crates/*) and inside the standalone
+# firmware-rs/hub75-diag workspace alike.
+#
+# `stable`, not a frozen version, per SPEC.md §2. The tradeoff is real: a new
+# stable can move the size numbers CI reports against BUDGET.md, and can add
+# clippy lints that fail an otherwise-unrelated PR. If either becomes a
+# nuisance, freeze this to an exact version and bump it deliberately —
+# see firmware-rs/TOOLCHAIN.md.
+#
+# Declaring `targets` here is what lets a fresh clone run
+# `cargo build --target thumbv8m.main-none-eabihf` with no separate
+# `rustup target add`.
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]
+targets = ["thumbv8m.main-none-eabihf"]
