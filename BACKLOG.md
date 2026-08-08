@@ -551,6 +551,33 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     `Gamma` value — the driver already stores the LUT, so it is a change of
     what crosses the seam, not of the driver.
 
+69. **A station that loses its association never comes back** — observed
+    2026-08-08 on the Rust bench unit during task #10: after roughly half an
+    hour of idle uptime the device stopped answering entirely — no HTTP, and
+    **no ARP reply**, which is what makes it a link/stack failure rather than
+    an application one (two wedged HTTP sockets would still leave the device
+    pingable). Meanwhile core 1 was rendering at a steady 20.0 FPS with no
+    errors, and `net::watch_link` logged nothing at all in a 75 s window: no
+    `wait_config_down` transition fired, so embassy-net still believed its
+    IPv4 configuration was up while the radio was off the network. A
+    `probe-rs reset` had it serving again in 6 s.
+
+    This is the documented consequence of `net::watch_link` deliberately not
+    being a reconnect loop (`main.py` has none either, and task #9 recorded the
+    choice), so it is not a regression — but the MicroPython firmware's answer
+    was the watchdog, and that is task #12's. **It blocks the one-week soak in
+    task #13**: a unit that silently falls off the network and keeps drawing is
+    exactly what a soak is supposed to catch, and there is nothing to catch it
+    with yet. Two things are needed, and the second is not optional: the
+    watchdog feeder, and a liveness signal that notices *this* failure — a
+    frame counter will not, because core 1 is perfectly healthy throughout.
+    Candidates: fail the health gate when `stack.config_v4()` has been `None`
+    past a threshold, or when the poller has had no successful fetch in N
+    intervals (task #11 gives that for free). Worth reproducing first with a
+    long `probe-rs attach` capture to find out whether cyw43 reports the
+    disassociation at all — if it does not, that is an upstream bug worth
+    filing alongside item 65.
+
 ## Backend
 
 14. **Per-device API keys** — comma-separated key list in backend config →
