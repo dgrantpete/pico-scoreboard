@@ -14,7 +14,7 @@ src/
   main.rs           init, the two-PAC ownership contract, spawning both cores.
                     Every flash access happens here, before spawn_core1 — see
                     storage.rs for why that is free and why it is not later
-  display_core1.rs  the render loop: 20 FPS deadline pacing, snapshot latch,
+  display_core1.rs  the render loop: 60 FPS deadline pacing, snapshot latch,
                     prepared-view rebuild, static-screen skip, frame_seq
   probe.rs          the frame-time probe (the Phase 3 acceptance instrument)
   storage.rs        sequential-storage over the 980 KB region: the config
@@ -105,8 +105,9 @@ writing `DMA.INTE0` is safe next to a driver that also drives DMA, is in
 
 **Every flash access is a frame the panel does not draw.** A program or erase
 runs from RAM with XIP disabled, and embassy-rp arranges that by parking core 1
-for the duration. Measured: one 942 B config save takes its frame to 14.5 ms
-against a 50 ms budget and drops nothing (BUDGET.md). That is why `storage`'s
+for the duration. Measured: one 942 B config save takes its frame to 14.5 ms,
+which fit a 50 ms budget with room and fits the 16.7 ms one with 2.1 ms to
+spare — the tightest margin the firmware has (BUDGET.md). That is why `storage`'s
 API is blocking rather than `async` — an `async fn` would suggest other tasks
 run meanwhile, and they do not — and why every boot-time read happens before
 `spawn_core1`, where parking core 1 costs nothing because there is no core 1.

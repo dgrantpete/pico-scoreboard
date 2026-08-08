@@ -83,6 +83,36 @@ layout variants and scroll speed from `screen_geometry`'s module state, and the
 crest pixels from `LogoProvider`'s placeholder builder. A change to any of them
 moves both sides on the next regeneration instead of silently disagreeing.
 
+### The 60 FPS move did not disturb any of this
+
+Task #17 (2026-08-08) took the Rust render loop to 60 FPS while the MicroPython
+firmware it is compared against stays at 20, and **all 180 frames still match
+byte for byte with no golden regenerated**. That is not luck, and it is worth
+writing down because the obvious expectation is a re-bless:
+
+* The pinned points are **absolute positions on the frame rail**, not frame
+  indices. Every renderer takes milliseconds, so `t = 1500` means the same
+  picture at any rate — the rate only decides how many frames the loop draws on
+  the way there.
+* All four points are frame boundaries at 60 FPS as well as at 20 (`1500 ×
+  60/1000 = 90` frames exactly, and likewise for 4500 and 11000), so each is a
+  picture the loop genuinely passes through rather than one between two frames.
+  `tests/time.rs::the_parity_harness_offsets_are_positions_the_rail_actually_visits`
+  is that check, so a future rate that broke it would fail rather than quietly
+  compare against unreachable frames.
+* The manifest pins 20 px/s, which is still legal at 60 FPS (one pixel every
+  three frames rather than one per frame). Had it pinned the 40 px/s the config
+  used to accept, this section would read very differently: the harness asserts
+  the Rust ladder accepts the speed `screen_geometry` runs at, so it would have
+  failed loudly rather than drifted.
+
+The claim the harness makes is therefore unchanged and was not weakened: it
+still compares pixels, not timing. The one place where 60 FPS *could* have
+produced a real divergence is the toast dim ladder, and it did not, because that
+ladder is wall-timed rather than one rung per frame — making it finer is
+possible now and would be a genuine divergence, which is why it is deferred to
+BACKLOG 83 rather than folded in here.
+
 ## Static screens
 
 The screens no wire payload reaches are published by hand through the same
@@ -633,11 +663,15 @@ The zeroed watermarks are the design working: the device died at 7 s, before the
 10 s scan that publishes them, so it reports nothing rather than a stale guess.
 
 **The frame hitch.** One 942 B save takes its frame to 14,544 µs against a 50 ms
-budget and drops nothing. Full table and derivation in BUDGET.md.
+budget and drops nothing. Full table and derivation in BUDGET.md — including
+what the same 14.5 ms means against the 16.67 ms budget the loop now paces at,
+which is the one place 60 FPS narrowed a margin that mattered.
 
 **Core 1 held 20.0 FPS throughout** — every `supervise::liveness` line in every
 capture above reads `200 ticks in 10 s (20 FPS)`, including the reports either
-side of the flash write and through the watchdog drill.
+side of the flash write and through the watchdog drill. These captures predate
+task #17; the same line reads 600 ticks per 10 s on the current firmware, and
+re-taking them is on the drill-day list rather than done.
 
 ## Not yet bench-validated
 

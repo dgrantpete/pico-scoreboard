@@ -274,6 +274,17 @@ profile, `firmware-rs/app`'s frame probe, 100 frames per scenario), it is:
 any scenario; core 1 held 20 FPS exactly (200 ticks per 10 s window) through a
 5-minute soak, 58 consecutive scenario reports.
 
+> **These numbers were taken at 20 FPS and are still the frame costs.** Task
+> #17 moved the loop to 60 FPS, which changes the budget and therefore the duty,
+> not the cost of drawing a frame — nothing in the render path or the packer
+> depends on how often it is called. Against the 16.67 ms budget the same 7.41
+> ms worst frame is **44 %**, with 9.26 ms of margin, and the busiest scenario's
+> mean of 6.90 ms is a **41 % duty** on core 1 where it was 14 %. The one
+> measured number the change invalidated was the gamma hook, and that was fixed
+> rather than re-measured — see below. Everything here is **pending re-measure
+> on hardware at drill day**; the frame probe now reports every 1,800 ticks
+> (still 30 s) and the liveness line should read 600 ticks per 10 s.
+
 The thesis holds by a wide margin. The two cases MicroPython could not draw
 inline are the two in bold: three line-score rows measured ~41 ms there and
 **1.17 ms** here; a long play line measured over 50 ms there and **1.96 ms**
@@ -303,7 +314,10 @@ cyw43's SPI runner, smoltcp's poll loop, DHCP, a TCP connection to the backend
 
 Every window reported exactly **200 ticks per 10 s — 20.0 FPS — with zero
 overruns**, across the station bench run, the AP-fallback run, and the
-un-provisioned run. The deltas are all *negative* and all within the build noise
+un-provisioned run. (At 60 FPS the same line reads 600 ticks per 10 s; the
+question this section answers — whether core 0's real load starves core 1's
+executor — is one the higher rate asks three times as often, so it is on the
+drill-day list.) The deltas are all *negative* and all within the build noise
 the section below warns about (flash placement moves the XIP cache under
 hub75's packing loop); the honest reading is not "networking made rendering
 faster" but "networking costs core 1 nothing that this instrument can see".
@@ -324,7 +338,12 @@ not depend on what was drawn. That is **~76 % of a drawn frame**, and it is
 - The render budget question is settled and needs no further work. If frame time
   ever has to come down, the driver's packer is where the time is, not the
   glyphs (BACKLOG item 63). Nothing today justifies touching it — 7.41 ms
-  against 50 ms is not a problem to solve.
+  against 50 ms was not a problem to solve, and 7.41 against 16.67 is not one
+  either. It is worth being precise about what 60 FPS did to that item: the pack
+  is unchanged at 5.25 ms per drawn frame, but it now runs three times a second
+  more often, so it alone is **31 % of core 1's wall time** on a screen that
+  draws every frame, against 10 % before. That is the number to look at first if
+  anything ever needs headroom back — and it is still not a problem today.
 - A *skipped* frame costs 0.07 ms, two orders of magnitude less than a drawn
   one. The static-screen skip is worth every line it costs.
 
@@ -435,10 +454,10 @@ one (1), and the level filter is stored as `2 - level` so that the default,
 `Debug`, is the zero value. `.data` fell from 38,992 B to 10,184 B when they
 were, which is 28,808 B of flash and of every OTA transfer.
 
-### A gamma change costs 27.5 ms on core 1
+### A gamma change used to cost 27.5 ms on core 1, and no longer runs there
 
 `PUT /api/config` sends display settings to core 1, which applies them at the
-top of a frame. Measured on hardware, per hook:
+top of a frame. Measured on hardware at 20 FPS, per hook:
 
 | Hook | Cost |
 |---|---:|
@@ -447,13 +466,23 @@ top of a frame. Measured on hardware, per hook:
 | render settings only (variants, dividers, scroll speed) | 10 µs |
 | boot, every hook at once | 2,017 µs |
 
-27.5 ms is over half a 50 ms frame. It fits — the frame itself is ~7 ms, no
+27.5 ms was over half a 50 ms frame. It fit — the frame itself is ~7 ms, no
 overrun was recorded, and the loop held 20.0 FPS across the whole config
-exercise — but it is the largest single thing that happens inside a frame, and
-it is why the settings message carries the *set of hooks to run* rather than
-just the values: a `PUT` that changes an SSID must not pay it. The boot figure
-is lower because the LUT it builds is sRGB, which is a `const` table copy rather
-than 256 calls to `pow`.
+exercise — but it was the largest single thing that happened inside a frame,
+and it is why the settings message carries the *set of hooks to run* rather
+than just the values: a `PUT` that changes an SSID must not pay it. The boot
+figure is lower because the LUT it builds is sRGB, which is a `const` table copy
+rather than 256 calls to `pow`.
+
+**The 60 FPS move turned that from a large cost into an impossible one** — 27.5
+against a 16.7 ms budget is a guaranteed overrun — so it was fixed rather than
+re-measured (BACKLOG 68, task #17). `hub75::gamma::GammaTable` carries the
+finished 256 bytes, `DisplayUpdate` is built on core 0 where the request lands,
+and core 1's share of a gamma change is a `copy_from_slice`. The row above is
+kept because it is the measurement that motivated the change, and because it is
+the only number in this file that a frame-rate change invalidated outright.
+**Re-measure the gamma hook at drill day**: it should now be indistinguishable
+from the render-settings row.
 
 **The flash number is mostly not code.** `.rodata` is 269,660 B, and 232,803 B
 of that is the CYW43's firmware, CLM and board NVRAM — `include_bytes!`
@@ -534,13 +563,26 @@ one frame in six hundred is not a rate. The hitch shows up in `render` or in
 `show` depending on where core 1 happened to be when it was parked, which is why
 both maxima rise.
 
+**This is the measurement 60 FPS pressed hardest on, and the one to re-take
+first.** 14.5 ms was 29 % of a 50 ms budget and is 87 % of a 16.67 ms one. It
+still fits, but the margin is 2.1 ms where every other number in this file has
+at least 9 — and the baseline frames either side of the save ranged 7.3 to
+9.7 ms, so a save landing on the unluckier of those would cross the deadline.
+What that costs is bounded and already handled: the loop counts an overrun,
+re-anchors, and carries on one frame late; it does not drop or fast-forward
+anything. A config save producing an occasional counted overrun is the expected
+behaviour at 60 FPS, not a fault, and the probe's `overrun` column is where it
+will show up.
+
 That is an *append*, not an erase. `sequential-storage` only erases when a page
 fills and the region wraps: at ~942 B per save into 4 KB pages across a 980 KB
 region, the first erase is about a thousand saves away. An erase is roughly
-30 ms per sector and would overrun a frame; it is not on the normal path, and
-the one place it *is* deliberate — a storage region that does not read as a map
-at all, erased once and only ever once — runs at boot before core 1 starts,
-where parking core 1 is a no-op and the cost is zero frames.
+30 ms per sector — under a 50 ms frame and comfortably over a 16.67 ms one, so
+at 60 FPS it is about two frames of visible hitch rather than a long frame. It
+is not on the normal path, and the one place it *is* deliberate — a storage
+region that does not read as a map at all, erased once and only ever once — runs
+at boot before core 1 starts, where parking core 1 is a no-op and the cost is
+zero frames.
 
 The same reasoning is why every boot-time flash read happens before
 `spawn_core1`.

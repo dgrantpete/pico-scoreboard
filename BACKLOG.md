@@ -495,6 +495,15 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     is XIP-placement sensitive (5.07 vs 5.25 ms across two builds differing by
     120 B), so benchmark any change against a rebuild of its own baseline.
 
+    **Duty updated by task #17 (2026-08-08), verdict unchanged.** 60 FPS does
+    not make the pack slower — it makes it run three times as often. Per drawn
+    frame it is still a flat 5.25 ms; as a share of core 1's wall time on a
+    screen that draws every frame it went from ~10 % to **~31 %**, and the worst
+    total frame from 15 % of budget to **44 %** (7.41 ms of 16.67). There is
+    still nothing to fix: 9.26 ms of margin is not tight. This stays the first
+    place to look if headroom is ever needed, and it is now the *only* place
+    worth looking — the entire render path is under 2 ms.
+
 64. **`hub75-diag` still links without flip-link** — the app got the
     stack-overflow guard in Phase 3 (`firmware-rs/app/.cargo/config.toml`, two
     lines, plus `cargo install flip-link` which CI now does). The bench binary
@@ -841,3 +850,23 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     come from a firmware that will never grow the rung. So this needs an
     accepted-divergence class in `parity_frames.rs` and a PARITY.md verdict
     entry, which is why it is not a drive-by.
+
+84. **60 FPS narrowed the flip/load tearing window, and nobody has looked at
+    the panel while it was narrow** — found by task #17's audit, 2026-08-08,
+    computed rather than observed. `Hub75Driver::flip` swaps the framebuffer
+    pointer, but the data-control DMA keeps scanning the old buffer until the
+    next panel frame boundary, and the old buffer is what the next
+    `load_rgb565` writes into. Safe while the gap between a flip and the next
+    load exceeds one refresh period: at 120 Hz that is 8.3 ms against 48 ms of
+    gap at 20 FPS and **15 ms at 60 FPS**. Still clear by 6.7 ms, and the
+    margin was 40 ms.
+
+    Two things follow. First, at 60 FPS the condition fails if the configured
+    `target_refresh_rate` drops below roughly 66 Hz — which is a value the
+    config accepts and the settings form offers, where at 20 FPS it would have
+    taken about 20 Hz to get there. Second, the whole thing is arithmetic from
+    a comment: nobody has put a camera on the panel at 60 Hz refresh and 60 FPS
+    render to see whether the tear is visible or whether the BCM scan makes it
+    moot. Do that at drill day — it is one config PUT and a look — and if it
+    tears, the fix is a refresh-rate floor in `scoreboard-config` rather than
+    anything in the driver.

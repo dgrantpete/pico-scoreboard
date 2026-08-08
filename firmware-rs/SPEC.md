@@ -67,7 +67,7 @@ pico-scoreboard/
 │           ├── supervise.rs      # watchdog + health gate, panic handler, reset
 │           ├── inputs.rs         # PIO1 and the 50 ms button drain
 │           ├── brightness.rs     # the 5 Hz loop; veml7700.rs is its I2C half
-│           └── display_core1.rs  # core-1 executor: render loop @ 20 FPS
+│           └── display_core1.rs  # core-1 executor: render loop @ 60 FPS
 └── firmware/                 # MicroPython tree, kept until Phase 4 sign-off
 ```
 
@@ -122,7 +122,7 @@ Mechanical port; largest volume, lowest risk:
 - `display.py`, `screen_geometry.py`, `textfold.py`, `menu.py`, per-sport render modules (`mlb.py`, `nba.py`, `soccer.py`, `football.py`, `inning_half.py`) → `scoreboard-render`. Viper blit kernels become ordinary Rust.
 - **Fonts:** retarget `tools/compile_fonts.py` to emit Rust (`build.rs` invokes it, or port the generator): `static GLYPHS: [Glyph; N]` with the same MONO_HLSB packing; `FontWriter` API preserved. All `&'static`, zero init cost, no import-time table building.
 - **QR codes:** setup-flow QR (replaces `miqro`). Preferred: a no-alloc no_std QR crate; the encoder needs ~4 KB of scratch for the largest version used — provide it as a caller-owned buffer. If no suitable crate passes the no-alloc audit (§10), port the needed subset of miqro (it is small and the format is stable).
-- Text scrolling, animations, brightness curves: direct port; assert frame-time headroom with a defmt timing probe around the render loop (budget: ≤ 50 ms per frame at 20 FPS; expected: low single-digit ms). **Measured on silicon, Phase 3: worst frame 7.4 ms, worst render 2.0 ms, zero overruns** — see BUDGET.md, "Core 1: measured frame times". Dropping MicroPython's strip pre-rendering was the right call by roughly 35×.
+- Text scrolling, animations, brightness curves: direct port; assert frame-time headroom with a defmt timing probe around the render loop (budget: one frame period — ≤ 50 ms at the 20 FPS this was specified for, ≤ 16.7 ms since task #17 moved the loop to 60 FPS; expected: low single-digit ms). **Measured on silicon, Phase 3: worst frame 7.4 ms, worst render 2.0 ms, zero overruns** — see BUDGET.md, "Core 1: measured frame times". Dropping MicroPython's strip pre-rendering was the right call by roughly 35×, and it is what left enough headroom for 60 FPS to be a constant change rather than an optimisation project.
 - Host tests: golden-image tests per sport/state using `backend/testdata/*.json` replayed through the backend encoder → wire bytes → firmware decode → render into the simulator buffer. This is the parity harness for the whole port. **Built and green — see `firmware-rs/PARITY.md`** for the verdict table, how time is pinned, and what is deliberately out of scope.
 
 ---
@@ -207,10 +207,12 @@ deliberate, are PARITY.md's. Four things this section did not anticipate:
   `Signal`) and applied at the top of a frame. It carries the set of hooks to
   run, not just the values, so a `PUT` that changes an SSID does not rebuild
   the gamma LUT — which is visible on the panel and measurably expensive.
-- **A gamma change costs 27.5 ms on core 1** (256 `libm::pow` calls), over half
-  a 50 ms frame. It fits today — no overrun was recorded and the loop held
-  20.0 FPS — but it is the largest single thing that happens inside a frame,
-  and BUDGET.md carries the number.
+- **A gamma change used to cost 27.5 ms on core 1** (256 `libm::pow` calls),
+  over half a 50 ms frame and more than a whole 16.7 ms one. Task #17 moved the
+  expansion to core 0, where the request already is: `hub75::gamma::GammaTable`
+  crosses the seam instead of a `Gamma`, and no entry point is left that makes
+  the driver expand one. BUDGET.md carries the number and BACKLOG 68 the
+  history.
 
 ### 7.4 Backend client (reqwless)
 
@@ -275,7 +277,7 @@ this section did not anticipate:
 `sequential-storage` (map API) over a dedicated flash region:
 
 - Keys: **three** — two from Phase 3, plus one Phase 4 had to add. The OTA attempt record (§8) is not config: nothing outside the OTA client writes it, `GET /api/config` has no business returning it, a `PUT` that reset it would re-arm the loop it exists to break, and it changes once per update attempt rather than once per settings save — folding it into the document would rewrite the wifi password every time an update started. The Phase 3 argument for the other two stands: **two, not four** — Phase 3 built this and the list above did not survive contact. The device configuration is one JSON document (`app/src/storage.rs`'s `Key::Config`), and it *contains* the wifi credentials, because `config.json` did and `GET /api/config` returns them; a separate credentials record would be a second source of truth for the same four fields. There are no sticky user prefs: the rotation lock and the league filter are deliberately session state (`menu.py` says so), and brightness is `display.brightness`, which is config. The OTA channel/dev flag is Phase 4's and §8 already says it becomes a *config* flag, so it needs no key of its own. The second key is the crash breadcrumb.
-- Writes are rare (config changes); reads happen once at boot into a `static` config struct — no steady-state flash traffic. **Every write stops the panel**: a flash program runs from RAM with XIP disabled, so embassy-rp parks core 1 for the duration. Measured at one 942 B config save: the affected frame took 14.5 ms against a 50 ms budget, and no frame was dropped.
+- Writes are rare (config changes); reads happen once at boot into a `static` config struct — no steady-state flash traffic. **Every write stops the panel**: a flash program runs from RAM with XIP disabled, so embassy-rp parks core 1 for the duration. Measured at one 942 B config save: the affected frame took 14.5 ms, which was 29 % of the 50 ms budget it was measured against and is 87 % of the 16.7 ms one the loop now paces at — still fitting, with the thinnest margin anywhere in BUDGET.md, and an overrun there costs one counted late frame rather than a dropped one.
 - **Logging changes shape:** `logger.py`'s file-flush model is replaced by defmt over RTT for development and a RAM ring buffer (fixed `heapless` deque) exposed via a `/api/logs` endpoint for deployed units — pull, not persist. Persistent crash breadcrumbs: a single small sequential-storage record carrying the panic message and a snapshot of both stacks' watermarks, read and reported at next boot through `/api/logs/previous`.
   **Correction from Phase 3: the panic handler does not write it.** It cannot. A flash write parks core 1 through the multicore FIFO and waits for an answer, so a write from core 1 is refused outright and a write from core 0 *while core 1 is the core that panicked* hangs forever — which is exactly the crash most worth recording. The handler instead writes the record to a `.uninit` RAM cell (240 B, survives both `SYSRESETREQ` and a watchdog reset) and resets; the next boot promotes it to flash **before core 1 starts**, where the write is free. Same guarantee, plus one the original shape did not have.
 - Migration: first Rust boot finds no storage region → runs the normal "unprovisioned" path. No attempt to read MicroPython's littlefs; gift units get reprovisioned once. (Documented, acceptable.)

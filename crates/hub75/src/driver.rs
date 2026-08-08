@@ -507,10 +507,26 @@ impl Hub75Driver {
 
     /// Atomically swap the active and inactive framebuffers. The data
     /// control DMA picks the new pointer up at the next frame boundary, so
-    /// this neither blocks nor tears. (As in the Python driver, a `load_*`
-    /// issued immediately after can overlap the tail of the frame still
-    /// being scanned out of that buffer — at 120 Hz refresh vs 20 FPS
-    /// rendering the window is negligible.)
+    /// this neither blocks nor tears.
+    ///
+    /// # The one window, stated as a condition rather than a rate
+    ///
+    /// As in the Python driver, the DMA keeps scanning the *old* buffer until
+    /// that boundary — up to one refresh period — and the old buffer is the one
+    /// the next `load_*` writes into. A caller is safe while
+    ///
+    /// ```text
+    /// (time between one flip and the next load) > 1 / refresh_rate
+    /// ```
+    ///
+    /// which for a render loop is its frame period minus what it spends
+    /// drawing. At 120 Hz that budget is 8.3 ms, against 48 ms at 20 FPS and
+    /// **15 ms at 60 FPS** — still clear, but the margin fell from 40 ms to
+    /// 6.7 ms when the app's loop sped up, and it closes entirely if the
+    /// configured refresh rate drops below about 66 Hz. It is a driver property
+    /// and not an app one, so it is written here as the inequality; BACKLOG 84
+    /// carries the app-side number and the fact that it has never been observed
+    /// rather than merely computed.
     pub fn flip(&mut self) {
         self.active_index = 1 - self.active_index;
         ACTIVE_BUFFER_PTR.store(buffer_addr(self.active_index), Ordering::Release);
