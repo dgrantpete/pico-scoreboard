@@ -669,16 +669,19 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     firmware did not panic. Prefer `probe-rs attach` for observation and reserve
     `probe-rs run` for flashing; never background it and never `TaskStop` it.
 
-71. **Nothing has ever pressed a button on the Rust firmware** — the bench unit
-    has no switches wired to GPIO 10 or 22, and no VEML7700 on I²C0. Task #12
-    built and tested both paths: the PIO debounce program is verified against
-    `tools/pio_sim.py`'s scenarios by a cycle-accurate interpreter that runs the
-    *assembled* program, the press fold and menu session are host-tested, and
-    the brightness curve is pinned to `brightness.py`'s values. What none of
-    that can tell you is whether the pull-ups are right, whether the pins match
-    the board, or how the debounce window behaves against a real switch. **Task
-    #13 should not sign the parity checklist without a unit that has buttons and
-    a sensor attached.**
+71. **The auto-brightness full-range sweep is still visually unconfirmed** —
+    the remaining sliver of what began as "nothing has ever pressed a button on
+    the Rust firmware." The button half closed itself emphatically on
+    2026-08-08 when the firmware reached the real scoreboard: skip, lock,
+    burst-rejection and the league menu were all exercised on the physical
+    switches — and the very first hold of B found a real cross-core bug (the
+    menu opened invisibly; fixed the same hour, `9410db0`), which is the
+    strongest possible vindication of this item's thesis that host tests end
+    where the hardware begins. The VEML7700 also proved alive (10 lux read at
+    boot, auto-brightness engaged once the preference left 100). What remains:
+    hold a thumb over the sensor and a flashlight on it for ~10 s each and
+    confirm the panel glides to the 5 % floor and to full — the smoothed ramp
+    (EMA + rate limit) is the one behaviour only eyes can sign off.
 
 ## Backend
 
