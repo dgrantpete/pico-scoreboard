@@ -560,6 +560,6 @@ API surface actually used: `Microdot()`, `.mount(subapp, url_prefix=)`, `.get/.p
 **Existing parity infrastructure worth reusing rather than rebuilding:**
 - `tools/preview/` runs the **real** `scoreboard.display.render_frame` on CPython behind framebuf/hub75/time shims, with golden tests and the scratch-poisoning tripwire. Closest existing analogue to the planned Rust golden-image harness. Its `framebuf_shim.py` is pinned bit-for-bit against `compile_layout.py`'s packers by `tests/test_framebuf_shim.py`.
 - `tools/pio_sim.py` — cycle-accurate PIO oracle for the button driver.
-- `tools/wire_format_check.py` — cross-implementation golden test running the actual firmware parsers under CPython against a from-spec encoder (retired once `scoreboard-wire` exists).
+- `tools/wire_format_check.py` — cross-implementation golden test running the actual firmware parsers under CPython against a from-spec encoder. **Deleted in Phase 0**: `crates/scoreboard-wire` tests both directions over the same goldens, and `backend/testdata/wire/` holds the corpus bytes it used to recompute.
 
 **One incidental finding, not blocking:** `firmware/src/config.json` is gitignored, so the live WiFi password and API key are not in version control — but they are present in the working tree and on every deployed device. Worth confirming the Rust deploy path keeps that file out of any image that gets published or shared.
