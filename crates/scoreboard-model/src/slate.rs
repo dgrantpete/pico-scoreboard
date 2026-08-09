@@ -29,6 +29,18 @@ struct SlateEntry {
     id: Text<GAME_ID>,
 }
 
+/// One rotation entry, as [`Slate::at`] hands it out.
+///
+/// `source` is the index into [`Slate::sources`] rather than the league itself:
+/// it is one byte, it is stable for as long as the configured sources are, and
+/// it is what anything keying per-game state can afford to store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Entry<'a> {
+    pub source: u8,
+    pub league: &'a LeagueId,
+    pub id: &'a str,
+}
+
 /// Every configured league's games, plus the rotation order and the position
 /// in it.
 #[derive(Debug, Clone)]
@@ -202,10 +214,39 @@ impl Slate {
         self.rotation.len()
     }
 
-    /// The league and game id to poll now.
-    pub fn current(&self) -> Option<(&LeagueId, &str)> {
-        let entry = &self.entries[*self.rotation.get(self.index as usize)? as usize];
-        Some((&self.sources[entry.source as usize], entry.id.as_str()))
+    /// Where in the rotation the board is. Only meaningful next to
+    /// [`Slate::at`], which is why the two are the whole of the read side.
+    pub fn position(&self) -> u8 {
+        self.index
+    }
+
+    /// The rotation entry at `position`, or `None` past the end.
+    pub fn at(&self, position: u8) -> Option<Entry<'_>> {
+        let entry = &self.entries[*self.rotation.get(position as usize)? as usize];
+        Some(Entry {
+            source: entry.source,
+            league: &self.sources[entry.source as usize],
+            id: entry.id.as_str(),
+        })
+    }
+
+    /// The game to poll now.
+    pub fn current(&self) -> Option<Entry<'_>> {
+        self.at(self.index)
+    }
+
+    /// Whether the merged slate still lists this game — *anywhere*, not only in
+    /// the rotation.
+    ///
+    /// The distinction is the live-first rule: one game going live drops every
+    /// pregame out of the rotation without those games leaving the day. A
+    /// consumer that keys state to a game (the crest warmer's index) wants the
+    /// slate's answer, not the rotation's, or it discards and rebuilds that
+    /// state every time a game starts.
+    pub fn lists(&self, source: u8, id: &str) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.source == source && entry.id == id)
     }
 
     /// Step to the next game.

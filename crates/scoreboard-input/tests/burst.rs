@@ -38,7 +38,7 @@ fn slate() -> Slate {
 fn current(slate: &Slate) -> String {
     slate
         .current()
-        .map(|(_, id)| id.to_string())
+        .map(|entry| entry.id.to_string())
         .expect("a non-empty rotation")
 }
 

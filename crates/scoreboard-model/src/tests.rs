@@ -12,6 +12,7 @@ use scoreboard_wire::{GameState, football, mlb, nba, soccer};
 
 use crate::color::Rgb888;
 use crate::feed::{GameDetail, GameFeed, LeagueId, ListSink, Sport, WireFeed};
+use crate::prefetch::{Step, WarmIndex};
 use crate::slate::Slate;
 use crate::snapshot::{self, Mode, ScoreboardSnapshot, SetupReason, ToastKind};
 use crate::sports::{LinescoreFinal, LocalClock, PregameInput};
@@ -996,7 +997,7 @@ fn a_live_game_anywhere_makes_the_rotation_live_only() {
     list(&mut slate, 1, &[(GameState::Live, "n1")]);
     slate.rebuild();
     assert_eq!(slate.len(), 1);
-    assert_eq!(slate.current().unwrap().1, "n1");
+    assert_eq!(slate.current().unwrap().id, "n1");
 }
 
 #[test]
@@ -1013,7 +1014,7 @@ fn with_nothing_live_finals_rotate_before_pregames_in_league_order() {
 
     let mut order = Vec::new();
     for _ in 0..slate.len() {
-        order.push(slate.current().unwrap().1.to_string());
+        order.push(slate.current().unwrap().id.to_string());
         slate.advance();
     }
     assert_eq!(order, vec!["m2", "n1", "m1"]);
@@ -1062,7 +1063,7 @@ fn the_shown_game_keeps_its_place_across_a_rebuild() {
     );
     slate.rebuild();
     slate.advance();
-    assert_eq!(slate.current().unwrap().1, "b");
+    assert_eq!(slate.current().unwrap().id, "b");
 
     // "a" finishes and drops off; "b" must not jump.
     list(
@@ -1071,12 +1072,12 @@ fn the_shown_game_keeps_its_place_across_a_rebuild() {
         &[(GameState::Final, "b"), (GameState::Final, "c")],
     );
     slate.rebuild();
-    assert_eq!(slate.current().unwrap().1, "b");
+    assert_eq!(slate.current().unwrap().id, "b");
 
     // ...and a game that vanishes resets to the top.
     list(&mut slate, 0, &[(GameState::Final, "c")]);
     slate.rebuild();
-    assert_eq!(slate.current().unwrap().1, "c");
+    assert_eq!(slate.current().unwrap().id, "c");
 }
 
 #[test]
@@ -1092,13 +1093,13 @@ fn a_league_skip_lands_on_the_next_distinct_league() {
     list(&mut slate, 2, &[(GameState::Final, "s1")]);
     slate.rebuild();
 
-    assert_eq!(slate.current().unwrap().1, "m1");
+    assert_eq!(slate.current().unwrap().id, "m1");
     slate.advance_league();
-    assert_eq!(slate.current().unwrap().1, "n1");
+    assert_eq!(slate.current().unwrap().id, "n1");
     slate.advance_league();
-    assert_eq!(slate.current().unwrap().1, "s1");
+    assert_eq!(slate.current().unwrap().id, "s1");
     slate.advance_league();
-    assert_eq!(slate.current().unwrap().1, "m1", "and wraps");
+    assert_eq!(slate.current().unwrap().id, "m1", "and wraps");
 }
 
 #[test]
@@ -1112,7 +1113,7 @@ fn a_single_league_slate_degrades_a_league_skip_to_a_plain_skip() {
     );
     slate.rebuild();
     slate.advance_league();
-    assert_eq!(slate.current().unwrap().1, "m2");
+    assert_eq!(slate.current().unwrap().id, "m2");
 }
 
 #[test]
@@ -1125,18 +1126,18 @@ fn a_filter_restricts_the_rotation_and_survives_an_empty_slate() {
 
     assert!(slate.set_filter(&["basketball/nba"]));
     assert_eq!(slate.len(), 1);
-    assert_eq!(slate.current().unwrap().1, "n1");
+    assert_eq!(slate.current().unwrap().id, "n1");
 
     // The NBA slate empties: fall back to every league rather than blank the
     // board, and keep the filter — its games may come back.
     list(&mut slate, 1, &[]);
     slate.rebuild();
-    assert_eq!(slate.current().unwrap().1, "m1");
+    assert_eq!(slate.current().unwrap().id, "m1");
     assert!(slate.filter().is_some());
 
     list(&mut slate, 1, &[(GameState::Final, "n2")]);
     slate.rebuild();
-    assert_eq!(slate.current().unwrap().1, "n2");
+    assert_eq!(slate.current().unwrap().id, "n2");
 }
 
 #[test]
@@ -1155,6 +1156,306 @@ fn the_rotation_lock_is_independent_of_the_filter() {
     slate.set_filter(&["baseball/mlb"]);
     assert!(slate.locked());
     assert!(!slate.toggle_lock());
+}
+
+// =========================================================================
+// The crest warmer's selector
+// =========================================================================
+
+/// The pool, as `WarmIndex::next` sees it: a set of `(league key,
+/// abbreviation)` pairs that are already cached.
+#[derive(Default)]
+struct Pool(Vec<(String, String)>);
+
+impl Pool {
+    fn hold(&mut self, league: &str, abbreviation: &str) {
+        self.0.push((league.to_string(), abbreviation.to_string()));
+    }
+
+    fn cached(&self) -> impl Fn(&str, &str) -> bool + '_ {
+        move |league, abbreviation| {
+            self.0
+                .iter()
+                .any(|(held, abbr)| held == league && abbr == abbreviation)
+        }
+    }
+}
+
+/// The rotation position and abbreviation of a [`Step::Crest`], for asserting.
+#[track_caller]
+fn crest(step: Option<Step>) -> (u8, String) {
+    match step {
+        Some(Step::Crest {
+            position,
+            abbreviation,
+        }) => (position, abbreviation.as_str().to_string()),
+        other => panic!("expected a crest fetch, got {other:?}"),
+    }
+}
+
+#[track_caller]
+fn probe(step: Option<Step>) -> u8 {
+    match step {
+        Some(Step::Probe { position }) => position,
+        other => panic!("expected a probe, got {other:?}"),
+    }
+}
+
+/// Three MLB games, all final, so every one of them rotates.
+fn three_mlb_games() -> Slate {
+    let mut slate = Slate::new();
+    slate.set_sources(&sources());
+    list(
+        &mut slate,
+        0,
+        &[
+            (GameState::Final, "m1"),
+            (GameState::Final, "m2"),
+            (GameState::Final, "m3"),
+        ],
+    );
+    slate.rebuild();
+    slate
+}
+
+const MLB: &str = "baseball/mlb";
+
+#[test]
+fn an_empty_rotation_has_nothing_to_warm() {
+    let mut slate = Slate::new();
+    slate.set_sources(&sources());
+    slate.rebuild();
+    let index = WarmIndex::<8>::new();
+    assert!(index.next(&slate, Pool::default().cached()).is_none());
+}
+
+#[test]
+fn a_game_with_unknown_teams_is_probed_before_any_crest_is_fetched() {
+    let slate = three_mlb_games();
+    let mut index = WarmIndex::<8>::new();
+    index.learned(0, "m2", "NYY", "BOS");
+
+    // m1 is on screen and nothing knows who is playing in it, so the probe
+    // comes first even though m2 has two crests outstanding.
+    assert_eq!(probe(index.next(&slate, Pool::default().cached())), 0);
+}
+
+#[test]
+fn crests_are_warmed_in_rotation_order_starting_at_the_game_on_screen() {
+    let slate = three_mlb_games();
+    let mut index = WarmIndex::<8>::new();
+    index.learned(0, "m1", "NYY", "BOS");
+    index.learned(0, "m2", "LAD", "SFG");
+    index.learned(0, "m3", "CHC", "STL");
+    let mut pool = Pool::default();
+
+    // Away before home, game before game, and the walk only moves on once the
+    // one in front of it is fully warm.
+    for (position, abbreviation) in [
+        (0, "NYY"),
+        (0, "BOS"),
+        (1, "LAD"),
+        (1, "SFG"),
+        (2, "CHC"),
+        (2, "STL"),
+    ] {
+        assert_eq!(
+            crest(index.next(&slate, pool.cached())),
+            (position, abbreviation.to_string())
+        );
+        pool.hold(MLB, abbreviation);
+    }
+    assert!(
+        index.next(&slate, pool.cached()).is_none(),
+        "everything is warm, so an idle board fetches nothing at all"
+    );
+}
+
+#[test]
+fn a_game_whose_crests_are_already_cached_is_skipped() {
+    let slate = three_mlb_games();
+    let mut index = WarmIndex::<8>::new();
+    index.learned(0, "m1", "NYY", "BOS");
+    index.learned(0, "m2", "LAD", "SFG");
+    let mut pool = Pool::default();
+    pool.hold(MLB, "NYY");
+    pool.hold(MLB, "BOS");
+
+    assert_eq!(
+        crest(index.next(&slate, pool.cached())),
+        (1, "LAD".to_string())
+    );
+}
+
+#[test]
+fn the_walk_wraps_past_the_end_of_the_rotation() {
+    let mut slate = three_mlb_games();
+    slate.advance();
+    slate.advance();
+    assert_eq!(slate.position(), 2);
+
+    let mut index = WarmIndex::<8>::new();
+    index.learned(0, "m1", "NYY", "BOS");
+    index.learned(0, "m2", "LAD", "SFG");
+    index.learned(0, "m3", "CHC", "STL");
+    let mut pool = Pool::default();
+    pool.hold(MLB, "CHC");
+    pool.hold(MLB, "STL");
+
+    // m3 is on screen and warm, so the next thing warmed is the game the
+    // rotation reaches next — which is back at the top.
+    assert_eq!(
+        crest(index.next(&slate, pool.cached())),
+        (0, "NYY".to_string())
+    );
+}
+
+#[test]
+fn the_same_abbreviation_in_two_leagues_is_two_crests() {
+    let mut slate = Slate::new();
+    slate.set_sources(&sources());
+    list(&mut slate, 0, &[(GameState::Final, "m1")]);
+    list(&mut slate, 2, &[(GameState::Final, "s1")]);
+    slate.rebuild();
+
+    let mut index = WarmIndex::<8>::new();
+    index.learned(0, "m1", "POR", "BOS");
+    index.learned(2, "s1", "POR", "SEA");
+    let mut pool = Pool::default();
+    pool.hold(MLB, "POR");
+    pool.hold(MLB, "BOS");
+
+    // A soccer POR is not the MLB POR the pool is holding — the league key is
+    // half of the crest's identity.
+    assert_eq!(
+        crest(index.next(&slate, pool.cached())),
+        (1, "POR".to_string())
+    );
+}
+
+#[test]
+fn a_full_index_stops_probing_rather_than_forgetting_a_game() {
+    let slate = three_mlb_games();
+    // Room for two games, and a three-game rotation to spend it on.
+    let mut index = WarmIndex::<2>::new();
+    index.learned(0, "m1", "NYY", "BOS");
+    index.learned(0, "m2", "LAD", "SFG");
+    let mut pool = Pool::default();
+    for abbreviation in ["NYY", "BOS", "LAD"] {
+        pool.hold(MLB, abbreviation);
+    }
+
+    // m3 is unknown and there is no room to record it, so the index finishes
+    // what it can and then goes quiet rather than churning its own records.
+    assert_eq!(
+        crest(index.next(&slate, pool.cached())),
+        (1, "SFG".to_string())
+    );
+    pool.hold(MLB, "SFG");
+    assert!(index.next(&slate, pool.cached()).is_none());
+}
+
+#[test]
+fn a_game_that_keeps_failing_stops_blocking_the_ones_behind_it() {
+    let slate = three_mlb_games();
+    let mut index = WarmIndex::<8>::new();
+    index.learned(0, "m2", "LAD", "SFG");
+    let pool = Pool::default();
+
+    // m1 is on screen, unknown, and its detail will not come. Three attempts
+    // is all it gets, and then the warmer moves on to the game behind it.
+    for _ in 0..3 {
+        assert_eq!(probe(index.next(&slate, pool.cached())), 0);
+        index.missed(0, "m1");
+    }
+    assert_eq!(
+        crest(index.next(&slate, pool.cached())),
+        (1, "LAD".to_string())
+    );
+}
+
+#[test]
+fn a_commit_teaches_the_index_and_clears_the_failures() {
+    let slate = three_mlb_games();
+    let mut index = WarmIndex::<8>::new();
+    for _ in 0..3 {
+        index.missed(0, "m1");
+    }
+    let pool = Pool::default();
+    assert_eq!(
+        probe(index.next(&slate, pool.cached())),
+        1,
+        "m1 is given up on, so the walk starts behind it"
+    );
+
+    // The rotation reaching m1 decodes its teams anyway; handing them over
+    // costs nothing and retires the probe entirely.
+    index.learned(0, "m1", "NYY", "BOS");
+    assert_eq!(
+        crest(index.next(&slate, pool.cached())),
+        (0, "NYY".to_string())
+    );
+}
+
+#[test]
+fn pruning_keeps_games_that_only_left_the_rotation() {
+    let mut slate = three_mlb_games();
+    let mut index = WarmIndex::<8>::new();
+    index.learned(0, "m1", "NYY", "BOS");
+    index.learned(0, "m3", "CHC", "STL");
+
+    // m3 goes live, which drops both finals out of the rotation without
+    // dropping them off the day.
+    list(
+        &mut slate,
+        0,
+        &[
+            (GameState::Final, "m1"),
+            (GameState::Final, "m2"),
+            (GameState::Live, "m3"),
+        ],
+    );
+    slate.rebuild();
+    index.prune(&slate);
+    assert_eq!(slate.len(), 1);
+
+    let mut pool = Pool::default();
+    pool.hold(MLB, "CHC");
+    pool.hold(MLB, "STL");
+    assert!(index.next(&slate, pool.cached()).is_none());
+
+    // m1 kept its record through the live window: when the finals rotate again
+    // it is warmed without a second probe.
+    list(
+        &mut slate,
+        0,
+        &[
+            (GameState::Final, "m1"),
+            (GameState::Final, "m2"),
+            (GameState::Final, "m3"),
+        ],
+    );
+    slate.rebuild();
+    index.prune(&slate);
+    assert_eq!(
+        crest(index.next(&slate, pool.cached())),
+        (0, "NYY".to_string())
+    );
+}
+
+#[test]
+fn pruning_drops_games_that_left_the_slate() {
+    let mut slate = three_mlb_games();
+    let mut index = WarmIndex::<8>::new();
+    index.learned(0, "m1", "NYY", "BOS");
+
+    list(&mut slate, 0, &[(GameState::Final, "m2")]);
+    slate.rebuild();
+    index.prune(&slate);
+
+    // m1 is gone, so its record is too; m2 is all that is left to ask about.
+    assert_eq!(probe(index.next(&slate, Pool::default().cached())), 0);
+    assert_eq!(slate.current().unwrap().id, "m2");
 }
 
 // =========================================================================

@@ -10,7 +10,9 @@
 //!   with no borrow into any receive buffer.
 //! - [`Store`] — the authoritative state and every rule for changing it,
 //!   including the view-identity rule that decides when an animation restarts.
-//! - [`Slate`] — the merged games list and the live-first rotation over it.
+//! - [`Slate`] — the merged games list and the live-first rotation over it,
+//!   and [`WarmIndex`] over the top of it: which crest an idle poller should
+//!   fetch next, so a skip lands on a game whose logos are already in the pool.
 //! - [`GameFeed`] — the one seam upstream data arrives through, so Phase S's
 //!   direct-to-ESPN mode plugs in without touching this crate.
 //!
@@ -24,6 +26,7 @@ pub mod channel;
 pub mod color;
 pub mod feed;
 pub mod poll;
+pub mod prefetch;
 pub mod slate;
 pub mod snapshot;
 pub mod sports;
@@ -37,6 +40,7 @@ pub use channel::{Publisher, Reader, SnapshotChannel};
 pub use color::{Rgb888, UiColors};
 pub use feed::{GameDetail, GameFeed, LeagueId, ListSink, Sport, WireFeed};
 pub use poll::{FailureTracker, PollError, SkipKind, SkipMachine, SkipVerdict, Transport};
+pub use prefetch::{Step, WarmIndex};
 pub use slate::Slate;
 pub use snapshot::{Millis, Mode, ScoreboardSnapshot, SetupReason, ToastKind};
 pub use sports::{LocalClock, PregameInput, PregameSideInput};
