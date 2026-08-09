@@ -50,6 +50,30 @@
 //! `poll_interval_seconds`. Nothing else in the firmware retries at all, so a
 //! backend that comes back is on the panel within one interval.
 //!
+//! # The crest warmer is a phase of this loop too
+//!
+//! After a tick commits, and before the sleep it has earned, the loop spends up
+//! to [`WARM_FETCHES`] requests filling crest slots for games the rotation has
+//! not reached yet ([`Poller::warm_crests`]). It is here, rather than in a task
+//! of its own, for the reason every other phase is: **there is one API client
+//! and it takes `&mut self`**, so a second fetcher would need a second
+//! connection, and a second connection would need its own socket, its own
+//! buffer and a rule for which of the two a button press interrupts. Inside the
+//! loop it inherits the answers — one request in flight, the store untouched,
+//! and a command channel that is already checked between fetches.
+//!
+//! What it buys is the burst: a board that has been idle has its crests in the
+//! pool, so a skip, a league-skip or a mashed button paints the next game
+//! immediately instead of waiting out two logo fetches. What it costs, honestly
+//! stated, is that a press arriving mid-warm waits for one logo — the same
+//! bound as a press arriving mid-tick, and smaller than one.
+//!
+//! It cannot affect anything else in this file. A warm fetch happens outside
+//! [`Poller::tick`], so it cannot reach [`FailureTracker`]; a failed one is a
+//! debug line and a retry on a later window, and [`Health`] never hears about
+//! it. That is structural rather than careful: `record_failure` is only called
+//! on `tick`'s return value, and the warmer has none.
+//!
 //! # The OTA check is a phase of this loop, not a task of its own
 //!
 //! [`crate::ota`]'s module docs carry the argument; the consequence here is one
@@ -70,12 +94,14 @@ use scoreboard_model::feed::LeagueId;
 use scoreboard_model::poll::{
     self, FailureTracker, Health, PollError, SkipKind, SkipMachine, SkipVerdict,
 };
+use scoreboard_model::prefetch::{Step, WarmIndex};
 use scoreboard_model::slate::MAX_SOURCES;
-use scoreboard_model::snapshot::Millis;
+use scoreboard_model::snapshot::{ABBR, GAME_ID, Millis};
 use scoreboard_model::store::Logos;
+use scoreboard_model::text::{Text, set_plain};
 use scoreboard_model::{GameFeed, Mode, Publisher, Slate, Sport, Store, WireFeed};
 
-use crate::logos::CrestDirectory;
+use crate::logos::{CrestDirectory, WARM_GAMES, Warm};
 use crate::net::api_client::{ApiClient, Etag, ResponseBuffer, base_url, url};
 use crate::net::timesync;
 use crate::settings;
@@ -117,6 +143,15 @@ pub enum Command {
 /// ticks, and if one ever did, the dropped press would have been rejected on
 /// arrival anyway.
 static COMMANDS: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
+
+/// Requests the crest warmer may make in one idle window.
+///
+/// Two is one game's pair of crests, or a probe and the first of them. It is a
+/// *latency* bound, not a bandwidth one: the warmer checks the command channel
+/// between fetches, so this number is what a button press waits for in the
+/// worst case — one logo — and the seconds after a screen change are the only
+/// time a press can land on it at all.
+const WARM_FETCHES: usize = 2;
 
 /// Send a command, dropping it if the queue is full. Never blocks, so an HTTP
 /// handler can call it.
@@ -252,6 +287,10 @@ struct Poller {
     client: ApiClient,
     slate: Slate,
     crests: CrestDirectory,
+    /// Who is playing in each game the loop has heard of, so the warmer asks
+    /// the backend once per game rather than once per idle window. Filled by
+    /// every commit for free — see [`Poller::poll_current`].
+    warm: WarmIndex<WARM_GAMES>,
     failures: FailureTracker,
     skips: SkipMachine,
     /// Per-source, parallel to [`Slate::sources`]. `None` until a list refresh
@@ -290,6 +329,7 @@ pub async fn run(
         client: ApiClient::new(stack),
         slate: Slate::new(),
         crests: CrestDirectory::new(),
+        warm: WarmIndex::new(),
         failures: FailureTracker::new(),
         skips: SkipMachine::new(),
         etags: [const { None }; MAX_SOURCES],
@@ -322,7 +362,13 @@ pub async fn run(
         }
 
         let now = Instant::now().as_millis();
-        match poller.tick(&cadence, now).await {
+        let outcome = poller.tick(&cadence, now).await;
+        // Fixed here, before the warmer runs: the poll interval has always been
+        // measured from the end of the tick, and warming spends the front of
+        // that window rather than adding to it. A board that warms therefore
+        // polls at exactly the cadence a board that does not warm polls at.
+        let deadline = Instant::now() + cadence.poll_interval;
+        match outcome {
             Ok(()) => {
                 if let Some(streak) = poller.failures.record_success() {
                     // ERROR level, as `poller.py:362-365` had it: a recovery is
@@ -332,6 +378,10 @@ pub async fn run(
                 }
                 FAILURE_STREAK.store(0, Ordering::Relaxed);
                 LAST_SUCCESS_S.store(Instant::now().as_secs() as u32, Ordering::Relaxed);
+                // Only after a tick that worked. Warming through an outage
+                // would spend every game's give-up count on the outage, and
+                // leave the whole slate marked unwarmable once it ended.
+                poller.warm_crests(&cadence).await;
             }
             Err(error) => {
                 let failure = poller.failures.record_failure(now, &error);
@@ -349,7 +399,7 @@ pub async fn run(
             }
         }
 
-        poller.sleep(cadence.poll_interval).await;
+        poller.sleep_until(deadline).await;
     }
 }
 
@@ -456,6 +506,7 @@ impl Poller {
             client,
             slate,
             etags,
+            warm,
             buffer,
             ..
         } = self;
@@ -523,6 +574,11 @@ impl Poller {
             return Err(last_error.expect("a failure recorded an error"));
         }
         slate.rebuild();
+        // The warmer's records are keyed to games, so the games that just left
+        // the day take theirs with them. Games that only left the *rotation* —
+        // every pregame, the moment one game goes live — keep theirs, which is
+        // what stops a first pitch costing a re-probe of the whole slate.
+        warm.prune(slate);
         // `poller.py:472-475`, minus the merged-slate total: `Slate` counts the
         // rotation, and the difference between the two numbers was only ever
         // "how many games the live-first rule filtered out", which the rotation
@@ -543,15 +599,19 @@ impl Poller {
     /// flicker, because the store restamps the animation clock only when the
     /// displayed `(mode, game id)` changes.
     async fn poll_current(&mut self, cadence: &Cadence) -> Result<(), PollError> {
-        let Some((league, game_id)) = self.slate.current() else {
+        let Some(entry) = self.slate.current() else {
             return Ok(());
         };
-        // Cloned so the slate is free for the rest of the tick; the commit
-        // needs the league's display name, which is 32 bytes.
-        let league = league.clone();
+        // Copied out so the slate is free for the rest of the tick; the commit
+        // needs the league's display name, which is 32 bytes, and the warmer's
+        // index is keyed by the other two.
+        let source = entry.source;
+        let league = entry.league.clone();
+        let mut game_id = Text::<GAME_ID>::new();
+        set_plain(&mut game_id, entry.id);
         let detail_url = url(
             &cadence.base_url,
-            format_args!("/{}/games/{}", league.key.as_str(), game_id),
+            format_args!("/{}/games/{}", league.key.as_str(), game_id.as_str()),
         )?;
 
         let Poller {
@@ -559,6 +619,7 @@ impl Poller {
             store,
             publisher,
             crests,
+            warm,
             buffer,
             ..
         } = self;
@@ -583,6 +644,11 @@ impl Poller {
         // what lets crests be fetched without knowing which kind of game this
         // is.
         let (away, home) = detail.abbreviations();
+        // The warmer's index, filled for free. This tick has just decoded who
+        // is playing, and the only other way for the warmer to learn it is a
+        // request of its own — so a game the rotation has shown is a game the
+        // warmer never has to probe.
+        warm.learned(source, game_id.as_str(), away, home);
         let base = cadence.base_url.as_str();
         let key = league.key.as_str();
         let logos = Logos {
@@ -609,6 +675,147 @@ impl Poller {
         Ok(())
     }
 
+    /// Spend the front of the idle window filling crest slots the rotation has
+    /// not needed yet.
+    ///
+    /// Two decisions carry this, and both are about not being able to do harm:
+    ///
+    /// * **It never evicts** ([`CrestDirectory::prefetch`]). A warmed crest is
+    ///   a guess, and a guess that displaced a crest the rotation was about to
+    ///   draw would make the board slower in exactly the case the pool
+    ///   expansion exists to fix. So a full pool ends the warming, for good —
+    ///   which is also the right answer for a slate with more teams than the
+    ///   pool holds.
+    /// * **It gives up on what it cannot have.** A game whose detail or crest
+    ///   keeps failing is retried on later windows and then left alone
+    ///   ([`scoreboard_model::prefetch`]), so one dead team never becomes the
+    ///   thing the warmer proposes forever while the rest of the slate stays
+    ///   cold.
+    ///
+    /// What it is *not* is a second poller. It commits nothing, publishes
+    /// nothing and touches neither the store nor the failure tracker; the only
+    /// state it changes is the crest pool and its own index.
+    async fn warm_crests(&mut self, cadence: &Cadence) {
+        for _ in 0..WARM_FETCHES {
+            // Between fetches, not only before the first: a press that landed
+            // while a logo was in flight is answered as soon as that one lands
+            // rather than after the pair.
+            if !COMMANDS.is_empty() {
+                return;
+            }
+            let Poller {
+                client,
+                slate,
+                crests,
+                warm,
+                buffer,
+                ..
+            } = self;
+            let Some(step) = warm.next(slate, |league, abbreviation| {
+                crests.holds(league, abbreviation)
+            }) else {
+                return;
+            };
+
+            let (Step::Probe { position } | Step::Crest { position, .. }) = step;
+            let Some(entry) = slate.at(position) else {
+                return;
+            };
+            let source = entry.source;
+            let sport = entry.league.sport;
+            let league_key = entry.league.key.clone();
+            let mut game_id = Text::<GAME_ID>::new();
+            set_plain(&mut game_id, entry.id);
+
+            match step {
+                Step::Probe { .. } => {
+                    let teams = Self::probe(
+                        client,
+                        buffer,
+                        cadence.base_url.as_str(),
+                        league_key.as_str(),
+                        sport,
+                        game_id.as_str(),
+                    )
+                    .await;
+                    match teams {
+                        Some((away, home)) => {
+                            warm.learned(source, game_id.as_str(), away.as_str(), home.as_str())
+                        }
+                        None => warm.missed(source, game_id.as_str()),
+                    }
+                }
+                Step::Crest { abbreviation, .. } => {
+                    let outcome = crests
+                        .prefetch(
+                            cadence.base_url.as_str(),
+                            league_key.as_str(),
+                            abbreviation.as_str(),
+                            client,
+                            &mut buffer[..],
+                        )
+                        .await;
+                    match outcome {
+                        Warm::Cached => {}
+                        // Nothing later in this window, or any window, can find
+                        // room either.
+                        Warm::Full => return,
+                        Warm::Failed => warm.missed(source, game_id.as_str()),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fetch a game's detail for the two abbreviations and throw the rest away.
+    ///
+    /// The one request the warmer would rather not make, and the reason
+    /// [`WarmIndex`] exists: the games list carries ids and states only, so
+    /// there is no other way to learn who is playing in a game the rotation has
+    /// not reached. Once. The answer is remembered.
+    ///
+    /// Every failure here is a debug line, not an error: nothing is waiting on
+    /// this, a 404 is an ordinary game that left today's scoreboard, and a
+    /// transport failure has already been logged by whatever the *tick* did
+    /// next.
+    async fn probe(
+        client: &mut ApiClient,
+        buffer: &mut ResponseBuffer,
+        base: &str,
+        league_key: &str,
+        sport: Sport,
+        game_id: &str,
+    ) -> Option<(Text<ABBR>, Text<ABBR>)> {
+        let url = url(base, format_args!("/{league_key}/games/{game_id}")).ok()?;
+        let payload = match client.game_detail(&url, &mut buffer[..]).await {
+            Ok(Some(payload)) => payload,
+            Ok(None) => {
+                crate::debug!("warm: {} is gone (404)", url.as_str());
+                return None;
+            }
+            Err(error) => {
+                crate::debug!("warm: {} failed, {}", url.as_str(), describe(&error));
+                return None;
+            }
+        };
+        let detail = match WireFeed.detail(sport, payload) {
+            Ok(detail) => detail,
+            Err(error) => {
+                crate::debug!(
+                    "warm: {} did not decode: {}",
+                    url.as_str(),
+                    describe(&PollError::Decode(error))
+                );
+                return None;
+            }
+        };
+        let (away, home) = detail.abbreviations();
+        let mut teams = (Text::new(), Text::new());
+        set_plain(&mut teams.0, away);
+        set_plain(&mut teams.1, home);
+        Some(teams)
+    }
+
     /// The interruptible sleep between ticks.
     ///
     /// `asyncio.wait_for(self._wake.wait(), poll_interval_seconds)`, plus one
@@ -626,9 +833,20 @@ impl Poller {
     ///   poll interval — 30 s by default, three times the timeout. Without the
     ///   cap a user who walked away would leave the menu on the panel until the
     ///   next poll.
-    async fn sleep(&mut self, interval: Duration) {
-        let deadline = Instant::now() + interval;
+    ///
+    /// The deadline is passed in rather than derived here because the warmer
+    /// runs between the tick and this, and spends part of the same window.
+    async fn sleep_until(&mut self, deadline: Instant) {
         loop {
+            // Drained before the select, not only inside it. On a short poll
+            // interval the warmer can have consumed the whole window, and an
+            // expired timer wins the race below every time — so without this a
+            // press delivered during warming would wait out another whole tick.
+            while let Ok(command) = COMMANDS.try_receive() {
+                if self.apply(command) == Wake::Now {
+                    return;
+                }
+            }
             let wake_at = match self.menu.deadline_ms() {
                 Some(menu_ms) => deadline.min(Instant::from_millis(menu_ms)),
                 None => deadline,
