@@ -482,45 +482,16 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
 
 ## Rust firmware rewrite (firmware-rs)
 
-63. **`hub75`'s RGB565→bitplane pack is 76 % of a drawn frame** — measured on
-    silicon by the Phase 3 app shell's frame probe (2026-08-08,
-    `firmware-rs/BUDGET.md` "Core 1: measured frame times"): `load_rgb565` +
-    `flip` costs a flat **5.25 ms** regardless of content, against 0.48-1.96 ms
-    for the entire render path. Total worst frame is 7.4 ms of a 50 ms budget,
-    so **there is nothing to fix today** — logged because if frame time ever
-    has to come down, this is where it is, and the intuition that "drawing is
-    the expensive part" is wrong by 3×. ~96 cycles/pixel at 150 MHz for eight
-    bitplanes plus a gamma lookup; the obvious levers are a wider inner loop
-    and doing the pack in the same pass as the gamma LUT. Note the measurement
-    is XIP-placement sensitive (5.07 vs 5.25 ms across two builds differing by
-    120 B), so benchmark any change against a rebuild of its own baseline.
+63. **hub75 pack — CLOSED 2026-08-09, measured on device.** Fused
+    three-table+shift pack (tiers 1-2): `show mean` 5,250 -> **2,241 us**
+    (2.34x), stable across 8x30 s windows, worst lap 2,257 us, zero overruns
+    in 14,400+ drawn frames at 60 FPS; core-1 duty 44% -> ~20%. Landed 241 us
+    above the <=2 ms target; tier-4 dirty-region deliberately NOT pulled
+    forward - the target's purpose (animation headroom, now ~13 ms/frame) is
+    achieved and dirty tracking is real complexity for 0.24 ms nobody needs.
+    Re-open only when measured demand appears. Decision tables and the
+    thumbv8m-vs-host benching trap: `crates/hub75/benches/pack.rs`.
 
-    **Duty updated by task #17 (2026-08-08), verdict unchanged.** 60 FPS does
-    not make the pack slower — it makes it run three times as often. Per drawn
-    frame it is still a flat 5.25 ms; as a share of core 1's wall time on a
-    screen that draws every frame it went from ~10 % to **~31 %**, and the worst
-    total frame from 15 % of budget to **44 %** (7.41 ms of 16.67). There is
-    still nothing to fix: 9.26 ms of margin is not tight. This stays the first
-    place to look if headroom is ever needed, and it is now the *only* place
-    worth looking — the entire render path is under 2 ms.
-
-    **Implemented, pending on-device measurement (task #20, 2026-08-09).**
-    Tier 1: the pack loop is RAM-resident (`.data.hub75_pack`, ~0.6 KiB in the
-    app image), which also retires this item's XIP-variance warning. Tier 2:
-    fused gamma+bitspread tables — one u64 per raw 5/6-bit channel carrying
-    all eight positioned plane bits, three tables plus a shift for the bottom
-    lanes, 1 KiB, derived inside the driver so `set_gamma` cannot forget to
-    rebuild them. The old pack survives verbatim as
-    `crates/hub75/tests/reference/mod.rs`, with property tests pinning
-    byte-identical output over all 65,536 RGB565 values and five gamma tables.
-    Tier 3 (wide stores) was measured and *declined*: 1.62× on the host, where
-    stores dominate, but the u32 transpose keeps four u64s live and regresses
-    thumbv8m codegen to 94.5 instr/pixel-pair against the shipped 78 — the
-    decision table lives in `crates/hub75/benches/pack.rs`. Projection from
-    the instruction ratio (~165 → 78 instr/pair, calibrated on the measured
-    192 cycles/pair): **~2.1–2.6 ms** against the ≤2 ms finish line, close
-    enough that the frame probe decides. If it lands above the line, the next
-    lever is tier-4 dirty-region packing, deliberately still in this item.
 
 64. **`hub75-diag` still links without flip-link** — the app got the
     stack-overflow guard in Phase 3 (`firmware-rs/app/.cargo/config.toml`, two
