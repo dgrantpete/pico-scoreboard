@@ -911,5 +911,6 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     backend-and-firmware release, not a refactor. Worth doing the next time the
     format opens for another reason — and if it does, note that `Slate` would
     then want the abbreviations on `SlateEntry`, which is ~3.2 KB across
-    `MAX_SLATE`, against the 672 B the warmer's index spends today. The index
-    is the cheaper home unless the list is already carrying them.
+    `MAX_SLATE`, against the ~744 B the warmer's index spends today (computed
+    from the layout, not isolated in the symbol table — it is inside the poller
+    arena). The index is the cheaper home unless the list already carries them.
