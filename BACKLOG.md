@@ -887,3 +887,29 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     moot. Do that at drill day — it is one config PUT and a look — and if it
     tears, the fix is a refresh-rate floor in `scoreboard-config` rather than
     anything in the driver.
+
+85. **The games list carries no team abbreviations, which costs the crest
+    warmer one detail fetch per game** — found by task #18, 2026-08-09. A crest
+    is keyed by `{league key}/{abbreviation}`, and `scoreboard-wire`'s list
+    format is `u8 version`, `u8 count`, then per game `u8 state` + a
+    length-prefixed id. So the rotation cannot say which crests a game it has
+    not shown will need, and the idle warmer has to fetch that game's *detail*
+    to find out before it can warm anything.
+
+    The cost is bounded and paid once — `prefetch::WarmIndex` remembers the
+    abbreviations, and the poll loop's own commits fill it for free, so the
+    probe is skipped entirely for games the board has already displayed — but
+    it is one request per game per slate epoch that a richer list would not
+    need, and it halves how fast a cold board converges.
+
+    The fix is a wire v3 whose list entries carry both abbreviations: ~10 extra
+    bytes per game, backend `list::encode` and the firmware decoder in the same
+    crate (they are defined together so they cannot drift), and the warmer's
+    probe deletes outright along with roughly half of `prefetch`. **It is
+    deliberately not done here**: `WIRE_VERSION = 2` is documented as frozen
+    because a device in the field decodes it, so bumping it is a coordinated
+    backend-and-firmware release, not a refactor. Worth doing the next time the
+    format opens for another reason — and if it does, note that `Slate` would
+    then want the abbreviations on `SlateEntry`, which is ~3.2 KB across
+    `MAX_SLATE`, against the 672 B the warmer's index spends today. The index
+    is the cheaper home unless the list is already carrying them.
