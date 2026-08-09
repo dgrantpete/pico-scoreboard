@@ -66,9 +66,11 @@ impl Gamma {
 /// The work is not on the render path by nature: a gamma change arrives with a
 /// `PUT /api/config`, which core 0 handles. So the table is built where the
 /// request lands and the finished 256 bytes cross the core seam, leaving core 1
-/// with a `copy_from_slice` inside its frame. [`Hub75Driver::set_gamma`] takes
-/// one of these for exactly that reason, and there is no entry point that lets a
-/// caller hand the driver a bare [`Gamma`] to expand.
+/// with a copy plus the microsecond-scale fused pack-table derivation
+/// ([`FusedTables`](crate::packing::FusedTables)) inside its frame.
+/// [`Hub75Driver::set_gamma`] takes one of these for exactly that reason, and
+/// there is no entry point that lets a caller hand the driver a bare [`Gamma`]
+/// to expand.
 ///
 /// [`Hub75Driver::set_gamma`]: crate::driver::Hub75Driver::set_gamma
 #[derive(Clone, Copy)]

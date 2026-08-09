@@ -164,6 +164,10 @@ pub struct Hub75Driver {
     blanking_time_ns: u32,
     gamma: Gamma,
     gamma_lut: [u8; 256],
+    /// The RGB565 pack's fused gamma+bitspread tables (1 KiB), derived from
+    /// `gamma_lut`. Every write to one rebuilds the other — `set_gamma` and
+    /// construction are the only two sites.
+    fused: packing::FusedTables,
     system_clock_hz: u32,
     data_clock_hz: u32,
 }
@@ -186,6 +190,7 @@ impl Hub75Driver {
         assert!(pins.data_base <= 24 && pins.clock_base <= 28 && pins.output_enable <= 29
             && pins.address_base <= 25, "pin group exceeds GPIO bank 0");
 
+        let gamma_lut = config.gamma.build_lut();
         let mut driver = Hub75Driver {
             pio,
             dma,
@@ -194,7 +199,8 @@ impl Hub75Driver {
             brightness: config.brightness.clamp(0.0, 1.0),
             blanking_time_ns: config.blanking_time_ns,
             gamma: config.gamma,
-            gamma_lut: config.gamma.build_lut(),
+            fused: packing::FusedTables::new(&gamma_lut),
+            gamma_lut,
             system_clock_hz: config.system_clock_hz,
             data_clock_hz: config.data_clock_hz,
         };
@@ -489,15 +495,19 @@ impl Hub75Driver {
     /// Convert an RGB888 frame into the inactive framebuffer (visible after
     /// [`flip`](Self::flip)). Gamma is applied during conversion.
     pub fn load_rgb888(&mut self, frame: &[u8; RGB888_FRAME_BYTES]) {
-        let lut = self.gamma_lut;
-        packing::pack_rgb888(frame, &lut, self.inactive_buffer());
+        // SAFETY: as in `inactive_buffer`, which this inlines so the table
+        // fields can be borrowed alongside the buffer.
+        let buffer = unsafe { &mut (*FRAMEBUFFERS.0.get()).0[1 - self.active_index] };
+        packing::pack_rgb888(frame, &self.gamma_lut, buffer);
     }
 
     /// Convert an RGB565 frame (little-endian, `framebuf.RGB565` layout)
     /// into the inactive framebuffer. Gamma is applied during conversion.
     pub fn load_rgb565(&mut self, frame: &[u8; RGB565_FRAME_BYTES]) {
-        let lut = self.gamma_lut;
-        packing::pack_rgb565(frame, &lut, self.inactive_buffer());
+        // SAFETY: as in `inactive_buffer`, which this inlines so the table
+        // fields can be borrowed alongside the buffer.
+        let buffer = unsafe { &mut (*FRAMEBUFFERS.0.get()).0[1 - self.active_index] };
+        packing::pack_rgb565(frame, &self.fused, buffer);
     }
 
     /// Zero the inactive framebuffer. Takes effect on the next `flip()`.
@@ -595,10 +605,13 @@ impl Hub75Driver {
     ///
     /// Takes a [`GammaTable`] rather than a [`Gamma`] so that building it —
     /// 27.6 ms for a `Power` curve — cannot land inside a frame. See
-    /// [`GammaTable`]'s docs.
+    /// [`GammaTable`]'s docs. The fused pack tables derive from the LUT, so
+    /// this is also where they rebuild; that part is microseconds
+    /// ([`packing::FusedTables`]) and safe inside a frame.
     pub fn set_gamma(&mut self, table: GammaTable) -> Gamma {
         self.gamma = table.gamma();
         self.gamma_lut = *table.lut();
+        self.fused = packing::FusedTables::new(table.lut());
         self.gamma
     }
 
