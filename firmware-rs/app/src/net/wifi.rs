@@ -218,6 +218,20 @@ async fn station(
         match attempt_join(control, stack, credentials).await {
             Ok(ip) => {
                 defmt::info!("wifi: connected, ip {}", ip);
+                // The CYW43 filters received frames by MAC; the mdns task's
+                // `join_multicast_group` stops one layer above the radio (see
+                // `GROUP_MAC`'s docs). Programmed here, on every successful
+                // join, because a radio reset clears the filter.
+                match control
+                    .add_multicast_address(scoreboard_portal::mdns::GROUP_MAC)
+                    .await
+                {
+                    Ok(_) => defmt::info!("wifi: radio passes mdns multicast"),
+                    Err(_) => defmt::warn!(
+                        "wifi: could not add the mdns group to the radio filter; \
+                         .local discovery will not work this session"
+                    ),
+                }
                 step_plain(store, publisher, 4, "Connected", &address_text(ip));
                 return Ok(ip);
             }

@@ -83,6 +83,16 @@ use crate::hosts::MAX_DEVICE_NAME;
 
 /// The mDNS multicast group (RFC 6762 §3).
 pub const GROUP: [u8; 4] = [224, 0, 0, 251];
+
+/// [`GROUP`] as the Ethernet multicast MAC it maps to (RFC 1112 §6.4: low 23
+/// bits of the group under the 01:00:5e prefix). The radio filters received
+/// frames by MAC, and `Stack::join_multicast_group` cannot reach that filter —
+/// it updates smoltcp's accept list and emits IGMP, one layer too high. A
+/// driver that is not told to pass this MAC drops every query before the
+/// stack ever sees it, which presents as a responder that joined the group,
+/// bound the port, and hears nothing — found on the first hardware unit,
+/// 2026-08-09.
+pub const GROUP_MAC: [u8; 6] = [0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb];
 /// The mDNS port, for both queries and responses.
 pub const PORT: u16 = 5353;
 
