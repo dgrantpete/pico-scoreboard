@@ -855,3 +855,91 @@ malformed answer.
 **Not yet exercised on hardware.** Everything above is host-tested or
 build-verified; the swap, the revert, the trial-boot confirm and the timings
 are task #16's drill day.
+
+# Post-parity divergences
+
+Parity was an exit criterion, not a permanent constraint. Everything above
+describes a port and its deliberate deviations *within* that constraint; this
+section is the register of the places where the firmware has since been changed
+to behave differently from the MicroPython one on purpose. Each entry names what
+the old behaviour was, so "we used to do X" stays answerable after the Python is
+gone. The rule for landing one is the rule BACKLOG 73 was gated on: bank the old
+behaviour as a measured baseline first, then diverge.
+
+*(The health gate's move from successes to answers, above, predates this section
+and belongs to the same category — it is documented where it is because it has
+its own bench evidence to carry.)*
+
+## Auto-brightness — the whole curve, 2026-08-09 (BACKLOG 73, task #19)
+
+**Was:** smoothed lux through a log curve, `0.05 + t·0.95` over 2–300 lux,
+straight onto the panel's duty cycle; the user's 0–100 preference folded in by a
+dual lerp anchored at the ambient value (0 → floor, 50 → pure auto, 100 → max);
+a symmetric ±0.04-per-tick rate limit on the result. Four pure functions in
+`brightness.py`, ported exactly, and the port was correct — the design was what
+needed replacing.
+
+**Is:** the same EMA over the same 2–300 lux anchors at the same 200 ms tick,
+but the log curve now produces a *perceptual* brightness `B ∈ [0,1]` rather than
+a duty; the preference is an additive bias `B + (pref − 50)/50` clamped to
+[0,1]; the ramp acts on `B` and is asymmetric, 1.5 s for a full-span brighten
+and 8 s for a full-span dim; and `duty = 0.05 + 0.95·B³` converts perception to
+panel units at the very end.
+
+Three arguments, in the order they matter:
+
+* **The knob was ambient-dependent, and that was the actual defect.** The dual
+  lerp interpolated *toward* the ambient value, so its strength was proportional
+  to how far ambient sat from the endpoint. Preference 25 was 0.475 below auto
+  at 300 lux and 0.143 below it at 9 lux: the same slider position meaning a
+  3.3× different amount of change depending on the room. An additive bias is the
+  same step everywhere it does not clamp, and the endpoints then saturate at
+  every ambient — 0 is the true floor and 100 the true maximum in any room, by
+  arithmetic rather than by a branch that switches the sensor off. In between
+  the sensor stays live: at preference 20 the bias is −0.6, and a room that
+  climbs past `B_auto = 0.6` un-clamps and moves the panel again.
+* **Perception and duty were the same number, and they are not the same
+  quantity.** One log curve was describing both how the room changes and how an
+  eye responds. Splitting them puts the cube where it belongs: CIE lightness
+  inverts as `Y ≈ ((L*+16)/116)³` and Stevens' exponent for brightness is near
+  1/3 in luminance, so perceived → emitted is a cube. Concretely `B = 0.5` costs
+  17 % duty and the top quarter of the scale is over half the panel's range,
+  which is where the eye can actually tell things apart.
+* **Brightening and dimming are different events.** Lights-on is a readability
+  deadline; evening falling should never be noticed. The old ramp gave both
+  5 seconds. Worth writing down because it surprised: the 8 s dim limit is a
+  *bound*, not the usual pace — the EMA cannot push the perceptual target down
+  faster than ≈0.0166 per tick (a full span in 12 s), so for a room that dims
+  the EMA is already the slower of the two and the limit binds only on step
+  changes: the preference moving down, a clamp releasing, a missing sensor
+  coming back to report a dark room. In the other direction it binds hard, since
+  a lights-on event moves the target 0.51 on the first tick alone.
+
+**Unchanged, and deliberately so:** the VEML7700 driver and its pinned gain
+table including the two wrong-vs-datasheet cells, the EMA and its α, the 200 ms
+tick, sole ownership of the brightness atomic, transition-only sensor logging,
+the `display.brightness` config field with its 0–100 range and its web slider,
+and the bright-room assumption when no reading has ever landed. The bias applies
+to that assumption too, so a sensorless bench unit's slider works like any other.
+
+**No migration, and the reason is the default.** The field means "bias" now
+rather than "blend", but it is the same key with the same range and the same
+direction, and the shipped default — **100**, from `config.py` and kept by
+`scoreboard-config` — saturates the knob under *both* designs and means exactly
+what it always did: full duty, sensor ignored. So an untouched device is
+bit-identical across the change. It also means the auto-brightness loop does
+nothing at all on a device nobody has adjusted, which is worth knowing before
+running a sweep: the ladder through 0/25/50/75 is the measurement, and the
+default is the one setting that cannot show the difference.
+
+**The 180-frame pixel harness is unaffected**, and not by luck: brightness is
+OE duty in the driver's timing buffer, not pixel data, so no golden frame has
+ever contained it. What this change does break is *visual* parity with the
+MicroPython unit standing next to it — that is the point, and it is why the item
+was gated on the old curve's hardware sweep being recorded first.
+
+20 host tests in `crates/scoreboard-input/src/brightness.rs`, including a
+reference grid computed from these formulas in CPython, the ambient-independence
+property at both the function and settled-chain level, endpoint semantics from
+five ambients, monotonicity in both preference and lux, and the ramp rates in
+ticks.

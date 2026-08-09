@@ -27,12 +27,12 @@
 //! No auto-ranging, no integration-time enforcement, and none of Vishay's
 //! high-lux correction polynomial — all three absent from `veml7700.py` too.
 //! The consequences are real and bounded: above roughly 1,900 lux the reading
-//! saturates, and the curve is already at [`BRI_MAX`] by 300 lux, so saturation
+//! saturates, and the curve is already at [`LUX_MAX`] by 300 lux, so saturation
 //! is invisible. The caller is responsible for spacing reads by at least one
 //! integration time; the 200 ms auto-brightness tick is twice the 100 ms
 //! configured here.
 //!
-//! [`BRI_MAX`]: scoreboard_input::brightness::BRI_MAX
+//! [`LUX_MAX`]: scoreboard_input::brightness::LUX_MAX
 
 use embassy_rp::i2c::{Async, Error, I2c};
 use embassy_rp::peripherals::I2C0;

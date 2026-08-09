@@ -1,8 +1,10 @@
 //! Auto-brightness: the one owner of the panel's brightness.
 //!
 //! `main.py`'s `LightSensor` and `auto_brightness_loop`. The curve is
-//! [`scoreboard_input::brightness`], host-tested against the Python's values;
-//! what is here is the I²C bus, the retry policy, and the 5 Hz tick.
+//! [`scoreboard_input::brightness`] — a deliberate post-parity divergence from
+//! `brightness.py`, host-tested against its own spec (see PARITY.md and
+//! BACKLOG 73); what is here is the I²C bus, the retry policy, and the 5 Hz
+//! tick, all of which are unchanged by that redesign.
 //!
 //! # Sole ownership, and why it is worth naming
 //!
@@ -21,9 +23,10 @@
 //!
 //! * **No reading ever taken means a bright room**, not a dark one. Falling
 //!   back to the bottom of the curve would leave a device with no sensor at
-//!   5 % brightness, which reads as broken. The rule lives in
+//!   5 % duty, which reads as broken. The rule lives in
 //!   [`AutoBrightness`](scoreboard_input::brightness::AutoBrightness) and is
-//!   host-tested there.
+//!   host-tested there. The user's preference still biases that assumption, so
+//!   the bench unit's slider works like any other.
 //! * **Only transitions are logged.** This is a deliberate deviation:
 //!   `LightSensor._try_init` logged an error on *every* attempt, and with a
 //!   retry every 15 ticks that is a line every three seconds — twenty a minute,
@@ -155,8 +158,8 @@ pub async fn auto_brightness(p: SensorPeripherals) -> ! {
         // reboot — which is what `poller.py` and this loop both got for free
         // from holding the `Config` object the API route mutated.
         let preference = crate::config::with(|config| config.display.brightness);
-        let level = auto.tick(lux, preference);
-        BRIGHTNESS.store(AutoBrightness::quantize(level), core::sync::atomic::Ordering::Relaxed);
+        let duty = auto.tick(lux, preference);
+        BRIGHTNESS.store(AutoBrightness::quantize(duty), core::sync::atomic::Ordering::Relaxed);
         ticker.next().await;
     }
 }

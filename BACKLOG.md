@@ -688,19 +688,41 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     `probe-rs run` for flashing; never background it and never `TaskStop` it.
 
 
-73. **Better auto-brightness algorithm** — owner request, 2026-08-08. What
-    ships today is a deliberate parity port of `brightness.py`: EMA (α=0.08 at
-    5 Hz), log curve over 2–300 lux, the dual-lerp preference knob, ±0.04/tick
-    ramp, and the VEML7700 gain table pinned *including its two
-    wrong-vs-datasheet cells*. Known upgrade avenues, none started: hysteresis
-    or a deadband so the panel doesn't hunt when the room sits at a curve
-    knee; asymmetric response (fast brighten on lights-on, slow dim as evening
-    falls — the current ramp is symmetric); a perceptual mapping (CIE
-    lightness) instead of raw log-lux; auto-ranging integration time (the
-    sensor supports it, the driver deliberately doesn't); the Vishay high-lux
-    correction polynomial (deliberately absent). **Gate: post-parity-sign-off
-    only** — any curve change breaks visual parity with the MicroPython unit,
-    so it must not land while task #13's checklist is open.
+73. ~~**Better auto-brightness algorithm**~~ — owner request, 2026-08-08.
+    **CLOSED by task #19, 2026-08-09**, design approved by the owner after the
+    old-curve hardware sweep was banked as the parity baseline. The gate held:
+    nothing landed until there was a recorded "before".
+
+    What shipped is a new pipeline, not a tuning pass —
+    `crates/scoreboard-input/src/brightness.rs`, written up in PARITY.md's
+    *Post-parity divergences*. Lux → EMA → log curve to a **perceptual** `B` in
+    [0,1] → additive clamped bias `B + (pref−50)/50` → asymmetric ramp on `B`
+    (1.5 s up, 8 s down) → `duty = 0.05 + 0.95·B³`. Three of this item's five
+    avenues are in it: the perceptual mapping (a cube, from CIE L\* and
+    Stevens, rather than CIE's own piecewise form — the knee is below the duty
+    floor, so it would be arithmetic nobody could see), the asymmetric
+    response, and, indirectly, the hunting complaint: the ramp asymmetry plus
+    the EMA leave nothing fast enough to hunt, so no deadband was added and no
+    hysteresis state exists to get stuck in.
+
+    The real reason it was worth doing was none of the five, and only became
+    obvious once the numbers were on the bench: **the dual lerp's knob strength
+    depended on the room.** Preference 25 sat 0.475 below auto at 300 lux and
+    0.143 below it at 9 lux — the same slider, a 3.3× different amount of
+    change — so a setting found in a lit room quietly lost two thirds of its
+    authority after dark. An additive bias in perceptual space is the same step
+    everywhere it does not clamp, and that property is host-tested.
+
+    **Still deliberately absent, and no longer worth an item:** auto-ranging
+    integration time and the Vishay high-lux correction polynomial. Both only
+    matter above ~1,900 lux, where the sensor saturates, and the curve has been
+    flat since 300 lux — they would change a number nothing reads. The
+    VEML7700 gain table stays pinned including its two wrong-vs-datasheet
+    cells; the driver is untouched by this change.
+
+    Bench work outstanding (task #19, after the owner flashes): re-run the
+    thumb/flashlight sweep and a 0/25/50/75/100 preference ladder against the
+    banked baseline.
 
 74. **Config storage write-granularity (owner asked: "minimize flash wear —
     can we drop JSON?")** — analysis 2026-08-08; the wear half is already
