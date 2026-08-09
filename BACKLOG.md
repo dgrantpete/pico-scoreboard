@@ -738,6 +738,14 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     than document rewrite, and the one-flash-write-per-PUT-batch property
     needs restating per key.
 
+85. **The firmware does not answer ICMP echo** — found 2026-08-09 while
+    verifying mDNS: `ping scoreboard.local` resolves the name (mDNS working)
+    but the echo times out; MicroPython's lwIP replied. Name resolution and
+    HTTP are unaffected, so this is cosmetic — but ping is exactly the "is it
+    up?" check a guest tries first, and a timeout reads as "down". smoltcp
+    can answer echo; check what embassy-net needs (an ICMP socket or a
+    feature) and wire it. One evening, low priority.
+
 ## Backend
 
 14. **Per-device API keys** — comma-separated key list in backend config →
