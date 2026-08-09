@@ -687,19 +687,6 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     firmware did not panic. Prefer `probe-rs attach` for observation and reserve
     `probe-rs run` for flashing; never background it and never `TaskStop` it.
 
-71. **The auto-brightness full-range sweep is still visually unconfirmed** —
-    the remaining sliver of what began as "nothing has ever pressed a button on
-    the Rust firmware." The button half closed itself emphatically on
-    2026-08-08 when the firmware reached the real scoreboard: skip, lock,
-    burst-rejection and the league menu were all exercised on the physical
-    switches — and the very first hold of B found a real cross-core bug (the
-    menu opened invisibly; fixed the same hour, `9410db0`), which is the
-    strongest possible vindication of this item's thesis that host tests end
-    where the hardware begins. The VEML7700 also proved alive (10 lux read at
-    boot, auto-brightness engaged once the preference left 100). What remains:
-    hold a thumb over the sensor and a flashlight on it for ~10 s each and
-    confirm the panel glides to the 5 % floor and to full — the smoothed ramp
-    (EMA + rate limit) is the one behaviour only eyes can sign off.
 
 73. **Better auto-brightness algorithm** — owner request, 2026-08-08. What
     ships today is a deliberate parity port of `brightness.py`: EMA (α=0.08 at
