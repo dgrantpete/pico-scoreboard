@@ -24,8 +24,8 @@ no heap to absorb a mistake.
 | Gamma LUT | 256 | **MEASURED** | `[u8; 256]` **inside `Hub75Driver`**, not a separate static. It lands in whichever arena owns the driver — do not add it again to the core-1 line. |
 | Snapshot handoff — `SnapshotChannel` | 8,552 | **MEASURED** | `crates/scoreboard-model`. Three `ScoreboardSnapshot` slots of 2,848 B + 2 B of index + padding. Three, not two — see the correction below. |
 | `Store` (core-0 authoritative state) | 2,888 | **MEASURED** | `scoreboard-app`'s `STORE`. One more snapshot plus the startup flag and the soccer stale-clock guard, plus `StaticCell`'s 1 B taken flag and padding. A `static` rather than a task local because it is *lent* to `net::bringup` for the boot screen and then moves to the poller — see the state-sharing note below. |
-| Poller task arena | 13,824 | **MEASURED** | `scoreboard-app`, task #11. The `Slate` (4,596 B — 160 entries × (source, state, 20-byte game id), the rotation order and 8 league descriptors, sized for a college-football Saturday alongside a full MLB slate), the 4,096 B receive buffer, eight per-source ETags, the crest directory's keys and LRU, and the futures of a whole tick: a detail fetch with two crest fetches nested inside it, each carrying its own 256 B URL. |
-| Crest pool (core 1) + its channel | 11,553 | **MEASURED** | `CRESTS` 9,217 B — eight 24×24 RGB565 slots, owned by core 1 — plus `logos::UPDATES` 2,336 B, the two-deep channel core 0 ships new crest pixels over. See the note below on why the pool is split across the cores; the alternative costs 18,432 B and still tears. |
+| Poller task arena | 16,048 | **MEASURED** | `scoreboard-app`, tasks #11 and #18. The `Slate` (4,596 B — 160 entries × (source, state, 20-byte game id), the rotation order and 8 league descriptors, sized for a college-football Saturday alongside a full MLB slate), the 4,096 B receive buffer, eight per-source ETags, the crest directory's 32 keys and LRU, the warm index's 16 game records, and the futures of a whole tick: a detail fetch with two crest fetches nested inside it, each carrying its own 256 B URL. It grew 2,184 B for the 32-slot pool — 1,536 B of it is the directory's key array, which is 32 × `Option<CrestKey>` at 41 bytes plus a `usize` length. |
+| Crest pool (core 1) + its channel | 39,201 | **MEASURED** | `CRESTS` 36,865 B — thirty-two 24×24 RGB565 slots, owned by core 1 — plus `logos::UPDATES` 2,336 B, the two-deep channel core 0 ships new crest pixels over. The channel does not scale with the pool: it carries one slot's pixels at a time and two of them is still enough. See the two notes below — one on why the pool is split across the cores (the alternative costs more *and* tears), one on why thirty-two is the number. |
 | Poller TCP socket | 2,050 | **MEASURED** | `api_client::TCP_STATE`: one connection, 1,536 B receive + 512 B send. One, because a request is never concurrent with another — the client takes `&mut self`. |
 | cyw43 driver state | 17,928 | **MEASURED** | `CYW43_STATE` 12,696 B (the driver's ioctl state and its 4 + 4 packet channel) plus the runner task's 5,232 B arena. Came in 9 % over SPEC §11's 16 KB guess. |
 | embassy-net stack + captive-portal sockets | 12,868 | **MEASURED** | `StackResources<8>` 4,584 B + the net runner's 136 B arena, plus the two AP-mode responders: 4,100 B of payload buffers, 400 B of packet metadata, and 3,920 B of task arenas (the DHCP and DNS scratch live in the arenas, not on a stack). **The TCP socket buffers are not in this line** — poller, HTTP ×2 and OTA are tasks #10/#11/#15 and bring their own. |
@@ -42,12 +42,21 @@ no heap to absorb a mistake.
 | Core-1 stack | 8,192 | **MEASURED** | Sized 8 KB by `scoreboard-app`; **high-water 3,348 B (41 %)** over a run of real backend data — up from 2,480 B under the demo, because the demo never drove the pregame screen. The setup screen, which is the only QR encoder caller and therefore the deepest frame, is still not among them. Guarded by MSPLIM at its bottom. See the core-1 notes below. |
 | Ring log | 28,812 | **MEASURED** | `crates/scoreboard-log`, task #10. 200 slots × 144 B — a `u32` sequence, a `u32` timestamp, a level byte and a 128-byte bounded message, padded. SPEC §11's ~8 KB guess assumed a shorter message; 128 B was chosen against the measured distribution of the 87 log call sites in `firmware/src` (median 43 B, max 116 B), where 64 B would have truncated real lines. It is `.bss`, not `.data` — see the note below. |
 | Misc statics | ~2,100 | **MEASURED** | embassy-rp's GPIO/DMA/PIO wakers, the time driver, the critical-section lock, the clock cache, the PAC singleton flags, and task #10's small publishers (`net::hosts`, `net::status`, the config cell, the stack-watermark atomics). |
-| **Projected total** | **264,222** | | **258.0 KiB** |
+| **Projected total** | **294,094** | | **287.2 KiB** |
 
-**Headroom: 50.4 %** (268,258 B free of 532,480 B). Against the 512 KiB the
-linker actually declares — see the caveat below — it is 49.6 %. The ≥ 40 %
-target holds with room: two lines are still estimates and together they claim
-18,432 B, so they could overrun by 55,000 B before the target is breached.
+**Headroom: 44.8 %** (238,386 B free of 532,480 B). Against the 512 KiB the
+linker actually declares — see the caveat below — it is 43.9 %. The ≥ 40 %
+target still holds, but the margin is no longer generous: two lines are
+estimates claiming 18,432 B between them, and there are **25,394 B** between the
+projection and the 319,488 B ceiling. That was 55,266 B before the crest pool
+grew. Anything that wants a five-figure static from here on should expect to
+argue for it.
+
+The projection rose by 29,872 B for the 32-slot crest pool, and unlike every
+other rise in this file it bought no new capability — the firmware fetched and
+drew crests before. It bought a *property*: after one lap of a normal slate the
+board fetches no logos at all. The section below argues why that was worth 5.6
+points of headroom, and prices the doubling that would not fit.
 
 The projection rose by 26,159 B when the poller landed, and 91 % of that is
 three measured lines that had no estimate at all: the poller's 13,824 B task
@@ -74,12 +83,34 @@ predicted. That is the `u16` length prefix on every bounded string doing its
 job: the layout is identical on the host and on `thumbv8m.main-none-eabihf`, so
 `scoreboard-model`'s own budget test is a real check and not a coincidence.
 
-**Measured today: 249,800 B** (243.9 KiB, 53.1 % headroom) — the whole of
-`scoreboard-app`, which is the binary of record: `.data` 10,280 + `.bss` 235,184
-+ `.uninit` 4,336. (BACKLOG 70's link-liveness clock added 32 B of it — one
-atomic and the gate's move into `scoreboard-model`, where it is host-tested.) That figure includes 4,336 B of dev-only defmt/RTT and the
-breadcrumb cell, of which 4,096 B leaves with the probe build. Networking added
-35,848 B of it, the HTTP server 80,160 B and the poller 24,452 B.
+**Measured today: 284,260 B** (277.6 KiB, 46.6 % headroom) — the whole of
+`scoreboard-app`, standalone profile, which is the binary of record: `.data`
+10,732 + `.bss` 269,192 + `.uninit` 4,336. That figure includes 4,336 B of
+dev-only defmt/RTT and the breadcrumb cell, of which 4,096 B leaves with the
+probe build. Networking added 35,848 B of it, the HTTP server 80,160 B and the
+poller 24,452 B.
+
+**The 32-slot crest pool and its warmer are 29,832 B of that**, measured as a
+clean before/after in a detached worktree so no other in-flight work was in the
+tree:
+
+| Symbol | 8 slots | 32 slots | Δ |
+|---|---:|---:|---:|
+| `scoreboard_app::CRESTS` | 9,217 | 36,865 | +27,648 |
+| `scoreboard_app::poller::run::POOL` | 13,864 | 16,048 | +2,184 |
+| `scoreboard_app::logos::UPDATES` | 2,336 | 2,336 | 0 |
+| `.data` + `.bss` + `.uninit` | 254,428 | 284,260 | **+29,832** |
+
+The two symbol deltas account for the image delta to the byte, which is the
+check that nothing else moved: the pool array, the directory's keys and its LRU
+all size from one `SLOTS` constant, `LogoRef` is a `u8` either way, and
+`scoreboard-render` takes the pool as a slice it indexes with `get` — so no
+renderer, no snapshot field and no test knew the number was eight. The channel
+did not move because it carries one slot's pixels at a time.
+
+(The 249,800 B this line read before is not a comparable baseline: it predates
+work that is not this change. 254,428 B is the commit immediately before it,
+measured the same way.)
 
 **Storage, inputs, brightness and supervision added 1,588 B**, which is the
 smallest any Phase 3 task has cost and worth one sentence on why: the two things
@@ -133,29 +164,88 @@ carrying forward from the just-published slot — would recover 2,848 B at the
 price of making the whole state machine borrow the channel. If RAM ever gets
 tight, that is the lever; at 53.6 % headroom it is not worth the coupling.
 
-### The crest pool is 11,553 B because the cheap arrangement is undefined behaviour
+### Thirty-two crest slots, and what the last twenty-four bought
 
-`display.py`'s `LogoPool` was one pool of eight buffers: Core 0 filled them,
-Core 1 drew from them, and evicting a slot the displayed state referenced tore a
-crest for a frame. In Python that is a cosmetic race. In Rust a
-`&[LogoSlot]` handed to a renderer *asserts* those bytes do not change while the
-borrow lives, so the same arrangement is not a race but undefined behaviour, and
-no amount of care on core 0 makes it sound while core 0 can write them.
+The pool was `display.py`'s `LogoPool(size=8)` — two crests per game, so eight
+covered the game on screen, the one before it, and two more. That is enough to
+rotate without thrashing and **not enough to ever stop fetching**. A full MLB
+day is 15 games and 30 teams: an eight-slot pool evicts a crest it will want
+again one lap later, every lap, for the whole evening.
 
-Three ways out, priced:
+| Slate | Teams | 8 slots | 32 slots |
+|---|---:|---|---|
+| Full MLB day | 30 | evicts every lap, forever | converges after one lap, 2 spare |
+| NFL Sunday | 32 | evicts every lap, forever | converges after one lap, exact fit |
+| College-football Saturday (~70 games) | ~140 | thrashes | fills once, then stops trying |
+
+Thirty-two costs **27,648 B** of core-1 RAM (24 × 1,152) and 2,184 B in the
+poller's arena for the directory that indexes it, and it is the single largest
+deliberate spend in this file after the framebuffers. What it buys is a
+property rather than a speedup: **after one lap of a normal slate the board
+fetches no logos at all**, so a rotation, a skip, a league-skip and a mashed
+button all paint immediately, and the `logo: evicting slot` line — which is the
+only direct evidence a pool is too small — goes quiet for the evening. That line
+staying quiet across a real MLB night is the acceptance test for this number.
+
+The idle warmer (`poller::warm_crests`) is what reaches the property without
+waiting for the rotation to walk the whole slate, and it is deliberately unable
+to make this worse: it fills **free slots only** and never evicts, so on the
+college-football row above it fills the pool once and then goes silent instead
+of two fetchers taking turns evicting each other's work. Its own memory — 16
+game records, sized to the most games a 32-slot pool can hold — is inside the
+poller arena line.
+
+**The steady state is zero traffic, not just zero logo traffic**, and that took
+a second thing to remember. A crest is keyed by `{league key}/{abbreviation}`,
+and the games list carries a state and an id only, so the warmer cannot know
+which crest a game needs without fetching that game's detail. Left there it
+would pay for one such probe per idle window forever. So the abbreviations are
+remembered per game (`scoreboard_model::prefetch::WarmIndex`), and the poll
+loop's own commits fill that index for free — a game the rotation has shown is
+never probed at all. The convergence cost is therefore **one extra detail fetch
+per game that the board has not yet displayed, once**, and after convergence an
+idle scoreboard makes no crest requests and no probe requests:
+
+| | Requests per idle window |
+|---|---|
+| Cold slate, games the board has not shown | ≤ 2 (a probe, then crests) |
+| Converged | 0 |
+| Pool full (slate larger than 32 crests) | 0 |
+
+The 40 % floor is what bounds this. Thirty-two slots leaves 44.8 % headroom;
+sixty-four would cost another 36,864 B and land at 37.9 %, under the target. So
+this is the last doubling that fits, and it is worth writing down that it was
+checked rather than assumed.
+
+### The crest pool's split across the cores is not the cheap arrangement, because the cheap one is undefined behaviour
+
+`display.py`'s `LogoPool` was one pool of buffers: Core 0 filled them, Core 1
+drew from them, and evicting a slot the displayed state referenced tore a crest
+for a frame. In Python that is a cosmetic race. In Rust a `&[LogoSlot]` handed
+to a renderer *asserts* those bytes do not change while the borrow lives, so the
+same arrangement is not a race but undefined behaviour, and no amount of care on
+core 0 makes it sound while core 0 can write them.
+
+Three ways out, priced at the pool's 32 slots:
 
 | | Bytes | |
 |---|---:|---|
-| Crest bytes in the snapshot | 18,432 | Four more copies (three channel slots + the `Store`) at 2,304 B each, plus 2,304 B copied on **every publish**. The `SnapshotChannel` docs reject it for exactly this reason. |
-| One shared pool, `UnsafeCell` per slot | 9,216 | Cheapest, and it does not work: forming the `&[LogoSlot]` the renderer wants covers a cell core 0 may be writing, whatever the eviction rule says. |
-| **Pixels on core 1, directory on core 0** | **11,553** | `CRESTS` 9,217 B, owned outright by the render loop, plus a 2,336 B channel. Core 0 keeps keys and LRU only. |
+| Crest bytes in the snapshot | 18,432 | Four more copies (three channel slots + the `Store`) at 2,304 B each, plus 2,304 B copied on **every publish**. Does not scale with the pool at all — it holds the *current* game's two crests — but it makes every publish 2,304 B more expensive and caches nothing, so a rotation re-fetches both crests every time. The `SnapshotChannel` docs reject it for exactly this reason. |
+| One shared pool, `UnsafeCell` per slot | 36,864 | Cheapest, and it does not work: forming the `&[LogoSlot]` the renderer wants covers a cell core 0 may be writing, whatever the eviction rule says. |
+| **Pixels on core 1, directory on core 0** | **39,201** | `CRESTS` 36,865 B, owned outright by the render loop, plus a 2,336 B channel. Core 0 keeps keys and LRU only. |
 
-The third is what is built. It costs 2,337 B over the unsound option and one
-1,152 B copy per crest *fetched* — a path that runs once per team per boot — and
-in exchange the renderer's borrow is exclusive, which is the only way it is
-sound at all. It also closed the tear on purpose rather than by luck: eviction
-never chooses a slot the published snapshot references, so the pixels behind a
-handle core 1 is drawing cannot be replaced.
+The third is what is built. It costs 2,337 B over the unsound option — a
+*constant*, not a per-slot cost, which is why growing the pool to 32 did not
+widen the gap — and one 1,152 B copy per crest *fetched*, on a path that runs
+once per team per boot. In exchange the renderer's borrow is exclusive, which is
+the only way it is sound at all.
+
+It also closed the tear on purpose rather than by luck: eviction never chooses a
+slot the published snapshot references, so the pixels behind a handle core 1 is
+drawing cannot be replaced. **That rule did not have to change for 32 slots.**
+It is stated over the two slots the published snapshot names, not over the pool,
+so a bigger pool only widens the gap between the held slots and the eviction
+candidates — and the idle warmer, the one new writer, does not evict at all.
 
 ### The receive buffer is 4,096 B, and `api_client.py` derived it from the wrong body
 
