@@ -99,16 +99,22 @@ impl<const N: usize> WarmIndex<N> {
     /// Record a game's teams — from a probe, or free of charge from a commit
     /// that had just decoded them anyway.
     ///
-    /// Also clears the miss count: the game answered, so whatever went wrong
-    /// before was not permanent.
+    /// Clears the miss count only when the teams are *new*, which is a
+    /// distinction with a reason. The game on screen is re-polled every tick
+    /// and re-learns the same two teams every time; if that cleared the count,
+    /// a crest that does not exist could never accumulate three failures while
+    /// its game was displayed, and the warmer would spend one request per idle
+    /// window on it for as long as the board sat there.
     pub fn learned(&mut self, source: u8, id: &str, away: &str, home: &str) {
         let mut teams = (Text::new(), Text::new());
         set_plain(&mut teams.0, away);
         set_plain(&mut teams.1, home);
         match self.find_mut(source, id) {
             Some(known) => {
+                if known.teams.as_ref() != Some(&teams) {
+                    known.misses = 0;
+                }
                 known.teams = Some(teams);
-                known.misses = 0;
             }
             None => self.push(source, id, Some(teams), 0),
         }

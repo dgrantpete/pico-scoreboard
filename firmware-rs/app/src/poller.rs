@@ -772,7 +772,8 @@ impl Poller {
     /// The one request the warmer would rather not make, and the reason
     /// [`WarmIndex`] exists: the games list carries ids and states only, so
     /// there is no other way to learn who is playing in a game the rotation has
-    /// not reached. Once. The answer is remembered.
+    /// not reached. The answer is remembered, so this is paid once per game and
+    /// not at all for the games the board has already shown.
     ///
     /// Every failure here is a debug line, not an error: nothing is waiting on
     /// this, a 404 is an ordinary game that left today's scoreboard, and a

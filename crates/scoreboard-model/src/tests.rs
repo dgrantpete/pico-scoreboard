@@ -1398,6 +1398,36 @@ fn a_commit_teaches_the_index_and_clears_the_failures() {
 }
 
 #[test]
+fn relearning_the_same_teams_does_not_clear_the_failures() {
+    let slate = three_mlb_games();
+    let mut index = WarmIndex::<8>::new();
+    let pool = Pool::default();
+
+    // The game on screen is re-polled every tick, so it hands over the same two
+    // teams every tick. A crest that does not exist has to be able to reach its
+    // give-up count anyway, or the warmer chases it for as long as the board
+    // sits on this game.
+    for _ in 0..3 {
+        index.learned(0, "m1", "NYY", "BOS");
+        assert_eq!(crest(index.next(&slate, pool.cached())).0, 0);
+        index.missed(0, "m1");
+    }
+    index.learned(0, "m1", "NYY", "BOS");
+    assert_eq!(
+        probe(index.next(&slate, pool.cached())),
+        1,
+        "m1 is given up on, so the walk moves to the game behind it"
+    );
+
+    // A *changed* lineup is new information, and gets a fresh three attempts.
+    index.learned(0, "m1", "NYY", "TOR");
+    assert_eq!(
+        crest(index.next(&slate, pool.cached())),
+        (0, "NYY".to_string())
+    );
+}
+
+#[test]
 fn pruning_keeps_games_that_only_left_the_rotation() {
     let mut slate = three_mlb_games();
     let mut index = WarmIndex::<8>::new();
