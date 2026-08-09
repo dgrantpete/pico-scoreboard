@@ -906,7 +906,7 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     tears, the fix is a refresh-rate floor in `scoreboard-config` rather than
     anything in the driver.
 
-85. **The games list carries no team abbreviations, which costs the crest
+86. **The games list carries no team abbreviations, which costs the crest
     warmer one detail fetch per game** — found by task #18, 2026-08-09. A crest
     is keyed by `{league key}/{abbreviation}`, and `scoreboard-wire`'s list
     format is `u8 version`, `u8 count`, then per game `u8 state` + a
