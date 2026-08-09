@@ -66,7 +66,14 @@
 //! pool, so a skip, a league-skip or a mashed button paints the next game
 //! immediately instead of waiting out two logo fetches. What it costs, honestly
 //! stated, is that a press arriving mid-warm waits for one logo — the same
-//! bound as a press arriving mid-tick, and smaller than one.
+//! bound as a press arriving mid-tick, and smaller than one. **That cost does
+//! not scale with [`WARM_FETCHES`]**, because the channel is checked between
+//! every fetch rather than after the batch; the constant's own docs say what it
+//! does decide, which is how fast a cold board converges.
+//!
+//! It also stops at the window's deadline, so however many fetches it is
+//! allowed and however short `poll_interval_seconds` is set, the next tick is
+//! never late because of it.
 //!
 //! It cannot affect anything else in this file. A warm fetch happens outside
 //! [`Poller::tick`], so it cannot reach [`FailureTracker`]; a failed one is a
@@ -146,12 +153,24 @@ static COMMANDS: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 
 /// Requests the crest warmer may make in one idle window.
 ///
-/// Two is one game's pair of crests, or a probe and the first of them. It is a
-/// *latency* bound, not a bandwidth one: the warmer checks the command channel
-/// between fetches, so this number is what a button press waits for in the
-/// worst case — one logo — and the seconds after a screen change are the only
-/// time a press can land on it at all.
-const WARM_FETCHES: usize = 2;
+/// **This number is not the latency bound, and reading it as one is the mistake
+/// to avoid.** The warmer checks the command channel between every fetch, so a
+/// button press waits for whatever single request is in flight — one 1.1 KB
+/// logo — and it waits exactly that long whether this is 2 or 60. The bound is
+/// the check, not the count.
+///
+/// What the number actually decides is how fast a cold board converges, and it
+/// is set against that. A 15-game MLB slate is 15 probes and 30 crests; at six
+/// per 30 s window that is warm in four to six minutes from boot, which is
+/// inside the first sitting. At two it took three times as long — slower than
+/// the rotation warms the pool by simply visiting games, which made the warmer
+/// close to pointless on a board being watched.
+///
+/// Six rather than more is politeness to a backend that is ours and small:
+/// roughly 7 KB and a few seconds of a window that is otherwise idle. The
+/// warmer also stops at the window's deadline, so this can never push the next
+/// poll late however short `poll_interval_seconds` is configured.
+const WARM_FETCHES: usize = 6;
 
 /// Send a command, dropping it if the queue is full. Never blocks, so an HTTP
 /// handler can call it.
@@ -381,7 +400,7 @@ pub async fn run(
                 // Only after a tick that worked. Warming through an outage
                 // would spend every game's give-up count on the outage, and
                 // leave the whole slate marked unwarmable once it ended.
-                poller.warm_crests(&cadence).await;
+                poller.warm_crests(&cadence, deadline).await;
             }
             Err(error) => {
                 let failure = poller.failures.record_failure(now, &error);
@@ -695,12 +714,20 @@ impl Poller {
     /// What it is *not* is a second poller. It commits nothing, publishes
     /// nothing and touches neither the store nor the failure tracker; the only
     /// state it changes is the crest pool and its own index.
-    async fn warm_crests(&mut self, cadence: &Cadence) {
+    ///
+    /// `deadline` is the moment the next tick is due. Stopping there is what
+    /// keeps the poll cadence exactly what it would be on a board that does no
+    /// warming at all.
+    async fn warm_crests(&mut self, cadence: &Cadence, deadline: Instant) {
         for _ in 0..WARM_FETCHES {
-            // Between fetches, not only before the first: a press that landed
-            // while a logo was in flight is answered as soon as that one lands
-            // rather than after the pair.
-            if !COMMANDS.is_empty() {
+            // Both checks between fetches, not only before the first. The
+            // command check is the latency bound — a press that landed while a
+            // logo was in flight is answered when that one lands, not when the
+            // batch ends — and the deadline is what makes "the warmer spends
+            // the front of the window" true rather than approximately true.
+            // Nothing stops `poll_interval_seconds` being configured at 1 s,
+            // and six fetches would not fit in that.
+            if !COMMANDS.is_empty() || Instant::now() >= deadline {
                 return;
             }
             let Poller {

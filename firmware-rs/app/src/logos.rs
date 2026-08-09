@@ -105,10 +105,12 @@ pub struct CrestUpdate {
 /// the poller never waits on core 1 inside a commit. A third would mean two
 /// commits inside one frame, where waiting a frame is the right answer anyway.
 ///
-/// The warmer does not need a third either. It installs at most two crests per
-/// idle window, with a whole HTTP request between them, and core 1 drains this
-/// once per frame — so its sends find the channel empty for the same reason a
-/// commit's do.
+/// The warmer does not need a third either, and this is the one place its
+/// per-window budget could have mattered. It does not, because the budget is
+/// spread rather than burst: every send has a whole HTTP request in front of
+/// it, and core 1 drains this once per frame at 60 FPS, so a send finds the
+/// channel empty for the same reason a commit's does — however many the warmer
+/// is allowed in a window.
 static UPDATES: Channel<CriticalSectionRawMutex, CrestUpdate, 2> = Channel::new();
 
 /// Core 1's half: the pixels, and nothing else.

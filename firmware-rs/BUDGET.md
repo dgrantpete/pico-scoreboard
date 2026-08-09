@@ -208,9 +208,18 @@ idle scoreboard makes no crest requests and no probe requests:
 
 | | Requests per idle window |
 |---|---|
-| Cold slate, games the board has not shown | ≤ 2 (a probe, then crests) |
+| Cold slate, games the board has not shown | ≤ 6 (a probe, then crests, per game) |
 | Converged | 0 |
 | Pool full (slate larger than 32 crests) | 0 |
+
+Six is a *convergence* number, not a latency one — the warmer checks the command
+channel between every fetch, so a press waits for one 1.1 KB logo whatever the
+budget is. At six a 15-game MLB slate (15 probes, 30 crests) is warm four to six
+minutes from boot, inside the first sitting; at two it was slower than the
+rotation warms the pool by simply visiting games, which made the warmer nearly
+pointless on a board being watched. The warmer also stops at the window's
+deadline, so it cannot push the next poll late however short
+`poll_interval_seconds` is set.
 
 The 40 % floor is what bounds this. Thirty-two slots leaves 44.8 % headroom;
 sixty-four would cost another 36,864 B and land at 37.9 %, under the target. So

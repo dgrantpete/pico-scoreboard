@@ -18,3 +18,10 @@ rp235x-pac = "=0.2.0"
 [dev-dependencies]
 # Self-dependency so `cargo test` builds the lib with the simulator available.
 hub75 = { path = ".", features = ["simulator"] }
+
+# Host-only timing harness for the bitplane pack (BACKLOG 63). Not a
+# criterion bench — a plain timed loop, so no new dependencies; `harness =
+# false` keeps libtest out and lets `main` own the measurement protocol.
+[[bench]]
+name = "pack"
+harness = false

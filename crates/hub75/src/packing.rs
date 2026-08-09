@@ -16,6 +16,16 @@ use crate::geometry::{
 
 /// Convert an RGB565 frame (little-endian, `framebuf.RGB565` layout: low
 /// byte `GGGBBBBB`, high byte `RRRRRGGG`) into bitplanes.
+///
+/// Placed in RAM on the device (`.data.*` is copied out of flash by the
+/// cortex-m-rt startup, and every device binary here links its script):
+/// this loop runs every drawn frame and BACKLOG 63 measured its time moving
+/// 5.07 → 5.25 ms between builds that differed by 120 B of unrelated code —
+/// XIP cache placement, not the loop. RAM residency removes that variance
+/// (and the XIP miss cost itself); `inline(never)` keeps LTO from folding
+/// the body back into a flash-resident caller.
+#[cfg_attr(target_os = "none", unsafe(link_section = ".data.hub75_pack"))]
+#[inline(never)]
 pub fn pack_rgb565(
     input: &[u8; RGB565_FRAME_BYTES],
     gamma_lut: &[u8; 256],
@@ -40,6 +50,9 @@ pub fn pack_rgb565(
 }
 
 /// Convert an RGB888 frame (three bytes per pixel: R, G, B) into bitplanes.
+///
+/// Stays in flash: nothing on the render path loads RGB888 (the display
+/// buffer is RGB565), so this is not worth RAM.
 pub fn pack_rgb888(
     input: &[u8; RGB888_FRAME_BYTES],
     gamma_lut: &[u8; 256],
@@ -70,6 +83,10 @@ pub fn pack_rgb888(
 /// Expand RGB565 channels to 8 bits, replicating the MSBs into the empty
 /// LSBs so full-scale reaches 255 (at the cost of slight nonlinearity),
 /// exactly as `bitplanes.c` does. Returned as LUT indices.
+///
+/// `inline(always)`: must land inside `pack_rgb565`'s RAM section, not as a
+/// flash-resident callee of it.
+#[inline(always)]
 fn expand_rgb565(lo: u8, hi: u8) -> (usize, usize, usize) {
     let r = (hi & 0b1111_1000) as u32;
     let g = (((hi as u32) << 5) | ((lo as u32) >> 3)) & 0b1111_1100;
@@ -83,6 +100,10 @@ fn expand_rgb565(lo: u8, hi: u8) -> (usize, usize, usize) {
 
 /// Scatter one gamma-corrected pixel pair (`[r1, g1, b1, r2, g2, b2]`)
 /// across all bitplanes at byte `index` within each plane.
+///
+/// `inline(always)`: must land inside `pack_rgb565`'s RAM section, not as a
+/// flash-resident callee of it.
+#[inline(always)]
 fn write_pair(channels: [u8; 6], output: &mut [u8; BITPLANE_BUFFER_BYTES], index: usize) {
     for plane in 0..COLOR_BIT_DEPTH {
         let mut packed = 0u8;
