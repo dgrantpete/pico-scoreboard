@@ -504,6 +504,24 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     place to look if headroom is ever needed, and it is now the *only* place
     worth looking — the entire render path is under 2 ms.
 
+    **Implemented, pending on-device measurement (task #20, 2026-08-09).**
+    Tier 1: the pack loop is RAM-resident (`.data.hub75_pack`, ~0.6 KiB in the
+    app image), which also retires this item's XIP-variance warning. Tier 2:
+    fused gamma+bitspread tables — one u64 per raw 5/6-bit channel carrying
+    all eight positioned plane bits, three tables plus a shift for the bottom
+    lanes, 1 KiB, derived inside the driver so `set_gamma` cannot forget to
+    rebuild them. The old pack survives verbatim as
+    `crates/hub75/tests/reference/mod.rs`, with property tests pinning
+    byte-identical output over all 65,536 RGB565 values and five gamma tables.
+    Tier 3 (wide stores) was measured and *declined*: 1.62× on the host, where
+    stores dominate, but the u32 transpose keeps four u64s live and regresses
+    thumbv8m codegen to 94.5 instr/pixel-pair against the shipped 78 — the
+    decision table lives in `crates/hub75/benches/pack.rs`. Projection from
+    the instruction ratio (~165 → 78 instr/pair, calibrated on the measured
+    192 cycles/pair): **~2.1–2.6 ms** against the ≤2 ms finish line, close
+    enough that the frame probe decides. If it lands above the line, the next
+    lever is tier-4 dirty-region packing, deliberately still in this item.
+
 64. **`hub75-diag` still links without flip-link** — the app got the
     stack-overflow guard in Phase 3 (`firmware-rs/app/.cargo/config.toml`, two
     lines, plus `cargo install flip-link` which CI now does). The bench binary

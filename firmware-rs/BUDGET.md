@@ -446,6 +446,18 @@ not depend on what was drawn. That is **~76 % of a drawn frame**, and it is
 - A *skipped* frame costs 0.07 ms, two orders of magnitude less than a drawn
   one. The static-screen skip is worth every line it costs.
 
+> **Pack rebuilt by task #20 (2026-08-09), pending on-device re-measure.** The
+> repack now goes through fused gamma+bitspread tables
+> (`hub75::packing::FusedTables` — 1 KiB in the driver, rebuilt by `set_gamma`
+> itself) and the loop runs from RAM instead of XIP; BACKLOG 63 carries the
+> design record and the declined alternatives. thumbv8m codegen went from ~165
+> instructions per pixel pair (which calibrates against the measured 192
+> cycles/pair) to 78, so the projected `show` lap is **~2.1–2.6 ms**, from
+> 5.25. Expected RAM deltas at the next `nm` pass: `render_loop::POOL` grows
+> ~1 KiB (the tables travel inside the driver), `.data` grows ~0.6 KiB (the
+> RAM-resident loop). Until the frame probe confirms, every 5.25 ms-derived
+> number in this file stands.
+
 `rebuild` (the prepared view, on commit frames only) is 14–16 µs for everything
 except the 255-byte play line, where measuring 255 glyphs to size the flash
 window takes **116 µs** — still a rounding error, and it happens once per
