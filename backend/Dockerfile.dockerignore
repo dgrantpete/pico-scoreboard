@@ -15,10 +15,12 @@
 !backend/Cargo.toml
 !backend/src/**
 !backend/config/**
-# The OTA image directory is COPYed whole and may legitimately be empty, so the
-# directory itself is re-included alongside its contents.
+# The OTA image directories are COPYed whole and may legitimately be empty, so
+# the directories themselves are re-included alongside their contents.
 !backend/app_dist
 !backend/app_dist/**
+!backend/fw_dist
+!backend/fw_dist/**
 
 **/target/
 backend/.maxmind-key
