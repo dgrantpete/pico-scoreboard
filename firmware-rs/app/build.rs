@@ -118,18 +118,33 @@ const DEV_KEYS: &[(&str, &str, &str, &str)] = &[
 /// ignored before it exists (see `.gitignore`) and `dev.example.toml` as the
 /// tracked template.
 ///
-/// Values reach the firmware through `env!`, so they end up as string literals
-/// in `.rodata` of the *local* image. That image is never published: OTA
-/// artifacts are built in CI, where no `dev.toml` exists and every key falls
-/// back to its default.
+/// Values reach the firmware through `env!`, so they end up in the image — as
+/// `.rodata` literals or, at opt-level 3, as instruction immediates that no
+/// grep will find but any disassembler will. And published artifacts are NOT
+/// built in some clean CI: `tools/build.py publish-fw` runs this build on
+/// whatever machine invokes it, dev.toml and all. Drill day 2026-08-16 proved
+/// the consequence — a published image carried the bench wifi passphrase in
+/// recoverable form. So the seed is now keyed off the same signal that already
+/// separates published from bench: `SCOREBOARD_FW_VERSION` set means a
+/// publish, and a publish gets every `DEV_*` key empty, dev.toml or not.
 ///
 /// The parser is deliberately minimal — `key = "value"` under `[section]`
 /// headers, `#` comments — rather than a `toml` build-dependency. It reads five
 /// keys from a file one developer writes by hand.
 fn emit_dev_config() {
     println!("cargo::rerun-if-changed=dev.toml");
+    println!("cargo::rerun-if-env-changed=SCOREBOARD_FW_VERSION");
 
-    let text = fs::read_to_string("dev.toml").unwrap_or_default();
+    // A published artifact must not carry the bench's secrets — see the doc
+    // above. Version set = publish = the seed reads as an absent dev.toml.
+    let publishing = !env::var("SCOREBOARD_FW_VERSION")
+        .unwrap_or_default()
+        .is_empty();
+    let text = if publishing {
+        String::new()
+    } else {
+        fs::read_to_string("dev.toml").unwrap_or_default()
+    };
     let mut section = String::new();
     let mut found: Vec<(String, String, String)> = Vec::new();
 
