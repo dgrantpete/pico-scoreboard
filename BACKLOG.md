@@ -903,3 +903,32 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     `MAX_SLATE`, against the ~744 B the warmer's index spends today (computed
     from the layout, not isolated in the symbol table — it is inside the poller
     arena). The index is the cheaper home unless the list already carries them.
+
+87. **The OTA verify reads-and-hashes at ~103 KB/s, and nobody knows which
+    half is slow.** Drill day measured the DFU walk at 10,635 ms for 1.09 MB
+    (4 KB chunks through `BlockingPartition` + software SHA-512 at
+    opt-level 3). The fed-chunk loop makes the duration harmless, so this is
+    curiosity with a payoff only if verify time ever matters (fleet-scale
+    OTA windows, or a Phase S device that hashes more often): profile whether
+    the flash read path (driver overhead vs. a straight XIP memcpy) or the
+    64-bit-arithmetic hash core dominates, and whether the RP2350's SHA-256
+    accelerator plus a scheme change could collapse it. Wants a bench probe
+    session, not a refactor on a hunch — benchmark before touching it.
+
+88. **The staging pair keeps a second stopped machine that serves stale
+    manifests for ~20 s after every deploy.** Fly's rolling deploy plus the
+    auto-start spare meant three separate drill runs read `current` from a
+    machine still holding the previous image; DRILL.md now documents the
+    wait-and-retry, but the right fix is one of: pin staging to a single
+    machine (`fly scale count 1` is its steady state anyway), or gate the
+    deploy on both machines reporting the new release before `publish-fw`
+    declares success. Prod has the same topology and the same window.
+
+89. **`POST /api/check-update`'s 20 s patience loses the race with the
+    poller's 30 s tick.** First answer after a quiet stretch is
+    `{"status":"updating","message":"The check is still running"}` — the
+    handler gave up waiting, not a verdict, and the SPA shows it as if an
+    update were in flight. Either the handler waits one full poll interval
+    (bounded by config, not a constant), or the poll loop wakes on the
+    request signal instead of meeting it at the next tick — the second is
+    nicer and the signal is already there.

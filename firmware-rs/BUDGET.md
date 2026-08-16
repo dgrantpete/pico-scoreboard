@@ -743,20 +743,27 @@ even though Phase 4 also added an mDNS responder — which took the slot.
 | mDNS packet metadata | 12 slots | 8 rx + 4 tx |
 | `Responder` (name + address) | 40 B | Task argument |
 
-### What is *not* measured yet, and needs hardware
+### Drill day 2026-08-16 — the numbers, measured
 
-Three numbers decide drill day and none of them can be had from a host build.
-They are all logged at ERROR so they survive the default log level:
+The section this replaces existed to be deleted; here is what the hardware
+said. All figures from the seated production unit over real Wi-Fi, captured
+by SWD snapshots of the defmt ring plus `/api/status` polling.
 
-- **The DFU hash.** `ota: hashed N bytes of DFU in M ms`. The one figure that
-  says whether embassy-boot's own two-byte path would have been survivable
-  (see `scoreboard_ota::verify`). Estimated 1–3 s at 1.06 MB with a 4 KB
-  buffer; the un-feedable ceiling is the bootloader's 8 s watchdog.
-- **The swap.** The spike measured ~5 s with *mostly-erased* 1.5 MB partitions
-  and warned time scales with content. At 1.06 MB of programmed image, budget
-  **35–70 s of dark panel**, and the same again for a revert.
-- **The download.** ~1.06 MB over plain HTTP, interleaved with ~266 sector
-  erase-and-programs at ~45 ms each. Expect 30–60 s, of which ~12 s is flash.
+- **The DFU hash: 10,635 ms at 1,094,232 B (~103 KB/s).** PAST the 8 s
+  watchdog ceiling — the estimate's "spans both sides of the limit" resolved
+  on the wrong side, and the single blocking call reset the device at the end
+  of every install, three times, until the attempt record blocked the
+  version. Survivable only because the verify now feeds and yields between
+  4 KB chunks (`ota/install.rs`); the walk's duration is no longer
+  correctness-relevant. For scale: embassy-boot's own two-byte path at ~30×
+  would be five-plus minutes.
+- **The swap: ~29 s** (41 s of dark panel reset-to-HTTP, of which ~12 s is
+  boot + Wi-Fi rejoin). Inside the 35–70 s budget. The revert cycle — swap
+  in, 8 s wedge starvation, revert swap, boot — measured **~86 s of dark**.
+- **The download: 1.09 MB in ~35 s** with smooth 10 %-steps, core 1 dipping
+  to ~53 FPS during chunk writes (one 9 ms overrun frame observed; benign).
+- **Download-to-confirmed, end to end: ~132 s** (35 download + 11 verify +
+  5 countdown + 41 dark + ~30 trial-to-confirm).
 
 ## Caveats to close before the numbers can be trusted end to end
 
@@ -778,12 +785,15 @@ They are all logged at ERROR so they survive the default log level:
   different route: `spawn_core1` arms MSPLIM at the bottom of the static stack
   it is handed. `hub75-diag` still links plain — a bench binary with one shallow
   task and 429.9 KiB of slack, where the guard buys little.
-- **512 KiB vs. 520 KiB.** `memory.x` declares `RAM : LENGTH = 512K` — the
-  contiguous striped banks. The RP2350's other 8 KiB (two non-striped 4 KiB
-  banks) is not in the linker's map, so it cannot be spent without a
-  deliberate section placement. The headroom target is stated against 520 KiB
-  per the spec; the 512 KiB figure is what is actually reachable today, and
-  both clear 40 %.
+- **512 KiB vs. 520 KiB, minus one cell.** `memory.x` declares
+  `RAM : LENGTH = 0x7ff00` — the contiguous striped banks, less the top 256 B
+  the layout crate withholds for the crash breadcrumb (drill day: the
+  bootloader's stack shredded a cell that lived inside the app's map; see
+  `scoreboard_layout::BREADCRUMB_BASE`). The RP2350's other 8 KiB (two
+  non-striped 4 KiB banks) is likewise not in the linker's map, so neither
+  can be spent without a deliberate placement. The headroom target is stated
+  against 520 KiB per the spec; the linked figure is what is actually
+  reachable today, and both clear 40 %.
 - **defmt/RTT is dev-only.** 4,150 B in the app (a 4 KB ring, raised from the
   default because two cores log into it, plus the control block) and 1,078 B in
   `hub75-diag`. Both leave the release image; the deployed build spends its

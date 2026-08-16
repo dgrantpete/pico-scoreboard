@@ -83,6 +83,18 @@ then publish a second one (any trivial change) and force a check:
 curl -X POST http://<device>/api/check-update
 ```
 
+Two operational notes from the first run of this playbook (2026-08-16):
+
+- **The staging edge lies for ~20 s after every deploy.** The staging app has
+  two machines and Fly's rolling deploy leaves one serving the previous
+  manifest briefly; the device's check can land there and answer `current`
+  against a version you just published. Wait half a minute and ask again
+  before suspecting the firmware.
+- **`{"status":"updating","message":"The check is still running"}` is the
+  handler's 20 s patience expiring, not a verdict** — the check is a phase of
+  the poll loop, whose tick can be up to 30 s away. POST again for the real
+  answer.
+
 - [ ] The handler answers `{"status":"updating", ...}` within 20 s
 - [ ] The panel switches to the progress screen and the bar advances
 - [ ] `ota: installing <version> (N bytes) over <old>` in the ring log
@@ -162,8 +174,12 @@ Pull power (not the probe's reset — a real cut) at each of:
 
 ## 7. mDNS
 
-- [ ] `dig -p 5353 @224.0.0.251 scoreboard-rs.local` answers
-- [ ] `http://scoreboard-rs.local/` opens the settings page from a phone and
+The device answers for its configured `device_name` — the production identity
+is plain `scoreboard.local` (the `scoreboard-rs` name retired with the old
+bench split).
+
+- [ ] `dig -p 5353 @224.0.0.251 scoreboard.local` answers
+- [ ] `http://scoreboard.local/` opens the settings page from a phone and
       from a laptop (they use different resolvers; both matter)
 - [ ] Same in setup mode, against the AP
 
