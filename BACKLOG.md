@@ -955,3 +955,24 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     on querier-less networks. Probe scripts in the 2026-08-16 session
     scratchpad; the `dev.toml`-era note "mDNS from this PC flaky, use the
     IP" is this bug.
+
+91. **Smarthome support.** Owner wish-list (2026-08-16, no spec yet): let the
+    scoreboard participate in the house's smart home — the obvious shapes are
+    Home Assistant discovery, MQTT state/command topics (power, brightness,
+    current game), or both, and the right one is a design conversation before
+    it is a crate choice. Worth deciding alongside Phase S planning, since
+    both add always-on outbound connections to the same radio and RAM budget.
+
+92. **Sensor and input state in the frontend.** Surface what the hardware
+    already knows on the settings SPA: the VEML7700's live lux reading (and
+    the brightness the auto-dimmer derived from it), plus button state /
+    last-press info. The device side is nearly free — the values sit in
+    atomics already read by the auto-brightness and input paths — so this is
+    mostly a `/api/status` (or new endpoint) field addition plus SPA work.
+    Pairs naturally with 93.
+
+93. **Frontend cleanup pass.** Owner-reported polish debt (2026-08-16):
+    certain items are not centered — modals especially — and some config
+    items should be removed outright. Needs an inventory pass over the SPA
+    with the owner pointing at offenders before any code; fold 92's additions
+    into the same pass so the layout is reworked once.
