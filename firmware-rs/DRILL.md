@@ -47,6 +47,27 @@ cd ../app && cargo run --release --no-default-features --features link-boot-inte
 > that is the rollback guard working. To drill the update path you must install
 > a `publish-fw` image (step 1), not a `cargo run` one.
 
+**Migrating a device that has ever held another image? Erase the state
+partition first** (learned 2026-08-16, the hard way): a standalone image spans
+`0x10008000`, so the bootloader pair lands with garbage where embassy-boot's
+state machine lives. Write 8 KB of `0xFF` before the first boot of the pair:
+
+```sh
+probe-rs download --chip RP235x --binary-format bin --base-address 0x10008000 <8KB-of-FF file>
+```
+
+Two more traps from the same day:
+
+- **Both link profiles build to the same ELF path.** A `cargo build --release`
+  (standalone) after the boot-integrated build silently replaces the artifact,
+  and flashing it writes a standalone image over the bootloader. Check the
+  entry point (`0x1000Axxx`, not `0x10000xxx`) before any probe flash of the
+  app.
+- **A running bootloader watchdog can kill a 40 s probe flash mid-write** —
+  the flash loader runs on the core, so the pause-on-debug bits do not help.
+  If the pair is live and wedged (no feeder), clear `WATCHDOG.CTRL.ENABLE`
+  over SWD first: `probe-rs write --chip RP235x b32 0x400db000 0x40000000`.
+
 ---
 
 ## 1. The happy path

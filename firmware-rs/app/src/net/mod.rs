@@ -330,11 +330,21 @@ pub async fn bringup(
     // moved to whoever owns them next, and nothing else it holds has a reader.
 }
 
-/// Start the watchdog task, if the configuration asks for one.
+/// Start the watchdog task, if the configuration — or the bootloader — asks
+/// for one.
 ///
-/// Opt-in and off by default, which is `main.py`'s arrangement and the reason
-/// a bench session can halt the core at a breakpoint without the device
-/// rebooting under the debugger a few seconds later.
+/// Under `link-standalone` this is opt-in and off by default, which is
+/// `main.py`'s arrangement and the reason a bench session can halt the core at
+/// a breakpoint without the device rebooting under the debugger a few seconds
+/// later.
+///
+/// Under `link-boot-integrated` the choice was made before this program's
+/// first instruction: the bootloader armed an 8 s watchdog that cannot be
+/// disarmed, so the feeder task is mandatory and `enabled` survives only as
+/// "may the health gate deliberately starve it" — the contract `main.rs`'s
+/// boot documentation states. The first boot-integrated boot on hardware
+/// (2026-08-16) is what proved the distinction: without this arm the device
+/// starved eight seconds after every boot, at the splash.
 ///
 /// `station` decides whether the poller's health counts. It must not in setup
 /// mode: there is no poller there by design, so its health would read as "never
@@ -349,14 +359,21 @@ fn arm_watchdog(spawner: Spawner, watchdog: embassy_rp::watchdog::Watchdog, stat
             config.display.poll_interval_seconds,
         )
     });
-    if !enabled {
+    let bootloader_armed = cfg!(feature = "link-boot-integrated");
+    if !enabled && !bootloader_armed {
         defmt::info!("watchdog: disabled by configuration");
         return;
+    }
+    if !enabled {
+        defmt::info!(
+            "watchdog: feeding the bootloader's watchdog; health gate disabled by configuration"
+        );
     }
     spawner.spawn(defmt::unwrap!(crate::supervise::watchdog(
         watchdog,
         timeout_ms,
         station.then_some(poll_interval_s),
+        enabled,
     )));
 }
 
