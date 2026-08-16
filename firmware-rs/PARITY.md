@@ -1,5 +1,15 @@
 # Pixel parity with the MicroPython firmware
 
+> **What this document is, as of 2026-08-16.** A record, phase by phase, of a
+> port being held to a reference — not a description of the present. Parity was
+> an exit criterion and it has been met; the Rust firmware has shipped and is in
+> soak on the seated unit, and the MicroPython firmware it is compared against
+> is now the gift fleet's only. Sections are dated by the task that produced
+> them and are left in their own tense; where a later run changed the verdict,
+> the change is noted inline rather than folded in. The one section written for
+> the present is **Post-parity divergences** at the end, which is the register
+> of places the firmware now deliberately behaves differently.
+
 Phase 2's exit criterion, and its evidence. Every committed wire fixture is
 rendered by both stacks and compared byte for byte:
 
@@ -255,8 +265,8 @@ the task report.
 | PUT | `/api/config` | **Match**, 2 deviations | Merge, cadence check against the *merged* pair, live-apply, echo the config back. `400 {"error":"invalid_cadence"}` verbatim. Deviations below. |
 | GET | `/api/status` | **Match**, memory fields redefined | Three shapes (`ap`/`station`/`unknown`), every field present in all three, `configured_ssid` only for the two failure reasons. The four memory keys mean something different — see below. |
 | GET | `/api/logs?since=` | **Match** | NDJSON, one `[seq, ts, level, msg]` per line, tail-follow by last seq. Chunked rather than a generator; same bytes. |
-| GET | `/api/logs/previous` | **Seam** | Always `404`. There is no previous-boot record until task #12 writes the panic breadcrumb; MicroPython's file-missing branch produced the same status and body shape, so the SPA already handles it. |
-| POST | `/api/check-update` | **Match** | `501 {"status":"unsupported"}` — precisely the answer `api_routes.py` gave when the OTA attribute seam was absent. Task #15 gives it a real one. |
+| GET | `/api/logs/previous` | **Seam** | Always `404` *as of task #10*. There was no previous-boot record until task #12 wrote the panic breadcrumb; MicroPython's file-missing branch produced the same status and body shape, so the SPA already handled it. Task #12 filled the seam — see that section below, and the breadcrumb transcripts. |
+| POST | `/api/check-update` | **Match** | `501 {"status":"unsupported"}` *as of task #10* — precisely the answer `api_routes.py` gave when the OTA attribute seam was absent. Task #15 gave it a real one, and task #16 exercised it on hardware. |
 | POST | `/api/reboot` | **Match** | Responds, then resets after 1 s. Measured recovery: **10 s** from request to serving again. |
 | POST | `/api/reset-network` | **Match** | Clears the credentials, leaves the live link up — deliberately, as `api_routes.py` did, so the response reaches the browser. |
 | GET | `/` | **Match** | The gzipped SPA with `ETag`, `Cache-Control` and `Content-Encoding: gzip`; `304` on a matching `If-None-Match`. |
@@ -320,6 +330,15 @@ would take the developer's machine off its network. The decision is host-tested
 construction is nine lines in `http::routes::Redirect`; it should be exercised
 once during Phase 3's soak, from a phone, which is the client it exists for.
 
+> **Exercised 2026-08-16, from an iPhone, and it worked** — the captive-portal
+> sheet came up on joining the setup AP, which is the redirect doing its job.
+> What the same run found instead was a *capacity* fault: iOS's login flow is a
+> connection storm, and the two-slot connection pool of the time could not
+> absorb it, so the sheet's fetches died in the backlog behind a stalled writer
+> and the page showed "Connection Error". Fixed by taking the pool to four
+> (108bc85); the redirect itself was never the problem. `http`'s module docs
+> carry the capture.
+
 ## Not carried over
 
 `Response.send_file_buffer_size = 2048` (`main.py:242`) has no counterpart:
@@ -372,7 +391,7 @@ the buffer sizing — is host-tested in `scoreboard-model::poll`.
 | Recovery logged at ERROR with the streak length | **Match** | Bench-validated: `recovered after 7 failed polls`. |
 | **No exponential backoff**; the sleep is always `poll_interval_seconds` | **Match** | |
 | Sleep interrupted by a wake | **Match** | An `embassy_sync` channel rather than an `Event`; see `poller`'s module docs. |
-| Skip machine: armed/rejected, one in flight, sticky spinner, `finally` teardown on every path | **Match** | Host-tested. The *sender* is task #12's — the button loop does not exist yet. |
+| Skip machine: armed/rejected, one in flight, sticky spinner, `finally` teardown on every path | **Match** | Host-tested. The *sender* was task #12's — at the time of this table the button loop did not exist yet; it does now. |
 | `skip_league` stays within the league filter | **Match** | `Slate::advance_league`, host-tested. |
 | `_poll_current` re-fetches every tick, including static screens | **Match** | Bench-validated: three detail fetches per rotation at `poll_interval=5`, `game_rotation=15`. |
 | Detail `404` skips the slot; the next rotation refreshes the list | **Match** | |
@@ -670,8 +689,12 @@ which is the one place 60 FPS narrowed a margin that mattered.
 **Core 1 held 20.0 FPS throughout** — every `supervise::liveness` line in every
 capture above reads `200 ticks in 10 s (20 FPS)`, including the reports either
 side of the flash write and through the watchdog drill. These captures predate
-task #17; the same line reads 600 ticks per 10 s on the current firmware, and
-re-taking them is on the drill-day list rather than done.
+task #17; the same line reads 600 ticks per 10 s on the current firmware.
+**Re-taking them is still not done** — drill day spent its bench time on the OTA
+path. What exists at 60 FPS is task #20's pack measurement (zero overruns across
+14,400+ drawn frames, BACKLOG 63) and drill day's incidental observation that
+core 1 dipped to ~53 FPS during OTA chunk writes with one benign 9 ms overrun
+frame. Neither is a substitute for re-running the scenario cycle.
 
 ## Not yet bench-validated
 
@@ -685,13 +708,31 @@ finger would be — but it cannot tell you the pull-ups are right or that the pi
 are the ones on the board. **This is the largest untested surface task #12
 leaves**, and task #13 should not sign off without a unit that has buttons.
 
+> **Closed 2026-08-08**, the day the firmware reached the real scoreboard. Skip,
+> lock, burst rejection and the league menu were all exercised on the physical
+> switches — and the very first hold of B found a real cross-core bug, the menu
+> opening invisibly, fixed the same hour in `9410db0`. That is this paragraph's
+> own thesis being vindicated: the host tests were right about everything they
+> could see, and ended exactly where the hardware began. BACKLOG 71 has the
+> record.
+
 **A real VEML7700.** Same shape: the driver's register writes and the lux scale
 are transcribed and the curve is host-tested against the Python's values, but no
 part has ever acknowledged on this bench. The absent path is thoroughly tested;
 the present path is not.
 
+> **Also closed 2026-08-08** — the sensor read 10 lux at boot and auto-brightness
+> engaged once the preference left its default of 100. What is *still* unsigned
+> is narrower and is all that remains of BACKLOG 71: the full-range visual sweep,
+> a thumb over the sensor and a flashlight on it, confirming the ramp glides to
+> the 5 % floor and back. The smoothed ramp is the one behaviour only eyes can
+> sign off, and the curve has been replaced since (BACKLOG 73, below).
+
 **The one-week soak.** Task #13. BACKLOG 69's blocker is cleared: a device that
 falls off the network now resets itself and leaves a record saying so.
+*(The two-week Phase 4 soak on the seated unit started 2026-08-16 and is
+running. Whether task #13's separate one-week Phase 3 soak was ever formally
+signed off is not recorded anywhere this document can see.)*
 
 ---
 
@@ -745,6 +786,14 @@ connected and bytes crossed in both directions.
 The residual is stated rather than hidden: an `api.url` typed to a
 reachable-but-refusing address reads as link death. That is a misconfiguration,
 it is visible on the error screen, and the watchdog is opt-in.
+
+*(That last clause needs a qualifier as of drill day, 2026-08-16. `watchdog.enabled`
+is opt-in only under `link-standalone`. Under `link-boot-integrated` — which is
+what ships — the bootloader's 8 s watchdog is already armed and cannot be
+disarmed, so the feeder always runs, and the flag controls only whether this
+gate may starve it. The residual above therefore costs a reboot cycle on a
+shipping unit where it used to cost nothing on a bench one. SPEC §12 carries the
+contract.)*
 
 The clock is stamped in `ApiClient::get`, the single function every request
 funnels through — not at the six call sites — so a seventh endpoint cannot
@@ -837,6 +886,19 @@ malformed answer.
 
 18 host tests, including every truncation of a query and a decompression bomb.
 
+**The responder is right; delivery is not, and that is open.** Drill-day probes
+against the live unit (2026-08-16) had unicast A queries, QU-flagged queries and
+a group-addressed query from the desktop all answered instantly — and Windows
+and iOS resolvers both still go blind a few minutes after boot, with a reboot
+buying a short grace window. The diagnosis points at the device-outward
+multicast leg the AP stops distributing rather than at anything in
+`scoreboard_portal::mdns`, and the symptom predates this firmware — "mDNS from
+this PC flaky, use the IP" is in the July notes. **BACKLOG 90** carries it,
+including the two firmware follow-ups worth doing regardless (negative NSEC
+answers for AAAA, and periodic announcements with a group leave/rejoin to
+refresh IGMP snooping). So the regression this section describes is *closed in
+the firmware* and not yet closed end to end on this LAN.
+
 ### OTA, feature for feature against `ota.py` + `main.py`'s `ota_check_task`
 
 | MicroPython | Here | Status |
@@ -852,9 +914,23 @@ malformed answer.
 | sha256 identity | build-stamped version + sha256 as an integrity check | **changed** — a running image cannot hash itself, so identity is stamped at build time and the hash goes back to being a checksum |
 | TLS + API key | plain HTTP, ed25519 on the artifact, separate API key | **changed**, SPEC §8 |
 
-**Not yet exercised on hardware.** Everything above is host-tested or
-build-verified; the swap, the revert, the trial-boot confirm and the timings
-are task #16's drill day.
+**Exercised on hardware 2026-08-16 — task #16, all eight steps of DRILL.md, on
+the seated unit.** The swap, the revert, the trial-boot confirm and the timings
+are measured and recorded in BUDGET.md's "Drill day" section; the unit has been
+running the Rust firmware off the `stable` channel since, with a two-week soak
+in progress.
+
+The table above survived contact — every ported row behaved as written. What
+drill day changed was not the OTA feature set but four things around it, each
+now in the commit history and in SPEC: the DFU hash had to become a fed,
+yielding chunk loop rather than one blocking call (705c761); the watchdog feeder
+had to run unconditionally under a bootloader (8303b79); the crash breadcrumb
+had to move to an address outside every linker map, because the bootloader's
+stack was shredding it between the panic and the boot that reads it (7f41099);
+and a check landing mid-trial had to stop repainting `/api/status` as `idle`
+(df70e8a). Three of the four are failure modes that only exist *under* a
+bootloader, which is the argument for having drilled at all rather than
+reasoning about it.
 
 # Post-parity divergences
 

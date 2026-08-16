@@ -145,8 +145,8 @@ pub struct Responder {
 }
 
 impl Responder {
-    /// `device_name` is the bare name: `scoreboard-rs`, not
-    /// `scoreboard-rs.local`. A name longer than [`MAX_DEVICE_NAME`] is
+    /// `device_name` is the bare name: `scoreboard`, not
+    /// `scoreboard.local`. A name longer than [`MAX_DEVICE_NAME`] is
     /// truncated, which cannot happen — the same value is the AP's SSID and is
     /// bounded by that.
     pub fn new(device_name: &str, address: [u8; 4]) -> Responder {

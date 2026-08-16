@@ -1,38 +1,28 @@
-# sv
+# Frontend
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
-
-## Creating a project
-
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project in the current directory
-npx sv create
-
-# create a new project in my-app
-npx sv create my-app
-```
+The scoreboard's settings web app: SvelteKit, built to a single inlined,
+gzipped HTML file that the firmware serves off the device itself. It talks to
+the firmware's `/api/*` endpoints (config, network status, WiFi setup, logs) —
+there is no separate host to deploy it to.
 
 ## Developing
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
 ```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+bun install
+bun run dev            # or: bun run dev -- --open
 ```
+
+API calls are relative (`/api/config`, …), so the dev server has no device
+behind them unless you add a Vite proxy. Pages are hash-routed (`/#/settings`),
+which is what the device serves.
 
 ## Building
 
-To create a production version of your app:
-
 ```sh
-npm run build
+bun run build          # writes build/index.html.gz
 ```
 
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+`adapter-static` with `bundleStrategy: 'inline'` and `precompress` produces the
+single file; `tools/build.py` then copies it into the MicroPython firmware
+(`firmware/src/index.html.gz`), and the Rust firmware embeds its own committed
+copy at `firmware-rs/app/assets/index.html.gz` (see that directory's README).

@@ -255,7 +255,7 @@ pub struct Health {
     /// dead app behind Fly's edge answers 502, which is an HTTP answer. The
     /// residual is a hand-typed `api.url` pointing at a reachable-but-refusing
     /// address, which is read as link death — a misconfiguration, visible on
-    /// the error screen, and the watchdog is opt-in.
+    /// the error screen, and the health gate is opt-in (`watchdog.enabled`).
     pub since_answer_s: Option<u32>,
 }
 

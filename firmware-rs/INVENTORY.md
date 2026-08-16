@@ -4,6 +4,15 @@ Compiled 2026-08-07 from firmware/src at commit ae14e35, as the parity reference
 for the Rust rewrite (see SPEC.md). Appendix B's checklist derives from this.
 File:line references are to the MicroPython tree at that commit.
 
+> **This is a frozen snapshot, and its present tense is 2026-08-07's.** Read it
+> that way. Since 2026-08-16 the MicroPython firmware described here is no
+> longer the seated production unit's — that unit runs the Rust firmware behind
+> embassy-boot — and it remains only the gift fleet's, served by the backend's
+> untouched `/app/*` surface. Nothing below has been rewritten to say so,
+> because the document's job is to record what the reference implementation did
+> at the moment the port was measured against it. Where a behaviour was
+> deliberately *not* carried over, PARITY.md is where that decision lives.
+
 
 **Scope:** 15,697 lines of first-party Python across 78 files. `firmware/micropython/` is a vendored upstream MicroPython submodule — ignore it. `firmware/board/PICO2W_SCOREBOARD/` is an out-of-tree board definition (ROMFS enabled, Bluetooth off, lwIP TCP pools raised); `firmware/dist/*.uf2` are build outputs.
 
@@ -563,3 +572,5 @@ API surface actually used: `Microdot()`, `.mount(subapp, url_prefix=)`, `.get/.p
 - `tools/wire_format_check.py` — cross-implementation golden test running the actual firmware parsers under CPython against a from-spec encoder. **Deleted in Phase 0**: `crates/scoreboard-wire` tests both directions over the same goldens, and `backend/testdata/wire/` holds the corpus bytes it used to recompute.
 
 **One incidental finding, not blocking:** `firmware/src/config.json` is gitignored, so the live WiFi password and API key are not in version control — but they are present in the working tree and on every deployed device. Worth confirming the Rust deploy path keeps that file out of any image that gets published or shared.
+
+*(Mostly resolved by construction, with one seam left. The Rust firmware has no filesystem and no `config.json`: credentials live in the flash storage region, written at provisioning, and never appear in an image. What carries the finding forward is `firmware-rs/app/dev.toml` — gitignored, like `config.json`, and read by `build.rs` into compile-time `env!` values that land as string literals in `.rodata`. `build.rs`'s own docstring says that image is never published "because OTA artifacts are built in CI, where no `dev.toml` exists". **That is not how `publish-fw` works**: `tools/build.py`'s `publish_fw` runs `cargo build` in `firmware-rs/app` on whatever machine invoked it, which for both the dev and the stable channel has so far been the developer's. So the answer to "does the Rust deploy path keep that file out of any image that gets published" is currently "only if the person publishing has no `dev.toml`". Worth confirming deliberately rather than inheriting.)*

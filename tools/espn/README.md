@@ -116,8 +116,9 @@ The pipeline for one sport: **collect** (add the league to `targets.yml`;
 the always-on service does the rest — check `status` for distinct-body
 growth and `coverage` for capture quality) → **discover** → curate →
 **schema** + **spec** → **validate** (must print PASS, 100%) → hand-write
-the thin Rust projection (see the presence-table rules below). MLB and NBA
-have been through every step; use them as references.
+the thin Rust projection (see the presence-table rules below). MLB, NBA, WNBA,
+and FIFA World are in the tracked contract
+(`backend/espn_openapi_combined.yaml`); use MLB and NBA as references.
 
 How much data before modeling: all three states observed (`in` requires
 polling during live games), several distinct game days, roughly ≥500

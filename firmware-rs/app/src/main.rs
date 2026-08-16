@@ -1,15 +1,15 @@
 //! The scoreboard firmware: embassy on both cores, the render loop on core 1
 //! driving the HUB75 panel.
 //!
-//! This is the Phase 3 app shell. Core 0 owns every peripheral and all I/O and
-//! stays thin; core 1 runs exactly one task, the render loop. The pure logic —
-//! wire format, state machine, pixels — lives in `crates/*` and never imports
-//! embassy (SPEC §2's crate-boundary rule).
+//! Core 0 owns every peripheral and all I/O and stays thin; core 1 runs exactly
+//! one task, the render loop. The pure logic — wire format, state machine,
+//! pixels — lives in `crates/*` and never imports embassy (SPEC §2's
+//! crate-boundary rule).
 //!
 //! Core 0's work is [`net::bringup`] through the boot and [`poller`] after it:
 //! the poller owns the display state, publishes every snapshot, and is the only
-//! thing that talks to the backend. Storage, inputs and supervision are the
-//! remaining Phase 3 tasks and land beside it.
+//! thing that talks to the backend. Storage, inputs, supervision and OTA sit
+//! beside it.
 //!
 //! # Two PACs, one chip, and a contract that cannot be compiled
 //!

@@ -49,9 +49,11 @@ pub const ERASE_SIZE: u32 = 4096;
 /// future embassy-rp raises this — hence the const assert.
 pub const FLASH_WRITE_SIZE: u32 = 1;
 
-/// Pico 2 W: 520 KB SRAM. The linker gets the 512 KB of contiguous striped
-/// banks; the two 4 KB non-striped scratch banks stay out of the map, so
-/// spending them takes a deliberate section placement (BUDGET.md).
+/// Pico 2 W: 520 KB SRAM. This is the 512 KB of contiguous striped banks; the
+/// two 4 KB non-striped scratch banks stay out of the map, so spending them
+/// takes a deliberate section placement (BUDGET.md). What the linker may
+/// actually hand out is [`LINKED_RAM_SIZE`], which stops below the breadcrumb
+/// cell reserved at the top.
 pub const RAM_BASE: u32 = 0x2000_0000;
 pub const RAM_SIZE: u32 = 512 * 1024;
 

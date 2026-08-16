@@ -111,3 +111,47 @@ was unknowingly built for this.
 3. Streaming tokenizer audit → adopt or write.
 4. `png-stream` (SPEC §14) for logos.
 5. TLS bring-up (embedded-tls via reqwless) against the mock first, then ESPN.
+
+## State of play, 2026-08-16 — re-read after drill day
+
+The owner asked again the evening the OTA drill finished, which is the right
+moment: **prerequisite 1 is done.** All eight drill steps passed on the seated
+unit — rollback, attempt records, three power cuts, the no-backend confirm
+deadline — so "a parse break is an OTA cycle" is now a proven recovery path
+rather than a plan. Prerequisites 2–5 remain untouched.
+
+Three things the drill taught that this document should carry:
+
+- **Distrust the crypto estimates the way the hash estimate earned.** The
+  verify hash was estimated at 1–3 s and measured at **10,635 ms** (1.09 MB,
+  ~103 KB/s read-and-hash, opt-level 3) — past the 8 s watchdog and fatal
+  until the loop learned to feed. The TLS handshake figure above (0.5–1 s
+  software P-256) is the same species of paper number. Budget seconds, plan
+  the keep-alive amortization as load-bearing rather than nice, and measure
+  before believing (BACKLOG 87 is the profiling instrument).
+- **The wall clock is really two questions, and ESPN answers neither.** The
+  device's one `GET /time` returns the epoch *and the UTC offset*, the offset
+  from the backend's GeoIP lookup — that is what the MaxMind database is for.
+  Direct mode replaces the epoch trivially (SNTP over UDP costs one transient
+  socket; `SOCKETS = 10` has room). Nothing upstream answers "what is this
+  living room's offset," so the honest replacement is a timezone setting in
+  the SPA — one more reason the shared transform should treat the offset as
+  configuration, not discovery.
+- **OTA lives on the backend too.** `/fw/manifest` + `/fw/image` are backend
+  routes. Backend-optional therefore means OTA-optional unless the artifacts
+  move to any dumb HTTPS host — the ed25519 signature carries the trust, not
+  the transport — at which point TLS-to-that-host joins the scope.
+
+Which sharpens the scope sentence: "remove the Rust backend" decomposes into
+(a) **the device not needing it** — games, logos, time — which is Phase S
+proper and achievable, and (b) **deleting the deployment**, which stays
+blocked on the gift fleet (wire v2 + `/app/*`) and on rehoming `/fw`. (a) is
+the goal; (b) is a separate decision for a later era, exactly as the fleet
+economics section already argued.
+
+Budget check against today's measured device: ~230 KB free after drill day's
+four-connection pool, against the ~70–80 KB net delta estimated above — fits
+twice over. Sequencing stands as written, with one note: the `tools/espn`
+mock speaks plain HTTP, so the TLS bring-up (step 5) needs a TLS terminator
+in front of the mock — or a disposable HTTPS echo target — before pointing at
+ESPN itself.

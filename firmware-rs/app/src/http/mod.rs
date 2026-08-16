@@ -3,7 +3,7 @@
 //!
 //! Port of `api_routes.py` plus `main.py`'s two catch-all handlers, on
 //! picoserve instead of Microdot. [`routes`] is the surface itself; this module
-//! is the sockets, the buffers and the two tasks that own them.
+//! is the sockets, the buffers and the four tasks that own them.
 //!
 //! # Four connections, and why that is a number and not a default
 //!
@@ -32,8 +32,8 @@
 //! sleeping mid-request — parked their handler task forever and permanently
 //! pinned one of lwIP's few sockets. They accumulated over days until inbound
 //! connections were silently dropped while the rest of the firmware stayed
-//! healthy. With two sockets instead of lwIP's several, this firmware would
-//! reach that state twice as fast.
+//! healthy. With four sockets instead of lwIP's several, this firmware would
+//! reach that state sooner.
 //!
 //! picoserve's [`Timeouts`] cover the same failure in finer grain, and they are
 //! set here rather than left at their defaults because the defaults are tuned
@@ -42,13 +42,13 @@
 //! | Timeout | Ours | Default | Why |
 //! |---|--:|--:|---|
 //! | `start_read_request` | 10 s | 5 s | The leak itself: a connection that never says anything. Ten seconds is longer than any real client's think time and four hundred times shorter than the failure. |
-//! | `persistent_start_read_request` | 2 s | 1 s | Keep-alive idle. Bounds how long one client can hold a slot the other needs. |
+//! | `persistent_start_read_request` | 2 s | 1 s | Keep-alive idle. Bounds how long one client can hold a slot another needs. |
 //! | `read_request` | 5 s | 3 s | A request that stops halfway. |
 //! | `write` | 10 s | 1 s | **Per write call, not per response.** It fires when the client stops draining, and the SPA is a 54 KB body: on marginal Wi-Fi a phone can legitimately stall a window for longer than a second, and the default would abort the download of the page it was asking for. |
 //!
 //! Keep-alive is on, which picoserve's docs make conditional on having more
-//! than one socket — we have exactly two, and the 2 s idle bound is what keeps
-//! the second client's wait short.
+//! than one socket — we have four, and the 2 s idle bound is what keeps the
+//! next client's wait short.
 
 pub mod routes;
 pub mod scratch;
@@ -105,7 +105,7 @@ async fn serve(id: usize, stack: Stack<'static>) -> ! {
     // Each task builds its own router rather than sharing one out of a
     // `StaticCell`. The router is a tree of stateless handlers — every route
     // reads a global or the request, and none of them captures anything — so
-    // the two copies are function pointers, not duplicated state. Sharing one
+    // the copies are function pointers, not duplicated state. Sharing one
     // would mean naming its type, and the type of a `Router` built by chained
     // `.route()` calls is only expressible as `impl PathRouter`, which cannot
     // be an associated type on stable (picoserve's own `AppBuilder` docs say
@@ -117,8 +117,8 @@ async fn serve(id: usize, stack: Stack<'static>) -> ! {
         read_request: Duration::from_secs(5),
         write: Duration::from_secs(10),
     })
-    // Two sockets, so one client holding a connection open cannot lock the
-    // other out for longer than the idle timeout above.
+    // Four connections, so one client holding a connection open cannot lock
+    // the others out for longer than the idle timeout above.
     .keep_connection_alive();
 
     // Task-local, so each connection's buffers live in its own arena rather

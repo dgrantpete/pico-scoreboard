@@ -976,3 +976,18 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     items should be removed outright. Needs an inventory pass over the SPA
     with the owner pointing at offenders before any code; fold 92's additions
     into the same pass so the layout is reworked once.
+
+94. **RAM headroom is 36.6 %, under the >=40 % rule — re-earn it.** The
+    doc-sweep re-measure (2026-08-16, boot-integrated 108bc85 ELF) put RAM
+    statics at 337,712 B, 18,224 B past the stated ceiling; the cause is the
+    four-connection HTTP pool (+50,498 B — picoserve's arena is mostly future
+    and every connection instantiates the whole router), which was the right
+    trade for the captive-portal storm but was priced at half its real cost.
+    Nothing is starved (core-0 stack high-water 25,816 B against 186 KB), but
+    Phase S wants 70-80 KB and the target exists to keep that possible. The
+    two already-priced levers, neither taken: fold the Store into the snapshot
+    channel's back buffer (2,848 B, BUDGET's §4-correction section), and halve
+    the crest pool to 16 slots (18,432 B, costs re-fetch churn on college-
+    football Saturdays). A third worth pricing: whether picoserve's arena
+    multiplier shrinks if the router type is boxed once instead of
+    instantiated per task. Measure before choosing, per house rule.

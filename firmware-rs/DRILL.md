@@ -1,13 +1,23 @@
 # Drill day: taking the Rust OTA path onto hardware
 
-Task #16's runbook. Everything in it needs a device in hand and none of it has
-been run — Phase 4 shipped host tests, build verification and a backend
-round-trip, and deliberately stopped at the edge of the hardware.
+Task #16's runbook. **Run in full on 2026-08-16 — all eight steps, on the seated
+unit.** What follows is kept as the procedure, not as a to-do list: it is what to
+re-run before any gift unit migrates, and the notes marked *(drill day)* are what
+the hardware said the first time.
 
-**Read this first:** the living-room unit at `192.168.50.57` is the only Rust
-device and it is *in service*. Nothing here should be run against it until the
-bench sequence below has passed on a spare, because step 2 deliberately bricks
-an image and step 5 deliberately starves a watchdog.
+**Outcome.** The Rust firmware is the shipping firmware on the living-room unit,
+boot-integrated behind embassy-boot, on published `2026.08.16-108bc85` off the
+`stable` channel, with a two-week soak started that day. The measured numbers
+are in BUDGET.md's "Drill day 2026-08-16" section. Five firmware bugs were found
+and fixed in the running — the watchdog contract under a bootloader (8303b79),
+the blocking DFU hash (705c761), the breadcrumb's address (7f41099), a mid-trial
+`/api/status` repaint (df70e8a), and the two-connection HTTP pool (108bc85) —
+which is roughly one per two steps, and the argument for having done it before
+the gift fleet rather than after.
+
+**Read this first, still.** The living-room unit at `192.168.50.57` is *in
+service*. Step 2 deliberately bricks an image and step 5 deliberately starves a
+watchdog; both were run on a spare first, and should be again.
 
 ---
 
@@ -88,23 +98,33 @@ Two operational notes from the first run of this playbook (2026-08-16):
 - **The staging edge lies for ~20 s after every deploy.** The staging app has
   two machines and Fly's rolling deploy leaves one serving the previous
   manifest briefly; the device's check can land there and answer `current`
-  against a version you just published. Wait half a minute and ask again
-  before suspecting the firmware.
+  against a version you just published. It cost three separate drill runs before
+  it was recognised. Wait half a minute and ask again before suspecting the
+  firmware. Production has the same topology and the same window — **BACKLOG 88**
+  is the fix.
 - **`{"status":"updating","message":"The check is still running"}` is the
   handler's 20 s patience expiring, not a verdict** — the check is a phase of
   the poll loop, whose tick can be up to 30 s away. POST again for the real
-  answer.
+  answer. The SPA renders it as though an update were in flight, which is
+  **BACKLOG 89**.
 
 - [ ] The handler answers `{"status":"updating", ...}` within 20 s
 - [ ] The panel switches to the progress screen and the bar advances
 - [ ] `ota: installing <version> (N bytes) over <old>` in the ring log
 - [ ] **Record `ota: hashed N bytes of DFU in M ms`.** This is the number the
-      whole verify design turns on — see `scoreboard_ota::verify`. If M is
-      comfortably under 8,000 the design has margin; if it is anywhere near it,
-      say so loudly, because embassy-boot's own two-byte path would have been
-      ~30× worse.
+      whole verify design turns on — see `scoreboard_ota::verify`.
+      *(Drill day: **10,635 ms at 1,094,232 B**, past the 8 s bootloader
+      watchdog, and the single blocking call reset the device at the end of
+      every install — three times, until the attempt record refused the version.
+      The fix is 705c761: the hash is a chunk loop that feeds the watchdog and
+      yields between 4 KB reads, so M no longer has to be under 8,000 for the
+      install to survive. It is still worth recording, because it is the only
+      measurement of the flash read path there is — BACKLOG 87.)*
 - [ ] The 5→1 countdown, then the panel goes dark
 - [ ] **Time the dark period.** Budgeted 35–70 s; it is the swap.
+      *(Drill day: **41 s** of dark reset-to-HTTP, of which ~12 s is boot plus
+      Wi-Fi rejoin, so the swap itself is ~29 s. Download-to-confirmed end to
+      end was ~132 s.)*
 - [ ] The bootloader logs `Swapping` at trace
 - [ ] The app comes back and logs `ota: TRIAL boot of <new version>`
 - [ ] `/api/status` shows `"ota_state": "trial"`
@@ -163,14 +183,18 @@ Pull power (not the probe's reset — a real cut) at each of:
       crash, which is the difference between "this image is broken" and "this
       image had a bad afternoon"
 
-## 6. The one that has never been exercised at all
+## 6. The one that had never been exercised at all
 
 - [ ] Let the device sit with the backend unreachable through a whole trial
       window. At 600 s it should confirm anyway and log
       `ota: confirming at N s with no backend answer`. The alternative — an
       image that stays armed for days and reverts at the next power cut — is
-      the failure this deadline exists to prevent, and it has only ever been
-      reasoned about.
+      the failure this deadline exists to prevent.
+      *(Drill day: it fired at **exactly 600 s**. This step also found the
+      bug in df70e8a — the settle-delay check landing inside the trial window
+      repainted `/api/status` as `idle` while the image was still armed and
+      unconfirmed, which is precisely the state an operator has to be able to
+      see. Watch `ota_state` through the whole window, not just at the ends.)*
 
 ## 7. mDNS
 
@@ -183,6 +207,14 @@ bench split).
       from a laptop (they use different resolvers; both matter)
 - [ ] Same in setup mode, against the AP
 
+*(Drill day: the responder answers correctly and promptly — unicast, QU-flagged
+and group-addressed queries all returned instantly — and **resolution still dies
+minutes after boot** on both Windows and iOS while unicast keeps working. The
+diagnosis points at the device-outward multicast leg the AP stops distributing
+rather than at the firmware, and the symptom predates the Rust firmware. This is
+**BACKLOG 90**, open; it did not block the migration because the IP works and
+the setup flow never depends on the name.)*
+
 ---
 
 ## Only after all of the above
@@ -193,23 +225,30 @@ bootloader flashed by probe and its storage region is at the same address
 either way (the layout crate's `neither profile reaches into storage` test is
 what guarantees the configuration survives).
 
-- [ ] Bootloader + published boot-integrated image, by probe
-- [ ] Confirm the stored wifi credentials and league selection survived
-- [ ] Switch it to `channel: stable` and publish there
-- [ ] Two-week soak before any gift unit is considered
+- [x] Bootloader + published boot-integrated image, by probe
+- [x] Confirm the stored wifi credentials and league selection survived
+- [x] Switch it to `channel: stable` and publish there
+- [ ] Two-week soak before any gift unit is considered — **started 2026-08-16**,
+      running now. The gift fleet stays on MicroPython and on the backend's
+      `/app/*` surface until it finishes.
 
 ## What to write down
 
-Drill day's output is four numbers and one verdict:
+Drill day's output is four numbers and one verdict. They belong in BUDGET.md's
+"Drill day" section. What 2026-08-16 recorded:
 
-1. DFU hash time at ~1.06 MB (ms)
-2. Swap time, first install (s)
-3. Swap time, revert (s)
-4. Total dark-panel time, download to confirmed (s)
-5. Whether the 8 s bootloader watchdog ever came close to firing outside
-   step 2 — if it did, the boot sequence has a blocking step nobody has
-   accounted for, and `firmware-rs/boot`'s module docs list the ones that are
-   known.
-
-They belong in BUDGET.md's "What is *not* measured yet" section, which exists
-to be deleted.
+1. **DFU hash time** — 10,635 ms at 1,094,232 B (~103 KB/s)
+2. **Swap time, first install** — ~29 s (41 s of dark panel, reset to HTTP)
+3. **Swap time, revert** — ~86 s of dark, for the whole revert cycle
+4. **Total dark-panel time, download to confirmed** — ~132 s end to end
+5. **Did the 8 s bootloader watchdog come close to firing outside step 2?**
+   **Yes — it fired.** The DFU hash was a single blocking call that took
+   10.6 s, so every install ended in a reset; and separately, the app under
+   `link-boot-integrated` was not running its feeder at all unless
+   `watchdog.enabled` was set, which is the flag meaning something different
+   under a bootloader than it did standalone. Both are fixed (705c761,
+   8303b79). The lesson generalises and is worth carrying into the next drill:
+   **every blocking step of the boot and the install is on an 8 s clock that
+   cannot be disarmed.** `firmware-rs/boot`'s module docs list the ones that
+   are known; the storage region's one-time erase was the other near miss, and
+   it now feeds between sectors.

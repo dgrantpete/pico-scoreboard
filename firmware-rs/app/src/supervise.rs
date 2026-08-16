@@ -166,11 +166,10 @@ pub fn record_static_ram(bytes: u32) {
 
 pub fn memory() -> Memory {
     let static_ram = STATIC_RAM.load(Ordering::Relaxed);
-    // The flash figures are the linked image's, which the running image cannot
-    // read off itself — nothing records its own length. They come from the
-    // partition map plus the one number `build.rs` could not know either, so
-    // for now the image size is reported as the partition's used extent being
-    // unknown: see PARITY.md. `flash_free` still answers the useful half.
+    // The flash figures are the linked image's: `image_bytes` derives the
+    // occupied extent from the linker's own symbols (see its doc), and the
+    // partition bound comes from the layout crate, so used and free cannot
+    // disagree with the image that is actually running.
     let partition = scoreboard_layout::ACTIVE_SIZE;
     Memory {
         static_ram,

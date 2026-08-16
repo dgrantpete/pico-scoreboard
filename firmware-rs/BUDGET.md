@@ -21,36 +21,52 @@ no heap to absorb a mistake.
 |---|---:|---|---|
 | HUB75 BCM framebuffers ×2 + driver statics | 65,609 | **MEASURED** | `crates/hub75`. 2 × 32,768 B bitplane buffers + 64 B timing stream + 8 B DMA pointer words + 1 B construction guard. See the breakdown below. |
 | `Hub75Display` RGB565 frame buffer | 16,384 | **MEASURED** | 128 × 64 × 2 B. App-owned, not a driver static — the driver never allocates the drawing surface. Costs 16,385 B as linked (`ConstStaticCell` appends a 1 B taken flag). |
-| Gamma LUT | 256 | **MEASURED** | `[u8; 256]` **inside `Hub75Driver`**, not a separate static. It lands in whichever arena owns the driver — do not add it again to the core-1 line. |
+| Gamma LUT + fused pack tables | — | **MEASURED, inside the core-1 line** | The 256 B `[u8; 256]` and task #20's 1 KiB `FusedTables` both live **inside `Hub75Driver`**, not in statics of their own, so they land in whichever arena owns the driver. That is the core-1 render-loop arena below, and this row is a pointer rather than a number so they are not counted twice. |
 | Snapshot handoff — `SnapshotChannel` | 8,552 | **MEASURED** | `crates/scoreboard-model`. Three `ScoreboardSnapshot` slots of 2,848 B + 2 B of index + padding. Three, not two — see the correction below. |
 | `Store` (core-0 authoritative state) | 2,888 | **MEASURED** | `scoreboard-app`'s `STORE`. One more snapshot plus the startup flag and the soccer stale-clock guard, plus `StaticCell`'s 1 B taken flag and padding. A `static` rather than a task local because it is *lent* to `net::bringup` for the boot screen and then moves to the poller — see the state-sharing note below. |
-| Poller task arena | 16,048 | **MEASURED** | `scoreboard-app`, tasks #11 and #18. The `Slate` (4,596 B — 160 entries × (source, state, 20-byte game id), the rotation order and 8 league descriptors, sized for a college-football Saturday alongside a full MLB slate), the 4,096 B receive buffer, eight per-source ETags, the crest directory's 32 keys and LRU, the warm index's 16 game records, and the futures of a whole tick: a detail fetch with two crest fetches nested inside it, each carrying its own 256 B URL. It grew 2,184 B for the 32-slot pool — 1,536 B of it is the directory's key array, which is 32 × `Option<CrestKey>` at 41 bytes plus a `usize` length. |
+| Poller task arena | 16,096 | **MEASURED** | `scoreboard-app`, tasks #11 and #18. The `Slate` (4,596 B — 160 entries × (source, state, 20-byte game id), the rotation order and 8 league descriptors, sized for a college-football Saturday alongside a full MLB slate), the 4,096 B receive buffer, eight per-source ETags, the crest directory's 32 keys and LRU, the warm index's 16 game records, and the futures of a whole tick: a detail fetch with two crest fetches nested inside it, each carrying its own 256 B URL. It grew 2,184 B for the 32-slot pool — 1,536 B of it is the directory's key array, which is 32 × `Option<CrestKey>` at 41 bytes plus a `usize` length. |
 | Crest pool (core 1) + its channel | 39,201 | **MEASURED** | `CRESTS` 36,865 B — thirty-two 24×24 RGB565 slots, owned by core 1 — plus `logos::UPDATES` 2,336 B, the two-deep channel core 0 ships new crest pixels over. The channel does not scale with the pool: it carries one slot's pixels at a time and two of them is still enough. See the two notes below — one on why the pool is split across the cores (the alternative costs more *and* tears), one on why thirty-two is the number. |
 | Poller TCP socket | 2,050 | **MEASURED** | `api_client::TCP_STATE`: one connection, 1,536 B receive + 512 B send. One, because a request is never concurrent with another — the client takes `&mut self`. |
 | cyw43 driver state | 17,928 | **MEASURED** | `CYW43_STATE` 12,696 B (the driver's ioctl state and its 4 + 4 packet channel) plus the runner task's 5,232 B arena. Came in 9 % over SPEC §11's 16 KB guess. |
-| embassy-net stack + captive-portal sockets | 12,868 | **MEASURED** | `StackResources<8>` 4,584 B + the net runner's 136 B arena, plus the two AP-mode responders: 4,100 B of payload buffers, 400 B of packet metadata, and 3,920 B of task arenas (the DHCP and DNS scratch live in the arenas, not on a stack). **The TCP socket buffers are not in this line** — poller, HTTP ×2 and OTA are tasks #10/#11/#15 and bring their own. |
-| Provisioning (`net::bringup` arena) | 1,528 | **MEASURED** | The scan's 64-entry BSSID table and the credentials. It was 4,400 B until the poller landed: the boot-time `Store` was a local of this task, and making it a `static` that bringup borrows removed 2,872 B rather than paying for a second copy in the poller's arena. Task-arena, so it is statically allocated but has no reader after the boot. |
-| HTTP server — sockets, request buffers, task arenas | 50,114 | **MEASURED** | `scoreboard-app`, task #10. 43,968 B of task arena for the two connections (21,984 each: 1,536 B TCP receive + 2,920 B TCP send + 4,096 B request buffer, and picoserve's request-handling future around them) plus 6,146 B of pooled response scratch. **The arena figure is dominated by the future, not the buffers** — see the multiplier note below before adding a route. |
-| Receive/scratch buffers (OTA chunk) | ~16,384 | ESTIMATE | Task #15's, all that is left of SPEC §11's 40,960 B guess: the HTTP server's share and the poller's have both moved to measured lines above. The poller's is 4,096 B, *one* buffer for every response — see the derivation note below. |
+| embassy-net stack + captive-portal sockets | 13,892 | **MEASURED** | `StackResources<10>` **5,336 B** + the net runner's 136 B arena, plus the two AP-mode responders: 4,100 B of payload buffers, 400 B of packet metadata, and 3,920 B of task arenas (the DHCP and DNS scratch live in the arenas, not on a stack). The socket table was 4,584 B at `StackResources<8>`; 10 is the shipped size, covering an eight-socket worst case with two spare so a new consumer is a budget line and not a rewrite. **The TCP socket buffers are not in this line** — poller and HTTP ×4 bring their own, and OTA reuses the poller's. |
+| mDNS responder (`net::mdns`) | 4,026 | **MEASURED** | Phase 4's `<device_name>.local` responder: a 1,776 B task arena, 1,537 B + 513 B of UDP payload buffers, and 200 B of packet metadata. It runs in both station and setup mode. Its socket cost nothing — it took the slot §7.1 had reserved for OTA. |
+| Provisioning (`net::bringup` arena) | 1,656 | **MEASURED** | The scan's 64-entry BSSID table and the credentials. It was 4,400 B until the poller landed: the boot-time `Store` was a local of this task, and making it a `static` that bringup borrows removed 2,872 B rather than paying for a second copy in the poller's arena. Task-arena, so it is statically allocated but has no reader after the boot. |
+| HTTP server — sockets, request buffers, task arenas | 100,612 | **MEASURED** | `scoreboard-app`, task #10, **re-measured at four connections (108bc85, drill day)**. 88,320 B of task arena — 22,080 each for four connections (1,536 B TCP receive + 2,920 B TCP send + 4,096 B request buffer, and picoserve's request-handling future around them) — plus 12,292 B of pooled response scratch, one 3,072 B slot per connection. It was 50,114 B at two connections. **The arena figure is dominated by the future, not the buffers** — see the multiplier note below before adding a route, and the four-connections note for why the count is what it is. |
+| Receive/scratch buffers (OTA chunk) | 0 | **MEASURED** | The last of SPEC §11's 40,960 B guess, and it turned out to be nothing. An update is a *phase of the poll loop*, so the poller's 4,096 B receive buffer is idle for the whole download and splits into a 2,048 B header half and a 2,048 B chunk half; the `BlockingFirmwareUpdater`'s own aligned buffer is **one byte**, on the stack. See "The download costs zero RAM" below. |
 | Glyph/font tables + compiled sprites | 0 | **MEASURED** | `crates/scoreboard-render`. **9,538 B of flash, 0 B of RAM** — read out of the crate's own object code, not asserted. Breakdown and the command below. |
-| Core-1 render-loop task arena | 1,384 | **MEASURED** | `scoreboard-app`. The loop's `LoopState` — frame rail, prepared view, skip memo, probe — plus the display and everything else held across the frame's await. It lives in the **task arena, not on the core-1 stack**: an embassy task's future is a static. See the correction below. The crest pool it now owns is a `static` it borrows, so it is the line above and not this one. |
-| Input, brightness and watchdog task arenas | 856 | **MEASURED** | `scoreboard-app`, task #12. `supervise::watchdog` 328 B, `inputs::run` 264 B, `brightness::auto_brightness` 264 B. All three are small because the state that could have been large is not theirs: the button fold is two 24 B structs, the brightness chain is three floats, and the watchdog holds a counter. The 3 KB storage buffer is a **stack** local of a plain `fn`, deliberately — see the note below. |
-| Crash breadcrumb — RAM cell + served copy | 468 | **MEASURED** | `supervise::CELL` 240 B in `.uninit` (magic, length, checksum and a 226 B encoded record; the section the startup code does not clear, which is what makes it survive a reset) plus `PREVIOUS` 228 B, the decoded copy `/api/logs/previous` serves so that opening the logs page does not park core 1 to read flash. |
+| Core-1 render-loop task arena | 3,448 | **MEASURED** | `scoreboard-app`. The loop's `LoopState` — frame rail, prepared view, skip memo, probe — plus the display and everything else held across the frame's await. It lives in the **task arena, not on the core-1 stack**: an embassy task's future is a static. See the correction below. The crest pool it now owns is a `static` it borrows, so it is the line above and not this one. It was 1,384 B until task #20's repack: the driver travels in this arena, so `hub75::packing::FusedTables` (1 KiB) and its alignment came here rather than to a `static` of their own. |
+| Input, brightness and watchdog task arenas | 888 | **MEASURED** | `scoreboard-app`, task #12. `supervise::watchdog` 360 B, `inputs::run` 264 B, `brightness::auto_brightness` 264 B. All three are small because the state that could have been large is not theirs: the button fold is two 24 B structs, the brightness chain is three floats, and the watchdog holds a counter. The 3 KB storage buffer is a **stack** local of a plain `fn`, deliberately — see the note below. |
+| Crash breadcrumb — served copy | 228 | **MEASURED** | `supervise::PREVIOUS`, the decoded copy `/api/logs/previous` serves so that opening the logs page does not park core 1 to read flash. **The 240 B RAM cell is no longer in this budget**: since drill day it lives at `scoreboard_layout::BREADCRUMB_BASE`, in the top 256 B that no profile's linker map contains — reserved, not allocated. See the caveat at the end of this file. |
 | Storage map | ~32 | **MEASURED** | `sequential-storage`'s `MapStorage` over an `Uncached` cache: a flash range, a `PhantomData`, and embassy-rp's `Flash` (which is itself a `PhantomData` plus an optional DMA channel). Under the 512 B reporting floor. The 3 KB scratch every operation needs is a stack local. |
-| Core-0 task arenas (remaining) | ~2,048 | ESTIMATE | The OTA task (#15). Everything else on core 0 now has a measured line. |
-| Core-0 stack | — | **MEASURED (not a fixed line)** | With flip-link the stack is the whole remainder below the statics: **266,536 B** today, growing *down*, guarded by MSPLIM at the bottom of RAM. It is not a number to budget; it is what the rest of the table does not spend. **High-water 25,816 B (9.7 %)** over a run that included a config save, whose 3 KB buffer is a stack local. The 415,520 B this line read before task #12 was stale — it predated the HTTP server's 50 KB and the poller's 13 KB, and 415,520 + 248,180 is more RAM than the chip has. |
+| Core-0 task arenas (remaining) | 240 | **MEASURED** | The last estimate in this table is gone, and it was never spent: there is no OTA *task*. An update is a phase of the poll loop and lives in the poller's arena. What remains is `supervise::liveness` 104 B, `net::watch_link` 72 B and `supervise::reboot_on_request` 64 B. |
+| Core-0 stack | — | **MEASURED (not a fixed line)** | With flip-link the stack is the whole remainder below the statics: **186,304 B** today (`_stack_start = 0x2002_d7c0`), growing *down*, guarded by MSPLIM at the bottom of RAM. It is not a number to budget; it is what the rest of the table does not spend, which is why it shrinks every time a static grows — it read 266,536 B before drill day added 50 KB of HTTP connections. The last published high-water is **25,816 B**, taken against the 266,536 B stack (9.7 % then, 13.9 % of what is left now) over a run that included a config save, whose 3 KB buffer is a stack local. **Not re-taken since drill day**; the depth should not have moved, but the denominator did. |
 | Core-1 stack | 8,192 | **MEASURED** | Sized 8 KB by `scoreboard-app`; **high-water 3,348 B (41 %)** over a run of real backend data — up from 2,480 B under the demo, because the demo never drove the pregame screen. The setup screen, which is the only QR encoder caller and therefore the deepest frame, is still not among them. Guarded by MSPLIM at its bottom. See the core-1 notes below. |
 | Ring log | 28,812 | **MEASURED** | `crates/scoreboard-log`, task #10. 200 slots × 144 B — a `u32` sequence, a `u32` timestamp, a level byte and a 128-byte bounded message, padded. SPEC §11's ~8 KB guess assumed a shorter message; 128 B was chosen against the measured distribution of the 87 log call sites in `firmware/src` (median 43 B, max 116 B), where 64 B would have truncated real lines. It is `.bss`, not `.data` — see the note below. |
-| Misc statics | ~2,100 | **MEASURED** | embassy-rp's GPIO/DMA/PIO wakers, the time driver, the critical-section lock, the clock cache, the PAC singleton flags, and task #10's small publishers (`net::hosts`, `net::status`, the config cell, the stack-watermark atomics). |
-| **Projected total** | **294,094** | | **287.2 KiB** |
+| Misc statics | ~2,900 | **MEASURED** | embassy-rp's GPIO/DMA/PIO wakers, the time driver, the critical-section lock, the clock cache, the PAC singleton flags, task #10's small publishers (`net::hosts`, `net::status`, the config cell, the stack-watermark atomics), the live display settings, and — new with task #20 — `hub75::packing::pack_rgb565`'s 562 B, which is code that lives in `.data` because the pack loop runs from RAM rather than XIP. |
+| **Measured total** | **337,712** | | **329.8 KiB** — read out of a real ELF, not summed from this table; see the breakdown below |
 
-**Headroom: 44.8 %** (238,386 B free of 532,480 B). Against the 512 KiB the
-linker actually declares — see the caveat below — it is 43.9 %. The ≥ 40 %
-target still holds, but the margin is no longer generous: two lines are
-estimates claiming 18,432 B between them, and there are **25,394 B** between the
-projection and the 319,488 B ceiling. That was 55,266 B before the crest pool
-grew. Anything that wants a five-figure static from here on should expect to
-argue for it.
+**Headroom: 36.6 %** (194,768 B free of 532,480 B). Against the 524,032 B the
+linker actually declares — see the caveat below — it is 35.6 %.
+
+**That is under the ≥ 40 % target, and it is the first time this file has had to
+say so.** Statics alone are 18,224 B past the 319,488 B ceiling. The cause is
+one line and it is not a surprise: the HTTP server went from two connections to
+four on drill day and grew 50,498 B doing it, because picoserve's arena is
+mostly *future* and each connection instantiates the whole router. That is
+44 KB of the 53 KB the projection rose by since the last measurement.
+
+The honest reading is that the target has been spent, not blown: nothing is
+starved — core 0 still has 186,304 B of stack against a 25,816 B high-water, and
+the panel, the poller and the crest pool are untouched — but the ≥ 40 % cushion
+that existed to absorb the *next* thing is gone. Two levers are already written
+down and priced. The cheap one is the fourth snapshot copy: folding `Store` into
+the channel's back buffer recovers 2,848 B (see the §4 correction). The large
+one is the crest pool, at 27,648 B for the last twenty-four slots. Neither
+should be pulled on this measurement alone; what should happen first is the
+decision the four-connection change deferred — whether 3,072 B of response
+scratch per connection is the right slot size now that there are four of them.
+Anything that wants a five-figure static before then has to say which of these
+it is displacing.
 
 The projection rose by 29,872 B for the 32-slot crest pool, and unlike every
 other rise in this file it bought no new capability — the firmware fetched and
@@ -83,12 +99,33 @@ predicted. That is the `u16` length prefix on every bounded string doing its
 job: the layout is identical on the host and on `thumbv8m.main-none-eabihf`, so
 `scoreboard-model`'s own budget test is a real check and not a coincidence.
 
-**Measured today: 284,260 B** (277.6 KiB, 46.6 % headroom) — the whole of
-`scoreboard-app`, standalone profile, which is the binary of record: `.data`
-10,732 + `.bss` 269,192 + `.uninit` 4,336. That figure includes 4,336 B of
-dev-only defmt/RTT and the breadcrumb cell, of which 4,096 B leaves with the
-probe build. Networking added 35,848 B of it, the HTTP server 80,160 B and the
-poller 24,452 B.
+**Measured today: 337,712 B** (329.8 KiB, 36.6 % headroom) — the whole of
+`scoreboard-app`, **`link-boot-integrated`**, which is now the binary of record
+because it is the profile the production unit runs: `.data` 11,296 + `.bss`
+322,320 + `.uninit` 4,096. The `.uninit` is dev-only defmt/RTT and leaves with
+the probe build; the breadcrumb cell used to be in there too and is now outside
+the linker map entirely.
+
+Two things about that figure before it is compared with anything above it.
+**It is a different profile** from the 284,260 B this line used to report, which
+was `link-standalone` — boot-integrated links `embassy-boot-rp`, `sha2` and
+`ed25519-dalek`, which is 73,744 B of *flash* and very little RAM, so the two
+are close but not the same measurement, and the standalone figure has not been
+re-taken. And **it is measured from the artifact left in the tree**, built
+2026-08-16 at the four-connection change (108bc85), rather than from a fresh
+`--locked` CI build. The symbol-by-symbol breakdown below reconciles to it, so
+it is not a stray build; re-run the reproduce block at the next size-relevant PR.
+
+The rise from 284,260 B is 53,452 B. The single largest contributor is the HTTP
+server going from two connections to four — **50,498 B**, of which 44,352 B is
+arena and 6,146 B is scratch — and the rest is spread across everything Phase 4
+and task #20 added between the two measurements: the mDNS responder's 4,026 B,
+the fused pack tables (~2,056 B in core 1's arena, 562 B in `.data`), the socket
+table's 752 B for `StackResources<10>`, less the 240 B breadcrumb cell that left
+the map and whatever the profile change is worth. Those do not sum to the delta
+and are not meant to — the two measurements are different profiles a week apart.
+The four-connection line is the one that is measured as a clean before/after,
+and it is the one that matters.
 
 **The 32-slot crest pool and its warmer are 29,832 B of that**, measured as a
 clean before/after in a detached worktree so no other in-flight work was in the
@@ -122,8 +159,11 @@ instantiate it once per layer (`http::scratch` measured that multiplier at 22×)
 And the button driver's state is two 24 B folds, because the PIO holds the
 timing and the CPU holds only an anchor.
 
-**Flash: 993,760 B**, 63.1 % of the 1,536 KB active partition — up 101,692 B for
-task #12. The bulk of that increase is `sequential-storage`'s map (its item
+**Flash: 1,096,104 B**, 69.7 % of the 1,536 KB active partition — the raw `.bin`
+of the boot-integrated image, measured 2026-08-16. It read 993,760 B (63.1 %)
+after task #12, on the standalone profile and before the OTA path linked; the
+profile change alone is 73,744 B of it, per the three-image table below. The
+bulk of task #12's own increase was `sequential-storage`'s map (its item
 iteration, page-state machine, CRC and auto-repair paths all instantiate against
 one concrete flash type) and `DeviceConfig::serialize`, which is the *write*
 half of the serde pair whose read half was already the image's largest function.
@@ -162,7 +202,10 @@ fourth copy: core 0 keeps the authoritative snapshot and publishes clones of it.
 Folding those together — mutating the publisher's back buffer in place and
 carrying forward from the just-published slot — would recover 2,848 B at the
 price of making the whole state machine borrow the channel. If RAM ever gets
-tight, that is the lever; at 53.6 % headroom it is not worth the coupling.
+tight, that is the lever. **RAM has since got tight** — 36.6 % headroom, under
+the ≥ 40 % target — so this is now a live option rather than a note, and it is
+the cheapest 2,848 B in the file. It is still coupling the whole state machine
+to the channel, so it should be taken deliberately and not as a reflex.
 
 ### Thirty-two crest slots, and what the last twenty-four bought
 
@@ -221,10 +264,20 @@ pointless on a board being watched. The warmer also stops at the window's
 deadline, so it cannot push the next poll late however short
 `poll_interval_seconds` is set.
 
-The 40 % floor is what bounds this. Thirty-two slots leaves 44.8 % headroom;
-sixty-four would cost another 36,864 B and land at 37.9 %, under the target. So
-this is the last doubling that fits, and it is worth writing down that it was
-checked rather than assumed.
+The 40 % floor is what bounds this. When the pool grew, thirty-two slots left
+44.8 % headroom and sixty-four would have cost another 36,864 B and landed at
+37.9 %, under the target — so this was the last doubling that fits, and it is
+worth writing down that it was checked rather than assumed.
+
+**Drill day then spent the margin somewhere else.** The four-connection HTTP
+pool put the whole budget at 36.6 %, so the floor this section was checked
+against no longer holds and the pool is now the largest single reversible item
+in the file: dropping back to sixteen slots returns 18,432 B and puts the budget
+back over 40 %. That is a real trade, and the table above is what prices it: a
+full MLB day is 30 teams and an NFL Sunday is 32, so sixteen slots evict every
+lap on both — which is exactly the property the last twenty-four slots were
+bought to remove. It is written here so that whoever needs
+RAM next finds the price already worked out instead of re-deriving it.
 
 ### The crest pool's split across the cores is not the cheap arrangement, because the cheap one is undefined behaviour
 
@@ -380,9 +433,17 @@ any scenario; core 1 held 20 FPS exactly (200 ticks per 10 s window) through a
 > ms worst frame is **44 %**, with 9.26 ms of margin, and the busiest scenario's
 > mean of 6.90 ms is a **41 % duty** on core 1 where it was 14 %. The one
 > measured number the change invalidated was the gamma hook, and that was fixed
-> rather than re-measured — see below. Everything here is **pending re-measure
-> on hardware at drill day**; the frame probe now reports every 1,800 ticks
-> (still 30 s) and the liveness line should read 600 ticks per 10 s.
+> rather than re-measured — see below. The frame probe now reports every 1,800
+> ticks (still 30 s) and the liveness line reads 600 ticks per 10 s.
+>
+> **Then task #20 rebuilt the pack and the duty question went away**: `show`
+> measures 2,241 µs where this table's frames were paying 5,250, so the busiest
+> scenario's ~41 % duty is ~20 % (BACKLOG 63, closed on device 2026-08-09, zero
+> overruns across 14,400+ drawn frames at 60 FPS). **A full scenario-by-scenario
+> re-take at 60 FPS has still not been done** — drill day spent its bench time on
+> the OTA path, and the numbers it did produce are in the "Drill day" section
+> below. What exists is the pack measurement and the overrun count, which is
+> what the acceptance question actually turned on.
 
 The thesis holds by a wide margin. The two cases MicroPython could not draw
 inline are the two in bold: three line-score rows measured ~41 ms there and
@@ -436,27 +497,35 @@ not depend on what was drawn. That is **~76 % of a drawn frame**, and it is
 
 - The render budget question is settled and needs no further work. If frame time
   ever has to come down, the driver's packer is where the time is, not the
-  glyphs (BACKLOG item 63). Nothing today justifies touching it — 7.41 ms
-  against 50 ms was not a problem to solve, and 7.41 against 16.67 is not one
-  either. It is worth being precise about what 60 FPS did to that item: the pack
-  is unchanged at 5.25 ms per drawn frame, but it now runs three times a second
-  more often, so it alone is **31 % of core 1's wall time** on a screen that
-  draws every frame, against 10 % before. That is the number to look at first if
-  anything ever needs headroom back — and it is still not a problem today.
+  glyphs (BACKLOG item 63). 7.41 ms against 50 ms was not a problem to solve;
+  what made it one was 60 FPS, which left the pack unchanged at 5.25 ms per
+  drawn frame but ran it three times as often — **31 % of core 1's wall time**
+  on a screen that draws every frame, against 10 % before. **That is what task
+  #20 then fixed**: the pack measures 2,241 µs today and the duty is ~20 %, so
+  this bullet's advice was taken and the item is closed. The glyph path was
+  never the place to look, and still is not.
 - A *skipped* frame costs 0.07 ms, two orders of magnitude less than a drawn
   one. The static-screen skip is worth every line it costs.
 
-> **Pack rebuilt by task #20 (2026-08-09), pending on-device re-measure.** The
-> repack now goes through fused gamma+bitspread tables
+> **Pack rebuilt by task #20 and measured on device — BACKLOG 63, closed
+> 2026-08-09.** The repack now goes through fused gamma+bitspread tables
 > (`hub75::packing::FusedTables` — 1 KiB in the driver, rebuilt by `set_gamma`
 > itself) and the loop runs from RAM instead of XIP; BACKLOG 63 carries the
 > design record and the declined alternatives. thumbv8m codegen went from ~165
-> instructions per pixel pair (which calibrates against the measured 192
-> cycles/pair) to 78, so the projected `show` lap is **~2.1–2.6 ms**, from
-> 5.25. Expected RAM deltas at the next `nm` pass: `render_loop::POOL` grows
-> ~1 KiB (the tables travel inside the driver), `.data` grows ~0.6 KiB (the
-> RAM-resident loop). Until the frame probe confirms, every 5.25 ms-derived
-> number in this file stands.
+> instructions per pixel pair to 78, and the projection of ~2.1–2.6 ms landed:
+> **`show` mean 2,241 µs against 5,250, a 2.34× speedup**, stable across eight
+> 30 s windows, worst lap 2,257 µs, **zero overruns in 14,400+ drawn frames at
+> 60 FPS**. Core 1's duty on a screen that draws every frame went from ~44 % to
+> **~20 %**. The predicted RAM deltas were right too, and are now in the table
+> above: `render_loop::POOL` 1,384 → 3,448 B and 562 B of `.data` for the
+> RAM-resident loop.
+>
+> **So every 5.25 ms-derived number below is superseded**, and the tables have
+> deliberately not been rewritten around 2.241 ms: they are the measurement that
+> justified the rebuild, and re-deriving them by arithmetic would turn measured
+> rows into computed ones. What changed is the conclusion, not the history —
+> `show` is no longer ~76 % of a drawn frame, and the headroom question the
+> 60 FPS move opened is closed with ~13 ms of margin per frame.
 
 `rebuild` (the prepared view, on commit frames only) is 14–16 µs for everything
 except the 255-byte play line, where measuring 255 glyphs to size the flash
@@ -483,54 +552,82 @@ probe-rs download --chip RP235x target/thumbv8m.main-none-eabihf/release/scorebo
 timeout 80 probe-rs run --chip RP235x target/thumbv8m.main-none-eabihf/release/scoreboard-app > session.log 2>&1
 ```
 
-The demo task that drives those scenarios is scaffolding for this measurement
-and leaves with the real poller. Re-run it before it does.
+The demo task that drove those scenarios was scaffolding for this measurement
+and left with the real poller, as planned — `demo::feed::POOL` is gone from the
+symbol table below. Re-running the scenario cycle now means driving the real
+poller against fixtures, which is why the re-take at 60 FPS is still outstanding.
 
 ---
 
 ## Measured breakdown — `scoreboard-app`, release, `thumbv8m.main-none-eabihf`
 
-Standalone link profile, with flip-link. **793,916 B flash** (50.5 % of the
-1,536 KB active partition), **10,184 B `.data`**, **209,448 B `.bss`**,
-**4,096 B `.uninit`** → **223,728 B of RAM statics**.
+**`link-boot-integrated`, with flip-link, measured 2026-08-16** from the tree at
+108bc85 — the profile the production unit runs. **1,096,104 B flash** as a raw
+`.bin` (69.7 % of the 1,536 KB active partition), **11,296 B `.data`**,
+**322,320 B `.bss`**, **4,096 B `.uninit`** → **337,712 B of RAM statics**, with
+**186,304 B** of core-0 stack below them (`_stack_start = 0x2002_d7c0`).
+
+The previous version of this table was the task-#10 snapshot — standalone
+profile, two HTTP connections, the demo feed still in it, and no poller, crest
+pool, mDNS or OTA path. It is not annotated here because almost every row moved;
+what follows replaces it.
 
 | Symbol | Bytes | Owner |
 |---|---:|---|
+| `http::serve::POOL` | 88,320 | the four HTTP connection tasks. **22,080 B each, and only 8,552 B of that is buffers** — see the multiplier note below |
 | `hub75::driver::FRAMEBUFFERS` | 65,536 | hub75 — the two BCM bitplane buffers |
-| `scoreboard_app::FRAME` | 16,385 | app — RGB565 drawing surface (16,384 + 1 B `ConstStaticCell` flag) |
-| `http::serve::POOL` | 43,968 | the two HTTP connection tasks. **21,984 B each, and only 8,552 B of that is buffers** — see the multiplier note below |
+| `scoreboard_app::CRESTS` | 36,865 | the 32-slot crest pool, owned outright by core 1 |
 | `ringlog::RING` | 28,812 | the deployed log: 200 × 144 B slots. `.bss`, deliberately — see below |
+| `scoreboard_app::FRAME` | 16,385 | app — RGB565 drawing surface (16,384 + 1 B `ConstStaticCell` flag) |
+| `poller::run::POOL` | 16,096 | the poll loop's arena: `Slate`, the 4,096 B receive buffer, the crest directory, the warm index, and a whole tick's futures |
 | `net::CYW43_STATE` | 12,696 | cyw43's ioctl state and its 4-deep packet channel in each direction |
-| `http::scratch::SLOTS` | 6,146 | two 3,072 B response buffers and their claim flags, pooled rather than held in handler futures |
+| `http::scratch::SLOTS` | 12,292 | four 3,072 B response buffers and their claim flags, pooled rather than held in handler futures |
 | `scoreboard_app::CHANNEL` | 8,552 | the three-slot snapshot handoff. **In `.data`, not `.bss`** — see below |
-| `scoreboard_app::CORE1_STACK` | 8,192 | core 1's stack; 2,480 B high-water |
+| `scoreboard_app::CORE1_STACK` | 8,192 | core 1's stack; 3,348 B high-water |
+| `net::STACK_RESOURCES` | 5,336 | `StackResources<10>` — smoltcp's `SocketSet` storage |
 | `net::cyw43_runner::POOL` | 5,232 | the radio runner's arena — its SPI scratch dominates |
-| `net::STACK_RESOURCES` | 4,584 | `StackResources<8>` — smoltcp's `SocketSet` storage |
-| `net::bringup::POOL` | 4,400 | provisioning's arena: the boot `Store` (2,880 B) + the scan's BSSID table |
 | `defmt_rtt::BUFFER` | 4,096 | defmt ring, `.uninit`. **Dev-only** |
-| `demo::feed::POOL` | 2,968 | the demo task's own `ScoreboardSnapshot`. **Scaffolding**; leaves with the demo |
+| `display_core1::render_loop::POOL` | 3,448 | core 1's task arena — the loop state, the display, and the driver's 1 KiB fused pack tables |
+| `scoreboard_app::STORE` | 2,888 | core 0's authoritative snapshot |
 | `net::dhcp_server::serve::POOL` | 2,752 | the DHCP task's two 1 KiB packet scratch buffers and its lease table |
-| `display_core1::render_loop::POOL` | 1,392 | core 1's task arena — the loop state |
+| `logos::UPDATES` | 2,336 | the two-deep channel core 0 ships new crest pixels over |
+| `net::api_client::TCP_STATE` | 2,050 | the poller's one connection: 1,536 B receive + 512 B send |
+| `net::mdns::serve::POOL` | 1,776 | the mDNS task's arena |
+| `net::bringup::POOL` | 1,656 | provisioning's arena: the scan's BSSID table and the credentials |
+| `net::mdns::{RX,TX}_BUFFER` | 2,050 | 1,537 + 513 — the mDNS socket's payload buffers |
 | `net::captive_dns::serve::POOL` | 1,168 | the DNS task's 512 B query and 528 B response scratch |
 | `net::{dhcp_server,captive_dns}::{RX,TX}_BUFFER` | 4,100 | 4 × 1,025 — the four UDP socket payload buffers |
-| `net::…::{RX,TX}_META` | 400 | UDP packet metadata: 8 slots each for DNS, 4 each for DHCP |
+| `config::CONFIG` | 960 | **`.data`** — the running configuration behind one lock |
+| `net::…::{RX,TX}_META` | 600 | UDP packet metadata across all three responders |
+| `hub75::packing::pack_rgb565` | 562 | **`.data`** — the pack loop itself, copied to RAM so it does not run from XIP |
+| `inputs::run::POOL` + `brightness::auto_brightness::POOL` | 528 | 264 each |
+| `.L_MergedGlobals` ×4 | 404 | hub75 driver statics, `net::hosts::HOSTS`, the stack-watermark atomics, embassy/defmt/probe singletons |
+| `supervise::watchdog::POOL` | 360 | the feeder |
+| `settings::DISPLAY` | 312 | **`.data`** — the live display settings core 1 applies at a frame boundary |
 | `embassy_rp::gpio::BANK0_WAKERS` | 240 | embassy-rp |
+| `supervise::PREVIOUS` | 228 | the decoded breadcrumb `/api/logs/previous` serves |
 | `net::net_runner::POOL` | 136 | smoltcp's driver arena |
+| `net::watch_link::POOL` + `supervise::reboot_on_request::POOL` | 136 | |
 | `embassy_rp::dma::CHANNEL_WAKERS` | 128 | embassy-rp, for CH0 |
+| `supervise::liveness::POOL` | 104 | |
+| `net::status::STATUS` | 100 | what provisioning decided, for `/api/status` |
 | `embassy_rp::pio::…::WAKERS` | 96 | embassy-rp, for PIO2 |
-| `supervise::liveness::POOL` + `net::watch_link::POOL` + `demo::brightness::POOL` | 224 | |
-| `.L_MergedGlobals` | 120 | hub75 driver statics (73 B) + embassy/defmt/probe singletons |
+| `flash::ram_helpers::write_flash_inner` | 68 | **`.data`** — embassy-rp's XIP-disabled programmer, likewise RAM-resident |
 | `hub75::driver::TIMING_BUFFER` | 64 | the OE/BCM timing stream |
-| `net::hosts::HOSTS` | 64 | the names the HTTP server answers to |
 | `_SEGGER_RTT` + `defmt_rtt::NAME` | 54 | `.data`, RTT control block. Dev-only |
-| `net::status::STATUS` | 88 | what provisioning decided, for `/api/status` |
-| everything else (wakers, flags, padding) | ~490 | |
+| everything else (wakers, flags, padding) | ~440 | |
+
+**The breadcrumb cell is not in this table and that is the point.** It is 256 B
+at `scoreboard_layout::BREADCRUMB_BASE`, above the top of every profile's RAM
+region, so no linker allocated it and no stack can reach it. See the caveat at
+the end of this file.
 
 ### A buffer in a picoserve handler costs its size times the router's depth
 
-The single most surprising number in this table is `http::serve::POOL`: 21,984 B
+The single most surprising number in this table is `http::serve::POOL`: 22,080 B
 per connection, of which the actual buffers — 1,536 B TCP receive, 2,920 B TCP
-send, 4,096 B request — are 8,552 B. The other 13,432 B is the future.
+send, 4,096 B request — are 8,552 B. The other 13,528 B is the future, and it is
+paid four times over.
 
 picoserve's router is a **type**, not a dispatch table. Each `.route()` produces
 `Route<Path, Handler, Fallback>` wrapping the previous router as its fallback,
@@ -546,10 +643,13 @@ Measured directly, by building the same code twice:
 | 256 B | 256 B | 60,336 B |
 | 3,072 B | 2,048 B | 263,088 B |
 
-4,608 B of extra buffer, 202,752 B of extra arena — a **22× multiplier**. So
-response buffers live in `http::scratch`, a pool of one slot per connection, and
-a handler's future holds an eight-byte `Lease`. The pool is the 6,146 B line
-above, and it does not move when a route is added.
+4,608 B of extra buffer, 202,752 B of extra arena — a **22× multiplier**. Those
+two builds were made at two connections, and the multiplier is *per connection*:
+at four, the same buffer change costs twice as much arena again. So response
+buffers live in
+`http::scratch`, a pool of one slot per connection, and a handler's future holds
+an eight-byte `Lease`. The pool is the 12,292 B line above; it grows with the
+connection count and not when a route is added.
 
 **Before adding a route or a response type, check this number again.** The rule
 of thumb: anything larger than a pointer that lives across an `await` inside a
@@ -625,20 +725,23 @@ arm-none-eabi-nm -C --size-sort -r -S -td "$ELF" | awk '$3 ~ /^[bBdD]$/'
 The panel-driver reference point, kept so the hub75 numbers stay comparable
 across commits. Links plain (no flip-link), which is why its symbol addresses
 are not comparable with the app's.
-**32,512 B flash** (`.text` + `.rodata` + vector/boot blocks), **56 B `.data`**,
-**83,040 B `.bss`**, **1,024 B `.uninit`** → **84,120 B of RAM statics**.
+Re-measured 2026-08-09, after task #20's repack. **32,348 B flash** (`.text` +
+`.rodata` + `.data` + vector/boot blocks), **616 B `.data`**, **85,096 B
+`.bss`**, **1,024 B `.uninit`** → **86,736 B of RAM statics**, leaving 427.3 KiB
+of its 512 KiB map unspent.
 
 | Symbol | Bytes | Owner |
 |---|---:|---|
 | `hub75::driver::FRAMEBUFFERS` | 65,536 | hub75 — the two BCM bitplane buffers |
 | `hub75_diag::FRAME` | 16,385 | app — RGB565 drawing surface (16,384 + 1 B `ConstStaticCell` flag) |
+| `hub75_diag::__embassy_main::POOL` | 2,816 | embassy task arena — holds the `Hub75Display`, hence the gamma LUT and the fused pack tables. It was 768 B before task #20 |
 | `defmt_rtt::BUFFER` | 1,024 | defmt-rtt ring, `.uninit`. **Dev-only**; not in the deployed budget |
-| `hub75_diag::__embassy_main::POOL` | 768 | embassy task arena — holds the `Hub75Display`, hence the gamma LUT |
 | `embassy_rp::gpio::BANK0_WAKERS` | 240 | embassy-rp |
-| `.L_MergedGlobals` | 104 | 73 B of hub75 driver statics (`TIMING_BUFFER` 64, `TIMING_BUFFER_PTR` 4, `ACTIVE_BUFFER_PTR` 4, `DRIVER_TAKEN` 1) + 28 B embassy/defmt singletons + 3 B padding |
+| `.L_MergedGlobals` | 104 | embassy/defmt singletons and driver flags |
+| `hub75::driver::TIMING_BUFFER` | 64 | the OE/BCM timing stream |
+| `hub75::packing::pack_rgb565` | 562 | **`.data`** — the RAM-resident pack loop, which is why `.data` went from 56 B to 616 B |
 | `_SEGGER_RTT` + `defmt_rtt::NAME` | 54 | `.data`, RTT control block. Dev-only |
-| `panic_probe::…::PANICKED` | 1 | |
-| inter-symbol alignment padding | 8 | |
+| `embassy_rp::time_driver::DRIVER` + clocks cache + PAC flag | 21 | |
 
 Reproduce (needs `binutils-arm-none-eabi`; CI runs exactly this and echoes it
 into the job summary):
@@ -674,11 +777,17 @@ one frame in six hundred is not a rate. The hitch shows up in `render` or in
 `show` depending on where core 1 happened to be when it was parked, which is why
 both maxima rise.
 
-**This is the measurement 60 FPS pressed hardest on, and the one to re-take
-first.** 14.5 ms was 29 % of a 50 ms budget and is 87 % of a 16.67 ms one. It
-still fits, but the margin is 2.1 ms where every other number in this file has
-at least 9 — and the baseline frames either side of the save ranged 7.3 to
-9.7 ms, so a save landing on the unluckier of those would cross the deadline.
+**This is the measurement 60 FPS pressed hardest on, and it is still the one to
+re-take first.** 14.5 ms was 29 % of a 50 ms budget and is 87 % of a 16.67 ms
+one. It still fits, but the margin was 2.1 ms where every other number in this
+file has at least 9 — and the baseline frames either side of the save ranged 7.3
+to 9.7 ms, so a save landing on the unluckier of those would cross the deadline.
+
+Task #20's repack has since taken roughly 3 ms out of every drawn frame, which
+moves both the baseline and the save frame down by about that much and is the
+one thing that would materially change this row. **It has not been re-measured**,
+so the 14.5 ms stands as the number of record and the margin should be read as
+"wider than 2.1 ms, by an amount nobody has put a probe on".
 What that costs is bounded and already handled: the loop counts an overrun,
 re-anchors, and carries on one frame late; it does not drop or fast-forward
 anything. A config save producing an occasional counted overrun is the expected
@@ -708,15 +817,15 @@ Measured 2026-08-08, `--release`, `thumbv8m.main-none-eabihf`, raw `.bin` via
 | Image | Bytes | Of its partition | Notes |
 |---|---:|---:|---|
 | `scoreboard-boot` | 14,208 | 43.4% of 32 KB | `opt-level = "s"`, defmt + `embassy_boot=trace`. The spike's was 12.2 KB; the difference is logging kept on purpose — those trace lines are the only direct evidence of what a given boot decided, and drill day reads them. |
-| `scoreboard-app`, `link-boot-integrated` | 1,088,880 | 69.1% of 1536 KB | What `publish-fw` ships. |
-| `scoreboard-app`, `link-standalone` | 1,015,136 | — | The bench image. |
+| `scoreboard-app`, `link-boot-integrated` | 1,088,880 | 69.1% of 1536 KB | What `publish-fw` ships. **1,096,104 B / 69.7 % as of 108bc85** — the four-connection change added 7,224 B of code. |
+| `scoreboard-app`, `link-standalone` | 1,015,136 | — | The bench image. Not re-measured since. |
 
 **The boot-integrated image is 73,744 B larger**, and all of it is the OTA
 path: `ed25519-dalek` + `curve25519-dalek`, `sha2`, and `embassy-boot`. That is
 the price of the device being able to refuse an image, and it is paid only by
 the profile that can install one.
 
-**485,288 B of headroom** before an image stops fitting the active partition.
+**476,760 B of headroom** before an image stops fitting the active partition.
 Worth watching rather than worrying about: the DFU partition is one erase page
 larger than active by construction, so the ceiling is a single number and the
 const asserts in `firmware-rs/layout` fail the build rather than the swap.
@@ -739,9 +848,10 @@ even though Phase 4 also added an mDNS responder — which took the slot.
 |---|---:|---|
 | OTA chunk + header buffers | **0** | Split from the poller's existing 4,096 B |
 | `BlockingFirmwareUpdater` aligned buffer | 1 B | Stack, per call |
-| mDNS socket buffers | 2,048 B | 1,536 rx + 512 tx, `net::mdns` statics |
-| mDNS packet metadata | 12 slots | 8 rx + 4 tx |
-| `Responder` (name + address) | 40 B | Task argument |
+| mDNS socket buffers | 2,050 B | 1,537 rx + 513 tx, `net::mdns` statics |
+| mDNS packet metadata | 200 B | 12 slots: 8 rx + 4 tx |
+| mDNS task arena | 1,776 B | `net::mdns::serve::POOL`, including the `Responder` |
+| One socket slot | 0 | It took the one §7.1 had reserved for OTA |
 
 ### Drill day 2026-08-16 — the numbers, measured
 
@@ -771,35 +881,40 @@ by SWD snapshots of the defmt ring plus `/api/status` polling.
   another way. `arm-none-eabi-size` reports statics only. Core 1's stack is an
   8,192 B static painted with 0xAA before the core starts, and
   `supervise::liveness` reports the deepest byte touched every 10 s — 3,348 B
-  against real backend data. Core 0's stack is now painted and probed the same
-  way: 266,536 B of it, high-water 25,816 B (9.7 %). It is the remainder below
-  the statics, so it is not a line to budget — but the watermark is worth
+  against real backend data. Core 0's stack is painted and probed the same way,
+  and its **high-water was 25,816 B when the stack was 266,536 B**. The stack is
+  now 186,304 B, because it is the remainder below the statics and the statics
+  grew; the *depth* should not have moved, but that has not been confirmed since
+  drill day and the ratio it is reported as certainly has. The watermark is worth
   watching, because the two 3 KB buffers that live on it (the storage scratch
   and a config save) are the deepest transients in the firmware.
   `hub75-diag` still has neither.
 - **`flip-link` is wired up for `firmware-rs/app`**, and the numbers above are
   measured with it. Core 0's stack sits below `.bss`/`.data`
-  (`_stack_start = 0x2006_5b20`, `_stack_end = 0x2000_0000`) and
+  (`_stack_start = 0x2002_d7c0`, `_stack_end = 0x2000_0000`) and
   `install_core0_stack_guard()` arms MSPLIM at the bottom, so overflow faults
   rather than eating `FRAMEBUFFERS`. Core 1 gets the same protection by a
   different route: `spawn_core1` arms MSPLIM at the bottom of the static stack
   it is handed. `hub75-diag` still links plain — a bench binary with one shallow
-  task and 429.9 KiB of slack, where the guard buys little.
+  task and 427.3 KiB of slack, where the guard buys little (BACKLOG 64).
 - **512 KiB vs. 520 KiB, minus one cell.** `memory.x` declares
-  `RAM : LENGTH = 0x7ff00` — the contiguous striped banks, less the top 256 B
-  the layout crate withholds for the crash breadcrumb (drill day: the
+  `RAM : LENGTH = 0x7ff00` — **524,032 B**, the contiguous striped banks less the
+  top 256 B the layout crate withholds for the crash breadcrumb (drill day: the
   bootloader's stack shredded a cell that lived inside the app's map; see
   `scoreboard_layout::BREADCRUMB_BASE`). The RP2350's other 8 KiB (two
   non-striped 4 KiB banks) is likewise not in the linker's map, so neither
   can be spent without a deliberate placement. The headroom target is stated
   against 520 KiB per the spec; the linked figure is what is actually
-  reachable today, and both clear 40 %.
+  reachable today, and **neither clears 40 % any more** — 36.6 % and 35.6 %
+  respectively. That sentence used to end "and both clear 40 %".
 - **defmt/RTT is dev-only.** 4,150 B in the app (a 4 KB ring, raised from the
   default because two cores log into it, plus the control block) and 1,078 B in
   `hub75-diag`. Both leave the release image; the deployed build spends its
   logging RAM on the ring buffer in the "Ring log + misc statics" line instead.
-- **The demo feed is scaffolding.** 2,968 B of the app's arena is a
-  `ScoreboardSnapshot` inside the placeholder core-0 task that exists to drive
-  the frame probe. It leaves when the real poller lands, and the poller will
-  want a `Store` (2,880 B) in roughly the same place — so treat it as a
-  placeholder for that line rather than as a saving.
+  Worth restating now that headroom is tight: the deployed figure is ~4 KB below
+  the measured one, and that is the whole of the slack this caveat buys.
+- **The measurements above come from the artifact in the tree, not from CI.**
+  Both ELFs were built by hand on the days they are dated. The symbol tables
+  reconcile to their section totals, which is the check that they are not stray
+  builds, but the next size-relevant PR should re-run the reproduce blocks under
+  `--locked` and replace these rather than adding to them.

@@ -109,19 +109,33 @@ cargo build --release                                                  # standal
 cargo build --release --no-default-features --features link-boot-integrated  # active partition: 0x1000_A000
 ```
 
-Standalone is Phase 3's world: probe-flashed, no bootloader, `cargo run` works.
-Boot-integrated is Phase 4's, and additionally emits the `__bootloader_*`
-symbols embassy-boot's `FirmwareUpdater` reads. Both stop below the storage
+Standalone is the bench profile: probe-flashed, no bootloader, `cargo run`
+works. Boot-integrated additionally emits the `__bootloader_*` symbols
+embassy-boot's `FirmwareUpdater` reads, and it is **what the production unit
+runs** — every published image is this profile. Both stop below the storage
 region, so config written under one profile survives the switch to the other.
 CI builds both.
 
+> **They build to the same ELF path**, and drill day was where that bit
+> (2026-08-16). A plain `cargo build --release` after a boot-integrated build
+> silently replaces the artifact, and probe-flashing it writes a standalone
+> image over the bootloader. Check the entry point before any probe flash of
+> the app — `0x1000Axxx` is boot-integrated, `0x10000xxx` is standalone — or
+> check for the symbols directly:
+>
+> ```sh
+> arm-none-eabi-nm target/thumbv8m.main-none-eabihf/release/scoreboard-app | grep __bootloader_active_start
+> ```
+
 ### Bench credentials — `dev.toml`
 
-Device config storage lives in flash and is task #12's. Until it exists, a
-probe-flashed image learns a network from `firmware-rs/app/dev.toml`, which
-`build.rs` reads into compile-time env vars. **The file is gitignored and must
-stay that way** — it holds a real passphrase. `dev.example.toml` is the tracked
-template:
+Device config storage landed with task #12 and is where a provisioned device
+reads its network from. `firmware-rs/app/dev.toml` is the bench seam beside it:
+`build.rs` reads it into compile-time env vars, and the stored document wins —
+the seed applies **only when no document exists at all**, document-level rather
+than field-level, so it cannot undo a `POST /api/reset-network` at the next
+boot. **The file is gitignored and must stay that way** — it holds a real
+passphrase. `dev.example.toml` is the tracked template:
 
 ```sh
 cd firmware-rs/app
@@ -143,14 +157,17 @@ The one function this replaces is `net::wifi::Credentials::from_dev_build`.
 A bench instrument, never in a shipped build. Once station mode is up it fetches
 `{DEV_API_URL}/time` over plain HTTP and logs the response, which is how the
 network stack was shown to move bytes end-to-end against the real backend
-before the client in task #11 existed.
+before task #11's client existed.
 
 ```sh
 cargo run --release --features net-probe
 ```
 
-It is not the time sync: parsing the timestamp, setting the clock offset, and
-keeping `utc_offset: 0` distinct from "sync failed" are all task #11's.
+It is still not the time sync — parsing the timestamp, setting the clock offset,
+and keeping `utc_offset: 0` distinct from "sync failed" are `net::timesync`'s,
+and it runs as the poll loop's first phase. The probe is kept for the case it
+was written for: proving the radio moves bytes when the poller is the thing
+under suspicion.
 
 ## probe-rs — flash and debug
 
@@ -161,14 +178,18 @@ cargo install probe-rs-tools --locked
 ```
 
 With a Raspberry Pi Debug Probe wired to SWD, `cargo run` flashes and attaches
-in one step, because `firmware-rs/hub75-diag/.cargo/config.toml` sets:
+in one step, because each binary's `.cargo/config.toml` sets a runner.
+`firmware-rs/app`'s is the one that matters:
 
 ```toml
-runner = "probe-rs run --chip RP2350"
+runner = "probe-rs run --chip RP235x --preverify"
 ```
 
-If probe-rs rejects the chip name, it is a version skew — older releases spell
-it `RP2350A` or `RP235x`. `probe-rs chip list | grep -i rp23` settles it.
+`RP235x` rather than `RP2350`: probe-rs 0.32 only matches the latter through a
+wildcard, with a warning. `--preverify` skips sectors that already hold the
+right bytes, so re-running an unchanged image is a reset rather than a full
+flash. If probe-rs rejects the chip name outright it is a version skew — older
+releases spell it `RP2350A`. `probe-rs chip list | grep -i rp23` settles it.
 
 ## defmt — logging
 
@@ -183,8 +204,8 @@ DEFMT_LOG = "info"
 
 Changing it forces a rebuild of the crates that log — that is expected, not a
 cache bug. Formatting stays on the host: the device transmits indices into a
-string table kept in the ELF's `.defmt` section (18 B today), which is why
-logging costs so little flash.
+string table kept in the ELF's `.defmt` section — 287 B in the app, 18 B in
+`hub75-diag` — which is why logging costs so little flash.
 
 `panic-probe` with `print-defmt` routes panics through the same channel.
 
@@ -250,8 +271,8 @@ Two things worth knowing:
   question about which table wins.
 
 `hub75-diag` still links plain (`--nmagic`, `-Tlink.x`, `-Tdefmt.x`). It is a
-bench binary with one shallow task and 429.9 KiB of slack; the guard is worth
-having where the real task stacks are.
+bench binary with one shallow task and 427.3 KiB of slack; the guard is worth
+having where the real task stacks are. That is BACKLOG 64, deliberately open.
 
 Core 1 does not go through flip-link at all — its stack is a static array
 handed to `spawn_core1`. embassy-rp arms MSPLIM at that array's bottom, which

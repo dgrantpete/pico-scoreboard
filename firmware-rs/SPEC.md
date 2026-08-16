@@ -1,6 +1,12 @@
 # pico-scoreboard Firmware Rewrite — Rust/Embassy Specification
 
-**Status:** Draft for review · **Scope:** `firmware/` only — the backend stays as-is
+**Status:** Shipped, in soak. Phases 0–4 are complete and this firmware is *the*
+firmware on the seated production unit as of 2026-08-16 — a Pico 2 W behind
+embassy-boot, running published version `2026.08.16-108bc85` off the `stable`
+channel, with a two-week soak started that day. `main` is the branch of record.
+The document stays living: each section carries the corrections that contact
+with hardware forced, and those corrections are the point.
+**Scope:** `firmware/` only — the backend stays as-is
 **Target:** Raspberry Pi Pico 2 W (RP2350A + CYW43439), Cortex-M33, `thumbv8m.main-none-eabihf`
 **Prime directive:** feature parity with the MicroPython firmware, then the stretch goals — never both at once.
 
@@ -54,8 +60,10 @@ pico-scoreboard/
 │   └── png-stream/           # (Phase S) no_std streaming PNG→sprite decoder
 ├── firmware-rs/
 │   ├── boot/                 # embassy-boot bootloader binary
+│   ├── layout/               # scoreboard-layout: flash/RAM constants, THE source.
+│   │                         # Moved up out of app/ in Phase 4, when the
+│   │                         # bootloader started needing the same table
 │   └── app/                  # the application binary
-│       ├── layout/           # scoreboard-layout: flash/RAM constants, THE source
 │       ├── build.rs          # font + SPA asset embedding, memory.x generation
 │       └── src/
 │           ├── main.rs           # init, task spawning, core-1 launch
@@ -68,7 +76,9 @@ pico-scoreboard/
 │           ├── inputs.rs         # PIO1 and the 50 ms button drain
 │           ├── brightness.rs     # the 5 Hz loop; veml7700.rs is its I2C half
 │           └── display_core1.rs  # core-1 executor: render loop @ 60 FPS
-└── firmware/                 # MicroPython tree, kept until Phase 4 sign-off
+└── firmware/                 # MicroPython tree. No longer the production
+                              # unit's firmware; still the gift fleet's, and
+                              # still the parity reference (INVENTORY.md)
 ```
 
 **Crate boundary rule:** `crates/*` never import embassy or touch hardware; they are pure `core` (+`heapless`) and fully host-testable. `firmware-rs/app` owns all peripherals and I/O and stays thin. This is the same discipline as the current `scoreboard/` package vs `main.py` split, made compile-enforced.
@@ -88,7 +98,7 @@ pico-scoreboard/
 
 ## 4. Concurrency architecture
 
-- **Core 0:** embassy executor. Tasks: net supervisor (wifi state machine), poller, HTTP server (picoserve, N=2 connections), OTA task, storage/log flush, brightness loop, input loop, watchdog feeder, time-sync.
+- **Core 0:** embassy executor. Tasks: net supervisor (wifi state machine), poller, HTTP server (picoserve, one task per connection — **four**, see §7.3), mDNS responder, storage/log flush, brightness loop, input loop, watchdog feeder. The OTA client and the time sync are *phases of the poll loop* rather than tasks of their own, which is what returned the socket §7.1 had reserved for OTA.
 - **Core 1:** second embassy executor (embassy-rp multicore), running exactly one task: the render loop. Core 1 never touches the network, storage, or the allocator-that-doesn't-exist. Its stack lives in SRAM allocated at spawn (embassy-rp `spawn_core1` takes an explicit static stack — size it in the budget, §11).
 - **Core 0 → Core 1 handoff** replaces today's "immutable after construction, read by the display thread" convention with a compile-checked equivalent: a double-buffered snapshot —
   - `scoreboard-model`'s `SnapshotChannel`: **three** `ScoreboardSnapshot` slots in a `static`, one atomic index cell, ownership moving by atomic swap. Core 0 publishes; core 1 latches at the top of each frame and renders from that reference for the whole frame. The seed read "`[ScoreboardSnapshot; 2]`" — a double buffer races, because a latched frame outlives the publish that supersedes it and two commits can land inside one frame. Rationale and the measured cost: BUDGET.md, "Correction to SPEC §4".
@@ -122,7 +132,7 @@ Mechanical port; largest volume, lowest risk:
 - `display.py`, `screen_geometry.py`, `textfold.py`, `menu.py`, per-sport render modules (`mlb.py`, `nba.py`, `soccer.py`, `football.py`, `inning_half.py`) → `scoreboard-render`. Viper blit kernels become ordinary Rust.
 - **Fonts:** retarget `tools/compile_fonts.py` to emit Rust (`build.rs` invokes it, or port the generator): `static GLYPHS: [Glyph; N]` with the same MONO_HLSB packing; `FontWriter` API preserved. All `&'static`, zero init cost, no import-time table building.
 - **QR codes:** setup-flow QR (replaces `miqro`). Preferred: a no-alloc no_std QR crate; the encoder needs ~4 KB of scratch for the largest version used — provide it as a caller-owned buffer. If no suitable crate passes the no-alloc audit (§10), port the needed subset of miqro (it is small and the format is stable).
-- Text scrolling, animations, brightness curves: direct port; assert frame-time headroom with a defmt timing probe around the render loop (budget: one frame period — ≤ 50 ms at the 20 FPS this was specified for, ≤ 16.7 ms since task #17 moved the loop to 60 FPS; expected: low single-digit ms). **Measured on silicon, Phase 3: worst frame 7.4 ms, worst render 2.0 ms, zero overruns** — see BUDGET.md, "Core 1: measured frame times". Dropping MicroPython's strip pre-rendering was the right call by roughly 35×, and it is what left enough headroom for 60 FPS to be a constant change rather than an optimisation project.
+- Text scrolling, animations, brightness curves: direct port; assert frame-time headroom with a defmt timing probe around the render loop (budget: one frame period — ≤ 50 ms at the 20 FPS this was specified for, ≤ 16.7 ms since task #17 moved the loop to 60 FPS; expected: low single-digit ms). **Measured on silicon, Phase 3: worst frame 7.4 ms, worst render 2.0 ms, zero overruns** — see BUDGET.md, "Core 1: measured frame times". Dropping MicroPython's strip pre-rendering was the right call by roughly 35×, and it is what left enough headroom for 60 FPS to be a constant change rather than an optimisation project. Three quarters of that frame was never the render path but `hub75`'s repack, which task #20 then rebuilt on fused tables: `show` measured **2,241 µs** against 5,250 (BACKLOG 63, closed 2026-08-09 on device), taking core 1's duty at 60 FPS from ~44 % to ~20 %.
 - Host tests: golden-image tests per sport/state using `backend/testdata/*.json` replayed through the backend encoder → wire bytes → firmware decode → render into the simulator buffer. This is the parity harness for the whole port. **Built and green — see `firmware-rs/PARITY.md`** for the verdict table, how time is pinned, and what is deliberately out of scope.
 
 ---
@@ -131,7 +141,7 @@ Mechanical port; largest volume, lowest risk:
 
 ### 7.1 Stack
 
-`cyw43` (with firmware blobs checked in) + `embassy-net` (smoltcp). Buffer sizes are budget lines (§11): sockets for {poller, HTTP server ×2, DNS, OTA}. DHCP client in station mode; static 192.168.4.1/24 + DHCP server behavior in AP mode as today.
+`cyw43` (with firmware blobs checked in) + `embassy-net` (smoltcp). Buffer sizes are budget lines (§11). The seed read "sockets for {poller, HTTP server ×2, DNS, OTA}"; what got built is `net::SOCKETS = 10` covering the larger of the two modes at eight — resolver, DHCP client, poller-**and**-OTA (one connection, never concurrent), HTTP server ×4, mDNS in station mode; resolver, HTTP ×4, mDNS, captive DNS, DHCP *server* in AP mode. DHCP client in station mode; static 192.168.4.1/24 + DHCP server behavior in AP mode as today.
 
 **Built and measured on silicon, Phase 3.** The resource map, the socket table
 and the reasoning behind both live in `firmware-rs/app/src/net/`'s module docs;
@@ -171,11 +181,21 @@ deviations its docs record, one of which fixes a latent `main.py` bug where a
 station-mode request for an unknown path was answered with a redirect to
 192.168.4.1.
 
-**`.local` resolution is DHCP option 12, not mDNS.** embassy-net's `mdns`
-feature is deliberately off: MicroPython only ever called
-`network.hostname()`, so the name reaches clients through the router in both
-firmwares. A device on a network whose router does not register DHCP hostnames
-was never reachable by name, and still is not.
+**`.local` resolution: this section was wrong, and Phase 4 fixed it.** The
+claim here was that DHCP option 12 is enough because MicroPython only ever
+called `network.hostname()`. It is not: MicroPython's port compiles lwIP with
+`LWIP_MDNS_RESPONDER`, so the panel answered multicast queries before any
+Python ran, and option 12 only teaches the *router* — which most resolvers go
+around. So the Phase 3 app silently lost `<device_name>.local`, and Phase 4
+gave it back with a responder of its own: `scoreboard_portal::mdns` decides the
+bytes, `net::mdns` owns the socket, in both station and AP mode.
+embassy-net's own `mdns` feature stays off (its `multicast` feature is what is
+on, so smoltcp accepts `224.0.0.251` at all); `edge-mdns` was audited and
+rejected on proportion — Appendix A carries both. The device answers for its
+configured `device_name`, which is plain `scoreboard` by default and therefore
+`scoreboard.local`. mDNS *delivery* is not yet reliable end to end on this LAN —
+BACKLOG 90 has the drill-day diagnosis, which points at the AP's multicast
+distribution rather than at the responder.
 
 ### 7.3 HTTP server (picoserve)
 
@@ -183,10 +203,25 @@ was never reachable by name, and still is not.
 - SPA: `index.html.gz` embedded via `include_bytes!` in `build.rs` from `frontend/`'s build output; served with `Content-Encoding: gzip` and a build-time ETag (hash computed in `build.rs`, replacing the runtime `_compute_index_etag`). The `/rom/` fallback path disappears — there is no filesystem.
 - JSON request/response bodies: `serde` with `derive` into fixed/borrowed types (serde works no-alloc when deserializing to borrowed `&str`/bounded types); responses serialized into a caller-owned buffer.
 
-**Built and bench-validated, Phase 3** (picoserve `=0.19.0`, N=2 connections on
-the sockets §7.1 reserved). Every endpoint in `api_routes.py`'s table is served
-with its original status codes and body shapes; the deviations, all of them
-deliberate, are PARITY.md's. Four things this section did not anticipate:
+**Built, bench-validated in Phase 3, and in production since drill day**
+(picoserve `=0.19.0`). Every endpoint in `api_routes.py`'s table is served with
+its original status codes and body shapes; the deviations, all of them
+deliberate, are PARITY.md's.
+
+**It serves four connections, not two, and that number was bought with a
+failure.** picoserve serves one connection per task, so four connections is
+four tasks and four sets of buffers — 100,612 B of the budget, the largest line
+in BUDGET.md after the framebuffers. Two was enough for the SPA's logs page
+polling beside the settings page, and it was *not* enough for an iPhone's
+captive-portal sheet during setup (drill day, 2026-08-16): iOS opens the
+captive probe, the page, Safari's speculative preconnects that never send a
+request, and the SPA's fetches at once, and the SWD capture showed a stalled
+writer pinning one of the two slots through its full 10 s timeout while the
+sheet's fetches died in the backlog — "Connection Error" on the setup page, on
+the network the device itself is running. The capture never showed more than
+three live connections plus one wedged, which is where four comes from.
+`http`'s module docs carry the timeout table that covers the same failure in
+finer grain. Four more things this section did not anticipate:
 
 - **A buffer inside a request handler is not a buffer, it is a buffer times the
   router's depth.** picoserve's router is a *type* — each `.route()` wraps the
@@ -246,8 +281,12 @@ this section did not anticipate:
   handed to a renderer asserts those bytes do not change while it lives, so the
   same arrangement is undefined behaviour here. The pixels moved to core 1 and
   the key/LRU bookkeeping stayed on core 0, with new crests crossing on a
-  channel — 11.7 KB total, against 18.4 KB for the obvious alternative of
-  putting crest bytes in the snapshot, and no tear.
+  channel. The split costs a *constant* 2,337 B over the unsound shared-pool
+  arrangement rather than a per-slot one, which is why the pool could later grow
+  from `LogoPool`'s 8 slots to 32 without widening the gap — 39,201 B at 32
+  slots today, against 18,432 B for the obvious alternative of putting crest
+  bytes in the snapshot, which caches nothing and re-fetches on every rotation.
+  BUDGET.md prices all three, and why thirty-two.
 - **A `304` has no body and reqwless does not know it.** With no
   `Content-Length` and no chunked encoding the library reads to end of
   connection, which on a keep-alive socket means waiting out the full 15 s
@@ -260,7 +299,8 @@ this section did not anticipate:
 
 - **Model:** whole-image A/B via `embassy-boot` — bootloader partition + active + DFU + state, trial-boot with automatic rollback. This absorbs, and improves on, today's `apply_staged()` / `recover()` / boot-fail-counter logic; the counter machinery in `main.py` is retired in favor of the bootloader's revert, with one app-side duty: call `mark_booted()` only after a health gate (Wi-Fi up OR AP mode reached, render loop alive for N seconds) — this preserves today's "safe mode after repeated failures" intent.
 - **Transport & trust:** plain HTTP; authenticity moves from the transport to the artifact. Backend signs images (ed25519); the device verifies with the public key baked into the app. **Device-side TLS is thereby removed from the parity scope entirely.**
-  **Correction from Phase 4: the verification is ours, not `embassy-boot`'s feature.** That feature's `verify_and_mark_updated` hashes the DFU partition through a hardcoded **two-byte** buffer, in one blocking call that cannot feed the watchdog — and under the bootloader an 8 s watchdog is already running and cannot be disarmed, so an overrun is a reboot loop on every update. `BlockingFirmwareUpdater::hash` is public and takes the *caller's* buffer, so the app hashes with 4 KB (176 flash reads instead of ~530,000) and `scoreboard_ota::verify` does the ed25519 check. The feature's real prize — it deletes `mark_updated`, making an unverified swap impossible rather than merely wrong — is rebuilt as a type: `Verified` has a private field, `verify` is the only constructor, and `arm_swap` takes one by value. Two incidental gains: the check is `verify_strict` (the permissive one accepts an all-zero signature under an all-zero key), and the SHA-256 from the manifest is checked against the *download stream* while the ed25519 is checked against the *flash read-back*, which tells "the network gave us bad bytes" apart from "the flash did not store them".
+  **Correction from Phase 4: the verification is ours, not `embassy-boot`'s feature.** That feature's `verify_and_mark_updated` hashes the DFU partition through a hardcoded **two-byte** buffer, in one blocking call that cannot feed the watchdog — and under the bootloader an 8 s watchdog is already running and cannot be disarmed, so an overrun is a reboot loop on every update. `BlockingFirmwareUpdater::hash` is public and takes the *caller's* buffer, so the app hashes with 4 KB — at the 1,094,232 B drill day actually measured, 268 flash reads instead of 547,116 — and `scoreboard_ota::verify` does the ed25519 check.
+  **Correction from drill day: 4 KB was necessary and not sufficient.** The estimate said a single blocking `hash` call "spans both sides" of the 8 s limit; on the seated unit it resolved on the wrong side, **10,635 ms for 1,094,232 B**, and the device reset at the end of every install — three times, until the attempt record refused the version. So the chunk loop lives in `ota/install.rs` rather than inside one `updater.hash` call: it reads a 4 KB chunk, updates the digest, **feeds the watchdog and yields**, and repeats. The executor — feeder task, HTTP server, the poller's liveness clock — keeps breathing for however long the DFU walk takes, and the walk's duration stops being correctness-relevant. For scale, embassy-boot's own two-byte path at ~30× would have been five-plus minutes. BACKLOG 87 carries the open question of *why* 103 KB/s. The feature's real prize — it deletes `mark_updated`, making an unverified swap impossible rather than merely wrong — is rebuilt as a type: `Verified` has a private field, `verify` is the only constructor, and `arm_swap` takes one by value. Two incidental gains: the check is `verify_strict` (the permissive one accepts an all-zero signature under an all-zero key), and the SHA-256 from the manifest is checked against the *download stream* while the ed25519 is checked against the *flash read-back*, which tells "the network gave us bad bytes" apart from "the flash did not store them".
 - **Backend work (small):** **not** `/app/*`. The MicroPython fleet's contract is frozen — `ota.py` calls it "spoken by every device FOREVER once flashed" and those units are USB-only — so the Rust firmware gets its own noun, `/fw/manifest` + `/fw/image`, carrying version/size/sha256/signature/channel. A version-prefixed path was rejected: it invites someone to eventually repoint `/app` at the newer thing and hand every gift unit a whole-flash binary. Two nouns means the day the last gift unit migrates is the day `/app/*` is deleted, with nothing to rename.
   **They also do not share an API key.** `ota.py` fetches over TLS; the Rust firmware has no TLS, so its key is visible on every LAN it joins. `APP_FW_API_KEY` gates `/fw/*` alone, and its exposure buys a download that is worthless without the signing key. Signing key in `backend/.fw-signing-key` (gitignored); `tools/fwsign.py` signs and `tools/build.py publish-fw` runs the pipeline.
 - **Boot-fail counter, reinstated.** A/B guarantees a broken image is *reverted*, not that it is not *re-downloaded* — without a memory of what was tried, the device loops download → swap → fail → revert → same manifest, every few minutes forever. A third storage key holds the attempt record (target version, count, reverted flag); it survives the swap because the storage region is outside both partitions. §12's "safe mode after repeated failures" intent lands here rather than in the bootloader.
@@ -277,7 +317,7 @@ this section did not anticipate:
 `sequential-storage` (map API) over a dedicated flash region:
 
 - Keys: **three** — two from Phase 3, plus one Phase 4 had to add. The OTA attempt record (§8) is not config: nothing outside the OTA client writes it, `GET /api/config` has no business returning it, a `PUT` that reset it would re-arm the loop it exists to break, and it changes once per update attempt rather than once per settings save — folding it into the document would rewrite the wifi password every time an update started. The Phase 3 argument for the other two stands: **two, not four** — Phase 3 built this and the list above did not survive contact. The device configuration is one JSON document (`app/src/storage.rs`'s `Key::Config`), and it *contains* the wifi credentials, because `config.json` did and `GET /api/config` returns them; a separate credentials record would be a second source of truth for the same four fields. There are no sticky user prefs: the rotation lock and the league filter are deliberately session state (`menu.py` says so), and brightness is `display.brightness`, which is config. The OTA channel/dev flag is Phase 4's and §8 already says it becomes a *config* flag, so it needs no key of its own. The second key is the crash breadcrumb.
-- Writes are rare (config changes); reads happen once at boot into a `static` config struct — no steady-state flash traffic. **Every write stops the panel**: a flash program runs from RAM with XIP disabled, so embassy-rp parks core 1 for the duration. Measured at one 942 B config save: the affected frame took 14.5 ms, which was 29 % of the 50 ms budget it was measured against and is 87 % of the 16.7 ms one the loop now paces at — still fitting, with the thinnest margin anywhere in BUDGET.md, and an overrun there costs one counted late frame rather than a dropped one.
+- Writes are rare (config changes); reads happen once at boot into a `static` config struct — no steady-state flash traffic. **Every write stops the panel**: a flash program runs from RAM with XIP disabled, so embassy-rp parks core 1 for the duration. Measured at one 942 B config save: the affected frame took 14.5 ms, which was 29 % of the 50 ms budget it was measured against and is 87 % of the 16.7 ms one the loop now paces at — still fitting, and an overrun there costs one counted late frame rather than a dropped one. That 14.5 ms was measured on top of a ~7 ms frame; task #20's repack has since taken the *base* frame down by about 3 ms, so the margin is wider than 87 % implies and narrower than nothing — the figure has not been re-taken, and BUDGET.md flags it.
 - **Logging changes shape:** `logger.py`'s file-flush model is replaced by defmt over RTT for development and a RAM ring buffer (fixed `heapless` deque) exposed via a `/api/logs` endpoint for deployed units — pull, not persist. Persistent crash breadcrumbs: a single small sequential-storage record carrying the panic message and a snapshot of both stacks' watermarks, read and reported at next boot through `/api/logs/previous`.
   **Correction from Phase 3: the panic handler does not write it.** It cannot. A flash write parks core 1 through the multicore FIFO and waits for an answer, so a write from core 1 is refused outright and a write from core 0 *while core 1 is the core that panicked* hangs forever — which is exactly the crash most worth recording. The handler instead writes the record to a `.uninit` RAM cell (240 B, survives both `SYSRESETREQ` and a watchdog reset) and resets; the next boot promotes it to flash **before core 1 starts**, where the write is free. Same guarantee, plus one the original shape did not have.
 - Migration: first Rust boot finds no storage region → runs the normal "unprovisioned" path. No attempt to read MicroPython's littlefs; gift units get reprovisioned once. (Documented, acceptable.)
@@ -310,16 +350,27 @@ consult BUDGET.md for what is measured and what is still a guess.
 | Core-0 task arenas + stack | ~24 KB | |
 | Core-1 stack | 8 KB | render loop only |
 | Ring log + misc statics | ~8 KB | |
-| **Total (headroom target ≥ 40 %)** | **~232 KB / 520 KB** | 55 % headroom with the framebuffer line corrected — see BUDGET.md |
+| **Total (headroom target ≥ 40 %)** | **~232 KB / 520 KB** | the seed's own arithmetic; every line above has since been measured — see BUDGET.md for where it actually landed |
 
 Rule: any PR that adds a static ≥ 1 KB updates the table in the same PR.
+
+**520 KB is the silicon, not the linker's map.** Two things narrow it. The
+RP2350's other 8 KiB is two non-striped 4 KiB banks that `memory.x` does not
+declare, so spending them takes a deliberate section placement; and since drill
+day the top 256 B are withheld from *every* profile's map for the crash
+breadcrumb (`scoreboard_layout::BREADCRUMB_BASE`), because the bootloader's
+top-of-RAM stack shredded a cell that lived inside the app's own map. What the
+linker hands out is therefore **512 KiB − 256 B = 524,032 B**. The ≥ 40 %
+target is stated against 520 KB per this table; BUDGET.md reports against both.
 
 ---
 
 ## 12. Supervision and health
 
-- Hardware watchdog fed by a core-0 task gated on a `ThreadHealth`-equivalent: core 1 publishes a frame counter (atomic); the *poller* publishes network liveness (which is the half BACKLOG 69 proved a frame counter cannot see); the feeder starves the watchdog if either stalls — port of today's semantics. **The network half counts answers, not successes** (BACKLOG 70): a 404 or a 500 proves the radio is on the network as well as a 200 does, so only silence starves, and a backend outage shows the error screen exactly as MicroPython's did instead of rebooting the device on a cycle. The gate is `scoreboard_model::poll::gate`, host-tested; "answer" means the HTTP layer, for reasons measured on the bench and recorded on `Health::since_answer_s`. Opt-in via `watchdog.enabled` and armed only after the network phase, both as `main.py` had it.
-- **`main.py`'s boot-fail counter is deliberately not ported.** It counted resets in `/boot_fails` and called `ota.recover()` at five, which is a hand-rolled rollback; §8 replaces it with embassy-boot's trial-boot revert, whose one app-side duty is a health-gated `mark_booted()`. Under the Phase 3 standalone profile there is no bootloader, so a device that crash-loops simply keeps resetting — with a breadcrumb each time saying why, which the counter never gave. Phase 4 wires the revert; nothing in Phase 3 should grow a counter in the meantime.
+- Hardware watchdog fed by a core-0 task gated on a `ThreadHealth`-equivalent: core 1 publishes a frame counter (atomic); the *poller* publishes network liveness (which is the half BACKLOG 69 proved a frame counter cannot see); the feeder starves the watchdog if either stalls — port of today's semantics. **The network half counts answers, not successes** (BACKLOG 70): a 404 or a 500 proves the radio is on the network as well as a 200 does, so only silence starves, and a backend outage shows the error screen exactly as MicroPython's did instead of rebooting the device on a cycle. The gate is `scoreboard_model::poll::gate`, host-tested; "answer" means the HTTP layer, for reasons measured on the bench and recorded on `Health::since_answer_s`. Armed only after the network phase, as `main.py` had it.
+
+  **`watchdog.enabled` means two different things, and drill day is what made that necessary** (2026-08-16). Under `link-standalone` it is `main.py`'s flag unchanged: opt-in, default off, because once armed a watchdog cannot be disarmed and a probe session that halts the core would reset the device seconds later. Under `link-boot-integrated` there is no opt — `firmware-rs/boot` armed an 8 s watchdog before the app's first instruction and nothing can turn it off — so **the feeder task always runs and always feeds**, and what the flag still controls is whether the health gate may *deliberately starve* it. Shipping the flag's original meaning under a bootloader would have meant a device that reboots every eight seconds with the feature switched off, which is how the contract was discovered.
+- **`main.py`'s boot-fail counter is deliberately not ported.** It counted resets in `/boot_fails` and called `ota.recover()` at five, which is a hand-rolled rollback; §8 replaces it with embassy-boot's trial-boot revert, whose one app-side duty is a health-gated `mark_booted()`. Under the standalone profile there is no bootloader, so a device that crash-loops simply keeps resetting — with a breadcrumb each time saying why, which the counter never gave. Phase 4 wired the revert, and the *re-download* loop A/B does not cover got the separate attempt record §8 describes.
 - Panic path: defmt + panic-probe in dev; in release, the panic handler stashes the breadcrumb (§9) then resets into the watchdog/trial-boot machinery, which is what ultimately triggers rollback after a bad OTA. It deliberately does **not** log: defmt's logger takes a lock, and a panic raised from inside a log statement would deadlock on it and turn a crash that reboots into a device that hangs.
 - **`SCB::sys_reset()` does not reset an RP2350** — measured 2026-08-08. `AIRCR.SYSRESETREQ` never reaches the power-on state machine; the requesting context spins in cortex-m's post-request loop and the chip carries on. Every reset in the firmware goes through the watchdog's `TRIGGER` bit instead (`supervise::force_reset`). This was a live bug in `POST /api/reboot` from Phase 3's HTTP task until the induced-panic drill found it.
 - `hardware_diagnostic.py`'s role becomes a `--features diag` build of the app (test patterns, input echo) rather than a separate script.
@@ -330,11 +381,20 @@ Rule: any PR that adds a static ≥ 1 KB updates the table in the same PR.
 
 Parallel-track: the MicroPython firmware remains the shipping firmware until Phase 4 exit.
 
+**Where this landed (2026-08-16).** Phases 0 through 4 are complete and the
+parallel track ended: the seated production unit runs the Rust firmware behind
+embassy-boot, on published `2026.08.16-108bc85` off the `stable` channel, and
+the ≥ 2-week soak Phase 4's exit criterion asks for started that day. The
+MicroPython firmware is no longer *a* shipping firmware on that unit; it is
+still the gift fleet's, served by the backend's untouched `/app/*` surface,
+which §8 says is deleted the day the last gift unit migrates. Phase S has not
+started.
+
 - **Phase 0 — Wire crate (pure win, do immediately).** Extract `scoreboard-wire`, backend consumes it, round-trip tests against `testdata/`, delete `wire_format_check.py`. *Exit: backend deployed on shared crate, zero wire diffs.*
 - **Phase 1 — `hub75` crate.** PIO + PAC-level DMA + BCM on real hardware; simulator feature; test patterns, brightness, timing probes. *Exit: stable 20 FPS test animation, timings ≥ parity with MicroPython driver, budget lines measured.*
 - **Phase 2 — Render stack on host.** `scoreboard-model` + `scoreboard-render` + fonts build pipeline; golden-image parity harness over the full testdata corpus. *Exit: pixel-parity (or reviewed-and-accepted diffs) across all sports/states — no hardware involved.*
 - **Phase 3 — App shell on device.** Wi-Fi/provisioning/captive portal, picoserve + SPA, reqwless poller, storage, inputs, brightness, supervision. First end-to-end live game on Rust. *Exit: feature-parity checklist against the MicroPython firmware, one week of continuous soak on the dev unit.*
-- **Phase 4 — Boot + OTA.** embassy-boot integration, partition layout, backend signing + endpoints, kill-and-rollback drills (pull power mid-write; ship a deliberately-broken image and watch it revert). *Exit: three consecutive successful OTA cycles + one induced rollback on the dev unit; then a ≥ 2-week soak before any gift unit is migrated.*
+- **Phase 4 — Boot + OTA.** embassy-boot integration, partition layout, backend signing + endpoints, kill-and-rollback drills (pull power mid-write; ship a deliberately-broken image and watch it revert). *Exit: three consecutive successful OTA cycles + one induced rollback on the dev unit; then a ≥ 2-week soak before any gift unit is migrated.* **Met 2026-08-16** — all eight steps of DRILL.md were run on the seated unit, the measured numbers are BUDGET.md's "Drill day" section, and five firmware bugs were found and fixed in the running (the watchdog contract, the blocking DFU hash, the breadcrumb's address, the mid-trial status repaint, and the two-connection HTTP pool). The soak is running.
 - **Phase S — Stretch (separately scoped):** `png-stream` crate (streaming inflate → box-downsample → sprite), direct-ESPN degraded fallback mode. Explicitly out of parity scope; only constraint on earlier phases: the poller's data-source trait should not hard-code "backend" in `scoreboard-model` (keep the source behind one interface so S plugs in).
 
 Deliberate deviation from "smallest first": Phase 1 front-loads the riskiest hardware work so any nasty surprise arrives before the mechanical bulk is invested.
@@ -404,7 +464,7 @@ caller-owned?* — `n/a` means the crate holds no runtime buffer at all.
 
 | Crate | Ver | Used by | no_std | no-alloc | Buffers | Notes |
 |---|---|---|---|---|---|---|
-| `embassy-net` | =0.9.1 | scoreboard-app | yes¹ | yes | caller | ¹`no_std` unless `std`. Every buffer is caller-supplied: `StackResources<N>` is the socket table (4,584 B at N=8), and each socket's payload and metadata buffers are passed to its constructor. Features `tcp udp dns dhcpv4 dhcpv4-hostname proto-ipv4 medium-ethernet` — `mdns` deliberately off, see §7.2. |
+| `embassy-net` | =0.9.1 | scoreboard-app | yes¹ | yes | caller | ¹`no_std` unless `std`. Every buffer is caller-supplied: `StackResources<N>` is the socket table (**5,336 B at the N=10 that shipped**; it was 4,584 B at N=8 before the fourth and fifth consumers landed), and each socket's payload and metadata buffers are passed to its constructor. Features `tcp udp dns dhcpv4 dhcpv4-hostname proto-ipv4 medium-ethernet multicast` — `mdns` deliberately off (the responder is ours), see §7.2. |
 | `smoltcp` | 0.13.1 | via embassy-net | yes | yes | caller | The TCP/IP stack itself. Its default feature set *is* `std`+`alloc`; embassy-net turns defaults off and selects socket types individually, so the no_std build is not accidental. `Ipv4Address` is a re-export of `core::net::Ipv4Addr`, which is what lets it, embassy-net and edge-dhcp share one address type with no conversion. |
 | `cyw43` | =0.7.0 | scoreboard-app | yes | yes | inline | The radio driver. `State` is a caller-placed 12,696 B static; the packet path is an `embassy-net-driver-channel` with 4 buffers each way, inline in it. Features `defmt firmware-logs`; **`bluetooth` off**, which keeps `bt-hci` out of the tree. |
 | `cyw43-pio` | =0.10.0 | scoreboard-app | yes | yes | n/a | The GSPI bit-banger. Compile-time PIO program, one state machine, one DMA channel. Use `RM2_CLOCK_DIVIDER`, not the default — see §7.1. |
@@ -464,12 +524,15 @@ caller-owned?* — `n/a` means the crate holds no runtime buffer at all.
 | `libm` | =0.2.16 | scoreboard-input | yes | yes | n/a | `logf`, for the log-scale lux curve. Already in the graph under `hub75`. |
 | `fixed` | =1.30.0 | scoreboard-app | yes | yes | n/a | The PIO clock divider's 16.8 fixed-point type. embassy-rp takes it by value in `pio::Config` and does not re-export the crate; already in the graph under embassy-rp and cyw43-pio. |
 
-**Not yet pinned** — audit when each lands.
+**Still unpinned** — audit when it lands. The other two rows this table used to
+carry have both been resolved: `embassy-boot-rp` is pinned at `=0.10.0` in the
+Phase 4 block above, and `flip-link` is **in use** for `firmware-rs/app` (the
+`_stack_start` below the statics is the check; TOOLCHAIN.md has the command).
+`hub75-diag` still links plain, which is BACKLOG 64 and deliberate — a bench
+binary with one shallow task and no real task stacks to guard.
 
 | Crate | Ver | Phase | Notes |
 |---|---|---|---|
-| `embassy-boot`(-rp) | not yet pinned | 4 | OTA + signature verification (§8) |
-| `flip-link` | not yet pinned | 3 | Linker wrapper, §2. **Not yet in use** — `hub75-diag` links without it, so stack overflow currently corrupts `.bss` instead of faulting. |
 | `png-stream` deps | not yet pinned | S | Out of parity scope |
 
 **The AP-mode DHCP server — decision record.** embassy-net has a DHCP *client*
@@ -512,7 +575,11 @@ by-value PAC ownership is therefore a proof *within* `rp235x-pac` only; the
 docs is what actually holds the line. Worth revisiting in Phase 3 when more of
 the chip is in use.
 
-## Appendix B — Parity checklist (fill during Phase 3 from MicroPython feature inventory)
+## Appendix B — Parity checklist
+
+Filled during Phase 3 from the MicroPython feature inventory and closed out on
+drill day, 2026-08-16. Everything here is done; PARITY.md is the evidence and
+the register of deliberate deviations.
 
 | Item | State |
 |---|---|
@@ -525,9 +592,9 @@ the chip is in use.
 | SPA + every `api_routes.py` endpoint | **Done, bench-validated** — transcripts in the task #10 report; deviations in PARITY.md |
 | Captive portal — HTTP catch-all wiring | **Done**; station-mode 404 bench-validated, AP-mode 302 host-tested only (reaching it needs the test host on the setup AP) |
 | RAM ring log + `/api/logs` NDJSON | **Done** — `crates/scoreboard-log`, host-tested, tail-follow bench-validated |
-| Poller ETag / backoff semantics | Task #11 |
-| Time sync (incl. `utc_offset: 0` ≠ `None`) | Task #11 — the endpoint is reachable, proved by `--features net-probe` |
-| Menu + buttons + encoder | Task #12 |
-| Auto-brightness curve | Task #12 |
-| Watchdog behaviour | Task #12 — core-1 liveness signal already published |
-| OTA trigger endpoint + safe-mode semantics | Task #15 |
+| Poller ETag / backoff semantics | **Done, bench-validated** (task #11) — there is no backoff to port; PARITY.md's `poller.py` table is endpoint for endpoint |
+| Time sync (incl. `utc_offset: 0` ≠ `None`) | **Done, bench-validated** (task #11) — and it re-runs daily rather than once at boot, a deliberate deviation |
+| Menu + buttons + encoder | **Done** (task #12) — the encoder is deliberately *not* ported; see §1 and PARITY deviation 13. The button path was host- and PIO-simulator-tested before hardware |
+| Auto-brightness curve | **Done** (task #12), then deliberately diverged (BACKLOG 73, task #19) — PARITY.md's "Post-parity divergences" carries the old curve as a measured baseline |
+| Watchdog behaviour | **Done, bench-validated** (task #12), revised by BACKLOG 70 (answers, not successes) and again on drill day (the flag's two meanings under the two link profiles — §12) |
+| OTA trigger endpoint + safe-mode semantics | **Done** (task #15), **exercised on hardware** (task #16, drill day 2026-08-16) — DRILL.md's eight steps, BUDGET.md's measured numbers |

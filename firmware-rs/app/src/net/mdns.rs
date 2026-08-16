@@ -16,7 +16,7 @@
 //! # Why it runs in both modes
 //!
 //! `captive_dns` is setup-mode only; this is not. In station mode it is the
-//! whole point: `scoreboard-rs.local` in a browser on the house wifi. In AP
+//! whole point: `scoreboard.local` in a browser on the house wifi. In AP
 //! mode it is what lets a phone that has joined the setup network reach the
 //! page by name as well as by address — and it costs one socket that setup mode
 //! has spare.

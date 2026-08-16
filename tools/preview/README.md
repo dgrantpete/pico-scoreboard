@@ -1,10 +1,16 @@
 # Desktop preview pipeline
 
-Runs the **real** firmware render code (`scoreboard.display.render_frame` and
-friends) on CPython so screen designs can be iterated without flashing a Pico.
-It installs MicroPython shims, drives named scenarios through the actual
-`scoreboard.state` mailbox, intercepts the RGB565 framebuffer, and renders it to
-PNGs/GIFs plus a click-to-zoom HTML gallery.
+Runs the **real** MicroPython firmware render code
+(`scoreboard.display.render_frame` and friends) on CPython so screen designs can
+be iterated without flashing a Pico. It installs MicroPython shims, drives named
+scenarios through the actual `scoreboard.state` mailbox, intercepts the RGB565
+framebuffer, and renders it to PNGs/GIFs plus a click-to-zoom HTML gallery.
+
+It outlives the MicroPython firmware it was built for: the Rust firmware's
+pixel-parity harness (`crates/scoreboard-render/tests/gen_parity.py`) generates
+its golden frames by running the MicroPython stack through these shims, so the
+Rust renderer has a byte-for-byte baseline to reproduce. Changing anything here
+moves that baseline.
 
 ## Usage
 
