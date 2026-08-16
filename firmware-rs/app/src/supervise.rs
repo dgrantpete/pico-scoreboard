@@ -174,7 +174,7 @@ pub fn memory() -> Memory {
     let partition = scoreboard_layout::ACTIVE_SIZE;
     Memory {
         static_ram,
-        ram_free: scoreboard_layout::RAM_SIZE.saturating_sub(static_ram),
+        ram_free: scoreboard_layout::LINKED_RAM_SIZE.saturating_sub(static_ram),
         image_bytes: image_bytes(),
         partition_free: partition.saturating_sub(image_bytes()),
         core0_stack_used: CORE0_STACK_USED.load(Ordering::Relaxed),
@@ -237,13 +237,25 @@ fn image_bytes() -> u32 {
 /// The cell survives both reset paths for the same reason: SRAM keeps its
 /// contents through a `SYSRESETREQ` and through a watchdog reset, because
 /// neither cuts power to it.
-#[unsafe(link_section = ".uninit.SCOREBOARD_BREADCRUMB")]
-static mut CELL: BreadcrumbCell = BreadcrumbCell {
-    magic: 0,
-    length: 0,
-    checksum: 0,
-    bytes: [0; scoreboard_log::breadcrumb::MAX_BYTES],
-};
+///
+/// Surviving the reset is necessary but not sufficient — under
+/// `link-boot-integrated` the **bootloader** runs between the death and this
+/// boot, and its top-of-RAM stack shredded a cell that lived in the app's
+/// `.uninit` (drill day 2026-08-16: intact one SWD sample after the panic,
+/// gone the next). The cell therefore lives at an address *no linker map
+/// contains* — the top of physical RAM, which `scoreboard_layout` withholds
+/// from every profile's RAM region — and is reached as a raw pointer rather
+/// than a static, because that is what "outside the linker's world" means.
+/// See `scoreboard_layout::BREADCRUMB_BASE` for the whole story.
+const fn cell_pointer() -> *mut BreadcrumbCell {
+    scoreboard_layout::BREADCRUMB_BASE as *mut BreadcrumbCell
+}
+
+// The linker no longer guards the size, so this does: a cell that outgrows
+// the reserved region would silently overlap the RAM end.
+const _: () = assert!(
+    core::mem::size_of::<BreadcrumbCell>() <= scoreboard_layout::BREADCRUMB_SIZE as usize
+);
 
 /// Deliberately not the breadcrumb's own magic: this one says "the RAM cell was
 /// filled by a handler on this boot", which is a different claim from "these
@@ -302,10 +314,10 @@ pub fn stash_breadcrumb(crumb: &Breadcrumb) -> bool {
         bytes: record,
     };
     // SAFETY: the claim makes this the only writer for the rest of this boot,
-    // and the only reader is `take_breadcrumb`, which runs at the next boot
-    // before core 1 exists. Through a raw pointer because a `&mut` to a
-    // `static mut` is not available in edition 2024.
-    unsafe { (&raw mut CELL).write(cell) };
+    // the only reader is `take_breadcrumb` at the next boot before core 1
+    // exists, and the address is the layout crate's reserved cell — RAM that
+    // no linker region contains, so nothing else can alias it.
+    unsafe { cell_pointer().write(cell) };
     true
 }
 
@@ -313,11 +325,11 @@ pub fn stash_breadcrumb(crumb: &Breadcrumb) -> bool {
 ///
 /// Call once, from `main`, before core 1 starts.
 fn take_breadcrumb() -> Option<Breadcrumb> {
-    // SAFETY: single-threaded — core 1 does not exist yet — and the only other
+    // SAFETY: single-threaded — core 1 does not exist yet — the only other
     // accessor is `stash_breadcrumb`, which cannot run concurrently for the
-    // same reason.
+    // same reason, and the address is the layout crate's reserved cell.
     let (magic, length, stored, bytes) = unsafe {
-        let cell = &raw const CELL;
+        let cell = cell_pointer();
         (
             (*cell).magic,
             (*cell).length as usize,
@@ -330,7 +342,7 @@ fn take_breadcrumb() -> Option<Breadcrumb> {
     // already been copied out.
     // SAFETY: as above.
     unsafe {
-        (&raw mut CELL).write_bytes(0, 1);
+        cell_pointer().write_bytes(0, 1);
     }
     CELL_CLAIMED.store(false, Ordering::Release);
 

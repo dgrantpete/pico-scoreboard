@@ -156,7 +156,9 @@ fn paint_core0_stack() -> supervise::StackProbe {
     let ceiling = pointer.saturating_sub(MARGIN);
 
     supervise::record_static_ram(
-        (scoreboard_layout::RAM_BASE + scoreboard_layout::RAM_SIZE).saturating_sub(pointer),
+        // LINKED_RAM_SIZE, not RAM_SIZE: the linker's RAM ends below the
+        // reserved breadcrumb cell, and the statics end where the linker says.
+        (scoreboard_layout::RAM_BASE + scoreboard_layout::LINKED_RAM_SIZE).saturating_sub(pointer),
     );
 
     let len = ceiling.saturating_sub(floor) as usize;
