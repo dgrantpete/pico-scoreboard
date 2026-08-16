@@ -5,15 +5,24 @@
 //! picoserve instead of Microdot. [`routes`] is the surface itself; this module
 //! is the sockets, the buffers and the two tasks that own them.
 //!
-//! # Two connections, and why that is a number and not a default
+//! # Four connections, and why that is a number and not a default
 //!
-//! `net`'s socket budget reserves exactly two slots here. picoserve serves one
-//! connection per task, so there are two tasks, and a third simultaneous client
-//! waits in the listen backlog rather than being refused. Two is what the SPA
-//! needs: its logs page polls `/api/logs` on a 3 s timer while the settings
-//! page is being used, and one socket would serialise those into visible
-//! stalls. It is also the ceiling the budget can afford — each connection
-//! costs its buffers below, twice.
+//! `net`'s socket budget reserves exactly four slots here. picoserve serves
+//! one connection per task, so there are four tasks, and a fifth simultaneous
+//! client waits in the listen backlog rather than being refused.
+//!
+//! It was two — enough for the SPA's logs page polling `/api/logs` on a 3 s
+//! timer beside the settings page — until drill day (2026-08-16) put an
+//! iPhone's captive-portal sheet in front of the setup flow. iOS's hotspot
+//! login is a connection storm: the captive probe, the page, Safari's
+//! speculative preconnects that never send a request, and the SPA's API
+//! fetches, all at once — and the SWD capture showed a stalled writer pinning
+//! one of the two slots through its full 10 s timeout while the sheet's
+//! fetches died in the backlog. "Connection Error" on the setup page, on the
+//! network the device itself is running. Four slots absorb the storm — the
+//! capture never showed more than three live connections plus one wedged —
+//! and each costs its buffers below, so the number is a budget line, not a
+//! shrug.
 //!
 //! # Timeouts, and the socket leak that motivates them
 //!
@@ -55,7 +64,7 @@ use picoserve::{Config, Server, Timeouts};
 pub const PORT: u16 = 80;
 
 /// Connections served at once. One task each; see the module docs.
-pub const CONNECTIONS: usize = 2;
+pub const CONNECTIONS: usize = 4;
 
 /// Per-connection TCP receive buffer.
 ///

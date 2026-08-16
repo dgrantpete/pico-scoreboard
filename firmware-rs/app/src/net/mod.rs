@@ -44,13 +44,13 @@
 //! | embassy-net's DNS resolver | 1 | 1 | embassy-net, always added |
 //! | DHCP *client* | 1 | — | embassy-net, while `ConfigV4::Dhcp` |
 //! | poller **and OTA** | 1 | — | [`api_client`] |
-//! | HTTP server | 2 | 2 | task #10 |
+//! | HTTP server | 4 | 4 | task #10 (four since drill day — the iOS captive-portal storm; its module docs) |
 //! | mDNS responder | 1 | 1 | [`mdns`] |
 //! | captive DNS | — | 1 | [`captive_dns`] |
 //! | DHCP *server* | — | 1 | [`dhcp_server`] |
-//! | **total** | **6** | **6** | |
+//! | **total** | **8** | **8** | |
 //!
-//! Seven is the working ceiling; [`SOCKETS`] is 8 so that adding one consumer
+//! Nine is the working ceiling; [`SOCKETS`] is 10 so that adding one consumer
 //! is a budget line rather than a rewrite.
 //!
 //! **The OTA slot this table used to reserve is gone**, and that is worth a
@@ -92,7 +92,7 @@ bind_interrupts!(struct Irqs {
 });
 
 /// Socket slots in the stack's `SocketSet`. See the module docs' table.
-pub const SOCKETS: usize = 8;
+pub const SOCKETS: usize = 10;
 
 /// The radio's silicon, taken from `Peripherals` in `main` so the resource map
 /// is decided in one place and passed here whole.
