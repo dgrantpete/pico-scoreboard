@@ -36,18 +36,36 @@ WORKDIR /app
 # our own code changed. Every workspace member the backend pulls in needs its
 # manifest here; a new one shows up as a "failed to load manifest" build error.
 
+# EVERY workspace member's manifest, not just the ones `-p backend` compiles:
+# cargo refuses to load a workspace with any member's manifest missing, so
+# `members = ["backend", "crates/*", "firmware-rs/layout"]` all appear here.
+# A new member still shows up as a "failed to load manifest" build error —
+# that is this list asking to be extended (drill day 2026-08-16 hit exactly
+# that, five workspace members after this layer was written).
 COPY Cargo.toml Cargo.lock ./
 COPY backend/Cargo.toml backend/
+COPY crates/hub75/Cargo.toml crates/hub75/
+COPY crates/scoreboard-config/Cargo.toml crates/scoreboard-config/
+COPY crates/scoreboard-input/Cargo.toml crates/scoreboard-input/
+COPY crates/scoreboard-log/Cargo.toml crates/scoreboard-log/
+COPY crates/scoreboard-model/Cargo.toml crates/scoreboard-model/
+COPY crates/scoreboard-ota/Cargo.toml crates/scoreboard-ota/
+COPY crates/scoreboard-portal/Cargo.toml crates/scoreboard-portal/
+COPY crates/scoreboard-render/Cargo.toml crates/scoreboard-render/
 COPY crates/scoreboard-wire/Cargo.toml crates/scoreboard-wire/
+COPY firmware-rs/layout/Cargo.toml firmware-rs/layout/
 
 # Stub sources: enough for cargo to resolve the workspace and compile the
-# dependency graph. `-p backend` keeps future firmware-only members (which
-# don't build for this host) out of the picture.
-RUN mkdir -p backend/src crates/scoreboard-wire/src && \
-    echo "fn main() {}" > backend/src/main.rs && \
-    : > crates/scoreboard-wire/src/lib.rs && \
+# dependency graph. Every member needs a target file to exist for workspace
+# load; only backend and its path deps actually compile under `-p backend`.
+RUN mkdir -p backend/src && echo "fn main() {}" > backend/src/main.rs && \
+    for member in crates/* firmware-rs/layout; do \
+        mkdir -p "$member/src" && : > "$member/src/lib.rs"; \
+    done && \
     cargo build --release -p backend && \
     rm -rf backend/src crates/scoreboard-wire/src
+# Only the two members that receive real sources below lose their stubs; the
+# rest keep them, because the final build still has to load the workspace.
 
 # Now copy the actual source code
 COPY crates/scoreboard-wire/src/ crates/scoreboard-wire/src/

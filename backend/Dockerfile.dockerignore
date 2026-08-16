@@ -15,6 +15,10 @@
 !backend/Cargo.toml
 !backend/src/**
 !backend/config/**
+# A workspace member outside crates/ (shared with the two device workspaces);
+# its manifest is COPYed for workspace load in the dependency-cache layer.
+!firmware-rs/layout
+!firmware-rs/layout/**
 # The OTA image directories are COPYed whole and may legitimately be empty, so
 # the directories themselves are re-included alongside their contents.
 !backend/app_dist
