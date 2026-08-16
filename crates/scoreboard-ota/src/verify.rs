@@ -27,17 +27,20 @@
 //!
 //! The spike measured verification as sub-second at 26 KB and warned that
 //! ~800 KB might cost "tens of seconds". That extrapolation spans both sides of
-//! the 8 s limit, and it cannot be resolved without the hardware, which is
-//! scheduled for drill day. A design that is only correct on one side of an
-//! unmeasured number is not a design.
+//! the 8 s limit, and it could not be resolved without the hardware. Drill day
+//! (2026-08-16) resolved it: **the wrong side** — a single blocking hash of the
+//! 1.1 MB image overran the window and reset the device at the end of every
+//! install, even with a 4 KB chunk buffer. The chunk size was never the
+//! decisive variable; the inability to feed mid-call was.
 //!
 //! # What is taken instead
 //!
-//! `BlockingFirmwareUpdater::hash` is **public and takes the caller's buffer**.
-//! The app calls it with a 4 KB one, which is the same SHA-512 over the same
-//! DFU partition through embassy-boot's own bounds — 176 flash reads instead of
-//! 350,000 — and then this function does the ed25519 check that
-//! `verify_and_mark_updated` would have done, on the digest that produced.
+//! The app walks the DFU partition itself — the same SHA-512 over the same
+//! bytes, read 4 KB at a time through the partition's own bounds — feeding the
+//! watchdog and yielding to the executor between chunks, so the walk can take
+//! as long as the flash makes it take. Then this function does the ed25519
+//! check that `verify_and_mark_updated` would have done, on the digest that
+//! produced.
 //!
 //! The deleted-`mark_updated` guarantee is rebuilt here as a type: [`Verified`]
 //! is a token with a private field, so the only way to obtain one is to call

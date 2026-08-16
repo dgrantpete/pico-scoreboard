@@ -661,10 +661,12 @@ pub const BOOT_WATCHDOG_TIMEOUT_MS: u32 = 8_000;
 /// read-modify-write, and no state in the `Watchdog` handle that two of them
 /// could disagree about. Two writers of a reload register is what feeding *is*.
 ///
-/// It exists for one caller: the OTA verify, which hashes the whole DFU
-/// partition in a single blocking call. The feeder is a *task*, so nothing
-/// feeds while that call runs, and it needs to start with a full window rather
-/// than with whatever is left of one.
+/// It exists for one caller: the OTA verify, which walks the DFU partition in
+/// 4 KB chunks and feeds between them. The feeder is a *task*, and drill day
+/// proved the arrangement that leaned on it: a single blocking hash call
+/// starves the task for the whole walk, which measured past the 8 s window on
+/// a 1.1 MB image and reset the device at the end of every install. Feeding
+/// from the verify's own loop is what makes the walk's duration irrelevant.
 #[cfg_attr(
     not(feature = "link-boot-integrated"),
     allow(dead_code, reason = "reached only through the OTA install path, which needs a bootloader")

@@ -216,7 +216,7 @@ mod integrated {
         }
 
         set_state(State::Verifying);
-        if let Err(message) = verify(buffer, manifest) {
+        if let Err(message) = verify(buffer, manifest).await {
             crate::error!("ota: {}", message);
             return Answer { status: "error", message: Some(message) };
         }
@@ -309,27 +309,44 @@ mod integrated {
 
     /// Hash the DFU partition and check the signature.
     ///
-    /// The two things that make this different from
-    /// `verify_and_mark_updated`, and the reasons, are in
-    /// [`scoreboard_ota::verify`]'s module docs: the 4 KB chunk buffer instead
-    /// of embassy-boot's hardcoded two, and `verify_strict`.
-    fn verify(buffer: &mut ResponseBuffer, manifest: &Manifest) -> Result<(), &'static str> {
-        // The one call in the whole update that blocks the executor for an
-        // unbounded time, so the watchdog gets a full window immediately before
-        // it. `crate::supervise::feed_watchdog` explains why that is legitimate
-        // from a task that does not own the peripheral.
+    /// The differences from `verify_and_mark_updated`, and the reasons, are in
+    /// [`scoreboard_ota::verify`]'s module docs: our own chunk loop instead of
+    /// embassy-boot's two-byte one, and `verify_strict`.
+    ///
+    /// # Why the hash is a loop here and not one `updater.hash` call
+    ///
+    /// Drill day 2026-08-16, on the number the module docs said could not be
+    /// resolved without hardware: hashing the 1.1 MB image in a single
+    /// blocking call exceeds the bootloader's 8 s watchdog window — the
+    /// countdown was observed over SWD running dry mid-hash, and the device
+    /// reset at the end of every install, three times, until the attempt
+    /// record blocked the version. So the chunks are read here, and every
+    /// chunk feeds the watchdog and yields: the executor (feeder task, HTTP,
+    /// the poller's liveness clock) keeps breathing for however long the DFU
+    /// walk takes.
+    async fn verify(buffer: &mut ResponseBuffer, manifest: &Manifest) -> Result<(), &'static str> {
+        use embedded_storage::nor_flash::ReadNorFlash;
+        use sha2::Digest;
+
         crate::supervise::feed_watchdog();
         let started = Instant::now();
 
-        let mut digest = [0u8; 64];
-        let hashed = with_updater(|updater| {
-            updater.hash::<Sha512>(manifest.size, &mut buffer[..], &mut digest)
-        });
-        match hashed {
-            Some(Ok(())) => {}
-            Some(Err(_)) => return Err("the DFU partition would not read back"),
-            None => return Err("the flash peripheral is not available"),
+        let cell = crate::storage::flash().ok_or("the flash peripheral is not available")?;
+        let config = FirmwareUpdaterConfig::from_linkerfile_blocking(cell, cell);
+        let mut dfu = config.dfu;
+
+        let mut digest = Sha512::new();
+        let mut offset = 0u32;
+        while offset < manifest.size {
+            let length = (manifest.size - offset).min(buffer.len() as u32) as usize;
+            dfu.read(offset, &mut buffer[..length])
+                .map_err(|_| "the DFU partition would not read back")?;
+            digest.update(&buffer[..length]);
+            offset += length as u32;
+            crate::supervise::feed_watchdog();
+            embassy_futures::yield_now().await;
         }
+        let digest: [u8; 64] = digest.finalize().into();
 
         // Drill day reads this number off the ring log; it is the one figure
         // that decides whether embassy-boot's own two-byte path would have been
