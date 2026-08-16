@@ -159,6 +159,7 @@ mod integrated {
         let marked = with_updater(|updater| updater.mark_booted());
         match marked {
             Some(Ok(())) => {
+                crate::ota::record_confirmed();
                 set_state(State::Idle);
                 true
             }

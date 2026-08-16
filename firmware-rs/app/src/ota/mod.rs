@@ -284,6 +284,17 @@ pub struct Context<'a> {
 /// Returns only when the device is staying on this image; an installed update
 /// resets the chip from inside and never comes back.
 pub async fn check(cx: Context<'_>, schedule: &mut Schedule) {
+    // What to paint when the check ends. Trial and RolledBack are the health
+    // gate's to clear — only `confirm` may — and a check that runs during an
+    // unconfirmed boot must resume them, not stomp them: the settle-delay
+    // check landing mid-trial repainted an armed, unconfirmed image as `idle`
+    // for the back half of its trial window (drill day 2026-08-16, step 6),
+    // which is exactly the state an operator must be able to see.
+    let resume = match status().0 {
+        State::Trial => State::Trial,
+        State::RolledBack => State::RolledBack,
+        _ => State::Idle,
+    };
     REQUESTED.reset();
     let answer = run(cx).await;
     // Re-arm before answering, so a handler that immediately asks again cannot
@@ -293,8 +304,23 @@ pub async fn check(cx: Context<'_>, schedule: &mut Schedule) {
     } else {
         HEALTHY_INTERVAL
     });
-    set_state(State::Idle);
+    // Unless the health gate confirmed while this check was in flight — its
+    // `Idle` must win, or the resumed Trial would have no one left to clear it.
+    if CONFIRMED_THIS_BOOT.load(Ordering::Relaxed) {
+        set_state(State::Idle);
+    } else {
+        set_state(resume);
+    }
     ANSWERED.signal(answer);
+}
+
+/// Latched by [`confirm`] so a concurrent [`check`] cannot resurrect a
+/// Trial/RolledBack status the gate has already cleared.
+static CONFIRMED_THIS_BOOT: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn record_confirmed() {
+    CONFIRMED_THIS_BOOT.store(true, Ordering::Relaxed);
 }
 
 async fn run(cx: Context<'_>) -> Answer {
