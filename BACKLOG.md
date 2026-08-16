@@ -932,3 +932,26 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     (bounded by config, not a constant), or the poll loop wakes on the
     request signal instead of meeting it at the next tick — the second is
     nicer and the signal is already there.
+
+90. **mDNS resolution dies minutes after boot while unicast keeps working —
+    diagnosed to the answer leg, not the responder.** Drill-day probes
+    (2026-08-16, all against the live unit): unicast A queries answered
+    instantly, QU-flagged queries answered instantly, a group-addressed
+    query from the desktop answered instantly — but Windows and iOS
+    resolvers both go blind after the device has been up a few minutes,
+    reboots buy a short grace window, and the symptom predates the Rust
+    firmware ("mDNS from this PC flaky" in the July notes). The responder
+    replies *multicast* to source-port-5353 queriers, and that
+    device-outward multicast leg is what the AP stops distributing;
+    cross-band phone queries may additionally never arrive. cyw43 power
+    save is already off; embassy-net's `multicast` (IGMP) feature is
+    already on. First lever is the ROUTER (IGMP snooping / multicast
+    enhancement toggles — check for a missing IGMP querier on the LAN).
+    Firmware follow-ups worth doing regardless: (a) answer AAAA queries
+    for our name negatively (NSEC per RFC 6762 §6.1) instead of ignoring
+    them — phones ask A+AAAA and hang on the dangling half; (b) periodic
+    unsolicited announcements (§8.3) plus a periodic leave/rejoin of the
+    group to re-emit IGMP reports, which refreshes snooping tables even
+    on querier-less networks. Probe scripts in the 2026-08-16 session
+    scratchpad; the `dev.toml`-era note "mDNS from this PC flaky, use the
+    IP" is this bug.
