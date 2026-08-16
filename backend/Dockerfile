@@ -62,6 +62,11 @@ RUN mkdir -p backend/src && echo "fn main() {}" > backend/src/main.rs && \
     for member in crates/* firmware-rs/layout; do \
         mkdir -p "$member/src" && : > "$member/src/lib.rs"; \
     done && \
+    # Targets declared explicitly in a manifest need their files too — cargo
+    # build validates them at workspace load (cargo metadata does not, so a
+    # local metadata check will not catch a missing one). Currently only
+    # hub75's `pack` bench.
+    mkdir -p crates/hub75/benches && : > crates/hub75/benches/pack.rs && \
     cargo build --release -p backend && \
     rm -rf backend/src crates/scoreboard-wire/src
 # Only the two members that receive real sources below lose their stubs; the
