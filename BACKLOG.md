@@ -988,6 +988,29 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     two already-priced levers, neither taken: fold the Store into the snapshot
     channel's back buffer (2,848 B, BUDGET's §4-correction section), and halve
     the crest pool to 16 slots (18,432 B, costs re-fetch churn on college-
-    football Saturdays). A third worth pricing: whether picoserve's arena
-    multiplier shrinks if the router type is boxed once instead of
-    instantiated per task. Measure before choosing, per house rule.
+    football Saturdays). The third lever is the arena itself: of each
+    connection's 22,080 B, only 8,552 B is our buffers — the rest is
+    picoserve's future machinery, and BUDGET's own note says a buffer inside
+    a handler costs its size times the router's nesting depth. So: measure
+    the future's layout first (nightly `-Zprint-type-sizes` names every
+    field), then shrink the deepest handler's temporaries and consider
+    flattening the route tree — fewer chained `.route()` wrappers means a
+    shallower composed future. Boxing the router is NOT a lever: the app is
+    no-alloc by design. The nuclear option, only if Phase S needs the RAM
+    back, is a hand-rolled minimal server (one dispatch fn, one modest
+    future) in picoserve's place. Measure before choosing, per house rule.
+
+95. **Browser-seeded timezone (owner proposal, 2026-08-16).** The settings
+    SPA runs on a device that lives in the scoreboard's own household, so let
+    it answer the question ESPN never can: on load, client JS posts the
+    timezone in the background and the Pico stores it. One refinement makes
+    it robust across sparse visits: post an offset *schedule*, not a bare
+    offset — current UTC offset, the instant of the next DST transition, and
+    the offset after it (all computable client-side by probing `Date` over
+    the coming months). The Pico stores three numbers and flips at the
+    timestamp, no tz database aboard, and every visit refreshes the horizon.
+    Write to storage only when the values changed (flash discipline);
+    last-writer-wins is fine for a household device. Today the backend's
+    GeoIP `/time` answers this, so the item is not urgent — it is the Phase S
+    answer, replacing both the MaxMind dependency and the manual-dropdown
+    fallback PHASE-S.md proposed.
