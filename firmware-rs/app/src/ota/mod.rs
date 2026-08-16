@@ -319,6 +319,10 @@ pub async fn check(cx: Context<'_>, schedule: &mut Schedule) {
 static CONFIRMED_THIS_BOOT: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
+#[cfg_attr(
+    not(feature = "link-boot-integrated"),
+    allow(dead_code, reason = "latched only by the boot-integrated confirm; standalone's confirm has no trial to clear")
+)]
 pub(crate) fn record_confirmed() {
     CONFIRMED_THIS_BOOT.store(true, Ordering::Relaxed);
 }
