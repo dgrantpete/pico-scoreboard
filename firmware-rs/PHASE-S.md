@@ -134,9 +134,20 @@ Three things the drill taught that this document should carry:
   from the backend's GeoIP lookup — that is what the MaxMind database is for.
   Direct mode replaces the epoch trivially (SNTP over UDP costs one transient
   socket; `SOCKETS = 10` has room). Nothing upstream answers "what is this
-  living room's offset," so the honest replacement is a timezone setting in
-  the SPA — one more reason the shared transform should treat the offset as
-  configuration, not discovery.
+  living room's offset."
+
+  **DECIDED (owner, 2026-08-16): the browser seeds it.** The settings SPA
+  runs on a device that lives in the scoreboard's own household, so on load
+  the client posts an offset *schedule* in the background — current UTC
+  offset, the instant of the next DST transition, and the offset after it,
+  all computable client-side by probing `Date` over the coming months. The
+  Pico stores three numbers and flips at the timestamp: no timezone database
+  aboard, every casual settings visit refreshes the horizon, storage is
+  written only when the values change, and last-writer-wins is accepted for
+  a household device. This is BACKLOG 95, it retires the MaxMind dependency,
+  and it is one more reason the shared transform treats the offset as
+  configuration, not discovery. A manual override field can ride along for
+  the pathological case, but the seed is the design.
 - **OTA lives on the backend too.** `/fw/manifest` + `/fw/image` are backend
   routes. Backend-optional therefore means OTA-optional unless the artifacts
   move to any dumb HTTPS host — the ed25519 signature carries the trust, not
