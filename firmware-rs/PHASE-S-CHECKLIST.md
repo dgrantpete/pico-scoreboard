@@ -38,19 +38,32 @@ line** — the `testdata/` relocation is the known case.
 Gate to start: none. Gate to exit: chunk-split property tests green over the
 real corpus.
 
-- [ ] Re-audit the ecosystem (the 2026-08-08 survey in PHASE-S.md is stale by
-      its own instruction). `picojson-rs` first, then `json-streaming`,
-      `json-stream-parser`, `json_event_parser`, plus anything new.
-- [ ] Score the candidate against SPEC §10: `no_std`, no-alloc, caller-owned
-      buffers, license, fuzzing history — and the criterion that kills most
-      "streaming" parsers: **resumable across arbitrary chunk splits**
-      (mid-string, mid-`\u` escape, mid-number, mid-literal).
-- [ ] Feasibility harness (sibling-repo pattern, like
-      `repos/aseprite-io-feasibility`): feed real ESPN bodies from
-      `backend/testdata/` split at *every* byte boundary (property test);
-      assert the event stream is identical to the unsplit parse.
-- [ ] Adopt-or-write decision recorded as a SPEC Appendix A audit line. If
-      write: the ~500-line pull state machine, fuzzed, same property tests.
+- [x] Re-audit the ecosystem (2026-08-16): `picojson` 0.2.3 published
+      2026-07-10, active, Apache-2.0, and now ships a **PushParser** —
+      SAX-style push, the actson shape PHASE-S.md wanted — plus a `defmt`
+      feature. Nothing among the other candidates beats it.
+- [x] Scored against SPEC §10 (2026-08-16): `no_std` PASS (checked on
+      `thumbv8m.main-none-eabihf` from a `#![no_std]` consumer), no-alloc
+      PASS (source-audited; the only `Vec` is test code), caller-owned
+      buffers PASS, split-resumability PASS (below), scratch overflow is a
+      clean `Err`. Fuzzing evidence THIN — mitigations in the harness README.
+- [x] Feasibility harness: `repos/picojson-feasibility` (2026-08-16, green).
+      Whole-parse vs 1-byte-at-a-time (every split point in one pass) and
+      seeded random chunkings over the full `backend/testdata/` JSON corpus;
+      every individual two-chunk split of escape/surrogate/UTF-8/number
+      nasties. Identical event streams throughout.
+      **One blocker found and pinned by a `compile_fail` doctest:** `'input`
+      is a struct lifetime on `PushParser`, so feeding from a *reused
+      receive buffer* — the firmware's socket loop — does not borrow-check.
+      Unnecessary by the crate's own contract (partials are copied to
+      scratch and the slice reset before `write` returns); unchanged on
+      upstream master; no upstream issue exists.
+- [ ] Adopt-or-write decision recorded as a SPEC Appendix A audit line.
+      Verdict from the harness: **adopt, conditional on the lifetime fix** —
+      preferred path is an upstream issue + PR with a `[patch.crates-io]`
+      fork pin until merged (draft at
+      `picojson-feasibility/ISSUE-DRAFT.md`, not filed — owner approves
+      outward contact first).
 - [ ] Exit: tokenizer choice + harness results written up; merge to `main`.
 
 ## S1 — shared transform crate (host-only)
