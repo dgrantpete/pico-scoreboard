@@ -117,6 +117,63 @@ The implementer owns the mechanism; these are the contract:
 - **One table serves both deployments.** No device-side feature-gating of
   DTO-only fields in S1; revisit at S3 only if a field measurably hurts.
 
+## Rulings (2026-08-16, after the football + NBA inventories)
+
+The inventory reports (session scratchpad, `s1-inventory/*.md`) converged on
+a set of cross-sport questions. Answered here once so no lane relitigates:
+
+1. **Rejection parity is part of the contract.** The backend's per-state
+   required-field rules (a pregame event missing `displayClock` is dropped;
+   the games *list* is the same parse) must be reproduced: extract finalize
+   validates the same required set and skips the event exactly where the
+   backend's DU conversion would. Byte parity on transformed games does not
+   imply set parity on the list — we owe both. Likewise the two-tier error
+   model survives: DU-tier failure = skip event; transform-tier failure
+   (bad color hex, unparseable score/date) = extract error the backend
+   adapter maps to today's 5xx.
+2. **Extract strings are bound at `MAX_STRING_BYTES` (255), never tighter.**
+   The backend truncates strings only at wire encode (char-boundary walk in
+   `codec.rs`); a tighter extract bound would silently diverge. The copy
+   into the extract truncates with the *same shared function* —
+   `scoreboard-wire`'s `truncate_utf8` becomes `pub` and both call it (one
+   implementation, zero drift). Structurally-bounded fields (colors,
+   scores) keep their integer types. `scoreboard-model`'s tighter `Text<N>`
+   bounds are downstream at `Store` copy-in and unchanged.
+3. **`start_time` parsing is hand-rolled, not a date crate**: fixed-width
+   parse of the two observed formats + days-from-civil epoch arithmetic
+   (~40 lines of pure `core`), property-tested against `chrono` in a std
+   dev-test. A date dependency for one field fails the edge-mdns
+   proportion test.
+4. **Field-order independence is a hard rule.** serde never depended on
+   ESPN's key order; the tables may not either. Cross-field logic
+   (possession → `Side`, home/away by marker never by index) resolves at
+   element finalize from buffered ids. No sport table may assume emission
+   order inside an object.
+5. **Warn-only duplicate clamps are dropped** (the wire-side clip is
+   authoritative and byte-identical); the *diagnostic* survives as ruling 6.
+6. **Diagnostics**: the crate emits structured quirk events (unknown phase
+   label, malformed record, clipped line score, …) through a small
+   caller-wired callback — backend routes them to `tracing`, the device to
+   its log ring. An enum with minimal payload; no formatting in the crate.
+7. **Behavior changes are out of scope, all of them.** Line-score period
+   gaps, NFL tie-record drops, OT phase labels, absent-vs-explicit-null
+   leniency, device-side bad-color policy: S1 reproduces today's behavior
+   bit for bit; each becomes a BACKLOG candidate for the owner. (Device
+   error *policy* is S3's layer anyway.)
+8. **`is_college` is a call parameter** of the football extractor, not a
+   table row; conditional logic gates in the sink.
+9. **The parity oracle is the existing golden harness.**
+   `backend/src/wire_corpus.rs` already pins transform→wire bytes to
+   committed goldens over every fixture; S1's acceptance test runs the
+   shared crate over the same fixtures against the same goldens. Corpus
+   gaps (no OT, no non-ASCII play text, synthetic-only football) are
+   surfaced to the owner as a capture/synthesis request — the gate extends
+   automatically as fixtures land.
+10. **Unicode uppercasing** (`rank_line`) uses `core`'s
+    `char::to_uppercase`; a std dev-test property-checks byte-identity
+    against `str::to_uppercase` over the corpus plus targeted non-ASCII
+    names.
+
 ## Lanes and validation
 
 - Engine lane: `src/path.rs` + its tests. Hard subsystem — strongest model,
