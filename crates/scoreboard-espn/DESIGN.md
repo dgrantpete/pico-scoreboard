@@ -193,16 +193,18 @@ Added after the MLB + soccer inventories, same day:
 
 Added as the sport lanes landed:
 
-14. **Detail-mode skip trades the failure count for speed — signed off,
-    with a backend condition.** `SkipElement` on non-target events means a
-    detail run does not validate what it skips, so "target absent +
-    sibling glitched" can resolve NotFound where the backend answers 502
-    (the observed all-`{}` glitch still resolves Glitched — unparsed ids
-    are never skipped). Accepted for the device (S3), where the cheap skip
-    is the point. The **backend adapter must not inherit it**: it derives
-    the 404-vs-502 verdict from a full-validation list pass over the
-    in-memory body before detail extraction, reproducing today's
-    `find_event` exactly. Recorded on both lanes' `ScanStats`/counts docs.
+14. **Detail mode validates until the target is found, then skips**
+    (REVISED same day — the football lane's deviation is adopted
+    crate-wide, superseding the skip-at-id policy and its backend
+    workaround). Rationale: `SkipElement` never skipped *tokenization*,
+    only matching work, so blind skipping bought almost nothing — while
+    validate-until-found makes the failure counts exact precisely when
+    the 404-vs-502 verdict consumes them: a missing target means nothing
+    was ever skipped. Post-target events are skipped and uncounted, which
+    is fine — the verdict is already Found. Pinned by football's
+    `events_after_found_target_are_skipped` (both directions); MLB, NBA
+    and soccer retrofit to the same policy and pin it the same way. The
+    backend adapter no longer needs a separate full-validation pass.
 15. **Local-helper promotion happens once, after all four lanes land** —
     the duplicated serde-shape integer parsers, `wire_phase`, and the
     stable insertion sort consolidate into `common.rs` in one

@@ -36,6 +36,16 @@ pub enum Quirk {
     ClippedLineScore,
     /// MLB weather block dropped (no resolvable condition or no temperature).
     WeatherDropped,
+    /// A live soccer/football situation dropped by validation (backend warns).
+    SituationDropped,
+    /// Soccer clock fell back to the numeric field (display string unparseable).
+    DisplayClockFallback,
+    /// A period outside the wire's decodable range passed through (encode
+    /// warns, decode rejects — the asymmetry is BACKLOG material).
+    PeriodOutOfRange,
+    /// A bounded extract buffer overflowed (scorer records, list entries…);
+    /// diagnostics only — the wire bytes are unaffected by where we clip.
+    BoundedOverflow,
 }
 
 /// Receives quirk events. Implemented by the callers, not the tables.
@@ -219,4 +229,145 @@ fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
     let doy = (153 * mp + 2) / 5 + day as i64 - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146_097 + doe - 719_468
+}
+
+// ---------------------------------------------------------------------------
+// Promoted from the sport lanes (ruling 15): one consolidation pass after all
+// four landed. Semantics are the lanes' tested ones, lifted verbatim.
+
+/// serde's `u8` acceptance for a raw JSON number: an unsigned integer
+/// literal that fits. Floats, exponents and signs are type errors, exactly
+/// as `serde_json` rejects them for integer fields.
+pub fn num_u8(text: &str) -> Option<u8> {
+    if !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// serde's `u16` acceptance for a raw JSON number. See [`num_u8`].
+pub fn num_u16(text: &str) -> Option<u16> {
+    if !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// serde's `u32` acceptance for a raw JSON number. See [`num_u8`].
+pub fn num_u32(text: &str) -> Option<u32> {
+    if !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// serde's `i16` acceptance for a raw JSON number: one optional leading
+/// minus, digits, in range. See [`num_u8`].
+pub fn num_i16(text: &str) -> Option<i16> {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// `common::LivePhase` → the wire's. Separate types because the wire crate
+/// is deleted on the standalone branch at S4 while this crate survives.
+pub fn wire_phase(phase: LivePhase) -> scoreboard_wire::LivePhase {
+    match phase {
+        LivePhase::InProgress => scoreboard_wire::LivePhase::InProgress,
+        LivePhase::Halftime => scoreboard_wire::LivePhase::Halftime,
+        LivePhase::EndOfPeriod => scoreboard_wire::LivePhase::EndOfPeriod,
+    }
+}
+
+/// Stable insertion sort — `core` has no stable slice sort, and stability is
+/// byte-load-bearing (equal keys keep arrival order; the soccer goldens and
+/// NBA duplicate-period linescores both encode it). O(n²) on slates that are
+/// tens of elements at most.
+pub fn stable_sort_by_key<T, K: Ord>(items: &mut [T], key: impl Fn(&T) -> K) {
+    for i in 1..items.len() {
+        let mut j = i;
+        while j > 0 && key(&items[j - 1]) > key(&items[j]) {
+            items.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+}
+
+/// Append `piece`, truncating at the remaining capacity on a char boundary.
+/// Returns false once truncation happened — the buffer is full.
+pub fn push_trunc<const N: usize>(dst: &mut heapless::String<N>, piece: &str) -> bool {
+    let take = truncate_utf8(piece, N - dst.len());
+    let _ = dst.push_str(take);
+    take.len() == piece.len()
+}
+
+/// `truncate_utf8(concat(pieces), N)` without materializing the
+/// concatenation: earlier pieces fit whole, the cut lands inside exactly one
+/// piece, and `truncate_utf8` backs up within it identically either way.
+pub fn compose<const N: usize>(dst: &mut heapless::String<N>, pieces: &[&str]) {
+    for piece in pieces {
+        if !push_trunc(dst, piece) {
+            break;
+        }
+    }
+}
+
+/// Bounded copy that REFUSES to truncate: parse inputs and compare keys must
+/// fail loudly (matching the backend's behavior on the same input) rather
+/// than silently operate on a prefix.
+#[derive(Debug, Clone, Default)]
+pub struct Exact<const N: usize> {
+    text: heapless::String<N>,
+    seen: bool,
+    over: bool,
+}
+
+impl<const N: usize> Exact<N> {
+    pub fn set(&mut self, src: &str) {
+        self.text.clear();
+        self.seen = true;
+        self.over = self.text.push_str(src).is_err();
+    }
+
+    pub fn seen(&self) -> bool {
+        self.seen
+    }
+
+    /// The stored text, or `None` when never set or when it overflowed.
+    pub fn valid(&self) -> Option<&str> {
+        if self.seen && !self.over {
+            Some(self.text.as_str())
+        } else {
+            None
+        }
+    }
+}
+
+/// Wire-bound string plus a presence flag: copies with the shared
+/// `truncate_utf8` (ruling 2).
+#[derive(Debug, Clone, Default)]
+pub struct WireText {
+    text: EText,
+    seen: bool,
+}
+
+impl WireText {
+    pub fn set(&mut self, src: &str) {
+        set_text(&mut self.text, src);
+        self.seen = true;
+    }
+
+    pub fn seen(&self) -> bool {
+        self.seen
+    }
+
+    pub fn get(&self) -> Option<&str> {
+        if self.seen { Some(self.text.as_str()) } else { None }
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.text.as_str()
+    }
 }
