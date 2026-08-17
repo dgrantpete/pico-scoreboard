@@ -12,6 +12,10 @@
 #![no_std]
 
 pub mod common;
+pub mod football;
+pub mod mlb;
+pub mod nba;
 pub mod path;
+pub mod soccer;
 
 pub use path::{Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
