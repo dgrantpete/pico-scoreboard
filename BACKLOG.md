@@ -1022,3 +1022,20 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     GeoIP `/time` answers this, so the item is not urgent — it is the Phase S
     answer, replacing both the MaxMind dependency and the manual-dropdown
     fallback PHASE-S.md proposed.
+
+96. **Tokenizer-core word-at-a-time scanning — the remaining 2–3× parse
+    lever (2026-08-17, measured).** After the batched-drive optimization
+    (fork branch `perf/batched-push-drive`, local, unpushed), on-device
+    parsing costs 179–268 cycles/byte and the wall is ujson's per-byte
+    state machine; string interiors dominate and admit a 32-bit SWAR scan
+    (`"`/`\`/control classes) on the M33. Full onboarding — measured
+    tables, the validation ladder that makes tokenizer surgery safe, the
+    positions contract, and hardware-bench operations — lives in
+    `firmware-rs/PARSE-PERF.md`. Pull this lever before ever reconsidering
+    the hosted-backend retreat; the college worst case plausibly drops
+    under 700 ms. Related instrument: item 87 (the RP2350 keeps teaching
+    that per-unit overhead dominates streaming loops). Also parked in that
+    doc's orbit: pushing the perf branch upstream as the follow-up to
+    picojson PR #98, and the FCS missing-`alternateColor` events that drop
+    real games from the college board (a fallback color would show them —
+    behavior change, owner's call).
