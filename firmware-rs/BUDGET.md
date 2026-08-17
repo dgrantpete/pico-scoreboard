@@ -895,6 +895,47 @@ by SWD snapshots of the defmt ring plus `/api/status` polling.
 - **Download-to-confirmed, end to end: ~132 s** (35 download + 11 verify +
   5 countdown + 41 dark + ~30 trial-to-confirm).
 
+## Phase S2 — what TLS 1.3 actually costs, measured 2026-08-17 night
+
+`firmware-rs/tls-spike` (standalone, bench pattern) on the seated unit's
+RP2350 over real Wi-Fi: embedded-tls via reqwless, `TlsVerify::None` (the
+ruled posture), AES-128-GCM, P-256 key exchange, 5 reps per cell. Three
+lanes: the LAN TLS terminator fronting the `tools/espn` mock, real
+`site.api.espn.com`, and `github.com` (the all-ECDSA chain).
+
+| | connect + handshake | kept-alive request | cold full fetch |
+|---|---:|---:|---:|
+| terminator (LAN, 481–498 KB body) | 132–198 ms | ~2.8–3.1 s | 3.0–5.3 s |
+| site.api.espn.com (215 KB body) | 311 ms | 49–110 ms¹ | 6.02–6.15 s |
+| github.com (2.3 KB body) | 389–409 ms | 239–312 ms | 570–680 ms |
+
+¹ Keep-alive reps answered 404 (a reqwless `resource()` base-path quirk in
+the spike, not a server or TLS issue) — still full request/response cycles
+on the open connection, which is what the cell measures.
+
+**The finding that sizes S3: transfers are TCP-window-limited, not
+crypto-limited.** The spike reused `api_client`'s 1,536 B receive buffer;
+throughput pinned at window/RTT everywhere — ~36 KB/s against ESPN
+(1,536 B / ~40 ms, measured 35.5 KB/s) and ~160 KB/s on the LAN. The
+crypto itself is bounded by the LAN handshake (≤ ~200 ms including ECDHE)
+and never showed as a bulk-rate ceiling. So a real ESPN poll at S3 costs
+**~6 s as-is, or well under 1 s with a 16 KB receive window** — a
++14.8 KB RAM line against the re-earned headroom, decided when S3 lands
+it, measured not estimated.
+
+TLS statics the spike carried (the S3 baseline): 16,640 B read-record +
+4,096 B write-record buffers = **20.7 KB**, plus the request future in
+the task arena (spike main future: 16.4 KB total). Handshake numbers used
+the fork `dgrantpete/embedded-tls` `port/der-0.8-stable` (two commits:
+stable-der build fix, and unconditional RSA signature-scheme advertising —
+without which ESPN's edge aborts a no-verify client's handshake outright;
+measured before/after on this silicon).
+
+Caveats attached to these numbers: Wi-Fi ran in `PowerSave` mode (the
+spike's choice; re-measure a lane with it off before treating the
+throughput floors as physics), and the multi-hour sustained-poll soak of
+the fronted mock is still owed — the S2 exit line carries it.
+
 ## Caveats to close before the numbers can be trusted end to end
 
 - **Stacks are still not in `size`'s output**, but both are now measured

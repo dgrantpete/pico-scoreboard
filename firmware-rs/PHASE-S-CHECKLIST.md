@@ -152,8 +152,19 @@ and steady-state numbers in BUDGET.md.
       10 KB, 816 B short at 15 KB, and `ram-exec` at S3 wants 5–10 KB more;
       the owner names the reservation and the S3-time lever if one is
       needed. Gate is open on the 10 KB reading.
-- [ ] embedded-tls via reqwless, against a TLS terminator fronting the
-      `tools/espn` mock first (the mock speaks plain HTTP), then real hosts.
+- [x] embedded-tls via reqwless, against a TLS terminator fronting the
+      `tools/espn` mock first, then real hosts (2026-08-17 night,
+      `firmware-rs/tls-spike` on the seated unit): full 481–498 KB mock
+      bodies and real 215 KB `site.api.espn.com` scoreboards fetched over
+      TLS 1.3 under the ruled posture, plus github.com. Two ecosystem
+      walls found and fixed on fork `dgrantpete/embedded-tls`
+      `port/der-0.8-stable`: (1) published embedded-tls cannot build
+      against today's crates.io (der rc-pin rot; upstream PR #196 fixes
+      main, unreleased), and (2) the default config only advertises RSA
+      signature schemes with `alloc` on, so ESPN's RSA-only edge aborts a
+      no-verify client at the handshake — advertising unconditionally
+      fixed it, measured before/after on silicon. Numbers and the
+      TCP-window-limited finding: BUDGET.md "Phase S2".
 - [x] **Protocol check, early** (2026-08-17, from the dev machine): all four
       hosts the standalone build will touch — `site.api.espn.com`,
       `a.espncdn.com` (logo hrefs are absolute), `github.com`,
@@ -179,17 +190,21 @@ and steady-state numbers in BUDGET.md.
       take it there; `objects.githubusercontent.com` (RSA) rides the
       signature. No CA pinning, so no CA-rotation runbook — the only
       TLS-shaped OTA event left is embedded-tls capability drift.
-- [ ] Measure the handshake on silicon before believing any figure — the
-      house rule PHASE-S.md earned at 8× on the hash estimate. Keep-alive
-      amortization is load-bearing, not nice-to-have. Crypto's hot footprint
-      will overflow the XIP cache, so cross-build comparisons carry the
-      layout noise floor (TOOLCHAIN.md "On-silicon benchmarking") — A/B
-      within one binary or expect ±30% ghosts.
-- [ ] User-Agent: device sends the allowlisted prefix from
-      `backend/config/default.toml` (ESPN's edge 403s unknown UAs).
-- [ ] Exit: sustained TLS polling of the fronted mock + one real ESPN fetch
-      from the bench unit; RAM delta and handshake time in BUDGET.md;
-      merge to `main`.
+- [x] Measure the handshake on silicon before believing any figure
+      (2026-08-17 night): connect+handshake 132–198 ms LAN / 311 ms ESPN /
+      ~400 ms github; kept-alive requests 50–310 ms vs cold fetches of
+      0.6–6 s — keep-alive amortization confirmed load-bearing. The 8×-class
+      surprise this time was elsewhere: bulk transfer is TCP-window-limited
+      (1.5 KB rx buffer), not crypto-limited — the S3 rx-buffer sizing
+      lever in BUDGET.md "Phase S2".
+- [x] User-Agent: the spike sent the allowlisted prefix from
+      `backend/config/default.toml` on every request — five real ESPN
+      fetches answered 200, no 403s (2026-08-17).
+- [ ] Exit: real-fetch and numbers portions DONE (five real ESPN fetches;
+      RAM delta and handshake times in BUDGET.md "Phase S2"). Still owed:
+      the multi-hour sustained-poll soak of the fronted mock (rig persists:
+      mock :8787 + terminator :8443 recipe in the spike's docs), a
+      PowerSave-off throughput control, then merge to `main`.
 
 ## S3 — the direct feed (device, still merge-clean)
 

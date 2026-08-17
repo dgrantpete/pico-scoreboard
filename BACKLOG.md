@@ -1047,7 +1047,16 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     issue after the perf PRs land rather than growing the stack.
     *Standing debts:* drop `[patch.crates-io]` pins when releases land —
     picojson (root `Cargo.toml` + `firmware-rs/bench`) after a release
-    carries #98/#99, picoserve (`firmware-rs/app`) after the next release
+    carries #98/#99; embedded-tls (`firmware-rs/tls-spike`, fork
+    `dgrantpete/embedded-tls` `port/der-0.8-stable`) after a release
+    carries their PR #196 AND a reqwless release accepts it — our der fix
+    duplicates #196 (found before filing, rule below), and our second
+    commit (advertise RSA sigalgs unconditionally, the fix that makes
+    no-verify clients work against ESPN's RSA edge) is a behavior change:
+    open an ISSUE upstream to gauge it, don't lead with a PR. Also
+    flag-only from that lane: their openssl dev-dep blocks `cargo test`
+    on vcpkg-less Windows, a possible QoL PR. picoserve
+    (`firmware-rs/app`) after the next release
     (upstream fixed the select duplication independently on development,
     47be022 — no PR owed there, and the near-miss is the lesson: **check the
     default branch before filing**).
