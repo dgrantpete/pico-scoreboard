@@ -1,0 +1,516 @@
+//! The MLB parity gate: every committed fixture streamed through the path
+//! table must encode byte-identically to its committed wire golden, the
+//! rain-delay fixture must be vetoed (that asymmetry is the point — it has
+//! no golden on purpose), and the extract must be invariant under chunk
+//! splits and JSON key order.
+//!
+//! Fixtures are single EVENT objects; the extractor sees the real
+//! scoreboard shape, so every test wraps them as `{"events":[…]}`.
+
+use scoreboard_espn::common::{Quirk, Quirks};
+use scoreboard_espn::mlb::{
+    Counts, DetailError, DetailExtractor, Extract, ListExtractor, ListSink, TransformError,
+};
+use scoreboard_wire::{GameState, SliceSink};
+use serde_json::{Value, json};
+use std::fs;
+use std::path::PathBuf;
+
+// ---------------------------------------------------------------- harness
+
+fn testdata() -> PathBuf {
+    PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../backend/testdata"
+    ))
+}
+
+fn fixture(name: &str) -> String {
+    let path = testdata().join("mlb").join(format!("{name}.json"));
+    fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+}
+
+fn golden(name: &str) -> Vec<u8> {
+    let path = testdata().join("wire/mlb").join(format!("{name}.bin"));
+    fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+}
+
+fn parse(raw: &str) -> Value {
+    serde_json::from_str(raw).expect("fixture parses as JSON")
+}
+
+fn event_id(raw: &str) -> String {
+    parse(raw)["id"].as_str().expect("event id").to_string()
+}
+
+/// `{"events":[…]}` — the scoreboard body the engine actually walks.
+fn wrap(events: &[&str]) -> Vec<u8> {
+    format!("{{\"events\":[{}]}}", events.join(",")).into_bytes()
+}
+
+#[derive(Default)]
+struct Entries(Vec<(String, GameState)>);
+
+impl ListSink for Entries {
+    fn entry(&mut self, id: &str, state: GameState) {
+        self.0.push((id.to_string(), state));
+    }
+}
+
+#[derive(Default)]
+struct Recorded(Vec<Quirk>);
+
+impl Quirks for Recorded {
+    fn quirk(&mut self, quirk: Quirk) {
+        self.0.push(quirk);
+    }
+}
+
+fn detail_chunked(
+    body: &[u8],
+    id: &str,
+    chunk: usize,
+    quirks: &mut Recorded,
+) -> Result<Extract, DetailError> {
+    let mut scratch = vec![0u8; 16 * 1024];
+    let mut extractor = DetailExtractor::new(id, quirks, &mut scratch).expect("table validates");
+    for piece in body.chunks(chunk.max(1)) {
+        extractor.write(piece).expect("chunk accepted");
+    }
+    extractor.finish()
+}
+
+fn detail(body: &[u8], id: &str) -> Result<Extract, DetailError> {
+    detail_chunked(body, id, usize::MAX, &mut Recorded::default())
+}
+
+fn list(body: &[u8]) -> (Vec<(String, GameState)>, Counts, Vec<Quirk>) {
+    let mut scratch = vec![0u8; 16 * 1024];
+    let mut entries = Entries::default();
+    let mut quirks = Recorded::default();
+    let mut extractor =
+        ListExtractor::new(&mut entries, &mut quirks, &mut scratch).expect("table validates");
+    extractor.write(body).expect("body accepted");
+    let counts = extractor.finish().expect("scoreboard shape valid");
+    (entries.0, counts, quirks.0)
+}
+
+fn encode(extract: &Extract) -> Vec<u8> {
+    let mut buf = [0u8; 4096];
+    let mut sink = SliceSink::new(&mut buf);
+    scoreboard_wire::mlb::encode(&extract.as_game(), &mut sink).expect("payload fits");
+    sink.written().to_vec()
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+// ---------------------------------------------------------- golden parity
+
+/// Every fixture with a committed golden: stream → extract → `as_game()` →
+/// `scoreboard_wire::mlb::encode` must reproduce the golden byte for byte.
+#[test]
+fn corpus_fixtures_encode_to_their_goldens() {
+    for name in ["final", "live_inning", "pregame", "pregame_weather_normal"] {
+        let raw = fixture(name);
+        let id = event_id(&raw);
+        let body = wrap(&[&raw]);
+        let extract =
+            detail(&body, &id).unwrap_or_else(|e| panic!("{name}: extract failed: {e:?}"));
+        assert_eq!(
+            hex(&encode(&extract)),
+            hex(&golden(name)),
+            "{name} does not match its wire golden"
+        );
+    }
+}
+
+/// `rain_delay.json` has NO golden on purpose: still `state:"in"`, still a
+/// full situation, and still excluded — the detail path answers NotFound
+/// (today's 404, never a 502) and the list drops the entry while counting
+/// the event as parsed.
+#[test]
+fn rain_delay_is_vetoed_not_encoded() {
+    let raw = fixture("rain_delay");
+    let id = event_id(&raw);
+    let body = wrap(&[&raw]);
+
+    let mut quirks = Recorded::default();
+    let result = detail_chunked(&body, &id, usize::MAX, &mut quirks);
+    assert_eq!(result, Err(DetailError::NotFound));
+    assert_eq!(quirks.0, vec![Quirk::UnknownInningHalf]);
+
+    let (entries, counts, quirks) = list(&body);
+    assert!(entries.is_empty(), "vetoed game must not be advertised");
+    assert_eq!(counts, Counts { ok: 1, failed: 0 });
+    assert_eq!(quirks, vec![Quirk::UnknownInningHalf]);
+}
+
+// ------------------------------------------------------ split invariance
+
+/// Whole-buffer vs 1-byte-at-a-time (and an uneven prime) must produce the
+/// identical extract and identical encoded bytes — the S0 methodology at
+/// the extract level.
+#[test]
+fn chunk_split_invariance_at_the_extract_level() {
+    for name in ["pregame", "live_inning", "final"] {
+        let raw = fixture(name);
+        let id = event_id(&raw);
+        let body = wrap(&[&raw]);
+        let whole = detail(&body, &id).expect("whole-buffer extract");
+        for chunk in [1usize, 7] {
+            let split = detail_chunked(&body, &id, chunk, &mut Recorded::default())
+                .unwrap_or_else(|e| panic!("{name}: {chunk}-byte feed failed: {e:?}"));
+            assert_eq!(split, whole, "{name}: {chunk}-byte feed extract diverged");
+            assert_eq!(
+                hex(&encode(&split)),
+                hex(&encode(&whole)),
+                "{name}: {chunk}-byte feed bytes diverged"
+            );
+        }
+    }
+}
+
+/// Ruling 4: no table may assume ESPN's emission order. serde_json's
+/// default map is sorted, so a parse → serialize round trip rewrites every
+/// object with alphabetical keys (`competitions` before `id`, `situation`
+/// before `status` — the discriminant moves), and the golden must survive.
+#[test]
+fn key_order_does_not_matter() {
+    for name in ["pregame", "live_inning", "final"] {
+        let raw = fixture(name);
+        let id = event_id(&raw);
+        let reordered = parse(&raw).to_string();
+        assert_ne!(raw.trim(), reordered, "round trip should reorder keys");
+        let extract = detail(&wrap(&[&reordered]), &id)
+            .unwrap_or_else(|e| panic!("{name} reordered: {e:?}"));
+        assert_eq!(
+            hex(&encode(&extract)),
+            hex(&golden(name)),
+            "{name}: reordered keys changed the wire bytes"
+        );
+    }
+}
+
+// ---------------------------------------------------------------- weather
+
+/// The corpus carries both orientations: `pregame.json` is transposed
+/// (`displayValue:"6"`, `conditionId:"Mostly cloudy"`) and
+/// `pregame_weather_normal.json` is not (`displayValue:"Sunny"`,
+/// `conditionId:"1"`). The condition is whichever member does not parse as
+/// a number.
+#[test]
+fn weather_transposition_resolves_both_orientations() {
+    let cases = [
+        ("pregame", "Mostly cloudy", 58i16),
+        ("pregame_weather_normal", "Sunny", 77i16),
+    ];
+    for (name, condition, temperature) in cases {
+        let raw = fixture(name);
+        let extract = detail(&wrap(&[&raw]), &event_id(&raw)).expect("pregame extracts");
+        let Extract::Pregame(game) = extract else {
+            panic!("{name} must extract as pregame");
+        };
+        let weather = game.weather.expect("weather resolves");
+        assert_eq!(weather.condition.as_str(), condition, "{name}");
+        assert_eq!(weather.temperature, temperature, "{name}");
+    }
+}
+
+/// Both members numeric → no condition text → the whole block drops
+/// (all-or-nothing with temperature), with the quirk, and the wire flags
+/// bit stays clear.
+#[test]
+fn weather_with_no_resolvable_condition_drops_whole_block() {
+    let raw = fixture("pregame_weather_normal");
+    let id = event_id(&raw);
+    let mut event = parse(&raw);
+    event["weather"]["displayValue"] = json!("7"); // conditionId is already "1"
+    let mut quirks = Recorded::default();
+    let extract = detail_chunked(&wrap(&[&event.to_string()]), &id, usize::MAX, &mut quirks)
+        .expect("event still extracts");
+    let Extract::Pregame(ref game) = extract else {
+        panic!("must stay pregame");
+    };
+    assert!(game.weather.is_none());
+    assert!(quirks.0.contains(&Quirk::WeatherDropped));
+    let bytes = encode(&extract);
+    assert_eq!(bytes[2] & 0x01, 0, "weather flag bit must be clear");
+    assert_eq!(bytes[3], 0, "temperature byte zeroed by the encoder");
+}
+
+/// Missing temperature also drops the block even though a condition
+/// resolved — the flag is all-or-nothing.
+#[test]
+fn weather_without_temperature_drops_whole_block() {
+    let raw = fixture("pregame_weather_normal");
+    let id = event_id(&raw);
+    let mut event = parse(&raw);
+    event["weather"]
+        .as_object_mut()
+        .expect("weather object")
+        .remove("temperature");
+    let mut quirks = Recorded::default();
+    let extract = detail_chunked(&wrap(&[&event.to_string()]), &id, usize::MAX, &mut quirks)
+        .expect("event still extracts");
+    let Extract::Pregame(game) = extract else {
+        panic!("must stay pregame");
+    };
+    assert!(game.weather.is_none());
+    assert!(quirks.0.contains(&Quirk::WeatherDropped));
+}
+
+// -------------------------------------------------------------- list mode
+
+/// Two real fixtures plus a synthetic `{}` (the observed 2026-07-06 glitch
+/// shape) in one events array: entries in document order, the glitch
+/// counted as failed exactly like `parse_events`.
+#[test]
+fn list_walks_every_event_and_counts_failures() {
+    let pregame = fixture("pregame");
+    let live = fixture("live_inning");
+    let body = wrap(&[&pregame, "{}", &live]);
+    let (entries, counts, quirks) = list(&body);
+    assert_eq!(
+        entries,
+        vec![
+            (event_id(&pregame), GameState::Pregame),
+            (event_id(&live), GameState::Live),
+        ]
+    );
+    assert_eq!(counts, Counts { ok: 2, failed: 1 });
+    assert!(quirks.is_empty());
+}
+
+/// The per-state required-field rules are the same parse the backend list
+/// runs: pregame requires the venue, live requires the full situation
+/// (including the no-default base bools), every state requires
+/// `shortDetail`, and a float temperature kills the event.
+#[test]
+fn list_applies_per_state_required_field_rules() {
+    // Pregame without a competition venue: DU-tier reject.
+    let mut event = parse(&fixture("pregame"));
+    event["competitions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("venue");
+    let (entries, counts, _) = list(&wrap(&[&event.to_string()]));
+    assert!(entries.is_empty());
+    assert_eq!(counts, Counts { ok: 0, failed: 1 });
+
+    // Final without a venue: fine — only the pregame arm requires it.
+    let mut event = parse(&fixture("final"));
+    event["competitions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("venue");
+    let (entries, counts, _) = list(&wrap(&[&event.to_string()]));
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].1, GameState::Final);
+    assert_eq!(counts, Counts { ok: 1, failed: 0 });
+
+    // Live without a situation: DU-tier reject.
+    let mut event = parse(&fixture("live_inning"));
+    event["competitions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("situation");
+    let (entries, counts, _) = list(&wrap(&[&event.to_string()]));
+    assert!(entries.is_empty());
+    assert_eq!(counts, Counts { ok: 0, failed: 1 });
+
+    // Live missing one required base bool (`onSecond` has no default).
+    let mut event = parse(&fixture("live_inning"));
+    event["competitions"][0]["situation"]
+        .as_object_mut()
+        .unwrap()
+        .remove("onSecond");
+    let (entries, counts, _) = list(&wrap(&[&event.to_string()]));
+    assert!(entries.is_empty());
+    assert_eq!(counts, Counts { ok: 0, failed: 1 });
+
+    // `shortDetail` is deserialized in every state, final included.
+    let mut event = parse(&fixture("final"));
+    event["competitions"][0]["status"]["type"]
+        .as_object_mut()
+        .unwrap()
+        .remove("shortDetail");
+    let (entries, counts, _) = list(&wrap(&[&event.to_string()]));
+    assert!(entries.is_empty());
+    assert_eq!(counts, Counts { ok: 0, failed: 1 });
+
+    // A float temperature fails `i16` deserialization and kills the event.
+    let mut event = parse(&fixture("pregame"));
+    event["weather"]["temperature"] = json!(58.5);
+    let (entries, counts, _) = list(&wrap(&[&event.to_string()]));
+    assert!(entries.is_empty());
+    assert_eq!(counts, Counts { ok: 0, failed: 1 });
+}
+
+// ------------------------------------------------------------ detail mode
+
+/// Target in the second slot: the first event is skipped on its id and the
+/// result is identical to extracting the fixture alone.
+#[test]
+fn detail_skips_non_target_events() {
+    let pregame = fixture("pregame");
+    let live = fixture("live_inning");
+    let target = event_id(&live);
+    let multi = detail(&wrap(&[&pregame, &live]), &target).expect("target extracts");
+    let alone = detail(&wrap(&[&live]), &target).expect("target extracts alone");
+    assert_eq!(multi, alone);
+    assert_eq!(hex(&encode(&multi)), hex(&golden("live_inning")));
+}
+
+/// `find_event`'s asymmetry: an absent id on a clean scoreboard is
+/// NotFound (the firmware's "game ended"); with any unparseable event it
+/// must be Glitched instead — a glitch must never look like "game ended".
+#[test]
+fn detail_absent_id_clean_vs_glitched() {
+    let pregame = fixture("pregame");
+    assert_eq!(
+        detail(&wrap(&[&pregame]), "000000000"),
+        Err(DetailError::NotFound)
+    );
+    assert_eq!(
+        detail(&wrap(&[&pregame, "{}"]), "000000000"),
+        Err(DetailError::Glitched)
+    );
+    // The target's own event failing to parse is the same 502-class case.
+    let mut broken = parse(&pregame);
+    broken.as_object_mut().unwrap().remove("date");
+    let id = event_id(&pregame);
+    assert_eq!(
+        detail(&wrap(&[&broken.to_string()]), &id),
+        Err(DetailError::Glitched)
+    );
+}
+
+/// The two-tier split, date edition: an unparseable `date` still lists
+/// (deserialization only wants a string) but the pregame detail transform
+/// fails — the backend's 502, not a dropped event.
+#[test]
+fn unparseable_date_lists_but_fails_detail_transform() {
+    let mut event = parse(&fixture("pregame"));
+    event["date"] = json!("garbage");
+    let body = wrap(&[&event.to_string()]);
+    let id = event_id(&fixture("pregame"));
+
+    let (entries, counts, _) = list(&body);
+    assert_eq!(entries.len(), 1, "still advertised on the list");
+    assert_eq!(counts, Counts { ok: 1, failed: 0 });
+
+    assert_eq!(
+        detail(&body, &id),
+        Err(DetailError::Transform(TransformError::Date))
+    );
+}
+
+/// More transform-tier cases: two home markers, a bad color, a bad live
+/// score — all list fine, all fail detail with the matching error.
+#[test]
+fn transform_tier_failures_list_but_fail_detail() {
+    // Two homes: `order_home_away` is by marker, never index.
+    let mut event = parse(&fixture("live_inning"));
+    event["competitions"][0]["competitors"][1]["homeAway"] = json!("home");
+    let body = wrap(&[&event.to_string()]);
+    let id = event_id(&fixture("live_inning"));
+    let (entries, counts, _) = list(&body);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(counts, Counts { ok: 1, failed: 0 });
+    assert_eq!(
+        detail(&body, &id),
+        Err(DetailError::Transform(TransformError::HomeAway))
+    );
+
+    // Bad hex color (final).
+    let mut event = parse(&fixture("final"));
+    event["competitions"][0]["competitors"][0]["team"]["color"] = json!("zzz");
+    let body = wrap(&[&event.to_string()]);
+    let id = event_id(&fixture("final"));
+    let (entries, counts, _) = list(&body);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(counts, Counts { ok: 1, failed: 0 });
+    assert_eq!(
+        detail(&body, &id),
+        Err(DetailError::Transform(TransformError::Color))
+    );
+
+    // Unparseable live score (checked before colors, like the backend).
+    let mut event = parse(&fixture("live_inning"));
+    event["competitions"][0]["competitors"][0]["score"] = json!("TBD");
+    event["competitions"][0]["competitors"][0]["team"]["color"] = json!("zzz");
+    let body = wrap(&[&event.to_string()]);
+    let id = event_id(&fixture("live_inning"));
+    let (entries, counts, _) = list(&body);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(counts, Counts { ok: 1, failed: 0 });
+    assert_eq!(
+        detail(&body, &id),
+        Err(DetailError::Transform(TransformError::Score))
+    );
+}
+
+/// A pregame score is deserialized but never parsed — "TBD" survives and
+/// the wire bytes are untouched (scores are not encoded pregame).
+#[test]
+fn pregame_score_is_not_parsed() {
+    let mut event = parse(&fixture("pregame"));
+    event["competitions"][0]["competitors"][0]["score"] = json!("TBD");
+    event["competitions"][0]["competitors"][1]["score"] = json!("TBD");
+    let id = event_id(&fixture("pregame"));
+    let extract = detail(&wrap(&[&event.to_string()]), &id).expect("pregame extracts");
+    assert_eq!(hex(&encode(&extract)), hex(&golden("pregame")));
+}
+
+// --------------------------------------------------------- field details
+
+/// At-bat is all-or-nothing: one side alone yields `None`, which clears
+/// wire flag bit0 and removes both strings from the payload.
+#[test]
+fn at_bat_is_all_or_nothing() {
+    let mut event = parse(&fixture("live_inning"));
+    event["competitions"][0]["situation"]
+        .as_object_mut()
+        .unwrap()
+        .remove("batter");
+    let id = event_id(&fixture("live_inning"));
+    let extract = detail(&wrap(&[&event.to_string()]), &id).expect("live extracts");
+    let Extract::Live(ref game) = extract else {
+        panic!("must extract live");
+    };
+    assert!(game.at_bat.is_none(), "pitcher alone must not make an at-bat");
+    let bytes = encode(&extract);
+    assert_eq!(bytes[2], 0, "at-bat flag bit must be clear");
+    assert!(
+        bytes.len() < golden("live_inning").len(),
+        "both at-bat strings must vanish from the payload"
+    );
+}
+
+/// A malformed `type=="total"` record summary degrades that team's record
+/// to `None` with the quirk; the other team keeps its record.
+#[test]
+fn malformed_total_record_degrades_with_quirk() {
+    let mut event = parse(&fixture("pregame"));
+    // Home (SF) overall record entry is records[0] in the fixture.
+    event["competitions"][0]["competitors"][0]["records"][0]["summary"] = json!("TBD");
+    let id = event_id(&fixture("pregame"));
+    let mut quirks = Recorded::default();
+    let extract = detail_chunked(&wrap(&[&event.to_string()]), &id, usize::MAX, &mut quirks)
+        .expect("pregame extracts");
+    let Extract::Pregame(game) = extract else {
+        panic!("must extract pregame");
+    };
+    assert!(game.home.record.is_none(), "malformed record drops");
+    assert_eq!(
+        game.away.record,
+        Some(scoreboard_wire::Record {
+            wins: 42,
+            losses: 49
+        }),
+        "the other team's record is untouched"
+    );
+    assert_eq!(quirks.0, vec![Quirk::MalformedRecord]);
+}
