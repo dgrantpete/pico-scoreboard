@@ -174,6 +174,23 @@ a set of cross-sport questions. Answered here once so no lane relitigates:
     against `str::to_uppercase` over the corpus plus targeted non-ASCII
     names.
 
+Added after the MLB + soccer inventories, same day:
+
+11. **Hex colors parse with `core`'s `u32::from_str_radix`** after the
+    identical `#`-strip and exactly-6 check — the backend's own function,
+    available in `no_std`, so quirks like the accepted leading `+` carry
+    over by construction instead of by re-implementation.
+12. **The datetime parse replicates chrono's flexibility**: both observed
+    formats AND 1-or-2-digit numeric fields (`"2026-7-8T1:40Z"` parses
+    today); the chrono property test covers those forms explicitly.
+13. **Extractors report ok/failed event counts**, because
+    `find_event`'s 404-vs-502 rule (a glitched scoreboard must never look
+    like "game ended") needs the failure count — on the backend today and
+    on the device at S3. And every sport lane must pin the tie-break
+    semantics with named tests: `max_by`/`max_by_key` keep the LAST of
+    equal maxima, sorts are stable — the soccer goldens encode both, so a
+    fold-based max or `sort_unstable` silently breaks bytes.
+
 ## Lanes and validation
 
 - Engine lane: `src/path.rs` + its tests. Hard subsystem — strongest model,
