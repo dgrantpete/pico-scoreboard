@@ -202,11 +202,12 @@ fn pregame_missing_display_clock_is_rejected_even_though_nothing_reads_it() {
     );
     assert_eq!((stats.ok, stats.failed), (1, 1));
 
-    // Detail for the broken event: not found, failed count nonzero — the
-    // caller's find_event maps that to 502, never 404.
+    // Detail for the broken event: not found, and — with every event
+    // validated on the way (ruling 14) — the exact counts of the
+    // backend's 502 shape, never a 404.
     let (outcome, stats) = run_detail(&body, &event_id(&mutated), &[body.len()]);
     assert!(matches!(outcome, DetailOutcome::NotFound), "got {outcome:?}");
-    assert_eq!(stats.failed, 1);
+    assert_eq!((stats.ok, stats.failed), (1, 1));
 }
 
 #[test]
@@ -328,27 +329,87 @@ fn home_away_resolves_by_marker_even_with_the_array_flipped() {
 }
 
 #[test]
-fn detail_extracts_its_target_and_skips_the_other_events() {
+fn detail_validates_until_its_target_then_skips_the_rest() {
     let final_event = fixture("final");
     let live_event = fixture("in_progress");
     let pregame_event = fixture("pregame");
     let body = wrap(&[&final_event, &live_event, &pregame_event]);
 
-    let (outcome, _) = run_detail(&body, &event_id(&live_event), &[body.len()]);
+    // Ruling 14: events before the target validate and count; events
+    // after it are skipped and uncounted.
+    let (outcome, stats) = run_detail(&body, &event_id(&live_event), &[body.len()]);
     assert_eq!(encode(&found(outcome)), golden("in_progress"));
+    assert_eq!((stats.ok, stats.failed), (2, 0), "final + live counted");
 
-    let (outcome, _) = run_detail(&body, &event_id(&pregame_event), &[body.len()]);
+    let (outcome, stats) = run_detail(&body, &event_id(&pregame_event), &[body.len()]);
     assert_eq!(encode(&found(outcome)), golden("pregame"));
+    assert_eq!((stats.ok, stats.failed), (3, 0), "everything preceded the target");
 
-    // Absent id over a clean scoreboard: NotFound with zero failures —
-    // the 404 case, not the 502 one.
+    // Absent id over a clean scoreboard: NotFound with exact counts —
+    // nothing was skipped, so failed == 0 really is the 404 case.
     let (outcome, stats) = run_detail(&body, "000000000", &[body.len()]);
     assert!(matches!(outcome, DetailOutcome::NotFound), "got {outcome:?}");
-    assert_eq!(stats.failed, 0);
+    assert_eq!((stats.ok, stats.failed), (3, 0));
 
-    // And the skip must survive a 1-byte feed.
-    let (outcome, _) = run_detail(&body, &event_id(&final_event), &[1]);
+    // And the post-target skip must survive a 1-byte feed.
+    let (outcome, stats) = run_detail(&body, &event_id(&final_event), &[1]);
     assert_eq!(encode(&found(outcome)), golden("final"));
+    assert_eq!((stats.ok, stats.failed), (1, 0), "the two later events skipped");
+}
+
+/// Ruling 14's pin, mirroring football's `events_after_found_target_are_skipped`:
+/// garbage after the target is skipped and uncounted; garbage before it is
+/// validated and counted — which is what makes a NotFound verdict's counts
+/// exact for the 404-vs-502 rule.
+#[test]
+fn events_after_found_target_are_skipped() {
+    let event = fixture("in_progress");
+    let id = event_id(&event);
+    let garbage = r#"{"id":42,"date":false,"competitions":"nope"}"#;
+
+    let after = wrap(&[&event, garbage]);
+    let (outcome, stats) = run_detail(&after, &id, &[after.len()]);
+    assert!(matches!(outcome, DetailOutcome::Found(_)), "got {outcome:?}");
+    assert_eq!((stats.ok, stats.failed), (1, 0), "post-target skipped");
+
+    let before = wrap(&[garbage, &event]);
+    let (outcome, stats) = run_detail(&before, &id, &[before.len()]);
+    assert!(matches!(outcome, DetailOutcome::Found(_)), "got {outcome:?}");
+    assert_eq!((stats.ok, stats.failed), (1, 1), "pre-target validated");
+
+    // Absent target with a glitched sibling: the backend's 502 shape —
+    // NotFound plus a nonzero, exact failure count.
+    let (outcome, stats) = run_detail(&before, "000000000", &[before.len()]);
+    assert!(matches!(outcome, DetailOutcome::NotFound), "got {outcome:?}");
+    assert_eq!((stats.ok, stats.failed), (1, 1));
+}
+
+/// Ruling 16: the target compare must never run on a truncated key —
+/// distinct ids sharing a 255-byte prefix are different games, and the
+/// prefix itself matches neither.
+#[test]
+fn long_ids_never_match_on_a_truncated_prefix() {
+    let prefix = "9".repeat(255);
+    let mut live = fixture_value("in_progress");
+    live["id"] = serde_json::Value::String(format!("{prefix}1"));
+    let mut fin = fixture_value("final");
+    fin["id"] = serde_json::Value::String(format!("{prefix}2"));
+    let body = wrap(&[&live.to_string(), &fin.to_string()]);
+
+    // The second long id must find the second event, not the first.
+    let target = format!("{prefix}2");
+    let (outcome, stats) = run_detail(&body, &target, &[body.len()]);
+    match &found(outcome).kind {
+        Kind::Final(_) => {}
+        other => panic!("prefix collision served the wrong game: {other:?}"),
+    }
+    assert_eq!((stats.ok, stats.failed), (2, 0));
+
+    // The bare 255-byte prefix — exactly what a truncated compare would
+    // see — matches neither event.
+    let (outcome, stats) = run_detail(&body, &prefix, &[body.len()]);
+    assert!(matches!(outcome, DetailOutcome::NotFound), "got {outcome:?}");
+    assert_eq!((stats.ok, stats.failed), (2, 0), "clean scoreboard: a real 404");
 }
 
 // --------------------------------------------------------- field semantics

@@ -29,11 +29,14 @@
 //!   periods keep arrival order) and clamped per entry with
 //!   `linescore_byte`; period gaps are not filled (ruling 7).
 //! - **Ok/failed counts (ruling 13)** feed the caller's 404-vs-502 rule: a
-//!   glitched scoreboard must never masquerade as "game ended".
+//!   glitched scoreboard must never masquerade as "game ended". Detail mode
+//!   validates every event until the target is found and skips only after
+//!   (ruling 14), so a missing target always comes with exact counts.
 
 use crate::common::{
-    EText, HomeAway, LivePhase, Quirk, Quirks, linescore_byte, order_home_away, parse_hex_rgb,
-    parse_live_phase, parse_record, parse_start_time, saturate_score, set_text,
+    EText, HomeAway, LivePhase, Quirk, Quirks, linescore_byte, num_i16, num_u8, order_home_away,
+    parse_hex_rgb, parse_live_phase, parse_record, parse_start_time, saturate_score, set_text,
+    stable_sort_by_key, wire_phase,
 };
 use crate::path::{Directive, Pattern, Seg, Sink, Value};
 use scoreboard_wire::{self as wire, GameState, MAX_LINE_SCORE, Record, TeamColors};
@@ -277,21 +280,13 @@ fn wire_final_team(team: &FinalTeam) -> wire::FinalTeam<'_> {
     }
 }
 
-fn wire_phase(phase: LivePhase) -> wire::LivePhase {
-    match phase {
-        LivePhase::InProgress => wire::LivePhase::InProgress,
-        LivePhase::Halftime => wire::LivePhase::Halftime,
-        LivePhase::EndOfPeriod => wire::LivePhase::EndOfPeriod,
-    }
-}
-
 // ------------------------------------------------------------ the outcomes
 
 /// Ok/failed event tallies (ruling 13). `failed` mirrors the backend's
-/// `parse_events` count: the caller's 404-vs-502 rule needs it. In detail
-/// mode, events skipped after an id mismatch are neither ok nor failed —
-/// the backend would still have parsed them, so a detail caller that misses
-/// its target must not read `failed == 0` as proof the scoreboard was clean.
+/// `parse_events` count: the caller's 404-vs-502 rule needs it. Detail mode
+/// validates every event until the target is found (ruling 14), so a missed
+/// target means nothing was ever skipped and the counts are exact — only
+/// post-target events go uncounted, when the verdict is already `Found`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ScanStats {
     /// Events that deserialized clean (including ones with an empty
@@ -333,8 +328,10 @@ pub enum DetailOutcome {
     /// The target event exists with an empty `competitions` array — the
     /// backend serves 404 for it regardless of the failure count.
     NoCompetition,
-    /// The target id never matched a clean event. 404 when
-    /// [`ScanStats::failed`] is 0, upstream error otherwise.
+    /// The target id never matched a clean event. Every event was
+    /// validated on the way here (ruling 14), so the verdict is exactly
+    /// the backend's `find_event`: 404 when [`ScanStats::failed`] is 0,
+    /// the glitched-scoreboard upstream error (502) otherwise.
     NotFound,
 }
 
@@ -490,8 +487,10 @@ impl<'c, Q: Quirks> Extractor<'c, Q> {
         Self::new(Mode::List { on_game }, quirks)
     }
 
-    /// Game-detail mode for one event id; other events are fast-forwarded
-    /// with `Directive::SkipElement` as soon as their id mismatches.
+    /// Game-detail mode for one event id. Every event is validated and
+    /// counted until the target resolves (ruling 14 — the counts must be
+    /// exact when the target is missing); after that, remaining events are
+    /// fast-forwarded with `Directive::SkipElement` and left uncounted.
     pub fn game_detail(target: &'c str, quirks: &'c mut Q) -> Self {
         Self::new(
             Mode::Detail {
@@ -570,6 +569,18 @@ impl<'c, Q: Quirks> Extractor<'c, Q> {
         }
     }
 
+    /// Detail mode with the outcome already decided: everything after is
+    /// skipped and uncounted (ruling 14).
+    fn target_found(&self) -> bool {
+        matches!(
+            self.mode,
+            Mode::Detail {
+                outcome: Some(_),
+                ..
+            }
+        )
+    }
+
     fn competitor(&mut self, indices: &[u16]) -> Option<&mut CompetitorScratch> {
         // Index 1 binds the competitors[*] level. Slots past the second
         // still count toward the exactly-2 rule but store nothing.
@@ -582,12 +593,11 @@ impl<Q: Quirks> Sink for Extractor<'_, Q> {
     fn enter(&mut self, pattern: usize, _indices: &[u16]) -> Directive {
         match pattern {
             P_EVENT => {
-                if let Mode::Detail { outcome, .. } = &self.mode {
-                    if outcome.is_some() {
-                        // Target already resolved: fast-forward the rest.
-                        self.scratch.skipped = true;
-                        return Directive::SkipElement;
-                    }
+                if self.target_found() {
+                    // Target already resolved: fast-forward the rest,
+                    // uncounted (ruling 14).
+                    self.scratch.skipped = true;
+                    return Directive::SkipElement;
                 }
                 self.scratch = EventScratch::default();
             }
@@ -672,19 +682,30 @@ impl<Q: Quirks> Sink for Extractor<'_, Q> {
         match pattern {
             P_EVENTS => self.stats.events_malformed = true,
             // A scalar where an event object belongs: unparseable event.
-            P_EVENT => self.stats.failed += 1,
+            // Scalars never enter, so the post-target skip cannot reach
+            // them — gate the count here (nothing counts after Found).
+            P_EVENT => {
+                if !self.target_found() {
+                    self.stats.failed += 1;
+                }
+            }
             P_ID => match value {
                 Value::Str(text) => {
                     set_text(&mut s.id, text);
                     s.id_seen = true;
-                    if let Mode::Detail { target, outcome } = &self.mode {
-                        if outcome.is_none() {
-                            if text == *target {
-                                s.is_target = true;
-                            } else {
-                                s.skipped = true;
-                                return Directive::SkipElement;
-                            }
+                    // The target compare runs on the UNTRUNCATED streamed
+                    // text and only the boolean survives — the bounded
+                    // `s.id` copy is output storage, never a compare key,
+                    // so distinct ids sharing a 255-byte prefix can never
+                    // silently match (ruling 16; this is the backend's own
+                    // unbounded compare, with no false negatives either).
+                    // Non-target events are NOT skipped here: pre-target
+                    // events validate and count in full (ruling 14) —
+                    // skipping starts only after the target resolves, at
+                    // the next event's enter.
+                    if let Mode::Detail { target, .. } = &self.mode {
+                        if text == *target {
+                            s.is_target = true;
                         }
                     }
                 }
@@ -711,7 +732,7 @@ impl<Q: Quirks> Sink for Extractor<'_, Q> {
             }
             P_WEATHER_TEMP => match value {
                 Value::Null => {}
-                Value::Num(text) if int_i16(text).is_some() => {}
+                Value::Num(text) if num_i16(text).is_some() => {}
                 _ => s.weather_bad = true,
             },
             P_COMPETITIONS => s.competitions_bad = true,
@@ -731,7 +752,7 @@ impl<Q: Quirks> Sink for Extractor<'_, Q> {
                 _ => s.desc_bad = true,
             },
             P_PERIOD => match value {
-                Value::Num(text) => match int_u8(text) {
+                Value::Num(text) => match num_u8(text) {
                     Some(period) => {
                         s.period = period;
                         s.period_seen = true;
@@ -902,7 +923,7 @@ impl<Q: Quirks> Sink for Extractor<'_, Q> {
                 _ => s.entry.ls_value_bad = true,
             },
             P_LINESCORE_PERIOD => match value {
-                Value::Num(text) => match int_u8(text) {
+                Value::Num(text) => match num_u8(text) {
                     Some(period) => s.entry.ls_period = Some(period),
                     None => s.entry.ls_period_bad = true,
                 },
@@ -1095,38 +1116,10 @@ fn final_team(competitor: &CompetitorScratch) -> Result<FinalTeam, TransformErro
 
 /// The backend's `linescore_bytes` ordering: a **stable** sort by period —
 /// duplicate periods keep arrival order (ruling 13), gaps are not filled.
-/// Insertion sort because `core` has no stable slice sort; at most 255
-/// entries, in practice 4–8.
 fn sorted_line(
     line: &heapless::Vec<(u8, u8), MAX_LINE_SCORE>,
 ) -> heapless::Vec<u8, MAX_LINE_SCORE> {
     let mut pairs = line.clone();
-    for i in 1..pairs.len() {
-        let mut j = i;
-        while j > 0 && pairs[j - 1].0 > pairs[j].0 {
-            pairs.swap(j - 1, j);
-            j -= 1;
-        }
-    }
+    stable_sort_by_key(&mut pairs, |&(period, _)| period);
     pairs.iter().map(|&(_, byte)| byte).collect()
-}
-
-/// serde_json's `u8` shape: an unsigned integer literal in range — floats,
-/// exponents and signs all fail, exactly as `status.period: 2.0` fails the
-/// backend's DTO. (Promotion candidate: MLB shares this for its period.)
-fn int_u8(text: &str) -> Option<u8> {
-    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    text.parse().ok()
-}
-
-/// serde_json's `i16` shape, for `weather.temperature` (parse-gating only).
-/// (Promotion candidate: MLB reads the temperature for real.)
-fn int_i16(text: &str) -> Option<i16> {
-    let digits = text.strip_prefix('-').unwrap_or(text);
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    text.parse().ok()
 }
