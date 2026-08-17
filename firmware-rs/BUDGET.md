@@ -561,11 +561,13 @@ poller against fixtures, which is why the re-take at 60 FPS is still outstanding
 
 ## Measured breakdown — `scoreboard-app`, release, `thumbv8m.main-none-eabihf`
 
-**`link-boot-integrated`, with flip-link, measured 2026-08-16** from the tree at
-108bc85 — the profile the production unit runs. **1,096,104 B flash** as a raw
-`.bin` (69.7 % of the 1,536 KB active partition), **11,296 B `.data`**,
-**322,320 B `.bss`**, **4,096 B `.uninit`** → **337,712 B of RAM statics**, with
-**186,304 B** of core-0 stack below them (`_stack_start = 0x2002_d7c0`).
+**`link-boot-integrated`, with flip-link, measured 2026-08-17** after the
+flat-dispatch router landed (previous measure: 2026-08-16 at 108bc85, the
+image the production unit runs — 337,712 B of statics). **1,093,400 B flash**
+as a raw `.bin` (69.5 % of the 1,536 KB active partition), **11,296 B
+`.data`**, **314,960 B `.bss`**, **4,096 B `.uninit`** → **330,352 B of RAM
+statics**, with core-0 stack below them (flip-link keeps
+`_stack_start` at the statics' floor).
 
 The previous version of this table was the task-#10 snapshot — standalone
 profile, two HTTP connections, the demo feed still in it, and no poller, crest
@@ -574,7 +576,7 @@ what follows replaces it.
 
 | Symbol | Bytes | Owner |
 |---|---:|---|
-| `http::serve::POOL` | 88,320 | the four HTTP connection tasks. **22,080 B each, and only 8,552 B of that is buffers** — see the multiplier note below |
+| `http::serve::POOL` | 80,960 | the four HTTP connection tasks. **20,240 B each, and only 8,552 B of that is buffers** — see the multiplier note below, and its 2026-08-17 addendum for where the route-chain share of it went |
 | `hub75::driver::FRAMEBUFFERS` | 65,536 | hub75 — the two BCM bitplane buffers |
 | `scoreboard_app::CRESTS` | 36,865 | the 32-slot crest pool, owned outright by core 1 |
 | `ringlog::RING` | 28,812 | the deployed log: 200 × 144 B slots. `.bss`, deliberately — see below |
@@ -654,6 +656,20 @@ connection count and not when a route is added.
 **Before adding a route or a response type, check this number again.** The rule
 of thumb: anything larger than a pointer that lives across an `await` inside a
 handler should be in the pool, not in the handler.
+
+*Addendum (2026-08-17, BACKLOG 94):* the `-Zprint-type-sizes` walk the item
+prescribed named every byte. Each `.route()` wrapper cost a flat 120 B of
+future, and the whole "handle one request" future was materialised **three
+times per connection** — picoserve's internal `select`/`select_either` are
+`async fn`s taking futures by value, and a generator never overlaps its
+argument slots with the `pin!`-ed locals they move into. Two consequences,
+one landed and one pending: the route chain is now one flat
+`PathRouterService` (`routes.rs::Dispatch`, −7,360 B, this measure), and the
+select duplication has a fix on a picoserve fork (named `Select` future
+structs instead of `async fn`s, ~−25,400 B more) that lands here when its
+pin does. The 22× table above still holds for anything a handler keeps
+across an `await` — flattening changed who multiplies, not that multiplication
+happens.
 
 ### The ring log is in `.bss`, and that was not free
 
