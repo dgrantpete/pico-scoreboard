@@ -8,7 +8,8 @@ use std::path::PathBuf;
 
 use scoreboard_espn::common::{IgnoreQuirks, Quirk, Quirks};
 use scoreboard_espn::football::{
-    Counts, DetailExtractor, DetailOutcome, GameExtract, ListEntries, ListExtractor,
+    Counts, DetailExtractor, DetailOutcome, FootballError, GameExtract, ListEntries,
+    ListExtractor,
 };
 use scoreboard_wire::{GameState, SliceSink, football as wire};
 
@@ -277,6 +278,57 @@ fn venue_required_only_pregame() {
             assert_eq!(counts.failed, 1, "{name}");
         }
     }
+}
+
+/// A scoreboard shell whose `events` is a scalar or null fails the
+/// backend's whole-body deserialize — a 502 before any event. Neither
+/// extractor may launder it into a clean 404 / empty list (ruling 13's
+/// glitch-vs-ended rule at body scope).
+#[test]
+fn scalar_events_shell_is_malformed_for_detail_and_list() {
+    for body in [r#"{"events":42}"#, r#"{"events":null}"#, r#"{"events":"x"}"#] {
+        let mut scratch = vec![0u8; 1024];
+        let mut detail =
+            DetailExtractor::new("77", false, IgnoreQuirks, &mut scratch).expect("table valid");
+        detail.write(body.as_bytes()).expect("clean parse");
+        assert!(
+            matches!(detail.finish(), Err(FootballError::MalformedEvents)),
+            "detail must reject {body}"
+        );
+
+        let mut scratch = vec![0u8; 1024];
+        let mut list = ListExtractor::new(Collect::default(), IgnoreQuirks, &mut scratch)
+            .expect("table valid");
+        list.write(body.as_bytes()).expect("clean parse");
+        assert!(
+            matches!(list.finish(), Err(FootballError::MalformedEvents)),
+            "list must reject {body}"
+        );
+    }
+}
+
+/// KNOWN RESIDUE, pinned so it flips loudly if the engine ever reports
+/// container kinds: an `events` OBJECT is invisible at the sink API —
+/// its members arrive as keys, which match no pattern — so
+/// `{"events":{…}}` scans exactly like the LEGAL empty scoreboard
+/// `{"events":[]}` and parses clean (backend: whole-body 502). Flagging
+/// "no event elements seen" instead would 502 every real no-games day.
+/// Identical residue in all four sport lanes.
+#[test]
+fn object_events_shell_is_the_documented_residue() {
+    for body in [r#"{"events":{"x":1}}"#, r#"{"events":{}}"#] {
+        let (outcome, counts) = run_detail(body, "77", false, usize::MAX);
+        assert!(matches!(outcome, DetailOutcome::Absent), "{body}: {outcome:?}");
+        assert_eq!(counts, Counts { ok: 0, failed: 0 }, "{body}");
+
+        let (entries, counts) = run_list(body, usize::MAX);
+        assert!(entries.is_empty(), "{body}");
+        assert_eq!(counts, Counts { ok: 0, failed: 0 }, "{body}");
+    }
+    // The legal empty scoreboard the residue is indistinguishable from.
+    let (outcome, counts) = run_detail(r#"{"events":[]}"#, "77", false, usize::MAX);
+    assert!(matches!(outcome, DetailOutcome::Absent));
+    assert_eq!(counts, Counts { ok: 0, failed: 0 });
 }
 
 /// A found id with an empty competitions array is the backend's direct

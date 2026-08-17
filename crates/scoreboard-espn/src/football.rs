@@ -30,6 +30,12 @@
 //! the document with [`Directive::SkipElement`]. Skipping non-target
 //! events *before* the target is found would undercount failures and turn
 //! a glitched scoreboard into a spurious "game ended".
+//!
+//! Body-scope rejection: a `$.events` that is a scalar or null fails the
+//! backend's whole-body deserialize before any event, so both extractors
+//! surface [`FootballError::MalformedEvents`] instead of a clean empty
+//! slate / absent target. An `events` OBJECT is the documented residue —
+//! see the variant's doc.
 
 use core::fmt::Write as _;
 
@@ -110,7 +116,12 @@ const LINESCORE_VALUE: usize = 41;
 const LINESCORE_PERIOD: usize = 42;
 const CURATED: usize = 43;
 const CURATED_CURRENT: usize = 44;
-const PATTERN_COUNT: usize = 45;
+/// Bare `$.events` container probe (appended late — index order is free of
+/// meaning here since a length-1 pattern never shares a node with the
+/// length-2+ rows): catches a scoreboard shell whose `events` is a scalar
+/// or null, the backend's whole-body deserialize failure.
+const EVENTS: usize = 45;
+const PATTERN_COUNT: usize = 46;
 
 static PATHS: [Pattern; PATTERN_COUNT] = [
     /* 00 EVENT            */ &[Key("events"), AnyIndex],
@@ -194,6 +205,7 @@ static PATHS: [Pattern; PATTERN_COUNT] = [
     &[Key("events"), AnyIndex, Key("competitions"), AnyIndex, Key("competitors"), AnyIndex, Key("curatedRank")],
     /* 44 CURATED_CURRENT  */
     &[Key("events"), AnyIndex, Key("competitions"), AnyIndex, Key("competitors"), AnyIndex, Key("curatedRank"), Key("current")],
+    /* 45 EVENTS           */ &[Key("events")],
 ];
 
 // ----------------------------------------------------------- public types
@@ -227,6 +239,15 @@ pub enum ExtractError {
 pub enum FootballError {
     /// Tokenizer / engine failure — the body was not well-formed JSON.
     Stream(path::Error),
+    /// The scoreboard shell was malformed (`events` present but a scalar
+    /// or null) — the backend's whole-body deserialize failure, a 502
+    /// before any event, for BOTH detail and list (ruling 13's
+    /// glitch-vs-ended rule at body scope). Residue: an `events` OBJECT
+    /// is invisible at the sink API (its members arrive as unmatched
+    /// keys), so `{"events":{…}}` parses like the legal empty scoreboard
+    /// `{"events":[]}` — same limitation in all four lanes; flagging
+    /// "no elements seen" instead would 502 every real no-games day.
+    MalformedEvents,
     /// Transform-tier failure on the target event.
     Extract(ExtractError),
 }
@@ -614,6 +635,9 @@ struct FootballSink<E: ListEntries, Q: Quirks> {
     /// consumed when the target is absent, in which case nothing was
     /// skipped).
     done: bool,
+    /// `$.events` was present but a scalar/null — the whole body is
+    /// unusable ([`FootballError::MalformedEvents`]), not one event.
+    events_malformed: bool,
     ev: EventScratch,
 }
 
@@ -626,6 +650,7 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
             detail,
             dstate: DState::Searching,
             done: false,
+            events_malformed: false,
             ev: EventScratch::default(),
         }
     }
@@ -647,6 +672,9 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
 
     fn on_value(&mut self, pattern: usize, idx: &[u16], v: Value<'_>) {
         match pattern {
+            // `$.events` itself a scalar/null: `RawScoreboard` fails —
+            // the whole request is unusable, not one event.
+            EVENTS => self.events_malformed = true,
             // A scalar where an event object belongs: the backend's
             // per-event deserialize fails, the event is skipped + counted.
             EVENT => self.counts.failed += 1,
@@ -904,6 +932,11 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
 
     fn on_enter(&mut self, pattern: usize, _idx: &[u16]) {
         match pattern {
+            // Container is fine — but the engine cannot tell an object
+            // from an array at enter, and an object's members arrive as
+            // unmatched keys, so an events OBJECT is the documented
+            // residue: it scans like the legal empty scoreboard `[]`.
+            EVENTS => {}
             EVENT => self.ev.reset(),
             COMPETITIONS => self.ev.competitions_entered = true,
             COMPETITION => {
@@ -1331,6 +1364,9 @@ impl<'s, Q: Quirks> DetailExtractor<'s, Q> {
 
     pub fn finish(self) -> Result<DetailReport<Q>, FootballError> {
         let sink = self.matcher.finish()?;
+        if sink.events_malformed {
+            return Err(FootballError::MalformedEvents);
+        }
         let outcome = match sink.dstate {
             DState::Found(game) => DetailOutcome::Found(game),
             DState::NoCompetitions => DetailOutcome::NoCompetitions,
@@ -1366,6 +1402,9 @@ impl<'s, E: ListEntries, Q: Quirks> ListExtractor<'s, E, Q> {
 
     pub fn finish(self) -> Result<ListReport<E, Q>, FootballError> {
         let sink = self.matcher.finish()?;
+        if sink.events_malformed {
+            return Err(FootballError::MalformedEvents);
+        }
         Ok(ListReport {
             entries: sink.entries,
             counts: sink.counts,
