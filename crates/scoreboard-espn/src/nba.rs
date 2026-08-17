@@ -38,7 +38,7 @@ use crate::common::{
     parse_hex_rgb, parse_live_phase, parse_record, parse_start_time, saturate_score, set_text,
     stable_sort_by_key, wire_phase,
 };
-use crate::path::{Directive, Pattern, Seg, Sink, Value};
+use crate::path::{ContainerKind, Directive, Pattern, Seg, Sink, Value};
 use scoreboard_wire::{self as wire, GameState, MAX_LINE_SCORE, Record, TeamColors};
 
 use Seg::{AnyIndex, Index, Key};
@@ -590,8 +590,15 @@ impl<'c, Q: Quirks> Extractor<'c, Q> {
 }
 
 impl<Q: Quirks> Sink for Extractor<'_, Q> {
-    fn enter(&mut self, pattern: usize, _indices: &[u16]) -> Directive {
+    fn enter(&mut self, pattern: usize, _indices: &[u16], kind: ContainerKind) -> Directive {
         match pattern {
+            // `{"events":{…}}` must 502-shape like a scalar shell; only an
+            // array here is a scoreboard (engine ContainerKind addition).
+            P_EVENTS => {
+                if kind == ContainerKind::Object {
+                    self.stats.events_malformed = true;
+                }
+            }
             P_EVENT => {
                 if self.target_found() {
                     // Target already resolved: fast-forward the rest,

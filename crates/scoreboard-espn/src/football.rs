@@ -44,7 +44,7 @@ use crate::common::{
     order_home_away, parse_hex_rgb, parse_live_phase, parse_record, parse_start_time,
     saturate_score, set_text, stable_sort_by_key, wire_phase,
 };
-use crate::path::{self, Directive, Pattern, Seg, Sink, StreamMatcher, Value};
+use crate::path::{self, ContainerKind, Directive, Pattern, Seg, Sink, StreamMatcher, Value};
 use scoreboard_wire::football as wire;
 use scoreboard_wire::{GameState, MAX_LINE_SCORE, Record, Side, TeamColors};
 
@@ -1115,9 +1115,15 @@ impl<E: ListEntries, Q: Quirks> Sink for FootballSink<E, Q> {
         Directive::Continue
     }
 
-    fn enter(&mut self, pattern: usize, indices: &[u16]) -> Directive {
+    fn enter(&mut self, pattern: usize, indices: &[u16], kind: ContainerKind) -> Directive {
         if self.done {
             return Directive::SkipElement;
+        }
+        // `{"events":{…}}` must 502-shape like a scalar shell; only an
+        // array here is a scoreboard (engine ContainerKind addition).
+        if pattern == EVENTS && kind == ContainerKind::Object {
+            self.events_malformed = true;
+            return Directive::Continue;
         }
         self.on_enter(pattern, indices);
         Directive::Continue

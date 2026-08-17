@@ -36,7 +36,7 @@ use crate::common::{
     EText, Exact, HomeAway, IgnoreQuirks, Quirk, Quirks, WireText, compose, num_u8, num_u32,
     order_home_away, parse_hex_rgb, parse_start_time, push_trunc, saturate_score, set_text,
 };
-use crate::path::{Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
+use crate::path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 
 use Seg::{AnyIndex, Index, Key};
 
@@ -1099,9 +1099,17 @@ impl<Q: Quirks> Sink for SoccerSink<Q> {
         Directive::Continue
     }
 
-    fn enter(&mut self, pattern: usize, _indices: &[u16]) -> Directive {
+    fn enter(&mut self, pattern: usize, _indices: &[u16], kind: ContainerKind) -> Directive {
         if self.done() {
             return Directive::SkipElement;
+        }
+        // `{"events":{…}}` must 502-shape like a scalar shell; only an
+        // array here is a scoreboard (engine ContainerKind addition).
+        if pattern == P_EVENTS {
+            if kind == ContainerKind::Object {
+                self.body_bad = true;
+            }
+            return Directive::Continue;
         }
         let s = &mut self.scratch;
         match pattern {
@@ -1405,7 +1413,7 @@ impl Sink for SummarySink {
         Directive::Continue
     }
 
-    fn enter(&mut self, pattern: usize, _indices: &[u16]) -> Directive {
+    fn enter(&mut self, pattern: usize, _indices: &[u16], _kind: ContainerKind) -> Directive {
         if pattern == S_ITEM {
             self.item = ItemScratch {
                 active: true,

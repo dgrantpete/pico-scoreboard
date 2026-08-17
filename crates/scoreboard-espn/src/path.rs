@@ -63,6 +63,17 @@ pub enum Directive {
     SkipElement,
 }
 
+/// What kind of container an [`Sink::enter`] callback opened. Exists because
+/// `{"events":{…}}` and `{"events":[]}` are otherwise indistinguishable to a
+/// sink (an object's members arrive as engine-internal key events), and the
+/// sport tables must 502-shape the former while the latter is a legal
+/// no-games day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerKind {
+    Object,
+    Array,
+}
+
 /// Receives matches. `pattern` is the index into the table; `indices` holds
 /// the concrete array index bound to each [`Seg::AnyIndex`] of that pattern,
 /// outermost first (`u16`: a college-Saturday slate can exceed a `u8`).
@@ -74,7 +85,7 @@ pub trait Sink {
     fn value(&mut self, pattern: usize, indices: &[u16], value: Value<'_>) -> Directive;
 
     /// A container (object or array) matched a pattern designating it.
-    fn enter(&mut self, _pattern: usize, _indices: &[u16]) -> Directive {
+    fn enter(&mut self, _pattern: usize, _indices: &[u16], _kind: ContainerKind) -> Directive {
         Directive::Continue
     }
 
@@ -279,6 +290,11 @@ impl<'t> Engine<'t> {
             }
             Event::StartObject | Event::StartArray => {
                 let is_array = matches!(event, Event::StartArray);
+                let kind = if is_array {
+                    ContainerKind::Array
+                } else {
+                    ContainerKind::Object
+                };
                 let alive = self.slot_alive();
                 let slot_depth = self.depth;
                 if self.depth == MAX_DEPTH {
@@ -299,7 +315,7 @@ impl<'t> Engine<'t> {
                     let p = fires.trailing_zeros() as usize;
                     fires &= fires - 1;
                     let idx = self.bindings(p, slot_depth, &mut buf);
-                    if sink.enter(p, idx) == Directive::SkipElement {
+                    if sink.enter(p, idx, kind) == Directive::SkipElement {
                         skip = true;
                     }
                 }

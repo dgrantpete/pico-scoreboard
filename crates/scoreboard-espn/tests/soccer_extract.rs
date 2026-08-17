@@ -12,8 +12,8 @@ use std::path::PathBuf;
 
 use scoreboard_espn::common::{IgnoreQuirks, Quirk, Quirks};
 use scoreboard_espn::soccer::{
-    DetailReport, GameExtractor, GameOutcome, ListExtractor, SoccerExtract, SummaryExtractor,
-    SummaryOutcome, parse_display_clock,
+    DetailReport, ExtractError, GameExtractor, GameOutcome, ListExtractor, SoccerExtract,
+    SummaryExtractor, SummaryOutcome, parse_display_clock,
 };
 use scoreboard_wire::soccer::{self as wire_soccer, EventKind, FinalFlavor};
 use scoreboard_wire::{GameState, Side, SliceSink};
@@ -689,6 +689,30 @@ fn events_after_found_target_are_skipped() {
 /// The 404-vs-502 rule (ruling 13): an absent target on a CLEAN scoreboard is
 /// "game ended" (failed == 0); a glitched scoreboard must never masquerade as
 /// that. With ruling 14 the counts are exact — every event was validated.
+#[test]
+fn events_shell_must_be_an_array() {
+    // Scalar/null shells at the value callback; object shells via the
+    // engine's ContainerKind at enter (the closed residue).
+    for body in [
+        r#"{"events":42}"#,
+        r#"{"events":null}"#,
+        r#"{"events":"x"}"#,
+        r#"{"events":{"x":1}}"#,
+        r#"{"events":{}}"#,
+    ] {
+        let mut scratch = vec![0u8; 4096];
+        let mut extractor = GameExtractor::new("77", IgnoreQuirks, &mut scratch).unwrap();
+        extractor.write(body.as_bytes()).unwrap();
+        assert!(
+            matches!(extractor.finish(), Err(ExtractError::MalformedBody)),
+            "{body}"
+        );
+    }
+    // The legal no-games day keeps resolving clean.
+    let report = extract_chunked(r#"{"events":[]}"#, "77", usize::MAX);
+    assert_eq!(report.outcome, GameOutcome::Absent);
+}
+
 #[test]
 fn absent_target_distinguishes_clean_from_glitched_scoreboards() {
     let pregame = fixture("pregame");

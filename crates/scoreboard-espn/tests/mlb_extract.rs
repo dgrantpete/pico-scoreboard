@@ -399,6 +399,28 @@ fn events_after_found_target_are_skipped() {
 /// NotFound (the firmware's "game ended"); with any unparseable event it
 /// must be Glitched instead — a glitch must never look like "game ended".
 #[test]
+fn events_shell_must_be_an_array() {
+    // Scalar/null shells at the value callback; object shells via the
+    // engine's ContainerKind at enter. Either way: never a clean 404/empty
+    // slate out of a glitched scoreboard body.
+    for body in [
+        r#"{"events":42}"#,
+        r#"{"events":null}"#,
+        r#"{"events":"x"}"#,
+        r#"{"events":{"x":1}}"#,
+        r#"{"events":{}}"#,
+    ] {
+        let mut quirks = Recorded::default();
+        let result = detail_chunked(body.as_bytes(), "77", usize::MAX, &mut quirks);
+        assert!(matches!(result, Err(DetailError::Events)), "{body}");
+    }
+    // The legal no-games day keeps resolving clean.
+    let mut quirks = Recorded::default();
+    let result = detail_chunked(br#"{"events":[]}"#, "77", usize::MAX, &mut quirks);
+    assert!(matches!(result, Err(DetailError::NotFound)), "legal empty slate");
+}
+
+#[test]
 fn detail_absent_id_clean_vs_glitched() {
     let pregame = fixture("pregame");
     assert_eq!(

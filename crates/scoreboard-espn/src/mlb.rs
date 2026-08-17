@@ -71,7 +71,7 @@ use crate::common::{
     EText, HomeAway, Quirk, Quirks, linescore_byte, num_i16, num_u8, order_home_away,
     parse_hex_rgb, parse_record, parse_start_time, saturate_score, set_text, stable_sort_by_key,
 };
-use crate::path::{Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
+use crate::path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 use scoreboard_wire::mlb::{AtBat as WireAtBat, Bases, Count, Inning, InningHalf, Weather as WireWeather};
 use scoreboard_wire::{
     GameState, LastPlay as WireLastPlay, MAX_LINE_SCORE, Record, TeamColors, TeamState,
@@ -833,7 +833,15 @@ fn competitor_index(indices: &[u16]) -> usize {
 }
 
 impl<L: ListSink, Q: Quirks> Sink for MlbSink<'_, L, Q> {
-    fn enter(&mut self, pattern: usize, _indices: &[u16]) -> Directive {
+    fn enter(&mut self, pattern: usize, _indices: &[u16], kind: ContainerKind) -> Directive {
+        if pattern == P_EVENTS {
+            // `{"events":{…}}` must 502-shape like a scalar shell; only an
+            // array here is a scoreboard (engine ContainerKind addition).
+            if kind == ContainerKind::Object {
+                self.events_malformed = true;
+            }
+            return Directive::Continue;
+        }
         if pattern == P_EVENT {
             self.event = EventScratch::default();
             if self.detail_done() {

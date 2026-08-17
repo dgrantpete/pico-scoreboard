@@ -18,4 +18,4 @@ pub mod nba;
 pub mod path;
 pub mod soccer;
 
-pub use path::{Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
+pub use path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};

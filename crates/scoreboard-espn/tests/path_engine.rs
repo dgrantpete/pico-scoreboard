@@ -4,7 +4,7 @@
 //! sequence.
 
 use scoreboard_espn::path::MAX_DEPTH;
-use scoreboard_espn::{Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
+use scoreboard_espn::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 use std::fs;
 use std::path::PathBuf;
 
@@ -55,8 +55,12 @@ impl Sink for RecSink {
         }
         Directive::Continue
     }
-    fn enter(&mut self, pattern: usize, indices: &[u16]) -> Directive {
-        self.recs.push(Rec::Enter(pattern, indices.to_vec()));
+    fn enter(&mut self, pattern: usize, indices: &[u16], kind: ContainerKind) -> Directive {
+        // Kind rides in the record as a pseudo-index so every existing
+        // sequence assertion also pins it: 0 = object, 1 = array.
+        let mut with_kind = indices.to_vec();
+        with_kind.push(matches!(kind, ContainerKind::Array) as u16);
+        self.recs.push(Rec::Enter(pattern, with_kind));
         Directive::Continue
     }
     fn leave(&mut self, pattern: usize, indices: &[u16]) -> Directive {
@@ -129,7 +133,7 @@ fn sibling_patterns_and_container_designation() {
     assert_eq!(
         recs,
         vec![
-            Rec::Enter(0, vec![]),
+            Rec::Enter(0, vec![0]),
             Rec::Val(1, vec![], "n:1".into()),
             Rec::Val(2, vec![], "s:z".into()),
             Rec::Leave(0, vec![]),
@@ -143,11 +147,11 @@ fn same_pattern_scalar_vs_container() {
     assert_eq!(run(T, r#"{"a":7}"#), vec![Rec::Val(0, vec![], "n:7".into())]);
     assert_eq!(
         run(T, r#"{"a":{"k":1}}"#),
-        vec![Rec::Enter(0, vec![]), Rec::Leave(0, vec![])]
+        vec![Rec::Enter(0, vec![0]), Rec::Leave(0, vec![])]
     );
     assert_eq!(
         run(T, r#"{"a":[1]}"#),
-        vec![Rec::Enter(0, vec![]), Rec::Leave(0, vec![])]
+        vec![Rec::Enter(0, vec![1]), Rec::Leave(0, vec![])]
     );
 }
 
@@ -161,7 +165,7 @@ fn root_pattern_and_nested_arrays() {
     assert_eq!(
         recs,
         vec![
-            Rec::Enter(0, vec![]),
+            Rec::Enter(0, vec![0]),
             Rec::Val(1, vec![0, 0], "n:10".into()),
             Rec::Val(1, vec![0, 1], "n:20".into()),
             Rec::Val(1, vec![1, 0], "n:30".into()),
@@ -298,14 +302,14 @@ fn skip_preserves_enter_leave_pairing() {
     assert_eq!(
         recs,
         vec![
-            Rec::Enter(0, vec![0]),
+            Rec::Enter(0, vec![0, 0]),
             Rec::Val(1, vec![0], "s:1".into()),
             Rec::Leave(0, vec![0]), // paired despite the skip
-            Rec::Enter(0, vec![1]),
+            Rec::Enter(0, vec![1, 0]),
             Rec::Val(1, vec![1], "s:2".into()),
             Rec::Val(2, vec![1], "s:a2".into()),
             Rec::Leave(0, vec![1]),
-            Rec::Enter(0, vec![2]),
+            Rec::Enter(0, vec![2, 0]),
             Rec::Val(1, vec![2], "s:3".into()),
             Rec::Val(2, vec![2], "s:a3".into()),
             Rec::Leave(0, vec![2]),

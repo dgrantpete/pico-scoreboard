@@ -362,6 +362,30 @@ fn detail_validates_until_its_target_then_skips_the_rest() {
 /// validated and counted — which is what makes a NotFound verdict's counts
 /// exact for the 404-vs-502 rule.
 #[test]
+fn events_shell_must_be_an_array() {
+    // Scalar/null shells at the value callback; object shells via the
+    // engine's ContainerKind at enter (the closed residue).
+    for body in [
+        r#"{"events":42}"#,
+        r#"{"events":null}"#,
+        r#"{"events":"x"}"#,
+        r#"{"events":{"x":1}}"#,
+        r#"{"events":{}}"#,
+    ] {
+        let mut quirks = scoreboard_espn::common::IgnoreQuirks;
+        let extractor = feed(
+            body,
+            Extractor::game_detail("77", &mut quirks),
+            &[usize::MAX],
+        );
+        assert!(extractor.stats().events_malformed, "{body}");
+    }
+    let mut quirks = scoreboard_espn::common::IgnoreQuirks;
+    let extractor = feed("{\"events\":[]}", Extractor::game_detail("77", &mut quirks), &[usize::MAX]);
+    assert!(!extractor.stats().events_malformed, "legal empty slate");
+}
+
+#[test]
 fn events_after_found_target_are_skipped() {
     let event = fixture("in_progress");
     let id = event_id(&event);
