@@ -668,8 +668,9 @@ the route chain is one flat `PathRouterService` (`routes.rs::Dispatch`,
 −7,360 B), and the select duplication is fixed by named `Select` future
 structs on fork `dgrantpete/picoserve` branch `perf/select-by-ref`
 (−25,408 B more; the app pins it by rev — drop the patch when an upstream
-release carries it, and an upstream PR is held pending the owner's outward
-contact, the picojson pattern). HTTP behavior was held byte-identical under
+release carries it. No PR: upstream fixed the same duplication
+independently on its development branch, 47be022, unreleased as of
+0.19.0 — convergent evidence the diagnosis is right). HTTP behavior was held byte-identical under
 a 16-probe matrix against the seated unit through both changes. The 22×
 table above still holds for anything a handler keeps across an `await` —
 these cuts changed who multiplies, not that multiplication happens.

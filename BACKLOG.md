@@ -1031,3 +1031,28 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     picojson PR #98, and the FCS missing-`alternateColor` events that drop
     real games from the college board (a fallback color would show them —
     behavior change, owner's call).
+
+97. **Open-source stewardship ledger (owner-requested, 2026-08-17).** What
+    this project carries from the community and what it owes back, kept
+    current so the debts don't rot.
+    *Outstanding upstream:* picojson issue #97 + PR #98 (lifetime fix, open)
+    and PR #99 (batched drive, stacked on #98, filed 2026-08-17 with
+    measurements and reproduction); the SWAR tokenizer branch
+    (`perf/tokenizer-swar-scan`) is pushed and offered in #99's body as a
+    follow-up once #99 settles — keep the PRs watched and rebase promptly
+    when the maintainer engages. The `ram-exec` feature is deliberately NOT
+    in the upstream stack: it expands API surface, so gauge interest with an
+    issue after the perf PRs land rather than growing the stack.
+    *Standing debts:* drop `[patch.crates-io]` pins when releases land —
+    picojson (root `Cargo.toml` + `firmware-rs/bench`) after a release
+    carries #98/#99, picoserve (`firmware-rs/app`) after the next release
+    (upstream fixed the select duplication independently on development,
+    47be022 — no PR owed there, and the near-miss is the lesson: **check the
+    default branch before filing**).
+    *Practices that make us good guests, learned this phase:* measure before
+    proposing and put the numbers plus reproduction in the PR body; run the
+    upstream suite AND a downstream corpus before asking for review; respect
+    upstream policy over local preference (deny(unsafe_code) → pin-project,
+    not an unsafe block); keep each PR a refinement with one idea; label
+    stacked PRs as stacked; file the issue before the PR when the change is
+    a judgment call rather than a defect.
