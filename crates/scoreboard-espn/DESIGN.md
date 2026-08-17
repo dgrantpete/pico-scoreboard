@@ -191,6 +191,23 @@ Added after the MLB + soccer inventories, same day:
     equal maxima, sorts are stable — the soccer goldens encode both, so a
     fold-based max or `sort_unstable` silently breaks bytes.
 
+Added as the sport lanes landed:
+
+14. **Detail-mode skip trades the failure count for speed — signed off,
+    with a backend condition.** `SkipElement` on non-target events means a
+    detail run does not validate what it skips, so "target absent +
+    sibling glitched" can resolve NotFound where the backend answers 502
+    (the observed all-`{}` glitch still resolves Glitched — unparsed ids
+    are never skipped). Accepted for the device (S3), where the cheap skip
+    is the point. The **backend adapter must not inherit it**: it derives
+    the 404-vs-502 verdict from a full-validation list pass over the
+    in-memory body before detail extraction, reproducing today's
+    `find_event` exactly. Recorded on both lanes' `ScanStats`/counts docs.
+15. **Local-helper promotion happens once, after all four lanes land** —
+    the duplicated serde-shape integer parsers, `wire_phase`, and the
+    stable insertion sort consolidate into `common.rs` in one
+    orchestrator pass, so mid-flight lanes never chase a moving target.
+
 ## Lanes and validation
 
 - Engine lane: `src/path.rs` + its tests. Hard subsystem — strongest model,
