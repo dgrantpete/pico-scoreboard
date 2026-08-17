@@ -155,7 +155,10 @@ and steady-state numbers in BUDGET.md.
       rotation runbook (a CA rotation is an OTA event).
 - [ ] Measure the handshake on silicon before believing any figure — the
       house rule PHASE-S.md earned at 8× on the hash estimate. Keep-alive
-      amortization is load-bearing, not nice-to-have.
+      amortization is load-bearing, not nice-to-have. Crypto's hot footprint
+      will overflow the XIP cache, so cross-build comparisons carry the
+      layout noise floor (TOOLCHAIN.md "On-silicon benchmarking") — A/B
+      within one binary or expect ±30% ghosts.
 - [ ] User-Agent: device sends the allowlisted prefix from
       `backend/config/default.toml` (ESPN's edge 403s unknown UAs).
 - [ ] Exit: sustained TLS polling of the fronted mock + one real ESPN fetch
