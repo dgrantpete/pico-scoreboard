@@ -6,3 +6,9 @@ resolver = "3"
 # `memory.x` from its constants. It is pure `no_std` arithmetic with host tests
 # behind a `std` feature, so it belongs where `cargo test` already runs.
 members = ["backend", "crates/*", "firmware-rs/layout"]
+
+# scoreboard-espn's tokenizer, pinned to the fork carrying the PushParser
+# per-call-input-lifetime fix (kaidokert/picojson-rs#98, filed from this
+# project). Drop this patch when an upstream release includes the fix.
+[patch.crates-io]
+picojson = { git = "https://github.com/dgrantpete/picojson-rs", rev = "4fd6eeac86cc4757c9cc07e41dde4398d85e3249" }
