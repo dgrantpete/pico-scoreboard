@@ -122,13 +122,16 @@ unchanged. Two subtleties that will bite a re-implementer:
 (commit `ea29142`), sitting on top of the `push-parser-per-call-input`
 branch (upstream PR #98). The tokenizer work below stacks further:
 branch `perf/tokenizer-swar-scan` = `ca799df` (SWAR scan) + `8fb8a76`
-(`ram-exec` feature). **All local — deliberately not pushed** as of this
-writing; the owner wanted them PR-shaped but held. To ship: push the
-branches, open the PRs as a stacked follow-up chain to #98, and once any
-release carries them, replace the `[patch.crates-io]` git-rev pins (root
-`Cargo.toml` AND `firmware-rs/bench/Cargo.toml` — standalone workspaces
-repeat the patch; any future device workspace using picojson needs it
-too) with the release version.
+(`ram-exec` feature). **Pushed 2026-08-17 evening** (owner lifted the
+hold): the batched drive is upstream
+[PR #99](https://github.com/kaidokert/picojson-rs/pull/99), stacked on
+#98 and offering the SWAR branch as a follow-up; `ram-exec` is held out
+of the stack (it expands API surface — BACKLOG 97 carries the
+gauge-interest-via-issue plan). Once any release carries the fixes,
+replace the `[patch.crates-io]` git-rev pins (root `Cargo.toml` AND
+`firmware-rs/bench/Cargo.toml` — standalone workspaces repeat the patch;
+any future device workspace using picojson needs it too) with the
+release version.
 
 ## The tokenizer-core lever, pulled (2026-08-17 afternoon)
 
