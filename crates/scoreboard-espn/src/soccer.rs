@@ -30,11 +30,11 @@ use scoreboard_wire::soccer::{
     FinalTeam as WireFinalTeam, Game as WireGame, Live as WireLive, Pregame as WirePregame,
     PregameTeam as WirePregameTeam,
 };
-use scoreboard_wire::{GameState, Side, TeamColors, TeamState, truncate_utf8};
+use scoreboard_wire::{GameState, Side, TeamColors, TeamState};
 
 use crate::common::{
-    EText, HomeAway, IgnoreQuirks, Quirk, Quirks, order_home_away, parse_hex_rgb,
-    parse_start_time, saturate_score, set_text,
+    EText, Exact, HomeAway, IgnoreQuirks, Quirk, Quirks, WireText, compose, num_u8, num_u32,
+    order_home_away, parse_hex_rgb, parse_start_time, push_trunc, saturate_score, set_text,
 };
 use crate::path::{Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 
@@ -250,8 +250,13 @@ impl SoccerExtract {
 /// The backend's `parse_display_clock`, byte for byte: floor minutes × 60,
 /// stoppage segments summed, all-or-nothing (one unparseable `+`-segment
 /// poisons the whole string), capped at `u16::MAX`. The fallback is the
-/// numeric `status.clock` clamped to `[0, 65535]`; absent ⇒ 0.
-pub fn parse_display_clock(display_clock: &str, numeric_fallback: Option<f64>) -> u16 {
+/// numeric `status.clock` clamped to `[0, 65535]`; absent ⇒ 0. Taking the
+/// fallback fires [`Quirk::DisplayClockFallback`] — the backend warns there.
+pub fn parse_display_clock(
+    display_clock: &str,
+    numeric_fallback: Option<f64>,
+    quirks: &mut impl Quirks,
+) -> u16 {
     fn minutes(text: &str) -> Option<u32> {
         let mut sum: u32 = 0;
         for part in text.split('+') {
@@ -265,111 +270,62 @@ pub fn parse_display_clock(display_clock: &str, numeric_fallback: Option<f64>) -
     }
     match minutes(display_clock) {
         Some(minutes) => minutes.saturating_mul(60).min(u16::MAX as u32) as u16,
-        None => numeric_fallback.unwrap_or(0.0).clamp(0.0, u16::MAX as f64) as u16,
+        None => {
+            quirks.quirk(Quirk::DisplayClockFallback);
+            numeric_fallback.unwrap_or(0.0).clamp(0.0, u16::MAX as f64) as u16
+        }
     }
 }
 
 /// Soccer's own live sub-state map (NOT `parse_live_phase`): the exact break
 /// and active string sets from the backend's `is_break`. `"Shootout"` is
 /// active play. Unknown labels degrade to active play with a quirk — the
-/// state is never guessed.
+/// state is never guessed. An over-bound description cannot equal any known
+/// label, so `valid() == None` while seen lands in the unknown arm too.
 fn is_break(desc: &Exact<DESC_BYTES>, quirks: &mut impl Quirks) -> bool {
-    if !desc.seen {
+    if !desc.seen() {
         return false;
     }
-    if !desc.over {
-        match desc.text.as_str() {
-            "Halftime" | "Extra Time Halftime" | "End of Regulation" | "End of Extra Time" => {
-                return true;
-            }
-            "First Half" | "Second Half" | "In Progress" | "Overtime" | "Shootout" => {
-                return false;
-            }
-            _ => {}
+    match desc.valid() {
+        Some("Halftime" | "Extra Time Halftime" | "End of Regulation" | "End of Extra Time") => {
+            true
+        }
+        Some("First Half" | "Second Half" | "In Progress" | "Overtime" | "Shootout") => false,
+        _ => {
+            quirks.quirk(Quirk::UnknownBreakDescription);
+            false
         }
     }
-    quirks.quirk(Quirk::UnknownBreakDescription);
-    false
 }
 
 /// Post-state description → wire flavor byte; unknown degrades to full time
 /// with a quirk.
 fn final_flavor(desc: &Exact<DESC_BYTES>, quirks: &mut impl Quirks) -> FinalFlavor {
-    if !desc.seen {
+    if !desc.seen() {
         return FinalFlavor::FullTime;
     }
-    if !desc.over {
-        match desc.text.as_str() {
-            "Final Score - After Extra Time" => return FinalFlavor::AfterExtraTime,
-            "Final Score - After Penalties" => return FinalFlavor::AfterPenalties,
-            "Full Time" => return FinalFlavor::FullTime,
-            _ => {}
+    match desc.valid() {
+        Some("Final Score - After Extra Time") => FinalFlavor::AfterExtraTime,
+        Some("Final Score - After Penalties") => FinalFlavor::AfterPenalties,
+        Some("Full Time") => FinalFlavor::FullTime,
+        _ => {
+            quirks.quirk(Quirk::UnknownFinalFlavor);
+            FinalFlavor::FullTime
         }
     }
-    quirks.quirk(Quirk::UnknownFinalFlavor);
-    FinalFlavor::FullTime
 }
 
 // ------------------------------------------------------------ text plumbing
+// `push_trunc`/`compose`, `Exact<N>` and `WireText` were promoted to
+// `common.rs` (ruling 15) with the semantics this lane tested; they are
+// imported back from there.
 
-/// Append with the wire's truncation semantics and report whether the whole
-/// piece fit. Composing pieces with this and STOPPING at the first cut piece
-/// yields exactly `truncate_utf8(concat(pieces), N)` — piece boundaries are
-/// char boundaries of the concatenation, so the walk-down lands identically.
-fn push_trunc<const N: usize>(dst: &mut heapless::String<N>, piece: &str) -> bool {
-    let take = truncate_utf8(piece, N - dst.len());
-    let _ = dst.push_str(take);
-    take.len() == piece.len()
-}
-
-/// `truncate_utf8(concat(pieces), N)` without materializing the concatenation.
-fn compose<const N: usize>(dst: &mut heapless::String<N>, pieces: &[&str]) {
-    for piece in pieces {
-        if !push_trunc(dst, piece) {
-            break;
-        }
-    }
-}
-
-/// Bounded copy that REFUSES to truncate: parse inputs and compare keys must
-/// fail loudly (matching the backend's parse failures on the same input)
-/// rather than silently operate on a prefix.
-#[derive(Debug, Clone, Default)]
-struct Exact<const N: usize> {
-    text: heapless::String<N>,
-    seen: bool,
-    over: bool,
-}
-
-impl<const N: usize> Exact<N> {
-    fn set(&mut self, src: &str) {
-        self.text.clear();
-        self.seen = true;
-        self.over = self.text.push_str(src).is_err();
-    }
-
-    fn valid(&self) -> Option<&str> {
-        if self.seen && !self.over {
-            Some(self.text.as_str())
-        } else {
-            None
-        }
-    }
-}
-
-/// Wire-bound string: copies with the shared `truncate_utf8` (ruling 2), so
-/// truncate-at-copy is byte-identical to the backend's truncate-at-encode.
-#[derive(Debug, Clone, Default)]
-struct WireText {
-    text: EText,
-    seen: bool,
-}
-
-impl WireText {
-    fn set(&mut self, src: &str) {
-        set_text(&mut self.text, src);
-        self.seen = true;
-    }
+/// Owned [`EText`] from an already-wire-truncated source (≤ the cap by
+/// construction, so the push cannot fail).
+fn owned(text: &str) -> EText {
+    let mut out = EText::new();
+    let _ = out.push_str(text);
+    out
 }
 
 // ------------------------------------------------------------- path tables
@@ -545,7 +501,6 @@ struct ScorerRec {
 #[derive(Debug, Clone, Default)]
 struct EventScratch {
     active: bool,
-    skipped: bool,
     is_target: bool,
     /// A DU-tier violation was observed: the backend would have dropped this
     /// event in `parse_events` (and counted it failed).
@@ -573,7 +528,7 @@ struct EventScratch {
 /// `competitions` array deserializes cleanly — the event is "ok" but has
 /// nothing to serve (list: filtered out; detail: `GameNotFound`).
 fn du_ok(s: &EventScratch) -> bool {
-    if s.invalid || !s.id.seen || !s.date.seen || !s.competitions_present {
+    if s.invalid || !s.id.seen() || !s.date.seen() || !s.competitions_present {
         return false;
     }
     if !s.comp0_present {
@@ -587,22 +542,22 @@ fn du_ok(s: &EventScratch) -> bool {
     }
     for competitor in &s.competitors {
         if competitor.home_away.is_none()
-            || !competitor.score.seen
-            || !competitor.team_id.seen
-            || !competitor.abbreviation.seen
-            || !competitor.color.seen
-            || !competitor.alternate.seen
+            || !competitor.score.seen()
+            || !competitor.team_id.seen()
+            || !competitor.abbreviation.seen()
+            || !competitor.color.seen()
+            || !competitor.alternate.seen()
         {
             return false;
         }
     }
     // A venue object without `fullName` fails deserialization in EVERY state.
-    if s.venue_present && !s.venue_name.seen {
+    if s.venue_present && !s.venue_name.seen() {
         return false;
     }
     match state {
-        GameState::Pregame => s.venue_present && s.venue_name.seen,
-        GameState::Live => s.display_clock.seen && s.period.is_some(),
+        GameState::Pregame => s.venue_present && s.venue_name.seen(),
+        GameState::Live => s.display_clock.seen() && s.period.is_some(),
         GameState::Final => true,
     }
 }
@@ -711,15 +666,15 @@ fn transform<Q: Quirks>(
                 .and_then(parse_start_time)
                 .ok_or(TransformError::Date)?;
             Ok(SoccerExtract::Pregame(PregameExtract {
-                game_id: s.id.text.clone(),
+                game_id: owned(s.id.as_str()),
                 start_time,
-                venue: s.venue_name.text.clone(),
+                venue: owned(s.venue_name.as_str()),
                 away: PregameTeamExtract {
-                    abbreviation: away.abbreviation.text.clone(),
+                    abbreviation: owned(away.abbreviation.as_str()),
                     colors: team_colors(away)?,
                 },
                 home: PregameTeamExtract {
-                    abbreviation: home.abbreviation.text.clone(),
+                    abbreviation: owned(home.abbreviation.as_str()),
                     colors: team_colors(home)?,
                 },
             }))
@@ -749,19 +704,29 @@ fn transform<Q: Quirks>(
                     text,
                 }
             });
+            let half = s.period.unwrap_or(0); // DU guaranteed Some
+            if !(1..=5).contains(&half) {
+                // Passed through raw, exactly like the backend's warn — but
+                // the wire DECODE rejects it (the asymmetry is BACKLOG-bound).
+                quirks.quirk(Quirk::PeriodOutOfRange);
+            }
             Ok(SoccerExtract::Live(LiveExtract {
-                game_id: s.id.text.clone(),
-                clock: s.display_clock.text.clone(),
-                clock_seconds: parse_display_clock(s.display_clock.text.as_str(), s.numeric_clock),
-                half: s.period.unwrap_or(0), // DU guaranteed Some
+                game_id: owned(s.id.as_str()),
+                clock: owned(s.display_clock.as_str()),
+                clock_seconds: parse_display_clock(
+                    s.display_clock.as_str(),
+                    s.numeric_clock,
+                    quirks,
+                ),
+                half,
                 on_break: is_break(&s.desc, quirks),
                 away: LiveTeamExtract {
-                    abbreviation: away.abbreviation.text.clone(),
+                    abbreviation: owned(away.abbreviation.as_str()),
                     score: team_score(away)?,
                     colors: team_colors(away)?,
                 },
                 home: LiveTeamExtract {
-                    abbreviation: home.abbreviation.text.clone(),
+                    abbreviation: owned(home.abbreviation.as_str()),
                     score: team_score(home)?,
                     colors: team_colors(home)?,
                 },
@@ -772,13 +737,13 @@ fn transform<Q: Quirks>(
         GameState::Final => {
             let flavor = final_flavor(&s.desc, quirks);
             let mut away_team = FinalTeamExtract {
-                abbreviation: away.abbreviation.text.clone(),
+                abbreviation: owned(away.abbreviation.as_str()),
                 score: team_score(away)?,
                 colors: team_colors(away)?,
                 scorers: EText::new(),
             };
             let mut home_team = FinalTeamExtract {
-                abbreviation: home.abbreviation.text.clone(),
+                abbreviation: owned(home.abbreviation.as_str()),
                 score: team_score(home)?,
                 colors: team_colors(home)?,
                 scorers: EText::new(),
@@ -801,7 +766,7 @@ fn transform<Q: Quirks>(
             away_team.scorers = scorers_for(recs, away_id);
             home_team.scorers = scorers_for(recs, home_id);
             Ok(SoccerExtract::Final(FinalExtract {
-                game_id: s.id.text.clone(),
+                game_id: owned(s.id.as_str()),
                 flavor,
                 away: away_team,
                 home: home_team,
@@ -834,7 +799,9 @@ enum Mode {
         overflowed: bool,
     },
     Detail {
-        target: EText,
+        /// Compare key, refuse-to-truncate (ruling 16): an over-bound target
+        /// matches nothing rather than false-matching on a prefix.
+        target: Exact<ID_BYTES>,
         done: bool,
         result: Option<DetailResult>,
     },
@@ -846,7 +813,6 @@ struct SoccerSink<Q: Quirks> {
     quirks: Q,
     ok: u16,
     failed: u16,
-    skipped: u16,
     /// The scoreboard shell itself was malformed (`events` not an array) —
     /// the backend's whole-body deserialize failure, a 502 before any event.
     body_bad: bool,
@@ -860,9 +826,14 @@ impl<Q: Quirks> SoccerSink<Q> {
             quirks,
             ok: 0,
             failed: 0,
-            skipped: 0,
             body_bad: false,
         }
+    }
+
+    /// Ruling 14: once the target is found, the document remainder is
+    /// skipped and uncounted — the verdict is already `Found`.
+    fn done(&self) -> bool {
+        matches!(self.mode, Mode::Detail { done: true, .. })
     }
 
     fn fold_detail(&mut self) {
@@ -877,7 +848,7 @@ impl<Q: Quirks> SoccerSink<Q> {
         if !d.type_seen
             || !d.value_seen
             || !d.display_seen
-            || (d.team_present && !d.team_id.seen)
+            || (d.team_present && !d.team_id.seen())
         {
             s.invalid = true;
             return;
@@ -908,33 +879,32 @@ impl<Q: Quirks> SoccerSink<Q> {
             };
             let mut text = EText::new();
             compose(&mut text, &[name, " ", d.display.as_str()]);
-            let _ = s.scorers.push(ScorerRec {
+            let rec = ScorerRec {
                 value: d.value,
                 team_id: d.team_id.clone(),
                 text,
-            });
+            };
+            if s.scorers.push(rec).is_err() {
+                // Beyond anything ESPN-covered soccer produces (SCORING_MAX);
+                // diagnostics only — the excess entry is dropped.
+                self.quirks.quirk(Quirk::BoundedOverflow);
+            }
         }
     }
 
-    fn finalize_event(&mut self) {
+    /// Every event up to and including the target is fully validated and
+    /// counted (ruling 14), so a missing target always comes with exact
+    /// `ok`/`failed` counts. Finding the target answers `SkipElement` and
+    /// flips `done` — nothing after it is matched or counted.
+    fn finalize_event(&mut self) -> Directive {
         let scratch = &mut self.scratch;
         if !scratch.active {
-            return;
+            return Directive::Continue;
         }
         scratch.active = false;
-        if scratch.skipped {
-            // A fast-forwarded event was not fully validated; one that had
-            // already tripped a DU violation before its id is still failed.
-            if scratch.invalid {
-                self.failed = self.failed.saturating_add(1);
-            } else {
-                self.skipped = self.skipped.saturating_add(1);
-            }
-            return;
-        }
         if !du_ok(scratch) {
             self.failed = self.failed.saturating_add(1);
-            return;
+            return Directive::Continue;
         }
         self.ok = self.ok.saturating_add(1);
         match &mut self.mode {
@@ -943,13 +913,15 @@ impl<Q: Quirks> SoccerSink<Q> {
                     if let Some(state) = scratch.state {
                         let entry = ListEntry {
                             state,
-                            id: scratch.id.text.clone(),
+                            id: owned(scratch.id.as_str()),
                         };
                         if games.push(entry).is_err() {
                             *overflowed = true;
+                            self.quirks.quirk(Quirk::BoundedOverflow);
                         }
                     }
                 }
+                Directive::Continue
             }
             Mode::Detail { done, result, .. } => {
                 if scratch.is_target && !*done {
@@ -962,7 +934,9 @@ impl<Q: Quirks> SoccerSink<Q> {
                     } else {
                         DetailResult::NoCompetition
                     });
+                    return Directive::SkipElement;
                 }
+                Directive::Continue
             }
         }
     }
@@ -970,6 +944,9 @@ impl<Q: Quirks> SoccerSink<Q> {
 
 impl<Q: Quirks> Sink for SoccerSink<Q> {
     fn value(&mut self, pattern: usize, indices: &[u16], value: Value<'_>) -> Directive {
+        if self.done() {
+            return Directive::SkipElement;
+        }
         let s = &mut self.scratch;
         match pattern {
             // `events` present but not an array (null, scalar): the backend's
@@ -980,12 +957,13 @@ impl<Q: Quirks> Sink for SoccerSink<Q> {
             P_ID => match value {
                 Value::Str(text) => {
                     s.id.set(text);
+                    // Ruling 14: no skipping before the target is found —
+                    // every pre-target event is fully validated so the
+                    // 404-vs-502 counts are exact. The raw token is compared
+                    // against the refuse-to-truncate target (ruling 16).
                     if let Mode::Detail { target, done, .. } = &self.mode {
-                        if !*done && text == target.as_str() {
+                        if !*done && target.valid() == Some(text) {
                             s.is_target = true;
-                        } else {
-                            s.skipped = true;
-                            return Directive::SkipElement;
                         }
                     }
                 }
@@ -1024,10 +1002,10 @@ impl<Q: Quirks> Sink for SoccerSink<Q> {
                 _ => s.invalid = true,
             },
             P_PERIOD => match value {
-                Value::Num(text) => match text.parse::<u8>() {
-                    Ok(period) => s.period = Some(period),
-                    // Fractional/out-of-range fails serde's u8 the same way.
-                    Err(_) => s.invalid = true,
+                Value::Num(text) => match num_u8(text) {
+                    Some(period) => s.period = Some(period),
+                    // Fractional/negative/out-of-range fails serde's u8 too.
+                    None => s.invalid = true,
                 },
                 Value::Null => {} // Option<u8>
                 _ => s.invalid = true,
@@ -1122,6 +1100,9 @@ impl<Q: Quirks> Sink for SoccerSink<Q> {
     }
 
     fn enter(&mut self, pattern: usize, _indices: &[u16]) -> Directive {
+        if self.done() {
+            return Directive::SkipElement;
+        }
         let s = &mut self.scratch;
         match pattern {
             P_EVENT => {
@@ -1148,8 +1129,11 @@ impl<Q: Quirks> Sink for SoccerSink<Q> {
     }
 
     fn leave(&mut self, pattern: usize, _indices: &[u16]) -> Directive {
+        if self.done() {
+            return Directive::SkipElement;
+        }
         match pattern {
-            P_EVENT => self.finalize_event(),
+            P_EVENT => return self.finalize_event(),
             P_DETAIL => self.fold_detail(),
             P_DATHLETE => {
                 let d = &mut self.scratch.detail;
@@ -1193,16 +1177,33 @@ impl From<Error> for ExtractError {
 #[allow(clippy::large_enum_variant)]
 pub enum GameOutcome {
     Found(SoccerExtract),
-    /// The target id was absent (or its event carried no competition).
-    /// `failed` counts events that provably fail the backend's per-event
-    /// parse — the 404-vs-502 rule (ruling 13): only `failed == 0` may map
-    /// to "game ended". `skipped` events were fast-forwarded at their id
-    /// without full validation (the list extractor validates everything).
-    NotFound { ok: u16, failed: u16, skipped: u16 },
+    /// The target event parsed clean but carried no competition — the
+    /// backend serves `GameNotFound` (404) from that check *regardless* of
+    /// sibling failures (`shared/handler.rs`, after `find_event`).
+    NoCompetition,
+    /// The target id was not among the validated events. A missing target
+    /// means nothing was ever skipped (ruling 14), so the report's counts
+    /// are exact — the honest 404-vs-502 input (ruling 13): only
+    /// `failed == 0` may map to "game ended".
+    Absent,
 }
 
-/// Streams one league scoreboard body and extracts the target event,
-/// fast-forwarding every other event at its `id` (`SkipElement`).
+/// Result of a detail extraction: the outcome, the per-event tallies, and
+/// the quirk receiver handed back.
+#[derive(Debug)]
+pub struct DetailReport<Q> {
+    pub outcome: GameOutcome,
+    /// Events validated clean, up to the point the verdict was reached —
+    /// post-found events are skipped and uncounted (ruling 14).
+    pub ok: u16,
+    /// Events the backend's per-event parse would have dropped with a warn.
+    pub failed: u16,
+    pub quirks: Q,
+}
+
+/// Streams one league scoreboard body and extracts the target event.
+/// Every event is fully validated and counted until the target is found
+/// (ruling 14); only the post-found remainder is skipped, uncounted.
 pub struct GameExtractor<'scratch, Q: Quirks> {
     matcher: StreamMatcher<'static, 'scratch, SoccerSink<Q>>,
 }
@@ -1215,8 +1216,8 @@ impl<'scratch, Q: Quirks> GameExtractor<'scratch, Q> {
         quirks: Q,
         scratch: &'scratch mut [u8],
     ) -> Result<Self, Error> {
-        let mut target = EText::new();
-        set_text(&mut target, target_id);
+        let mut target = Exact::default();
+        target.set(target_id);
         let sink = SoccerSink::new(
             Mode::Detail {
                 target,
@@ -1234,26 +1235,35 @@ impl<'scratch, Q: Quirks> GameExtractor<'scratch, Q> {
         self.matcher.write(chunk)
     }
 
-    /// Finish the document; hands the quirk receiver back alongside the
-    /// outcome (it is only reachable on the Ok path — transform failures are
-    /// terminal 5xx, not diagnostics).
-    pub fn finish(self) -> Result<(GameOutcome, Q), ExtractError> {
+    /// Finish the document. The report is only reachable on the Ok path —
+    /// transform failures are terminal 5xx, not diagnostics.
+    pub fn finish(self) -> Result<DetailReport<Q>, ExtractError> {
         let sink = self.matcher.finish()?;
         if sink.body_bad {
             return Err(ExtractError::MalformedBody);
         }
-        let (ok, failed, skipped) = (sink.ok, sink.failed, sink.skipped);
-        match sink.mode {
+        let (ok, failed) = (sink.ok, sink.failed);
+        let outcome = match sink.mode {
             Mode::Detail {
                 result: Some(DetailResult::Game(game)),
                 ..
-            } => Ok((GameOutcome::Found(game), sink.quirks)),
+            } => GameOutcome::Found(game),
             Mode::Detail {
                 result: Some(DetailResult::Failed(error)),
                 ..
-            } => Err(ExtractError::Transform(error)),
-            _ => Ok((GameOutcome::NotFound { ok, failed, skipped }, sink.quirks)),
-        }
+            } => return Err(ExtractError::Transform(error)),
+            Mode::Detail {
+                result: Some(DetailResult::NoCompetition),
+                ..
+            } => GameOutcome::NoCompetition,
+            _ => GameOutcome::Absent,
+        };
+        Ok(DetailReport {
+            outcome,
+            ok,
+            failed,
+            quirks: sink.quirks,
+        })
     }
 }
 
@@ -1277,9 +1287,9 @@ pub struct GamesList {
     pub overflowed: bool,
 }
 
-/// Streams one league scoreboard body into the games list. Unlike
-/// [`GameExtractor`] it never skips, so `failed` is exact — this is the
-/// authoritative count for the 404-vs-502 rule.
+/// Streams one league scoreboard body into the games list — the same
+/// per-event validation as [`GameExtractor`] (ruling 14), never terminating
+/// early, so every event in the body is counted.
 pub struct ListExtractor<'scratch> {
     matcher: StreamMatcher<'static, 'scratch, SoccerSink<IgnoreQuirks>>,
 }
@@ -1375,9 +1385,9 @@ impl Sink for SummarySink {
             S_SEQ => match value {
                 // A genuine JSON number, `u32`: non-integer or negative fails
                 // the whole summary, exactly like serde.
-                Value::Num(text) => match text.parse::<u32>() {
-                    Ok(sequence) => self.item.sequence = Some(sequence),
-                    Err(_) => self.poisoned = true,
+                Value::Num(text) => match num_u32(text) {
+                    Some(sequence) => self.item.sequence = Some(sequence),
+                    None => self.poisoned = true,
                 },
                 _ => self.poisoned = true,
             },

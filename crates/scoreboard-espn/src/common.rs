@@ -36,7 +36,8 @@ pub enum Quirk {
     ClippedLineScore,
     /// MLB weather block dropped (no resolvable condition or no temperature).
     WeatherDropped,
-    /// A live soccer/football situation dropped by validation (backend warns).
+    /// A live football situation dropped by validation (backend warns).
+    /// Football-only: soccer has no situation path (its lane checked).
     SituationDropped,
     /// Soccer clock fell back to the numeric field (display string unparseable).
     DisplayClockFallback,

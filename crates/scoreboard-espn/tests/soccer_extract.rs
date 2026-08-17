@@ -12,8 +12,8 @@ use std::path::PathBuf;
 
 use scoreboard_espn::common::{IgnoreQuirks, Quirk, Quirks};
 use scoreboard_espn::soccer::{
-    GameExtractor, GameOutcome, ListExtractor, SoccerExtract, SummaryExtractor, SummaryOutcome,
-    parse_display_clock,
+    DetailReport, GameExtractor, GameOutcome, ListExtractor, SoccerExtract, SummaryExtractor,
+    SummaryOutcome, parse_display_clock,
 };
 use scoreboard_wire::soccer::{self as wire_soccer, EventKind, FinalFlavor};
 use scoreboard_wire::{GameState, Side, SliceSink};
@@ -80,17 +80,17 @@ impl Quirks for RecQuirks {
     }
 }
 
-fn extract_chunked(body: &str, target: &str, chunk: usize) -> GameOutcome {
+fn extract_chunked(body: &str, target: &str, chunk: usize) -> DetailReport<IgnoreQuirks> {
     let mut scratch = vec![0u8; 64 * 1024];
     let mut extractor = GameExtractor::new(target, IgnoreQuirks, &mut scratch).unwrap();
     for piece in body.as_bytes().chunks(chunk.max(1)) {
         extractor.write(piece).unwrap();
     }
-    extractor.finish().unwrap().0
+    extractor.finish().unwrap()
 }
 
 fn found(body: &str, target: &str) -> SoccerExtract {
-    match extract_chunked(body, target, usize::MAX) {
+    match extract_chunked(body, target, usize::MAX).outcome {
         GameOutcome::Found(extract) => extract,
         other => panic!("expected Found for {target}, got {other:?}"),
     }
@@ -140,12 +140,12 @@ fn chunk_split_invariance_across_feed_shapes() {
         let event = fixture(name);
         let target = id_of(&event);
         let body = wrap(&[&event]);
-        let whole = match extract_chunked(&body, &target, usize::MAX) {
+        let whole = match extract_chunked(&body, &target, usize::MAX).outcome {
             GameOutcome::Found(extract) => encode(&extract),
             other => panic!("{name}: {other:?}"),
         };
         for chunk in [1, 7] {
-            let split = match extract_chunked(&body, &target, chunk) {
+            let split = match extract_chunked(&body, &target, chunk).outcome {
                 GameOutcome::Found(extract) => encode(&extract),
                 other => panic!("{name} at {chunk}-byte chunks: {other:?}"),
             };
@@ -293,12 +293,12 @@ fn unknown_break_description_degrades_to_active_play_with_a_quirk() {
     let mut extractor =
         GameExtractor::new(&id_of(&event), RecQuirks::default(), &mut scratch).unwrap();
     extractor.write(body.as_bytes()).unwrap();
-    let (outcome, quirks) = extractor.finish().unwrap();
-    let GameOutcome::Found(SoccerExtract::Live(live)) = outcome else {
+    let report = extractor.finish().unwrap();
+    let GameOutcome::Found(SoccerExtract::Live(live)) = report.outcome else {
         panic!("live");
     };
     assert!(!live.on_break, "unknown descriptions never guess a break");
-    assert_eq!(quirks.0, vec![Quirk::UnknownBreakDescription]);
+    assert_eq!(report.quirks.0, vec![Quirk::UnknownBreakDescription]);
 }
 
 #[test]
@@ -311,15 +311,15 @@ fn unknown_final_description_degrades_to_full_time_with_a_quirk() {
     let mut extractor =
         GameExtractor::new(&id_of(&event), RecQuirks::default(), &mut scratch).unwrap();
     extractor.write(body.as_bytes()).unwrap();
-    let (outcome, quirks) = extractor.finish().unwrap();
-    let GameOutcome::Found(extract) = outcome else {
+    let report = extractor.finish().unwrap();
+    let GameOutcome::Found(extract) = report.outcome else {
         panic!("found");
     };
     let SoccerExtract::Final(game) = &extract else {
         panic!("final");
     };
     assert_eq!(game.flavor, FinalFlavor::FullTime);
-    assert_eq!(quirks.0, vec![Quirk::UnknownFinalFlavor]);
+    assert_eq!(report.quirks.0, vec![Quirk::UnknownFinalFlavor]);
     // Flavor byte identical to the genuine "Full Time" golden.
     assert_eq!(hex(&encode(&extract)), hex(&golden("full_time")));
 }
@@ -328,32 +328,82 @@ fn unknown_final_description_degrades_to_full_time_with_a_quirk() {
 
 #[test]
 fn display_clock_parses_floor_minutes_and_stoppage() {
-    assert_eq!(parse_display_clock("23'", None), 1380);
-    assert_eq!(parse_display_clock("45'+6'", None), 3060);
-    assert_eq!(parse_display_clock("120'+4'", None), 7440);
-    assert_eq!(parse_display_clock("0'", None), 0);
+    let q = &mut IgnoreQuirks;
+    assert_eq!(parse_display_clock("23'", None, q), 1380);
+    assert_eq!(parse_display_clock("45'+6'", None, q), 3060);
+    assert_eq!(parse_display_clock("120'+4'", None, q), 7440);
+    assert_eq!(parse_display_clock("0'", None, q), 0);
     // Segments are trimmed before the apostrophe strip.
-    assert_eq!(parse_display_clock("45' + 6'", None), 3060);
+    assert_eq!(parse_display_clock("45' + 6'", None, q), 3060);
     // The u16 cap.
-    assert_eq!(parse_display_clock("1100'", None), u16::MAX);
+    assert_eq!(parse_display_clock("1100'", None, q), u16::MAX);
 }
 
 #[test]
 fn unparseable_display_clock_falls_back_to_the_numeric_clock() {
-    assert_eq!(parse_display_clock("HT", Some(2700.0)), 2700);
-    assert_eq!(parse_display_clock("HT", None), 0);
-    assert_eq!(parse_display_clock("garbage", None), 0);
+    let q = &mut IgnoreQuirks;
+    assert_eq!(parse_display_clock("HT", Some(2700.0), q), 2700);
+    assert_eq!(parse_display_clock("HT", None, q), 0);
+    assert_eq!(parse_display_clock("garbage", None, q), 0);
     // The fallback clamps rather than wraps.
-    assert_eq!(parse_display_clock("HT", Some(1e9)), u16::MAX);
-    assert_eq!(parse_display_clock("HT", Some(-5.0)), 0);
+    assert_eq!(parse_display_clock("HT", Some(1e9), q), u16::MAX);
+    assert_eq!(parse_display_clock("HT", Some(-5.0), q), 0);
+    // Taking the fallback is the backend's warn — surfaced as a quirk.
+    let mut rec = RecQuirks::default();
+    assert_eq!(parse_display_clock("HT", Some(2700.0), &mut rec), 2700);
+    assert_eq!(rec.0, vec![Quirk::DisplayClockFallback]);
+    // The happy path stays silent.
+    let mut rec = RecQuirks::default();
+    assert_eq!(parse_display_clock("45'+6'", None, &mut rec), 3060);
+    assert!(rec.0.is_empty());
 }
 
 /// `Option<u32>: Sum` short-circuits: one unparseable `+`-segment poisons the
 /// WHOLE string — no partial credit, straight to the numeric fallback.
 #[test]
 fn one_poisoned_clock_segment_falls_back_for_the_whole_string() {
-    assert_eq!(parse_display_clock("45'+x'", Some(2700.0)), 2700);
-    assert_eq!(parse_display_clock("45'+x'", None), 0);
+    let q = &mut IgnoreQuirks;
+    assert_eq!(parse_display_clock("45'+x'", Some(2700.0), q), 2700);
+    assert_eq!(parse_display_clock("45'+x'", None, q), 0);
+}
+
+/// The fallback quirk also surfaces through a full extraction.
+#[test]
+fn display_clock_fallback_fires_a_quirk_through_extraction() {
+    let event = fixture("halftime"); // status.clock is 2700.0
+    let body = wrap(&[&mutate(&event, |v| {
+        v["competitions"][0]["status"]["displayClock"] = serde_json::json!("HT");
+    })]);
+    let mut scratch = vec![0u8; 64 * 1024];
+    let mut extractor =
+        GameExtractor::new(&id_of(&event), RecQuirks::default(), &mut scratch).unwrap();
+    extractor.write(body.as_bytes()).unwrap();
+    let report = extractor.finish().unwrap();
+    let GameOutcome::Found(SoccerExtract::Live(live)) = report.outcome else {
+        panic!("live");
+    };
+    assert_eq!(live.clock_seconds, 2700);
+    assert!(report.quirks.0.contains(&Quirk::DisplayClockFallback));
+}
+
+/// An out-of-range period passes through raw (the backend only warns) but is
+/// surfaced as a quirk — the wire decode would reject these bytes.
+#[test]
+fn out_of_range_period_passes_through_with_a_quirk() {
+    let event = fixture("first_half");
+    let body = wrap(&[&mutate(&event, |v| {
+        v["competitions"][0]["status"]["period"] = serde_json::json!(9);
+    })]);
+    let mut scratch = vec![0u8; 64 * 1024];
+    let mut extractor =
+        GameExtractor::new(&id_of(&event), RecQuirks::default(), &mut scratch).unwrap();
+    extractor.write(body.as_bytes()).unwrap();
+    let report = extractor.finish().unwrap();
+    let GameOutcome::Found(SoccerExtract::Live(live)) = report.outcome else {
+        panic!("live");
+    };
+    assert_eq!(live.half, 9);
+    assert!(report.quirks.0.contains(&Quirk::PeriodOutOfRange));
 }
 
 // ----------------------------------------------------- last-event details
@@ -408,6 +458,53 @@ fn athlete_less_scorer_falls_back_to_type_text_in_the_list() {
         panic!("final");
     };
     assert_eq!(game.away.scorers.as_str(), "Goal 90'+1'");
+    assert_eq!(game.home.scorers.as_str(), "");
+}
+
+/// Scoring details beyond `SCORING_MAX` are dropped with a
+/// `Quirk::BoundedOverflow` each — and because the buffered entries already
+/// overrun the 255-byte wire cap, the encoded scorers still match what the
+/// backend's unbounded join-then-truncate would produce.
+#[test]
+fn scorer_buffer_overflow_drops_excess_with_a_quirk() {
+    let event = fixture("full_time");
+    let body = mutate(&event, |v| {
+        let details: Vec<serde_json::Value> = (1..=40)
+            .map(|i| {
+                serde_json::json!({
+                    "type": {"text": "Goal"},
+                    "clock": {"value": (i * 60) as f64, "displayValue": format!("{i}'")},
+                    "team": {"id": "164"},
+                    "scoringPlay": true,
+                    "athletesInvolved": [{"shortName": format!("P{i}")}]
+                })
+            })
+            .collect();
+        v["competitions"][0]["details"] = serde_json::Value::Array(details);
+    });
+    let mut scratch = vec![0u8; 64 * 1024];
+    let mut extractor =
+        GameExtractor::new(&id_of(&event), RecQuirks::default(), &mut scratch).unwrap();
+    extractor.write(wrap(&[&body]).as_bytes()).unwrap();
+    let report = extractor.finish().unwrap();
+    let GameOutcome::Found(SoccerExtract::Final(game)) = report.outcome else {
+        panic!("final");
+    };
+    let overflows = report
+        .quirks
+        .0
+        .iter()
+        .filter(|q| **q == Quirk::BoundedOverflow)
+        .count();
+    assert_eq!(overflows, 8, "40 scoring details, 32 buffered");
+    // The 32 buffered entries join to 268 bytes, so the 255-byte cut lands
+    // inside them — byte-identical to the backend's full 40-entry join.
+    let full = (1..=32)
+        .map(|i| format!("P{i} {i}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(full.len() > 255);
+    assert_eq!(game.away.scorers.as_str(), &full[..255]);
     assert_eq!(game.home.scorers.as_str(), "");
 }
 
@@ -550,47 +647,79 @@ fn games_list_reports_states_ids_and_exact_failed_counts() {
 }
 
 #[test]
-fn target_found_behind_skipped_events() {
-    let shootout = fixture("shootout"); // 760508 — skipped at its id
+fn target_found_behind_a_validated_sibling() {
+    let shootout = fixture("shootout"); // 760508 — validated, counted, not served
     let first_half = fixture("first_half"); // 760507 — the target
     let body = wrap(&[&shootout, &first_half]);
     let extract = found(&body, "760507");
     assert_eq!(hex(&encode(&extract)), hex(&golden("first_half")));
 }
 
+/// Ruling 14 pin (mirrors football's test): everything BEFORE the target is
+/// validated and counted; everything AFTER the found target is skipped and
+/// uncounted; a missing target comes with exact counts.
+#[test]
+fn events_after_found_target_are_skipped() {
+    let event = fixture("first_half");
+    let id = id_of(&event);
+    let garbage = r#"{"id":42,"date":false,"competitions":"nope"}"#;
+
+    let after = wrap(&[&event, garbage]);
+    let report = extract_chunked(&after, &id, usize::MAX);
+    let GameOutcome::Found(extract) = report.outcome else {
+        panic!("target present, got {:?}", report.outcome);
+    };
+    assert_eq!(hex(&encode(&extract)), hex(&golden("first_half")));
+    assert_eq!((report.ok, report.failed), (1, 0), "post-target skipped");
+
+    let before = wrap(&[garbage, &event]);
+    let report = extract_chunked(&before, &id, usize::MAX);
+    let GameOutcome::Found(extract) = report.outcome else {
+        panic!("target present, got {:?}", report.outcome);
+    };
+    assert_eq!(hex(&encode(&extract)), hex(&golden("first_half")));
+    assert_eq!((report.ok, report.failed), (1, 1), "pre-target validated");
+
+    // Absent target: nothing was skipped, both events counted exactly.
+    let report = extract_chunked(&before, "999", usize::MAX);
+    assert_eq!(report.outcome, GameOutcome::Absent);
+    assert_eq!((report.ok, report.failed), (1, 1));
+}
+
 /// The 404-vs-502 rule (ruling 13): an absent target on a CLEAN scoreboard is
 /// "game ended" (failed == 0); a glitched scoreboard must never masquerade as
-/// that, so provably-unparseable events are counted.
+/// that. With ruling 14 the counts are exact — every event was validated.
 #[test]
 fn absent_target_distinguishes_clean_from_glitched_scoreboards() {
     let pregame = fixture("pregame");
 
     let clean = wrap(&[&pregame]);
-    let GameOutcome::NotFound { ok, failed, skipped } = extract_chunked(&clean, "999", usize::MAX)
-    else {
-        panic!("target 999 is absent");
-    };
-    assert_eq!((ok, failed, skipped), (0, 0, 1));
+    let report = extract_chunked(&clean, "999", usize::MAX);
+    assert_eq!(report.outcome, GameOutcome::Absent);
+    assert_eq!((report.ok, report.failed), (1, 0));
 
     let glitched = wrap(&[&pregame, "{}"]);
-    let GameOutcome::NotFound { failed, skipped, .. } =
-        extract_chunked(&glitched, "999", usize::MAX)
-    else {
-        panic!("target 999 is absent");
-    };
-    assert_eq!((failed, skipped), (1, 1));
+    let report = extract_chunked(&glitched, "999", usize::MAX);
+    assert_eq!(report.outcome, GameOutcome::Absent);
+    assert_eq!((report.ok, report.failed), (1, 1));
 }
 
 /// A found event with an empty `competitions` array is the backend's
-/// `GameNotFound` (404 on a clean parse), not an error.
+/// `GameNotFound` (404) from the post-find check — regardless of sibling
+/// failures, unlike `Absent`.
 #[test]
 fn target_with_no_competition_is_not_found() {
-    let body = wrap(&[r#"{"id":"555","date":"2026-07-07T00:00Z","competitions":[]}"#]);
-    let GameOutcome::NotFound { ok, failed, skipped } = extract_chunked(&body, "555", usize::MAX)
-    else {
-        panic!("no competition to serve");
-    };
-    assert_eq!((ok, failed, skipped), (1, 0, 0));
+    let no_comp = r#"{"id":"555","date":"2026-07-07T00:00Z","competitions":[]}"#;
+    let body = wrap(&[no_comp]);
+    let report = extract_chunked(&body, "555", usize::MAX);
+    assert_eq!(report.outcome, GameOutcome::NoCompetition);
+    assert_eq!((report.ok, report.failed), (1, 0));
+
+    // Even with a glitched sibling the backend still 404s this case.
+    let glitched = wrap(&["{}", no_comp]);
+    let report = extract_chunked(&glitched, "555", usize::MAX);
+    assert_eq!(report.outcome, GameOutcome::NoCompetition);
+    assert_eq!((report.ok, report.failed), (1, 1));
 }
 
 // ------------------------------------------------------- rejection parity
@@ -607,11 +736,9 @@ fn live_event_missing_display_clock_is_dropped() {
             .unwrap()
             .remove("displayClock");
     })]);
-    let GameOutcome::NotFound { ok, failed, .. } = extract_chunked(&body, &target, usize::MAX)
-    else {
-        panic!("dropped event cannot be found");
-    };
-    assert_eq!((ok, failed), (0, 1));
+    let report = extract_chunked(&body, &target, usize::MAX);
+    assert_eq!(report.outcome, GameOutcome::Absent);
+    assert_eq!((report.ok, report.failed), (0, 1));
 }
 
 #[test]
@@ -621,11 +748,9 @@ fn pregame_event_missing_venue_is_dropped() {
     let body = wrap(&[&mutate(&event, |v| {
         v["competitions"][0].as_object_mut().unwrap().remove("venue");
     })]);
-    let GameOutcome::NotFound { ok, failed, .. } = extract_chunked(&body, &target, usize::MAX)
-    else {
-        panic!("dropped event cannot be found");
-    };
-    assert_eq!((ok, failed), (0, 1));
+    let report = extract_chunked(&body, &target, usize::MAX);
+    assert_eq!(report.outcome, GameOutcome::Absent);
+    assert_eq!((report.ok, report.failed), (0, 1));
 
     // The same event as live would NOT need the venue — but a venue object
     // missing fullName fails deserialization in every state.
@@ -635,9 +760,7 @@ fn pregame_event_missing_venue_is_dropped() {
             .unwrap()
             .remove("fullName");
     })]);
-    let GameOutcome::NotFound { failed, .. } = extract_chunked(&broken_venue, &target, usize::MAX)
-    else {
-        panic!("dropped event cannot be found");
-    };
-    assert_eq!(failed, 1);
+    let report = extract_chunked(&broken_venue, &target, usize::MAX);
+    assert_eq!(report.outcome, GameOutcome::Absent);
+    assert_eq!((report.ok, report.failed), (0, 1));
 }
