@@ -1,12 +1,18 @@
 //! The REST surface, endpoint for endpoint against `api_routes.py`.
 //!
 //! Everything mounted under `/api` in MicroPython, plus `main.py`'s `GET /` and
-//! its `/<path:path>` catch-all. The one structural difference is where the
-//! catch-all sits: Microdot matched routes in registration order and fell
-//! through to the `<path:path>` route, while picoserve builds a chain in which
-//! each `.route()` wraps the previous as its fallback — so the catch-all has to
-//! be the *innermost* layer, and [`build`] starts from it with
-//! `Router::from_service`.
+//! its `/<path:path>` catch-all. [`Dispatch`] answers all of them from one
+//! service that tests the path itself and falls off its end into the catch-all,
+//! the way Microdot matched in registration order — not from a `.route()`
+//! chain. picoserve's chain is a *type*: each link wraps the previous as its
+//! fallback, and every link contributes its own frame to the "handle one
+//! request" future, which every connection task materialises — three times
+//! over, until the picoserve fork this crate pins fixed its internal select
+//! duplication. See BUDGET.md, "A buffer in a picoserve handler costs its
+//! size times the router's depth" and its 2026-08-17 addendum. Collapsing
+//! the nine links to one measured 7,360 B off `.bss` (pre-fork) and 1,352 B
+//! off `.text`; what it does not recover is the method router and request
+//! handler beneath each route, which are picoserve's and stay one frame each.
 //!
 //! # `POST /api/check-update`, and the one thing it does differently
 //!
@@ -45,7 +51,7 @@ use core::fmt::Write as _;
 use embassy_time::{Duration, with_timeout};
 use picoserve::request::Path;
 use picoserve::response::{IntoResponse, Response, StatusCode, chunked};
-use picoserve::routing::{get, post};
+use picoserve::routing::{MethodHandler as _, get, post};
 use picoserve::{ResponseSent, io};
 use scoreboard_config::ConfigPatch;
 
@@ -53,20 +59,83 @@ use crate::http::scratch::{self, Lease};
 use crate::http::{spa, status::Status};
 use crate::{config, poller, ringlog, settings, supervise};
 
-/// Build the router. See the module docs for why the catch-all comes first.
+/// Build the router. See the module docs for why it is one layer deep.
 pub fn build() -> picoserve::Router<impl picoserve::routing::PathRouter> {
-    let router = picoserve::Router::from_service(CatchAll)
-        .route("/", get(index))
-        .route("/api/config", get(get_config).put(put_config))
-        .route("/api/status", get(get_status))
-        .route("/api/logs", get(get_logs))
-        .route("/api/logs/previous", get(get_previous_log))
-        .route("/api/check-update", post(check_update))
-        .route("/api/reboot", post(reboot))
-        .route("/api/reset-network", post(reset_network));
-    #[cfg(feature = "induce-panic")]
-    let router = router.route("/api/induce-panic", post(induce_panic));
-    router
+    picoserve::Router::from_service(Dispatch)
+}
+
+/// The route table, as one path test per route.
+///
+/// The tests are picoserve's own: `Path`'s `PartialEq` is the comparison
+/// `.route()` performs, percent-decoding as it walks and demanding that the
+/// whole path be consumed — so `/api/config/` reaches [`catch_all`] here for
+/// the same reason it always did.
+///
+/// What each route is handed to is picoserve's too: the `get`/`post` value that
+/// `.route()` would have stored, invoked directly. Method dispatch, the `405`
+/// body and `HEAD` answered by the `GET` handler with the body dropped all stay
+/// picoserve's, which is the only way to have them — the body swap `HEAD` needs
+/// goes through `Response`'s fields, and those are `pub(crate)`.
+struct Dispatch;
+
+impl<State> picoserve::routing::PathRouterService<State> for Dispatch {
+    async fn call_path_router_service<R: io::Read, W: picoserve::response::ResponseWriter<Error = R::Error>>(
+        &self,
+        state: &State,
+        _path_parameters: (),
+        path: Path<'_>,
+        request: picoserve::request::Request<'_, R>,
+        response_writer: W,
+    ) -> Result<ResponseSent, W::Error> {
+        if path == "/" {
+            return get(index)
+                .call_method_handler(state, (), request, response_writer)
+                .await;
+        }
+        if path == "/api/config" {
+            return get(get_config)
+                .put(put_config)
+                .call_method_handler(state, (), request, response_writer)
+                .await;
+        }
+        if path == "/api/status" {
+            return get(get_status)
+                .call_method_handler(state, (), request, response_writer)
+                .await;
+        }
+        if path == "/api/logs" {
+            return get(get_logs)
+                .call_method_handler(state, (), request, response_writer)
+                .await;
+        }
+        if path == "/api/logs/previous" {
+            return get(get_previous_log)
+                .call_method_handler(state, (), request, response_writer)
+                .await;
+        }
+        if path == "/api/check-update" {
+            return post(check_update)
+                .call_method_handler(state, (), request, response_writer)
+                .await;
+        }
+        if path == "/api/reboot" {
+            return post(reboot)
+                .call_method_handler(state, (), request, response_writer)
+                .await;
+        }
+        if path == "/api/reset-network" {
+            return post(reset_network)
+                .call_method_handler(state, (), request, response_writer)
+                .await;
+        }
+        #[cfg(feature = "induce-panic")]
+        if path == "/api/induce-panic" {
+            return post(induce_panic)
+                .call_method_handler(state, (), request, response_writer)
+                .await;
+        }
+        catch_all(state, request, response_writer).await
+    }
 }
 
 /// `POST /api/induce-panic` — panic on core 0, on purpose. See the module docs.
@@ -269,26 +338,22 @@ async fn index(host: HostCheck, if_none_match: IfNoneMatch) -> impl IntoResponse
 /// built its host set from the AP interface, which does not exist in station
 /// mode, so a request for an unknown path on a joined network was answered with
 /// a redirect to 192.168.4.1, an address on a network the client is not on.
-struct CatchAll;
+///
+/// It answers a `HEAD` with a body, because it has never looked at the method
+/// and the routed handlers above are where picoserve drops the body.
+async fn catch_all<State, R: io::Read, W: picoserve::response::ResponseWriter<Error = R::Error>>(
+    state: &State,
+    request: picoserve::request::Request<'_, R>,
+    response_writer: W,
+) -> Result<ResponseSent, W::Error> {
+    let host = picoserve::from_request_parts!(state, request, response_writer, HostCheck);
 
-impl<State> picoserve::routing::PathRouterService<State> for CatchAll {
-    async fn call_path_router_service<R: io::Read, W: picoserve::response::ResponseWriter<Error = R::Error>>(
-        &self,
-        state: &State,
-        _path_parameters: (),
-        _path: Path<'_>,
-        request: picoserve::request::Request<'_, R>,
-        response_writer: W,
-    ) -> Result<ResponseSent, W::Error> {
-        let host = picoserve::from_request_parts!(state, request, response_writer, HostCheck);
-
-        let connection = request.body_connection.finalize().await?;
-        match host.redirect() {
-            Some(redirect) if !host.mine => redirect.write_to(connection, response_writer).await,
-            _ => Response::new(StatusCode::NOT_FOUND, "Not found")
-                .write_to(connection, response_writer)
-                .await,
-        }
+    let connection = request.body_connection.finalize().await?;
+    match host.redirect() {
+        Some(redirect) if !host.mine => redirect.write_to(connection, response_writer).await,
+        _ => Response::new(StatusCode::NOT_FOUND, "Not found")
+            .write_to(connection, response_writer)
+            .await,
     }
 }
 
