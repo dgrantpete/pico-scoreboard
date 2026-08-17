@@ -51,7 +51,7 @@ pub mod mlb;
 pub mod nba;
 pub mod soccer;
 
-pub use codec::{Sink, SliceSink};
+pub use codec::{Sink, SliceSink, truncate_utf8};
 pub use common::{
     FinalTeam, GameState, LastPlay, LivePhase, Record, Side, TeamColors, TeamState,
     clamp_temperature, saturate_score,

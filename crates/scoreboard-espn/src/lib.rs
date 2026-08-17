@@ -11,6 +11,7 @@
 //! this crate's root carries the architecture and the decisions.
 #![no_std]
 
+pub mod common;
 pub mod path;
 
 pub use path::{Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};

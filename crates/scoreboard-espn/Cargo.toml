@@ -9,3 +9,8 @@ description = "Shared ESPN-JSON → game-model transform: streaming path tables 
 [dependencies]
 picojson = "0.2.3"
 heapless = "0.9.3"
+scoreboard-wire = { path = "../scoreboard-wire" }
+
+[dev-dependencies]
+# The oracle for parse_start_time's property tests only; never shipped.
+chrono = "0.4"

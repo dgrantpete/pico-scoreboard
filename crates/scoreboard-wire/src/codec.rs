@@ -89,7 +89,12 @@ impl<S: Sink + ?Sized> SinkExt for S {}
 
 /// Truncate to at most `max` bytes without splitting a UTF-8 char.
 /// (`str::floor_char_boundary` is nightly-only, hence the manual walk.)
-fn truncate_utf8(text: &str, max: usize) -> &str {
+///
+/// Public because `scoreboard-espn` copies strings into its bounded extract
+/// structs with *this exact function* — one implementation is what makes
+/// truncate-at-copy byte-identical to truncate-at-encode (its DESIGN.md,
+/// ruling 2).
+pub fn truncate_utf8(text: &str, max: usize) -> &str {
     if text.len() <= max {
         return text;
     }

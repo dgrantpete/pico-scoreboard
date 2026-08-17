@@ -2139,8 +2139,10 @@ dependencies = [
 name = "scoreboard-espn"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "heapless 0.9.3",
  "picojson",
+ "scoreboard-wire",
 ]
 
 [[package]]
