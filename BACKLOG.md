@@ -1018,12 +1018,13 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
 96. **Parse-perf follow-ups after the tokenizer lever landed (2026-08-17
     afternoon).** The SWAR scan was pulled and validated (fork branch
     `perf/tokenizer-swar-scan`: `ca799df` + the `ram-exec` feature
-    `8fb8a76`, stacked on the batched drive; all local, unpushed) — host
+    `8fb8a76`, stacked on the batched drive; pushed 2026-08-17 evening) — host
     3.1×, silicon 1.3–2.5× with `ram-exec`, full story and tables in
     `firmware-rs/PARSE-PERF.md`. What remains in its orbit:
-    (a) **push the three stacked fork branches upstream** as the follow-up
-    chain to picojson PR #98, then move the `[patch.crates-io]` git pins
-    (root + bench) to a release;
+    (a) ~~push the fork branches upstream~~ DONE 2026-08-17 evening (PR
+    #99 stacked on #98; SWAR offered as follow-up; ram-exec held — item
+    97); the `[patch.crates-io]` git pins (root + bench) move to a release
+    when one carries the fixes;
     (b) **decide `ram-exec` for the real firmware at S3 integration** —
     ~5–10 KB of RAM buys 1.3–2.5× parse and kills the ±30% XIP layout
     lottery the bench exposed; it is a BUDGET.md line, owner's call;
@@ -1032,3 +1033,28 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     owner's call). Related instrument: item 87 (the RP2350 keeps teaching
     that per-unit overhead — now instruction fetch — dominates streaming
     loops).
+
+97. **Open-source stewardship ledger (owner-requested, 2026-08-17).** What
+    this project carries from the community and what it owes back, kept
+    current so the debts don't rot.
+    *Outstanding upstream:* picojson issue #97 + PR #98 (lifetime fix, open)
+    and PR #99 (batched drive, stacked on #98, filed 2026-08-17 with
+    measurements and reproduction); the SWAR tokenizer branch
+    (`perf/tokenizer-swar-scan`) is pushed and offered in #99's body as a
+    follow-up once #99 settles — keep the PRs watched and rebase promptly
+    when the maintainer engages. The `ram-exec` feature is deliberately NOT
+    in the upstream stack: it expands API surface, so gauge interest with an
+    issue after the perf PRs land rather than growing the stack.
+    *Standing debts:* drop `[patch.crates-io]` pins when releases land —
+    picojson (root `Cargo.toml` + `firmware-rs/bench`) after a release
+    carries #98/#99, picoserve (`firmware-rs/app`) after the next release
+    (upstream fixed the select duplication independently on development,
+    47be022 — no PR owed there, and the near-miss is the lesson: **check the
+    default branch before filing**).
+    *Practices that make us good guests, learned this phase:* measure before
+    proposing and put the numbers plus reproduction in the PR body; run the
+    upstream suite AND a downstream corpus before asking for review; respect
+    upstream policy over local preference (deny(unsafe_code) → pin-project,
+    not an unsafe block); keep each PR a refinement with one idea; label
+    stacked PRs as stacked; file the issue before the PR when the change is
+    a judgment call rather than a defect.
