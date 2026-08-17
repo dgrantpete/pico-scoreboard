@@ -140,10 +140,18 @@ Gate to start: **BACKLOG 94 settled** — headroom re-earned to ≥40 % *plus*
 the smarthome reservation, measured, not estimated. Gate to exit: handshake
 and steady-state numbers in BUDGET.md.
 
-- [ ] BACKLOG-94 levers, measured then chosen: Store-into-back-buffer fold
-      (2,848 B), crest pool 32→16 (18,432 B), picoserve arena layout
-      (`-Zprint-type-sizes`), flatten the route tree. Boxing is not a lever
-      (no-alloc).
+- [x] BACKLOG-94 levers, measured then chosen (2026-08-17): the
+      `-Zprint-type-sizes` walk found the arena was mostly duplication, and
+      the two structural levers alone re-earned the budget — flat route
+      dispatch (−7,360 B) and picoserve's select-duplication fix on fork
+      `dgrantpete/picoserve` `perf/select-by-ref` (−25,408 B). Statics
+      337,712 → 304,944 B = **42.7 % headroom, measured**; HTTP behavior
+      byte-identical under a 16-probe matrix on the seated unit. Store fold
+      and crest halving priced, deliberately untaken. Residual (BACKLOG 94):
+      beyond-40 % slack is 14,544 B — covers the smarthome reservation at
+      10 KB, 816 B short at 15 KB, and `ram-exec` at S3 wants 5–10 KB more;
+      the owner names the reservation and the S3-time lever if one is
+      needed. Gate is open on the 10 KB reading.
 - [ ] embedded-tls via reqwless, against a TLS terminator fronting the
       `tools/espn` mock first (the mock speaks plain HTTP), then real hosts.
 - [x] **Protocol check, early** (2026-08-17, from the dev machine): all four
