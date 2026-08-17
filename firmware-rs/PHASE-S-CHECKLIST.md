@@ -162,8 +162,23 @@ and steady-state numbers in BUDGET.md.
       (embedded-tls's primary suite; verified via openssl s_client forced to
       that suite). No stop-and-redesign finding. The on-device handshake
       against real hosts remains S2's own exit evidence.
-- [ ] Root CA strategy: pin multiple roots per host family; write the
-      rotation runbook (a CA rotation is an OTA event).
+- [x] **Verification posture decided (owner, 2026-08-17 evening)** — the
+      root-CA-pinning item dissolved into a per-host-family policy once the
+      chain recon landed. ESPN and `a.espncdn.com` serve RSA-only chains
+      (no ECDSA dual certs — verified by forcing ECDSA-only offers), and
+      embedded-tls's RSA verification hard-requires `alloc`; the owner
+      ruled the no-alloc contract wins: **ESPN runs `TlsVerify::None`** —
+      transport encryption, no server auth. Damage ceiling accepted as
+      wrong-game-data; strictly stronger than today's plain-HTTP data
+      plane. The honest corollary, stated once: the parser and png-stream
+      are now the security boundary for hostile payloads — evidence is the
+      no-alloc bounded design, 149k-body sweep at 0 panics, and clean-Err
+      overflow paths; S0's thin-fuzzing note inherits a little more weight.
+      OTA plane: ed25519 carries the trust end-to-end as designed;
+      `github.com` is all-ECDSA so full `rustpki` verification is free —
+      take it there; `objects.githubusercontent.com` (RSA) rides the
+      signature. No CA pinning, so no CA-rotation runbook — the only
+      TLS-shaped OTA event left is embedded-tls capability drift.
 - [ ] Measure the handshake on silicon before believing any figure — the
       house rule PHASE-S.md earned at 8× on the hash estimate. Keep-alive
       amortization is load-bearing, not nice-to-have. Crypto's hot footprint
