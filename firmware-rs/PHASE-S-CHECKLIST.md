@@ -96,12 +96,17 @@ backend's transforms.
       design): live soccer commentary comes from ESPN's *summary* endpoint
       (390–456 KB per live game). Recommendation: fetch it — streaming makes
       the size a non-issue (~30 ms CPU) — rather than degrade the render.
-- [ ] Backend migrates to the shared crate immediately (on the pre-S4 merge
-      path, so `main`'s backend runs it against live traffic — the strongest
-      parity instrument available, and standalone value if Phase S stalls,
-      same as Phase 0's wire extraction).
-- [ ] Exit: zero (or reviewed) transform diffs across the full corpus;
-      backend deployed on the shared crate; merge to `main`.
+- [x] Backend migrated to the shared crate (2026-08-17): handlers feed raw
+      bytes to the extractors, thin adapters map to unchanged DTOs, the
+      serde DUs and per-sport transforms are deleted (−3,634/+1,215), and
+      `wire_corpus` runs every fixture through the real serving path —
+      33/33 goldens without re-blessing, 46/46 workspace test binaries.
+      The adapter's friction report drives one API-unification pass
+      (shared Counts/TransformError/Report shapes) as S1 polish.
+- [x] Exit (2026-08-17, code-complete): zero transform diffs across the
+      full corpus; merged to `main` at this boundary. **Deploy of the
+      migrated backend is the owner's call** — it carries the seated
+      unit's data plane; everything is green and ready when they are.
 
 ## S2 — TLS bring-up (first on-device phase)
 
