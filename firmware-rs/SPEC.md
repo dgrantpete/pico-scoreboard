@@ -433,6 +433,13 @@ caller-owned?* — `n/a` means the crate holds no runtime buffer at all.
 | `embedded-storage` | =0.3.1 | scoreboard-app | yes | yes | caller | `NorFlash`, for the one flash handle `storage` lends to both the config map and the firmware updater. Traits only. |
 | `embassy-net` `multicast` | =0.9.1 | scoreboard-app | yes | yes | — | Feature, not a crate: smoltcp group membership, so the interface accepts `224.0.0.251`. Without it `net::mdns` binds and receives nothing, which looks exactly like "no queries are arriving". |
 
+**Phase S0 addition (audited 2026-08-16; not yet in a lockfile — first
+consumer is S1's transform crate)**
+
+| Crate | Ver | Used by | no_std | no-alloc | Buffers | Notes |
+|---|---|---|---|---|---|---|
+| `picojson` | =0.2.3 + PR #98 | Phase S transform crate (S1+) | yes | yes | caller | Streaming JSON tokenizer; the `PushParser` (SAX push — the shape network chunks want). `no_std` checked from a `#![no_std]` consumer on `thumbv8m.main-none-eabihf`; the only `Vec` in the source is test code. Zero deps in the default feature set; ships a `defmt` feature. **Split-resumability proven, not claimed**: `repos/picojson-feasibility` compares whole-parse vs 1-byte-feed vs random chunkings over the full `backend/testdata/` corpus, plus every two-chunk split of escape/surrogate/UTF-8/number nasties — identical event streams; scratch overflow is a clean `Err`. **Adoption is conditional on the `'input`-lifetime fix** ([picojson-rs#97](https://github.com/kaidokert/picojson-rs/issues/97), [PR #98](https://github.com/kaidokert/picojson-rs/pull/98)): 0.2.3 rejects chunks fed from a reused receive buffer. Until the PR lands in a release, pin the fork by rev via `[patch.crates-io]` (`dgrantpete/picojson-rs`, branch `push-parser-per-call-input`), validated by `picojson-feasibility/patched-check` — full corpus through a reused 4 KB buffer at chunk sizes 1/7/1379/4096. Fuzzing upstream is thin ("experimental" label); mitigations: the crate is ~20 small readable files, our suite pins the behavior we depend on, and the write-our-own fallback stays priced in PHASE-S.md. |
+
 **Evaluated and rejected**
 
 | Crate | Ver | For | Verdict |

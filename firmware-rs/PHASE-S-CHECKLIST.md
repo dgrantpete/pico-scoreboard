@@ -58,13 +58,20 @@ real corpus.
       Unnecessary by the crate's own contract (partials are copied to
       scratch and the slice reset before `write` returns); unchanged on
       upstream master; no upstream issue exists.
-- [ ] Adopt-or-write decision recorded as a SPEC Appendix A audit line.
-      Verdict from the harness: **adopt, conditional on the lifetime fix** —
-      preferred path is an upstream issue + PR with a `[patch.crates-io]`
-      fork pin until merged (draft at
-      `picojson-feasibility/ISSUE-DRAFT.md`, not filed — owner approves
-      outward contact first).
-- [ ] Exit: tokenizer choice + harness results written up; merge to `main`.
+- [x] Adopt-or-write decision recorded as a SPEC Appendix A audit line
+      (2026-08-16, "Phase S0 addition"): **adopt `picojson` =0.2.3 + the
+      lifetime fix**. Owner approved outward contact; issue filed
+      ([picojson-rs#97](https://github.com/kaidokert/picojson-rs/issues/97))
+      and PR opened
+      ([#98](https://github.com/kaidokert/picojson-rs/pull/98), fork
+      `dgrantpete/picojson-rs` branch `push-parser-per-call-input`, local
+      checkout `repos/picojson-rs`). Upstream's full suite green on the
+      patch; `picojson-feasibility/patched-check` proves the firmware's
+      reused-receive-buffer shape against the full corpus. Until a release
+      carries the fix, S1+ pins the fork by rev via `[patch.crates-io]`.
+- [x] Exit (2026-08-16): tokenizer chosen, harness results in
+      `repos/picojson-feasibility/README.md`, audit line in SPEC Appendix A;
+      merged to `main` at this boundary.
 
 ## S1 — shared transform crate (host-only)
 
