@@ -9,9 +9,12 @@
 //!   backend's per-state required-field rules (the same lenient
 //!   `parse_events` pass) and yields `(id, state)` through a caller
 //!   [`ListSink`], plus ok/failed counts (DESIGN.md ruling 13).
-//! - [`DetailExtractor`] — one game: non-target events are skipped cheaply on
-//!   their `id` via [`Directive::SkipElement`]; the target is validated,
-//!   transformed, and returned as an owned bounded [`Extract`] whose
+//! - [`DetailExtractor`] — one game: every event is validated until the
+//!   target is found (ruling 14 — the failure counts are exact precisely
+//!   when the 404-vs-502 verdict consumes them: a missing target means
+//!   nothing was ever skipped), and only events *after* the found target are
+//!   fast-forwarded via [`Directive::SkipElement`]; the target is
+//!   transformed and returned as an owned bounded [`Extract`] whose
 //!   [`Extract::as_game`] is the borrowed wire-shaped view.
 //!
 //! Field-order independence is a hard rule (ruling 4): every cross-field
@@ -51,12 +54,6 @@
 //!   vice versa) is only detected when a scalar sits where the table expects
 //!   a container; `records: {}` and friends degrade instead of rejecting.
 //! - Duplicate JSON keys are last-wins here; serde rejects the event.
-//! - Detail mode skips a non-target event at its `id`, so a *later*
-//!   malformation inside it goes uncounted: a scoreboard whose only broken
-//!   events carry readable non-target ids resolves an absent target as
-//!   `NotFound` where the backend answers 502. Events whose `id` never
-//!   parses are never skipped, so the observed real-world glitch (events of
-//!   `{}`, MLB 2026-07-06) still resolves `Glitched` exactly like today.
 //! - More than [`MAX_LINE_SCORE`] line-score entries clip at accumulation
 //!   (pre-sort) rather than at encode (post-sort), with a
 //!   [`Quirk::ClippedLineScore`]; the backend clips after sorting.
@@ -71,8 +68,8 @@
 use core::mem;
 
 use crate::common::{
-    EText, HomeAway, Quirk, Quirks, linescore_byte, order_home_away, parse_hex_rgb, parse_record,
-    parse_start_time, saturate_score, set_text,
+    EText, HomeAway, Quirk, Quirks, linescore_byte, num_i16, num_u8, order_home_away,
+    parse_hex_rgb, parse_record, parse_start_time, saturate_score, set_text, stable_sort_by_key,
 };
 use crate::path::{Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 use scoreboard_wire::mlb::{AtBat as WireAtBat, Bases, Count, Inning, InningHalf, Weather as WireWeather};
@@ -512,13 +509,22 @@ impl<'c, 's, Q: Quirks> DetailExtractor<'c, 's, Q> {
         self.matcher.write(chunk)
     }
 
-    pub fn finish(self) -> Result<Extract, DetailError> {
+    /// The counts cover events up to and including the target (ruling 14):
+    /// events after a found target are skipped and uncounted — fine, the
+    /// verdict is already `Found`. When the target is absent, nothing was
+    /// ever skipped, so `failed` is exact where the `Glitched`-vs-`NotFound`
+    /// verdict consumes it.
+    pub fn finish(self) -> Result<(Extract, Counts), DetailError> {
         let sink = self.matcher.finish().map_err(DetailError::Stream)?;
         if sink.events_malformed {
             return Err(DetailError::Events);
         }
+        let counts = Counts {
+            ok: sink.ok,
+            failed: sink.failed,
+        };
         match sink.result {
-            Some(Ok(extract)) => Ok(extract),
+            Some(Ok(extract)) => Ok((extract, counts)),
             Some(Err(Fail::NotFound)) => Err(DetailError::NotFound),
             Some(Err(Fail::Transform(kind))) => Err(DetailError::Transform(kind)),
             None if sink.failed > 0 => Err(DetailError::Glitched),
@@ -551,7 +557,8 @@ enum Fate {
     Scanning,
     /// A DU-tier reject: counts `failed`, everything else ignored.
     Malformed,
-    /// Detail mode fast-forwarded it (wrong id, or target already done).
+    /// Detail mode fast-forwarded an event *after* the found target
+    /// (ruling 14) — uncounted, the verdict is already decided.
     Skipped,
 }
 
@@ -592,10 +599,11 @@ struct CompetitorScratch {
     /// like the backend's `find`); inner is its summary's parse.
     total_record: Option<Option<(u16, u16)>>,
     probable: Option<EText>,
-    /// `(period, arrival, clamped value)` — sorted at finalize by
-    /// `(period, arrival)`, which makes the core unstable sort reproduce
-    /// the backend's *stable* `sort_by_key(period)` (ruling 13).
-    lines: heapless::Vec<(u8, u8, u8), MAX_LINE_SCORE>,
+    /// `(period, clamped value)` in arrival order — the promoted
+    /// `stable_sort_by_key` orders them by `period` at finalize, keeping
+    /// arrival order for equal periods exactly like the backend's stable
+    /// `sort_by_key(period)` (rulings 13/15).
+    lines: heapless::Vec<(u8, u8), MAX_LINE_SCORE>,
 }
 
 /// Everything buffered for the event in flight. All states accumulate the
@@ -604,6 +612,9 @@ struct CompetitorScratch {
 struct EventScratch {
     fate: Fate,
     id: Option<EText>,
+    /// Detail mode: the arrival-time full-text compare against the target
+    /// id matched — exact even where the wire-cap copy would truncate.
+    id_matched: bool,
     date_present: bool,
     start_time: Option<u32>,
     weather_entered: bool,
@@ -773,8 +784,8 @@ impl<'c, L: ListSink, Q: Quirks> MlbSink<'c, L, Q> {
                     }
                 }
             }
-            Mode::Detail { target, done } => {
-                if *done || scratch.id.as_deref() != Some(*target) {
+            Mode::Detail { done, .. } => {
+                if *done || !scratch.id_matched {
                     return;
                 }
                 *done = true;
@@ -807,8 +818,7 @@ impl<'c, L: ListSink, Q: Quirks> MlbSink<'c, L, Q> {
             return;
         };
         if let Some(competitor) = self.event.comps.get_mut(competitor_index(indices)) {
-            let arrival = competitor.lines.len() as u8;
-            if competitor.lines.push((period, arrival, value)).is_err() {
+            if competitor.lines.push((period, value)).is_err() {
                 self.quirks.quirk(Quirk::ClippedLineScore);
             }
         }
@@ -827,6 +837,7 @@ impl<L: ListSink, Q: Quirks> Sink for MlbSink<'_, L, Q> {
         if pattern == P_EVENT {
             self.event = EventScratch::default();
             if self.detail_done() {
+                // Ruling 14: only events after the found target skip.
                 self.event.fate = Fate::Skipped;
                 return Directive::SkipElement;
             }
@@ -885,12 +896,12 @@ impl<L: ListSink, Q: Quirks> Sink for MlbSink<'_, L, Q> {
         if pattern == P_ID {
             match value {
                 Value::Str(text) => {
+                    // Ruling 14: no skip on mismatch — every event before
+                    // the target is fully validated so the failure counts
+                    // stay exact. The compare runs on the full text, before
+                    // the wire-cap copy could truncate.
                     if let Mode::Detail { target, .. } = &self.mode {
-                        if text != *target {
-                            // The cheap path: conclusively not the target.
-                            self.event.fate = Fate::Skipped;
-                            return Directive::SkipElement;
-                        }
+                        self.event.id_matched = text == *target;
                     }
                     self.event.id = Some(etext(text));
                 }
@@ -1253,11 +1264,11 @@ fn final_team(competitor: CompetitorScratch) -> Result<FinalTeam, Fail> {
         .ok_or(Fail::Transform(TransformError::Score))?;
     let colors = team_colors(&competitor)?;
     let mut pairs = competitor.lines;
-    // `(period, arrival)` is a total order: the unstable core sort is
-    // byte-identical to the backend's stable `sort_by_key(period)`.
-    pairs.sort_unstable_by_key(|&(period, arrival, _)| (period, arrival));
+    // The promoted stable sort (ruling 15): equal periods keep arrival
+    // order, byte-identical to the backend's stable `sort_by_key(period)`.
+    stable_sort_by_key(&mut pairs, |&(period, _)| period);
     let mut line_score = LineScore::new();
-    for &(_, _, runs) in pairs.iter() {
+    for &(_, runs) in pairs.iter() {
         // Same capacity as the accumulation buffer: cannot overflow.
         let _ = line_score.push(runs);
     }
@@ -1320,27 +1331,14 @@ fn parse_inning_half(short_detail: &str) -> Option<InningHalf> {
     }
 }
 
+/// Owned wire-bound copy: kept local rather than promoted because it is an
+/// *output* constructor over `common::set_text` (ruling 2's truncation) —
+/// the scratch strings move into the extract, which `common::WireText`
+/// (borrow-only access) cannot do. Compare keys never go through this path
+/// (ruling 16): the target-id and `"total"` compares run on the full
+/// borrowed token at arrival.
 fn etext(text: &str) -> EText {
     let mut owned = EText::new();
     set_text(&mut owned, text);
     owned
-}
-
-/// serde_json's integer typing: an integer field accepts only an integral
-/// literal (no fraction, no exponent) in range — `77.0` or `1e2` reject the
-/// event exactly as the backend's `u8`/`i16` fields do (inventory Q7 held
-/// to ruling 7: reproduce today's behavior bit for bit).
-fn int_literal(raw: &str) -> Option<i64> {
-    if raw.bytes().any(|byte| matches!(byte, b'.' | b'e' | b'E')) {
-        return None;
-    }
-    raw.parse().ok()
-}
-
-fn num_u8(raw: &str) -> Option<u8> {
-    int_literal(raw)?.try_into().ok()
-}
-
-fn num_i16(raw: &str) -> Option<i16> {
-    int_literal(raw)?.try_into().ok()
 }

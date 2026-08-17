@@ -71,7 +71,7 @@ fn detail_chunked(
     id: &str,
     chunk: usize,
     quirks: &mut Recorded,
-) -> Result<Extract, DetailError> {
+) -> Result<(Extract, Counts), DetailError> {
     let mut scratch = vec![0u8; 16 * 1024];
     let mut extractor = DetailExtractor::new(id, quirks, &mut scratch).expect("table validates");
     for piece in body.chunks(chunk.max(1)) {
@@ -81,6 +81,10 @@ fn detail_chunked(
 }
 
 fn detail(body: &[u8], id: &str) -> Result<Extract, DetailError> {
+    detail_counts(body, id).map(|(extract, _)| extract)
+}
+
+fn detail_counts(body: &[u8], id: &str) -> Result<(Extract, Counts), DetailError> {
     detail_chunked(body, id, usize::MAX, &mut Recorded::default())
 }
 
@@ -160,7 +164,7 @@ fn chunk_split_invariance_at_the_extract_level() {
         let body = wrap(&[&raw]);
         let whole = detail(&body, &id).expect("whole-buffer extract");
         for chunk in [1usize, 7] {
-            let split = detail_chunked(&body, &id, chunk, &mut Recorded::default())
+            let (split, _) = detail_chunked(&body, &id, chunk, &mut Recorded::default())
                 .unwrap_or_else(|e| panic!("{name}: {chunk}-byte feed failed: {e:?}"));
             assert_eq!(split, whole, "{name}: {chunk}-byte feed extract diverged");
             assert_eq!(
@@ -228,7 +232,7 @@ fn weather_with_no_resolvable_condition_drops_whole_block() {
     let mut event = parse(&raw);
     event["weather"]["displayValue"] = json!("7"); // conditionId is already "1"
     let mut quirks = Recorded::default();
-    let extract = detail_chunked(&wrap(&[&event.to_string()]), &id, usize::MAX, &mut quirks)
+    let (extract, _) = detail_chunked(&wrap(&[&event.to_string()]), &id, usize::MAX, &mut quirks)
         .expect("event still extracts");
     let Extract::Pregame(ref game) = extract else {
         panic!("must stay pregame");
@@ -252,7 +256,7 @@ fn weather_without_temperature_drops_whole_block() {
         .expect("weather object")
         .remove("temperature");
     let mut quirks = Recorded::default();
-    let extract = detail_chunked(&wrap(&[&event.to_string()]), &id, usize::MAX, &mut quirks)
+    let (extract, _) = detail_chunked(&wrap(&[&event.to_string()]), &id, usize::MAX, &mut quirks)
         .expect("event still extracts");
     let Extract::Pregame(game) = extract else {
         panic!("must stay pregame");
@@ -350,17 +354,45 @@ fn list_applies_per_state_required_field_rules() {
 
 // ------------------------------------------------------------ detail mode
 
-/// Target in the second slot: the first event is skipped on its id and the
-/// result is identical to extracting the fixture alone.
+/// Ruling 14: every event before the target is fully validated (and
+/// counted), and the result is identical to extracting the fixture alone.
 #[test]
-fn detail_skips_non_target_events() {
+fn detail_validates_preceding_events_and_matches_alone() {
     let pregame = fixture("pregame");
     let live = fixture("live_inning");
     let target = event_id(&live);
-    let multi = detail(&wrap(&[&pregame, &live]), &target).expect("target extracts");
+    let (multi, counts) =
+        detail_counts(&wrap(&[&pregame, &live]), &target).expect("target extracts");
     let alone = detail(&wrap(&[&live]), &target).expect("target extracts alone");
     assert_eq!(multi, alone);
     assert_eq!(hex(&encode(&multi)), hex(&golden("live_inning")));
+    assert_eq!(
+        counts,
+        Counts { ok: 2, failed: 0 },
+        "the preceding non-target event is validated and counted"
+    );
+}
+
+/// Ruling 14's pin (mirroring football's): garbage AFTER the found target
+/// is skipped and uncounted — the verdict is already Found; garbage BEFORE
+/// the target is validated and counted. Absent targets get exact counts
+/// because nothing was ever skipped.
+#[test]
+fn events_after_found_target_are_skipped() {
+    let live = fixture("live_inning");
+    let target = event_id(&live);
+
+    // Garbage after the target: skipped, uncounted.
+    let (extract, counts) =
+        detail_counts(&wrap(&[&live, "{}"]), &target).expect("target extracts");
+    assert_eq!(hex(&encode(&extract)), hex(&golden("live_inning")));
+    assert_eq!(counts, Counts { ok: 1, failed: 0 });
+
+    // Garbage before the target: validated, counted, target still found.
+    let (extract, counts) =
+        detail_counts(&wrap(&["{}", &live]), &target).expect("target extracts");
+    assert_eq!(hex(&encode(&extract)), hex(&golden("live_inning")));
+    assert_eq!(counts, Counts { ok: 1, failed: 1 });
 }
 
 /// `find_event`'s asymmetry: an absent id on a clean scoreboard is
@@ -385,6 +417,30 @@ fn detail_absent_id_clean_vs_glitched() {
         detail(&wrap(&[&broken.to_string()]), &id),
         Err(DetailError::Glitched)
     );
+    // Ruling 14 (changed expectation): a malformed sibling whose id is
+    // readable and non-target is now validated and counted, so the absent
+    // target resolves Glitched exactly like the backend — under the old
+    // skip-at-id policy this case wrongly answered NotFound.
+    assert_eq!(
+        detail(&wrap(&[&broken.to_string()]), "000000000"),
+        Err(DetailError::Glitched)
+    );
+}
+
+/// The rain-delay veto is a property of the TARGET event, not of sibling
+/// accounting (inventory §2.1, unchanged by ruling 14): the vetoed target
+/// answers NotFound even when other events failed to parse — the backend
+/// finds the event despite `failed > 0`, then `parse_inning_half` 404s it.
+#[test]
+fn veto_semantics_survive_sibling_failures() {
+    let rain = fixture("rain_delay");
+    let id = event_id(&rain);
+    for body in [wrap(&["{}", &rain]), wrap(&[&rain, "{}"])] {
+        let mut quirks = Recorded::default();
+        let result = detail_chunked(&body, &id, usize::MAX, &mut quirks);
+        assert_eq!(result, Err(DetailError::NotFound));
+        assert_eq!(quirks.0, vec![Quirk::UnknownInningHalf]);
+    }
 }
 
 /// The two-tier split, date edition: an unparseable `date` still lists
@@ -498,7 +554,7 @@ fn malformed_total_record_degrades_with_quirk() {
     event["competitions"][0]["competitors"][0]["records"][0]["summary"] = json!("TBD");
     let id = event_id(&fixture("pregame"));
     let mut quirks = Recorded::default();
-    let extract = detail_chunked(&wrap(&[&event.to_string()]), &id, usize::MAX, &mut quirks)
+    let (extract, _) = detail_chunked(&wrap(&[&event.to_string()]), &id, usize::MAX, &mut quirks)
         .expect("pregame extracts");
     let Extract::Pregame(game) = extract else {
         panic!("must extract pregame");
