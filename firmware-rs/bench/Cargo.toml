@@ -11,6 +11,7 @@ description = "On-silicon timing bench for Phase S local processing: streaming E
 [dependencies]
 scoreboard-espn = { path = "../../crates/scoreboard-espn" }
 scoreboard-wire = { path = "../../crates/scoreboard-wire" }
+png-stream = { path = "../../crates/png-stream" }
 
 # Pre-1.0 ecosystem: pinned exactly (SPEC.md §14), mirroring hub75-diag.
 embassy-executor = { version = "=0.10.0", features = ["platform-cortex-m", "executor-thread", "defmt"] }

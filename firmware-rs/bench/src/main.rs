@@ -21,10 +21,11 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Instant, Timer};
 use panic_probe as _;
+use png_stream::{Rgb8, Scratch, SpriteDecoder};
 use scoreboard_espn::common::IgnoreQuirks;
 use scoreboard_espn::{football, mlb, soccer};
 use scoreboard_wire::GameState;
-use static_cell::ConstStaticCell;
+use static_cell::{ConstStaticCell, StaticCell};
 
 static MLB_BODY: &[u8] = include_bytes!("../assets/body-mlb-max.json");
 static CFB_BODY: &[u8] = include_bytes!("../assets/body-cfb-live.json");
@@ -36,6 +37,19 @@ static CHUNK: ConstStaticCell<[u8; 4096]> = ConstStaticCell::new([0; 4096]);
 /// picojson token scratch. 16 KB clears every token the 149k-body host
 /// sweep encountered (longest are summary commentary lines, low-KB).
 static SCRATCH: ConstStaticCell<[u8; 16 * 1024]> = ConstStaticCell::new([0; 16 * 1024]);
+/// png-stream working memory (61.7 KB): initialized in place, per the
+/// lane's device-placement note (avoids a transient stack copy).
+static PNG_SCRATCH: StaticCell<Scratch> = StaticCell::new();
+
+/// The six real CDN logos: 500 px originals and 100 px combiner variants.
+static LOGOS: [(&str, &[u8]); 6] = [
+    ("nyy-100", include_bytes!("../assets/nyy-100.png")),
+    ("bos-100", include_bytes!("../assets/bos-100.png")),
+    ("mlb-500-nyy", include_bytes!("../assets/mlb-500-nyy.png")),
+    ("mlb-500-bos", include_bytes!("../assets/mlb-500-bos.png")),
+    ("nfl-500-kc", include_bytes!("../assets/nfl-500-kc.png")),
+    ("ncaa-500-2294", include_bytes!("../assets/ncaa-500-2294.png")),
+];
 
 struct NoopSink;
 impl mlb::ListSink for NoopSink {
@@ -183,6 +197,36 @@ async fn main(_spawner: Spawner) {
             us,
             matches!(rep_out.outcome, soccer::GameOutcome::Found(_))
         );
+    }
+
+    // PNG decode: real CDN logos, streamed in 4 KB chunks (fetch-shaped),
+    // decoded + box-downsampled to a 24x24 RGB565 sprite over black.
+    let png_scratch = PNG_SCRATCH.init_with(Scratch::new);
+    for rep in 0..3u32 {
+        for (name, png) in LOGOS.iter() {
+            let t0 = Instant::now();
+            let mut dec = SpriteDecoder::new(png_scratch);
+            let mut pos = 0;
+            while pos < png.len() {
+                let end = (pos + 4096).min(png.len());
+                let n = end - pos;
+                chunk_buf[..n].copy_from_slice(&png[pos..end]);
+                dec.write(&chunk_buf[..n]).unwrap();
+                pos = end;
+            }
+            let sprite = dec.finish(Rgb8::new(0, 0, 0)).unwrap();
+            let us = t0.elapsed().as_micros();
+            // Touch the sprite so the whole decode can't be optimized out.
+            let checksum: u32 = sprite.iter().map(|&px| px as u32).sum();
+            info!(
+                "PNG {=str} rep={=u32}: {=u64} us for {=usize} B (sprite sum {=u32})",
+                name,
+                rep,
+                us,
+                png.len(),
+                checksum
+            );
+        }
     }
 
     info!("=== BENCH COMPLETE ===");

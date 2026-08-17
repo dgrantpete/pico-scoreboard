@@ -440,6 +440,14 @@ consumer is S1's transform crate)**
 |---|---|---|---|---|---|---|
 | `picojson` | =0.2.3 + PR #98 | Phase S transform crate (S1+) | yes | yes | caller | Streaming JSON tokenizer; the `PushParser` (SAX push — the shape network chunks want). `no_std` checked from a `#![no_std]` consumer on `thumbv8m.main-none-eabihf`; the only `Vec` in the source is test code. Zero deps in the default feature set; ships a `defmt` feature. **Split-resumability proven, not claimed**: `repos/picojson-feasibility` compares whole-parse vs 1-byte-feed vs random chunkings over the full `backend/testdata/` corpus, plus every two-chunk split of escape/surrogate/UTF-8/number nasties — identical event streams; scratch overflow is a clean `Err`. **Adoption is conditional on the `'input`-lifetime fix** ([picojson-rs#97](https://github.com/kaidokert/picojson-rs/issues/97), [PR #98](https://github.com/kaidokert/picojson-rs/pull/98)): 0.2.3 rejects chunks fed from a reused receive buffer. Until the PR lands in a release, pin the fork by rev via `[patch.crates-io]` (`dgrantpete/picojson-rs`, branch `push-parser-per-call-input`), validated by `picojson-feasibility/patched-check` — full corpus through a reused 4 KB buffer at chunk sizes 1/7/1379/4096. Fuzzing upstream is thin ("experimental" label); mitigations: the crate is ~20 small readable files, our suite pins the behavior we depend on, and the write-our-own fallback stays priced in PHASE-S.md. |
 
+**Phase S additions (audited 2026-08-17, png-stream lane; verified from
+pinned source, not README)**
+
+| Crate | Ver | Used by | no_std | no-alloc | Buffers | Notes |
+|---|---|---|---|---|---|---|
+| `miniz_oxide` | =0.8.9 | png-stream | yes | yes | caller | `default-features = false` drops `with-alloc`; what remains is the tinfl inflate state machine with every buffer caller-owned: `DecompressorOxide` (≈10.5 KiB) lives in png-stream's `Scratch`, the LZ77 window is the caller's 32 KiB ring, input is the caller's slice — `inflate::core::decompress` touches no memory it was not handed. `no_std` gated on `not(std) && not(serde)`, both off; the sole `extern crate alloc` is behind `with-alloc` (off) — verified by grep of the pinned source and `cargo check` on `thumbv8m.main-none-eabihf`. The same call validates the zlib adler32 over the decompressed pixels, which is why png-stream can skip PNG chunk CRCs (module-doc decision) without losing end-to-end pixel integrity. Already in the root lockfile via the backend's `flate2` — no new resolution surface. |
+| `adler2` | =2.0.1 | png-stream (via miniz_oxide) | yes | yes | n/a | Pulled `default-features = false` by miniz_oxide; `no_std`, zero dependencies, pure rolling checksum. Also already in the root lockfile. |
+
 **Evaluated and rejected**
 
 | Crate | Ver | For | Verdict |
