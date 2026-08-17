@@ -146,11 +146,14 @@ and steady-state numbers in BUDGET.md.
       (no-alloc).
 - [ ] embedded-tls via reqwless, against a TLS terminator fronting the
       `tools/espn` mock first (the mock speaks plain HTTP), then real hosts.
-- [ ] **Protocol check, early**: embedded-tls is TLS 1.3-only. Verify 1.3 on
-      all four hosts the standalone build will touch:
-      `site.api.espn.com`, `a.espncdn.com` (logo hrefs are absolute),
-      `github.com`, `objects.githubusercontent.com` (release-asset
-      redirect target). Any 1.2-only host is a stop-and-redesign finding.
+- [x] **Protocol check, early** (2026-08-17, from the dev machine): all four
+      hosts the standalone build will touch — `site.api.espn.com`,
+      `a.espncdn.com` (logo hrefs are absolute), `github.com`,
+      `objects.githubusercontent.com` (release-asset redirect target) —
+      negotiate TLS 1.3 with `TLS_AES_128_GCM_SHA256` specifically
+      (embedded-tls's primary suite; verified via openssl s_client forced to
+      that suite). No stop-and-redesign finding. The on-device handshake
+      against real hosts remains S2's own exit evidence.
 - [ ] Root CA strategy: pin multiple roots per host family; write the
       rotation runbook (a CA rotation is an OTA event).
 - [ ] Measure the handshake on silicon before believing any figure — the
