@@ -1,0 +1,18 @@
+[package]
+name = "png-stream"
+version = "0.1.0"
+edition = "2021"
+description = "Streaming ESPN-logo PNG → 24×24 RGB565 sprite: no-alloc inflate + defilter + box downsample (Phase S)"
+
+[dependencies]
+# Inflate core only. `default-features = false` drops `with-alloc`, and what
+# remains is the `#![no_std]` tinfl state machine over caller-owned buffers:
+# `DecompressorOxide` lives in our `Scratch`, the 32 KiB LZ window is our ring
+# buffer. Exact-pinned per SPEC §14; audit line in SPEC Appendix A. Sole
+# transitive dep: `adler2` (no_std, zero deps) for the zlib adler32 we keep.
+miniz_oxide = { version = "=0.8.9", default-features = false }
+
+[dev-dependencies]
+# Decode oracle for the exact-decode tests and encoder for synthetic
+# fixtures (RGB path, per-filter-type coverage); never shipped.
+png = "0.18"
