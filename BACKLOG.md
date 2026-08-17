@@ -962,6 +962,10 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     current game), or both, and the right one is a design conversation before
     it is a crate choice. Worth deciding alongside Phase S planning, since
     both add always-on outbound connections to the same radio and RAM budget.
+    DECIDED in part (owner, 2026-08-16, Phase S kickoff): Phase S reserves
+    the headroom — ~1 socket + 10–15 KB unspoken-for after it lands, folded
+    into item 94's re-earn target — and the design conversation itself stays
+    deferred. See `firmware-rs/PHASE-S-CHECKLIST.md`.
 
 92. **Sensor and input state in the frontend.** Surface what the hardware
     already knows on the settings SPA: the VEML7700's live lux reading (and
@@ -999,6 +1003,10 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     no-alloc by design. The nuclear option, only if Phase S needs the RAM
     back, is a hand-rolled minimal server (one dispatch fn, one modest
     future) in picoserve's place. Measure before choosing, per house rule.
+    Phase S kickoff (2026-08-16) raised the bar: the re-earn target is now
+    ≥40 % *plus* item 91's reservation (~1 socket + 10–15 KB), and settling
+    this item is the gate on Phase S's first on-device phase (S2 in
+    `firmware-rs/PHASE-S-CHECKLIST.md`).
 
 95. **Browser-seeded timezone (owner proposal, 2026-08-16).** The settings
     SPA runs on a device that lives in the scoreboard's own household, so let

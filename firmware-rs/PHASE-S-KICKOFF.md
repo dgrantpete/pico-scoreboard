@@ -42,6 +42,16 @@ to start without stepping on anything.
   verify hash's paper estimate missed by 8×. Measure the TLS handshake
   before believing any number you read about it.
 
+> **Correction, 2026-08-16 evening (owner):** two of the decisions below
+> changed the day this document was written — "direct is a mode" became
+> **branch-separated full removal**, and S4's dual-mode trial became the
+> deletion sweep + standalone build. `PHASE-S-CHECKLIST.md` is now the
+> normative sequencing and tracker; PHASE-S.md's closing section records the
+> decisions. Everything else here — read order, delegation discipline,
+> branch/commit rules — stands, with one refinement: S0–S3 merge to `main`
+> at phase boundaries as written, and S4 is where `phase-s` stops merging
+> back.
+
 ## Sequencing (each phase gates the next)
 
 - **S0 — tokenizer audit.** `picojson-rs` first, against SPEC §10: no-alloc,

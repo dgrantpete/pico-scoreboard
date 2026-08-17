@@ -166,3 +166,26 @@ twice over. Sequencing stands as written, with one note: the `tools/espn`
 mock speaks plain HTTP, so the TLS bring-up (step 5) needs a TLS terminator
 in front of the mock — or a disposable HTTPS echo target — before pointing at
 ESPN itself.
+
+## Owner decisions, 2026-08-16 evening — branch-separated full removal
+
+Recorded the evening Phase S kicked off, superseding three framings above;
+the working tracker is `PHASE-S-CHECKLIST.md`.
+
+- **Separation by branch/release, not by flag.** The "direct as a mode /
+  degraded fallback / config switch" framing is retired. `main` keeps the
+  backend world; the `phase-s` branch deletes it outright once the direct
+  feed is proven (S4), and the two worlds ship as different releases. The
+  fleet-economics argument stands — which is exactly why the deletion lives
+  on a branch while the gift fleet lives on `main`.
+- **Consequence accepted: no in-image proxy fallback.** Risk 1's mitigation
+  ("keep proxy mode primary") becomes an OTA runbook instead: ESPN drift on
+  a standalone device is recovered by OTA, including OTA back to a
+  proxy-world image kept published on a reachable channel.
+- **OTA artifacts move to GitHub Releases** (repo verified public
+  2026-08-16), which resolves the "rehoming `/fw`" question this document
+  left open: the signature carries the trust, the host is dumb, and
+  TLS-to-GitHub joins the S2 scope alongside TLS-to-ESPN.
+- **Smarthome (BACKLOG 91) gets a reservation, not a design**: the
+  BACKLOG-94 re-earn target now includes ~1 socket + 10–15 KB left
+  unspoken-for after Phase S lands.
