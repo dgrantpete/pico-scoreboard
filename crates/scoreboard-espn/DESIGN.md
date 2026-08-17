@@ -209,6 +209,16 @@ Added as the sport lanes landed:
     the duplicated serde-shape integer parsers, `wire_phase`, and the
     stable insertion sort consolidate into `common.rs` in one
     orchestrator pass, so mid-flight lanes never chase a moving target.
+16. **Compare keys refuse to truncate (`common::Exact`), crate-wide.**
+    Two storages for >255-byte compare keys existed: truncate-at-bound
+    (genuinely-equal keys stay equal, but distinct keys sharing a
+    255-byte prefix silently *match* — wrong possession bit, wrong game
+    served) and `Exact`'s refuse-to-store (equality checks fail visibly,
+    the situation drops, the game resolves NotFound). Both diverge from
+    the backend's unbounded compare only in absurd-land, but a false
+    positive is wrong data and a false negative is safe degradation —
+    `Exact` wins. Applies to detail-target ids, `team.id`, possession
+    ids, and any future key whose equality gates a byte.
 
 ## Lanes and validation
 
