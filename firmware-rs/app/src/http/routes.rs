@@ -6,12 +6,13 @@
 //! the way Microdot matched in registration order — not from a `.route()`
 //! chain. picoserve's chain is a *type*: each link wraps the previous as its
 //! fallback, and every link contributes its own frame to the "handle one
-//! request" future, which four connection tasks each materialise three times
-//! over. See BUDGET.md, "A buffer in a picoserve handler costs its size times
-//! the router's depth". Collapsing the nine links to one measured 7,360 B off
-//! `.bss` and 1,352 B off `.text`; what it does not recover is the method
-//! router and request handler beneath each route, which are picoserve's and
-//! stay one frame each.
+//! request" future, which every connection task materialises — three times
+//! over, until the picoserve fork this crate pins fixed its internal select
+//! duplication. See BUDGET.md, "A buffer in a picoserve handler costs its
+//! size times the router's depth" and its 2026-08-17 addendum. Collapsing
+//! the nine links to one measured 7,360 B off `.bss` (pre-fork) and 1,352 B
+//! off `.text`; what it does not recover is the method router and request
+//! handler beneath each route, which are picoserve's and stay one frame each.
 //!
 //! # `POST /api/check-update`, and the one thing it does differently
 //!
