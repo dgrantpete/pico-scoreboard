@@ -28,14 +28,23 @@ device's entire RAM; the case streaming exists for), the largest stored
 MLS slate (207,433 B). Chunks are memcpy'd into a 4 KB RAM buffer inside
 the timed region, socket-read-shaped.
 
-| Operation | Stock picojson 0.2.3 (+#98) | Batched drive (`ea29142`) |
-|---|---|---|
-| MLB list, 489 KB | 948 ms (516 KB/s) | **874 ms** (560 KB/s) |
-| CFB list, 1.21 MB | 2.62 s (473 KB/s) | **2.03 s** (609 KB/s) |
-| MLS list, 207 KB | 320 ms (648 KB/s) | **247 ms** (840 KB/s) |
-| MLB detail | 886 ms | **610 ms** |
-| CFB detail, early target | 2.12 s | **1.18 s** |
-| CFB detail, last target (worst) | 2.36 s | **1.62 s** |
+| Operation | Stock picojson 0.2.3 (+#98) | Batched drive (`ea29142`) | SWAR tokenizer (`ca799df`)¹ | + `ram-exec` (`8fb8a76`) |
+|---|---|---|---|---|
+| MLB list, 489 KB | 948 ms (516 KB/s) | 874 ms (560 KB/s) | 542–609 ms | **348 ms** (1405 KB/s) |
+| CFB list, 1.21 MB | 2.62 s (473 KB/s) | 2.03 s (609 KB/s) | 1.44–1.70 s | **1.17 s** (1054 KB/s) |
+| MLS list, 207 KB | 320 ms (648 KB/s) | 247 ms (840 KB/s) | 197–212 ms | **152 ms** (1368 KB/s) |
+| MLB detail | 886 ms | 610 ms | 396–612 ms | **280 ms** |
+| CFB detail, early target | 2.12 s | 1.18 s | 962 ms–1.33 s | **899 ms** |
+| CFB detail, last target (worst) | 2.36 s | 1.62 s | 1.43–1.64 s | **1.20 s** |
+| MLS detail | — | 349 ms | 179–248 ms | **151 ms** |
+
+¹ Ranges, not noise: two builds of identical SWAR parse code (the second
+merely added a bench section) differed ±30% per lane — see "the layout
+lottery" below. Within one build, reps repeat to ±0.1% as before. The
+batched-drive column was re-measured 2026-08-17 afternoon and reproduced
+the prior night's numbers exactly (2.0336 s CFB list, 610.0 ms MLB
+detail), so the baseline is solid; it is the flash-resident-code world
+that is layout-sensitive.
 
 Findings that shape design, all measured the same night:
 
@@ -111,66 +120,96 @@ unchanged. Two subtleties that will bite a re-implementer:
 
 **Where**: fork `dgrantpete/picojson-rs`, branch `perf/batched-push-drive`
 (commit `ea29142`), sitting on top of the `push-parser-per-call-input`
-branch (upstream PR #98). **Local only — deliberately not pushed** as of
-this writing; the owner wanted it PR-shaped but held. To ship it: push the
-branch, open the PR as a follow-up to #98, and once any release carries
-both, replace the `[patch.crates-io]` git-rev pins (root `Cargo.toml` AND
-`firmware-rs/bench/Cargo.toml` — standalone workspaces repeat the patch;
-any future device workspace using picojson needs it too) with the release
-version.
+branch (upstream PR #98). The tokenizer work below stacks further:
+branch `perf/tokenizer-swar-scan` = `ca799df` (SWAR scan) + `8fb8a76`
+(`ram-exec` feature). **All local — deliberately not pushed** as of this
+writing; the owner wanted them PR-shaped but held. To ship: push the
+branches, open the PRs as a stacked follow-up chain to #98, and once any
+release carries them, replace the `[patch.crates-io]` git-rev pins (root
+`Cargo.toml` AND `firmware-rs/bench/Cargo.toml` — standalone workspaces
+repeat the patch; any future device workspace using picojson needs it
+too) with the release version.
 
-## The lever still on the table: tokenizer-core surgery (est. 2–3×)
+## The tokenizer-core lever, pulled (2026-08-17 afternoon)
 
-Post-batching, the wall moved *inside* ujson: the tokenizer still runs a
-per-byte state machine (a match over (state, byte-class) plus a position
-counter store, per byte). Measured residue: 268 cycles/byte on the MLB
-body, 246 on college, 179 on MLS — string-heavy bodies cost more, which
-points straight at the opportunity:
+The SWAR surgery predicted above landed as `ca799df` on fork branch
+`perf/tokenizer-swar-scan` (stacked on `perf/batched-push-drive`; both
+local, unpushed). Three changes, all inside `parse_chunk_inner`:
 
-**Word-at-a-time string scanning.** String interiors dominate JSON bytes,
-and inside a string the tokenizer only cares about three byte classes:
-`"` (close), `\` (escape), and control bytes (< 0x20, error). The classic
-fix is scanning words, not bytes: on the Cortex-M33 (no SIMD) that is
-32-bit SWAR — the `(x ^ splat(b))` then `(y - 0x01010101) & !y & 0x80808080`
-zero-byte trick per target class, four bytes per iteration, falling back
-to the byte loop at boundaries and matches. Same idea applies to
-whitespace runs between tokens. Expected: 2–3× on the remaining cost
-(strings are most of the bytes; the scan replaces ~4 matched-dispatch
-iterations with ~3 ALU ops), putting the college worst case plausibly
-under 700 ms and MLB under 300 ms.
+- **String interiors** (measured 72–75% of every real body's bytes)
+  advance through a 32-bit SWAR scan — four bytes per iteration against
+  the three in-string byte classes (`"`, `\`, control); the scan advances
+  only past definitively-clean bytes and every flagged byte re-enters the
+  untouched byte machine, so events, positions, errors, and chunk
+  resumability are identical *by construction*. The less-than-0x20
+  detection admits borrow false-positives only above a genuine stop; the
+  scan takes the lowest flagged byte, which is therefore always real (an
+  exhaustive boundary-palette unit test pins this).
+- **Digit runs** in the three self-looping number states skip the same
+  way (byte-wise loop; numbers are short).
+- **Position/line/column bookkeeping hoisted** out of the per-byte loop;
+  the absolute `Position` is built on demand at error sites and comma
+  records only.
 
-What a taker needs to know:
+The full validation ladder above was rerun in order and is green: fork
+suite (now 235 + stress + buffer-reuse), thumbv8m check, patched-check
+corpus at chunks 1/7/1379/4096, `scoreboard-espn` 112, `backend` 63 (incl.
+the 33 byte-exact goldens), then silicon. Host tokenizer throughput:
+160 → 496 MB/s (3.1×) on the CFB body; full football extraction on host:
+8.7 → 3.6 ms (2.4×, `crates/scoreboard-espn/examples/detail_bench.rs`,
+written for exactly this A/B).
 
-1. **Where**: `picojson/src/ujson/` (the tokenizer core) on the fork —
-   this is the conformance-tested heart of the crate, shared by all three
-   parsers. Touching it is upstream-scale surgery; do it on a branch off
-   `perf/batched-push-drive` so the two PRs stack.
-2. **Contract to preserve**: event *positions* exactly as today (the
-   batched drive's span math depends on them — especially the
-   `Begin(UnicodeEscape)`-at-first-hex quirk); resumability at any byte
-   boundary (a scan window must stop cleanly at chunk end and resume);
-   the callback event order for multi-event bytes (e.g. a digit that ends
-   a number AND closes an array).
-3. **The validation ladder makes this safe** — run it in full, in order:
-   - fork: `cargo test` (234 unit + stress + buffer-reuse) and
-     `cargo check --target thumbv8m.main-none-eabihf`;
-   - `repos/picojson-feasibility/patched-check`: full ESPN corpus through
-     a reused 4 KB buffer at chunk sizes 1/7/1379/4096, sequences
-     byte-compared (do NOT run the top-level feasibility crate — its
-     compile_fail doctest pins crates-io 0.2.3 and will misfire);
-   - pico-scoreboard: temporarily flip root `Cargo.toml`'s
-     `[patch.crates-io]` picojson to `path = "../picojson-rs/picojson"`,
-     run `cargo test -p scoreboard-espn` (112 incl. engine chunk-split
-     invariance) and `cargo test -p backend` (33 byte-exact goldens
-     through the real serving path), then restore the pin and
-     `git restore Cargo.lock`;
-   - hardware: `firmware-rs/bench` with the same temporary path patch in
-     ITS `Cargo.toml` — see operations below. The host throughput example
-     is a screener; the M33 number is the verdict.
-4. **Ambition cap**: if SWAR inside ujson balloons, a cheaper cousin is
-   hoisting only the position-counter update out of the per-byte match.
-   Profile first; the fork's `examples/throughput.rs` gives 5-second
-   feedback loops on the host.
+### What silicon then taught: the layout lottery, and `ram-exec`
+
+The device did not follow the host. Lists improved 1.2–1.6×, but CFB
+detail *regressed* in the first SWAR build — and a second build of
+identical parse code (only a bench section added) swung every lane by
+±30%, some up, some down. The re-measured baseline reproduced exactly, so
+this is real: **once the per-byte ALU work shrinks, XIP instruction fetch
+is the wall.** The hot path (tokenizer + drive + engine + per-sport sink,
+~30–40 KB across `write`/`handle_event`/`fire_values` monomorphizations)
+does not fit the RP2350's 16 KB XIP cache, and link-layout luck decides
+which lanes thrash.
+
+Two attribution experiments, both in the bench now:
+
+- **Data-source control** (`CTRL` / `mls-207K-RAMSRC` sections): feeding
+  the MLS extraction from a RAM copy of the body instead of flash saves
+  ~10% (196.8 → 175.6 ms; the memcpy+sum control is 15.9 ms of it). So
+  flash-resident *bodies* pollute the XIP cache only mildly — the bench
+  stays representative, and the real firmware (socket data, already in
+  RAM) gets that ~10% for free.
+- **Code-source experiment**: `ram-exec`, a new default-off feature on the
+  fork (`8fb8a76`), places `parse_chunk_inner` in `.data` on embedded ARM
+  so startup copies it to SRAM. That one function executing from RAM took
+  every lane to its best measured value (table above): 1.3–2.5× vs the
+  flash-code best case, ~4.6 KB of RAM per tokenizer monomorphization
+  (the bench pays 27.5 KB for its six sink types; the real app's fetch
+  path uses one or two).
+
+To reproduce the `ram-exec` numbers: path-flip bench's `Cargo.toml` pin as
+usual, then add a direct `picojson = { version = "=0.2.3", features =
+["ram-exec"] }` dependency there — feature unification turns it on for the
+shared build. The committed bench does not enable it (the committed pin
+predates the feature).
+
+### Levers that remain, sized
+
+1. **`ram-exec` in the real firmware** — the big one, but it is a RAM
+   budget line (~5–10 KB) against BUDGET.md's 40%-plus-reservation
+   discipline, so it is the owner's call at S3 integration time, measured
+   against real headroom. The same trick extended to the engine/sink layer
+   (`fire_values`, `handle_event`) would chase the rest of the layout
+   lottery, at proportionally more RAM.
+2. **UTF-8 revalidation second pass**: every string/key token pays
+   `core::str::from_utf8` over its content at extraction — a second walk
+   over ~75% of body bytes, low single-digit % of total. Removing it needs
+   an ASCII-purity side-channel from the tokenizer's scan (which already
+   sees every byte) — an upstream API conversation, not worth it yet.
+3. **Number parsing is NOT a lever**: `JsonNumber::from_slice` eagerly
+   parses (soft-float f64 for decimals) and scoreboard-espn only reads
+   `.as_str()`, but real bodies carry only ~1–2.5k number tokens (~400
+   floats max) — a few ms per parse. Measured, dismissed.
 
 ## Hardware bench operations (learned the annoying way)
 
@@ -205,3 +244,10 @@ rebuild. Reopen this question only if S3 integration shows real-world
 symptoms the bench didn't predict (poll-loop CPU delaying input handling
 or WiFi servicing), and reach for the tokenizer-core lever before reaching
 for the retreat.
+
+*Addendum (2026-08-17 afternoon, tokenizer lever pulled):* the margin
+widened again. With SWAR alone the college worst case is 1.4–1.7 s
+(≈5–6% of core 0 at a 30 s cadence); with `ram-exec` it is 1.2 s, and a
+normal MLB day's list is 348 ms (≈1.2%). The remaining decision in this
+document's orbit is whether the real firmware spends the ~5–10 KB of RAM
+`ram-exec` wants — an S3-time BUDGET.md line, not a go/no-go input.

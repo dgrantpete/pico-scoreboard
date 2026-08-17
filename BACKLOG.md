@@ -1023,19 +1023,20 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     answer, replacing both the MaxMind dependency and the manual-dropdown
     fallback PHASE-S.md proposed.
 
-96. **Tokenizer-core word-at-a-time scanning — the remaining 2–3× parse
-    lever (2026-08-17, measured).** After the batched-drive optimization
-    (fork branch `perf/batched-push-drive`, local, unpushed), on-device
-    parsing costs 179–268 cycles/byte and the wall is ujson's per-byte
-    state machine; string interiors dominate and admit a 32-bit SWAR scan
-    (`"`/`\`/control classes) on the M33. Full onboarding — measured
-    tables, the validation ladder that makes tokenizer surgery safe, the
-    positions contract, and hardware-bench operations — lives in
-    `firmware-rs/PARSE-PERF.md`. Pull this lever before ever reconsidering
-    the hosted-backend retreat; the college worst case plausibly drops
-    under 700 ms. Related instrument: item 87 (the RP2350 keeps teaching
-    that per-unit overhead dominates streaming loops). Also parked in that
-    doc's orbit: pushing the perf branch upstream as the follow-up to
-    picojson PR #98, and the FCS missing-`alternateColor` events that drop
-    real games from the college board (a fallback color would show them —
-    behavior change, owner's call).
+96. **Parse-perf follow-ups after the tokenizer lever landed (2026-08-17
+    afternoon).** The SWAR scan was pulled and validated (fork branch
+    `perf/tokenizer-swar-scan`: `ca799df` + the `ram-exec` feature
+    `8fb8a76`, stacked on the batched drive; all local, unpushed) — host
+    3.1×, silicon 1.3–2.5× with `ram-exec`, full story and tables in
+    `firmware-rs/PARSE-PERF.md`. What remains in its orbit:
+    (a) **push the three stacked fork branches upstream** as the follow-up
+    chain to picojson PR #98, then move the `[patch.crates-io]` git pins
+    (root + bench) to a release;
+    (b) **decide `ram-exec` for the real firmware at S3 integration** —
+    ~5–10 KB of RAM buys 1.3–2.5× parse and kills the ±30% XIP layout
+    lottery the bench exposed; it is a BUDGET.md line, owner's call;
+    (c) the FCS missing-`alternateColor` events that drop real games from
+    the college board (a fallback color would show them — behavior change,
+    owner's call). Related instrument: item 87 (the RP2350 keeps teaching
+    that per-unit overhead — now instruction fetch — dominates streaming
+    loops).
