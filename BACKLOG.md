@@ -981,32 +981,24 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     with the owner pointing at offenders before any code; fold 92's additions
     into the same pass so the layout is reworked once.
 
-94. **RAM headroom is 36.6 %, under the >=40 % rule — re-earn it.** The
-    doc-sweep re-measure (2026-08-16, boot-integrated 108bc85 ELF) put RAM
-    statics at 337,712 B, 18,224 B past the stated ceiling; the cause is the
-    four-connection HTTP pool (+50,498 B — picoserve's arena is mostly future
-    and every connection instantiates the whole router), which was the right
-    trade for the captive-portal storm but was priced at half its real cost.
-    Nothing is starved (core-0 stack high-water 25,816 B against 186 KB), but
-    Phase S wants 70-80 KB and the target exists to keep that possible. The
-    two already-priced levers, neither taken: fold the Store into the snapshot
-    channel's back buffer (2,848 B, BUDGET's §4-correction section), and halve
-    the crest pool to 16 slots (18,432 B, costs re-fetch churn on college-
-    football Saturdays). The third lever is the arena itself: of each
-    connection's 22,080 B, only 8,552 B is our buffers — the rest is
-    picoserve's future machinery, and BUDGET's own note says a buffer inside
-    a handler costs its size times the router's nesting depth. So: measure
-    the future's layout first (nightly `-Zprint-type-sizes` names every
-    field), then shrink the deepest handler's temporaries and consider
-    flattening the route tree — fewer chained `.route()` wrappers means a
-    shallower composed future. Boxing the router is NOT a lever: the app is
-    no-alloc by design. The nuclear option, only if Phase S needs the RAM
-    back, is a hand-rolled minimal server (one dispatch fn, one modest
-    future) in picoserve's place. Measure before choosing, per house rule.
-    Phase S kickoff (2026-08-16) raised the bar: the re-earn target is now
-    ≥40 % *plus* item 91's reservation (~1 socket + 10–15 KB), and settling
-    this item is the gate on Phase S's first on-device phase (S2 in
-    `firmware-rs/PHASE-S-CHECKLIST.md`).
+94. **RAM headroom: re-earned to 42.7 % (2026-08-17); one residual call is
+    the owner's.** The re-earn came entirely from the two structural levers
+    the `-Zprint-type-sizes` walk exposed, with zero product cost: the flat
+    HTTP dispatch (`routes.rs::Dispatch`, -7,360 B) and picoserve's
+    select-duplication fix (fork `dgrantpete/picoserve`
+    `perf/select-by-ref`, -25,408 B; upstream PR held pending outward
+    contact, the picojson pattern; drop the app's `[patch.crates-io]` when
+    a release carries it). Statics 337,712 -> 304,944 B; per-connection
+    HTTP arena 22,080 -> 13,888 B, of which 8,552 B is buffers. The
+    product levers (Store fold 2,848 B, crest pool halving 18,432 B) were
+    priced and deliberately NOT taken. Residual: headroom beyond the 40 %
+    floor is 14,544 B, which covers item 91's smarthome reservation at the
+    10 KB reading and is 816 B short at 15 KB — and `ram-exec` at S3 would
+    want 5-10 KB more. If either forces a lever, the Store fold is the
+    cheapest but couples the state machine to the cross-core channel
+    (BUDGET's own caution); the ring log at 200 slots (28,812 B) is the
+    biggest untouched line whose size is a product choice. Decide when S3
+    prices ram-exec, not before.
 
 95. **Browser-seeded timezone (owner proposal, 2026-08-16).** The settings
     SPA runs on a device that lives in the scoreboard's own household, so let
