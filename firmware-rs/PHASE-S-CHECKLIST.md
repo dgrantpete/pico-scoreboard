@@ -108,6 +108,32 @@ backend's transforms.
       migrated backend is the owner's call** — it carries the seated
       unit's data plane; everything is green and ready when they are.
 
+**S1 validation addendum (2026-08-17, owner-requested, NUC store).** The
+whole collector corpus was ruled on, two independent ways:
+
+- *Mass sweep* (`crates/scoreboard-espn/examples/sweep.rs`): ~149k bodies /
+  1.37M events through the new extractors — 0 panics, 0 malformed-shell
+  errors; 604 event rejections total (5 MLB, 599 MLS), all with coherent
+  verdicts; 39,649 real soccer summaries through the summary extractor
+  clean (closing the no-summary-fixtures gap).
+- *Byte differential* (old serde pipeline vendored from git vs new, harness
+  preserved at `repos/s1-differential`): 113,904 real bodies, 1,374,186
+  events — **1,363,791 wire payloads byte-identical (117 MB), all 604
+  rejections matched by event id, 1.29M JSON-only field comparisons clean,
+  ZERO diffs**. Negative-control self-corruption proves the comparator's
+  loudness. Only findings: soccer's `LIST_MAX = 64` list bound (synthetic
+  80-game body only; dissolves in the API-unification round's sink list)
+  and football's wire-derived JSON score (same round).
+- *First silicon numbers* (`firmware-rs/bench`, standalone, on the seated
+  unit's RP2350 @150 MHz): streaming list extraction ≈ **0.5 MB/s**
+  (489 KB MLB slate 1.01 s; 1.21 MB live college slate 2.65 s) — the
+  PHASE-S.md "~20 ms per 300 KB" paper number was off ~30×. Host control
+  61 MB/s (128× — the expected in-order-M33 envelope, nothing
+  pathological). S3 sizing: fine under a 30 s cadence with per-chunk
+  yields; optimization lever: picojson's one-byte-per-call tokenizer feed.
+- Corpus gaps that remain are seasonal, not tooling: NBA + college bodies
+  are off-season empties until October / week 1 (BACKLOG 41/58).
+
 ## S2 — TLS bring-up (first on-device phase)
 
 Gate to start: **BACKLOG 94 settled** — headroom re-earned to ≥40 % *plus*
