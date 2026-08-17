@@ -34,14 +34,26 @@
 use core::fmt::Write as _;
 
 use crate::common::{
-    EText, HomeAway, LivePhase, Quirk, Quirks, linescore_byte, order_home_away, parse_hex_rgb,
-    parse_live_phase, parse_record, parse_start_time, saturate_score, set_text,
+    EText, Exact, HomeAway, Quirk, Quirks, linescore_byte, num_i16, num_u8, num_u16,
+    order_home_away, parse_hex_rgb, parse_live_phase, parse_record, parse_start_time,
+    saturate_score, set_text, stable_sort_by_key, wire_phase,
 };
 use crate::path::{self, Directive, Pattern, Seg, Sink, StreamMatcher, Value};
 use scoreboard_wire::football as wire;
 use scoreboard_wire::{GameState, MAX_LINE_SCORE, Record, Side, TeamColors};
 
 use Seg::{AnyIndex, Key};
+
+// ---------------------------------------------------------------- bounds
+
+/// ESPN ids (event and team) are numeric strings, ≤ 10 digits in every
+/// sampled league (football corpus max 9 bytes). These are compare keys,
+/// never wire strings, so overflow marks the field invalid instead of
+/// truncating (ruling 16, soccer's convention): a silently-truncated key
+/// could false-match the possession side or serve the wrong game as the
+/// detail target, while a refused key degrades safely and visibly
+/// (situation dropped / target absent).
+const ID_BYTES: usize = 24;
 
 // --------------------------------------------------------------- the table
 //
@@ -492,8 +504,8 @@ struct Comp0Data {
     home_timeouts: i16,
     away_timeouts: i16,
     red_zone: bool,
-    possession: bool,
-    possession_id: EText,
+    /// Compare key (ruling 16): overflow invalidates instead of truncating.
+    possession: Exact<ID_BYTES>,
     last_play: bool,
     last_play_id: EText,
     last_play_text: EText,
@@ -515,8 +527,7 @@ impl Default for Comp0Data {
             home_timeouts: -1,
             away_timeouts: -1,
             red_zone: false,
-            possession: false,
-            possession_id: EText::new(),
+            possession: Exact::default(),
             last_play: false,
             last_play_id: EText::new(),
             last_play_text: EText::new(),
@@ -530,8 +541,9 @@ struct Comp0Competitor {
     home_away: Option<HomeAway>,
     score: EText,
     /// Compared as a *string* against `situation.possession` — never
-    /// parsed, so `"012" != "12"` (backend parity).
-    team_id: EText,
+    /// parsed, so `"012" != "12"` (backend parity). Compare key
+    /// (ruling 16): overflow invalidates instead of truncating.
+    team_id: Exact<ID_BYTES>,
     abbreviation: EText,
     color: EText,
     alternate_color: EText,
@@ -574,7 +586,9 @@ impl EventScratch {
 // ----------------------------------------------------------------- sink
 
 struct DetailCfg {
-    target: EText,
+    /// Compare key (ruling 16): an overflowed target id matches nothing —
+    /// the extractor reports `Absent` rather than serving a prefix match.
+    target: Exact<ID_BYTES>,
     is_college: bool,
 }
 
@@ -641,7 +655,7 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
                     self.ev.id_seen = true;
                     set_text(&mut self.ev.id, s);
                     if let Some(cfg) = &self.detail {
-                        if s == cfg.target.as_str() {
+                        if cfg.target.valid() == Some(s) {
                             self.ev.is_target = true;
                         }
                     }
@@ -752,8 +766,7 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
             SIT_POSSESSION => match v {
                 Value::Str(s) => {
                     if Self::comp0(idx) {
-                        self.ev.comp0.possession = true;
-                        set_text(&mut self.ev.comp0.possession_id, s);
+                        self.ev.comp0.possession.set(s);
                     }
                 }
                 Value::Null => {}
@@ -798,11 +811,19 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
                 }
                 _ => self.invalid(),
             },
-            TEAM_ID | TEAM_ABBR | TEAM_COLOR | TEAM_ALT_COLOR => match v {
+            TEAM_ID => match v {
+                Value::Str(s) => {
+                    self.ev.check.competitor.team_id = true;
+                    if let Some(k) = Self::slot(idx) {
+                        self.ev.comp0.competitors[k].team_id.set(s);
+                    }
+                }
+                _ => self.invalid(),
+            },
+            TEAM_ABBR | TEAM_COLOR | TEAM_ALT_COLOR => match v {
                 Value::Str(s) => {
                     let check = &mut self.ev.check.competitor;
                     match pattern {
-                        TEAM_ID => check.team_id = true,
                         TEAM_ABBR => check.abbreviation = true,
                         TEAM_COLOR => check.color = true,
                         _ => check.alternate_color = true,
@@ -810,7 +831,6 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
                     if let Some(k) = Self::slot(idx) {
                         let c = &mut self.ev.comp0.competitors[k];
                         let dst = match pattern {
-                            TEAM_ID => &mut c.team_id,
                             TEAM_ABBR => &mut c.abbreviation,
                             TEAM_COLOR => &mut c.color,
                             _ => &mut c.alternate_color,
@@ -1118,9 +1138,9 @@ fn transform(
                 d.description.then_some(d.description_text.as_str()),
                 quirks,
             ));
-            let home_id = &d.competitors[home_k].team_id;
-            let away_id = &d.competitors[away_k].team_id;
-            g.situation = validate_situation(d, home_id, away_id);
+            let home_id = d.competitors[home_k].team_id.valid();
+            let away_id = d.competitors[away_k].team_id.valid();
+            g.situation = validate_situation(d, home_id, away_id, quirks);
             g.timeouts = parse_timeouts(d);
             if d.last_play {
                 g.last_play = true;
@@ -1188,7 +1208,9 @@ fn fill_colors(team: &mut TeamExtract, c: &Comp0Competitor) -> Result<(), Extrac
 
 fn fill_line_score(team: &mut TeamExtract, c: &Comp0Competitor) {
     let mut pairs = c.linescores.clone();
-    stable_sort_by_period(&mut pairs);
+    // Explicit key: sort by the ESPN period, stability keeping arrival
+    // order for duplicates (ruling 13).
+    stable_sort_by_key(&mut pairs, |&(_, period)| period);
     team.line_score.clear();
     for (value, _) in &pairs {
         // Capacity is identical to the source vec's, so this cannot fail.
@@ -1200,21 +1222,35 @@ fn fill_line_score(team: &mut TeamExtract, c: &Comp0Competitor) {
 /// (`-1` is the ordinary between-plays sentinel and stays silent), then
 /// yardLine 0..=100, then possession resolved by string comparison — home
 /// first — against the two team ids. All-or-nothing; `distance` alone is
-/// clamped, never validated.
-fn validate_situation(d: &Comp0Data, home_id: &str, away_id: &str) -> Option<wire::Situation> {
+/// clamped, never validated. [`Quirk::SituationDropped`] fires exactly
+/// where the backend warns: a glitched down (anything but `-1`), an
+/// out-of-range yardLine, or a possession id — absent included — that
+/// resolves to neither competitor. Ids are compare keys with `Exact`
+/// semantics (ruling 16): an overflowed possession or team id lands in
+/// the unresolvable arm rather than prefix-matching a side.
+fn validate_situation(
+    d: &Comp0Data,
+    home_id: Option<&str>,
+    away_id: Option<&str>,
+    quirks: &mut impl Quirks,
+) -> Option<wire::Situation> {
     if !(1..=4).contains(&d.down) {
+        if d.down != -1 {
+            quirks.quirk(Quirk::SituationDropped);
+        }
         return None;
     }
     if !(0..=100).contains(&d.yard_line) {
+        quirks.quirk(Quirk::SituationDropped);
         return None;
     }
-    let possession_id = d.possession.then_some(d.possession_id.as_str())?;
-    let possession = if possession_id == home_id {
-        Side::Home
-    } else if possession_id == away_id {
-        Side::Away
-    } else {
-        return None;
+    let possession = match d.possession.valid() {
+        Some(id) if Some(id) == home_id => Side::Home,
+        Some(id) if Some(id) == away_id => Side::Away,
+        _ => {
+            quirks.quirk(Quirk::SituationDropped);
+            return None;
+        }
     };
     Some(wire::Situation {
         down: d.down as u8,
@@ -1256,52 +1292,6 @@ fn build_rank_line(dst: &mut EText, rank: u16, name: &str) {
     }
 }
 
-fn wire_phase(phase: LivePhase) -> scoreboard_wire::LivePhase {
-    match phase {
-        LivePhase::InProgress => scoreboard_wire::LivePhase::InProgress,
-        LivePhase::Halftime => scoreboard_wire::LivePhase::Halftime,
-        LivePhase::EndOfPeriod => scoreboard_wire::LivePhase::EndOfPeriod,
-    }
-}
-
-/// Insertion sort, stable by construction — the backend's `sort_by_key`
-/// is stable and duplicate periods keep input order (ruling 13); `core`
-/// only offers `sort_unstable`, which would silently break bytes.
-fn stable_sort_by_period(pairs: &mut [(u8, u8)]) {
-    for i in 1..pairs.len() {
-        let mut j = i;
-        while j > 0 && pairs[j - 1].1 > pairs[j].1 {
-            pairs.swap(j - 1, j);
-            j -= 1;
-        }
-    }
-}
-
-/// serde's `u8` acceptance: an unsigned integer literal that fits (floats,
-/// exponents and signs are type errors, exactly as `serde_json` rejects
-/// them for integer fields).
-fn num_u8(text: &str) -> Option<u8> {
-    if !text.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    text.parse().ok()
-}
-
-fn num_u16(text: &str) -> Option<u16> {
-    if !text.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    text.parse().ok()
-}
-
-fn num_i16(text: &str) -> Option<i16> {
-    let digits = text.strip_prefix('-').unwrap_or(text);
-    if !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    text.parse().ok()
-}
-
 // -------------------------------------------------------- entry points
 
 /// Streaming extractor for `GET /football/{league}/games/{game_id}`:
@@ -1312,17 +1302,19 @@ pub struct DetailExtractor<'s, Q: Quirks> {
 
 impl<'s, Q: Quirks> DetailExtractor<'s, Q> {
     /// `scratch` must hold the longest contiguous string/number token in
-    /// the body (see [`StreamMatcher::new`]). `game_id` longer than the
-    /// wire's 255-byte cap cannot match (the backend compares unbounded
-    /// strings, but no real ESPN id approaches the cap).
+    /// the body (see [`StreamMatcher::new`]). `game_id` is a compare key
+    /// (ruling 16): past [`ID_BYTES`] it diverges from the backend's
+    /// unbounded compare by *refusing* — it matches nothing and the
+    /// extraction reports `Absent` — never by prefix-matching a different
+    /// game (no real ESPN id approaches the bound).
     pub fn new(
         game_id: &str,
         is_college: bool,
         quirks: Q,
         scratch: &'s mut [u8],
     ) -> Result<Self, path::Error> {
-        let mut target = EText::new();
-        set_text(&mut target, game_id);
+        let mut target = Exact::default();
+        target.set(game_id);
         let sink = FootballSink::new(
             NoEntries,
             quirks,

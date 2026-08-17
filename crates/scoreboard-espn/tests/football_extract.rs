@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use scoreboard_espn::common::IgnoreQuirks;
+use scoreboard_espn::common::{IgnoreQuirks, Quirk, Quirks};
 use scoreboard_espn::football::{
     Counts, DetailExtractor, DetailOutcome, GameExtract, ListEntries, ListExtractor,
 };
@@ -415,6 +415,75 @@ fn timeouts_survive_a_dropped_situation() {
     let t = timeouts.expect("timeouts populated with no snap");
     assert_eq!((t.away, t.home), (0, 1));
     assert_eq!(bytes[2], 0x10, "flags: timeouts only");
+}
+
+#[derive(Default)]
+struct QuirkLog(Vec<Quirk>);
+
+impl Quirks for QuirkLog {
+    fn quirk(&mut self, quirk: Quirk) {
+        self.0.push(quirk);
+    }
+}
+
+fn quirks_of(body: &str, target: &str) -> Vec<Quirk> {
+    let mut scratch = vec![0u8; 16 * 1024];
+    let mut extractor =
+        DetailExtractor::new(target, false, QuirkLog::default(), &mut scratch).expect("table valid");
+    extractor.write(body.as_bytes()).expect("clean parse");
+    extractor.finish().expect("no transform error").quirks.0
+}
+
+/// `Quirk::SituationDropped` fires exactly where the backend warns: a
+/// glitched down (anything but the `-1` sentinel), an out-of-range
+/// yardLine, or an unresolvable possession — while the ordinary
+/// between-plays situation stays silent.
+#[test]
+fn situation_dropped_quirk_fires_where_the_backend_warns() {
+    let silent = live_body(r#"{"down":-1,"distance":-1,"yardLine":-1}"#);
+    assert_eq!(quirks_of(&silent, "401772599"), vec![]);
+
+    for glitch in [
+        r#"{"down":0,"distance":10,"yardLine":50,"possession":"12"}"#,
+        r#"{"down":1,"distance":10,"yardLine":101,"possession":"12"}"#,
+        r#"{"down":1,"distance":10,"yardLine":50,"possession":"999"}"#,
+        r#"{"down":1,"distance":10,"yardLine":50}"#,
+    ] {
+        assert_eq!(
+            quirks_of(&live_body(glitch), "401772599"),
+            vec![Quirk::SituationDropped],
+            "one warn expected for {glitch}"
+        );
+    }
+}
+
+/// Ruling 16: compare keys refuse to truncate. A team id + possession
+/// pair beyond the compare-key bound would string-match in the backend's
+/// unbounded compare; here both keys invalidate and the situation drops
+/// (the safe direction) with the same warn-quirk — never a prefix match.
+/// An over-bound detail target likewise matches nothing: Absent over a
+/// clean board, not the wrong game.
+#[test]
+fn oversized_compare_keys_refuse_instead_of_prefix_matching() {
+    let long = "9".repeat(30);
+    let body = format!(
+        r#"{{"events":[{{"id":"401772599","date":"2026-01-12T21:30Z","competitions":[{{
+            "competitors":[
+                {{"homeAway":"away","score":"10","team":{{"id":"2","abbreviation":"BUF","color":"00338d","alternateColor":"c60c30"}}}},
+                {{"homeAway":"home","score":"10","team":{{"id":"{long}","abbreviation":"KC","color":"e31837","alternateColor":"ffb81c"}}}}
+            ],
+            "status":{{"type":{{"state":"in","description":"In Progress"}},"period":1,"displayClock":"10:00"}},
+            "situation":{{"down":1,"distance":10,"yardLine":50,"possession":"{long}"}}
+        }}]}}]}}"#
+    );
+    assert_eq!(quirks_of(&body, "401772599"), vec![Quirk::SituationDropped]);
+    let (situation, _) = decode_live(&live_of(&body));
+    assert!(situation.is_none(), "over-bound keys must not resolve a side");
+
+    let clean = live_body(r#"{}"#);
+    let (outcome, counts) = run_detail(&clean, &"4".repeat(30), false, usize::MAX);
+    assert!(matches!(outcome, DetailOutcome::Absent), "{outcome:?}");
+    assert_eq!(counts, Counts { ok: 1, failed: 0 });
 }
 
 /// Ruling 4: possession resolves at finalize from buffered ids, so a body
