@@ -104,6 +104,29 @@ fn record_split_and_the_tie_quirk() {
 }
 
 #[test]
+fn integer_shape_parsers_match_serde_json() {
+    use scoreboard_espn::common::{num_i16, num_u8};
+    // The oracle: what serde_json accepts for integer fields. Scope: inputs
+    // that are grammar-valid JSON numbers — the helpers only ever see text
+    // picojson's tokenizer already validated, so grammar rejects (leading
+    // zeros, bare signs, empty) are upstream's job, not theirs.
+    for text in [
+        "0", "7", "255", "256", "-1", "-32768", "-32769", "-0", "2.0", "1e2", "0.5",
+    ] {
+        assert_eq!(
+            num_i16(text).is_some(),
+            serde_json::from_str::<i16>(text).is_ok(),
+            "num_i16 diverged from serde_json on {text:?}"
+        );
+        assert_eq!(
+            num_u8(text).is_some(),
+            serde_json::from_str::<u8>(text).is_ok(),
+            "num_u8 diverged from serde_json on {text:?}"
+        );
+    }
+}
+
+#[test]
 fn score_saturates() {
     assert_eq!(saturate_score(103), 103);
     assert_eq!(saturate_score(70_000), u16::MAX);

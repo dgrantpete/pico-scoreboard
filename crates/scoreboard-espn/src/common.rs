@@ -262,8 +262,13 @@ pub fn num_u32(text: &str) -> Option<u32> {
 }
 
 /// serde's `i16` acceptance for a raw JSON number: one optional leading
-/// minus, digits, in range. See [`num_u8`].
+/// minus, digits, in range — and `-0` rejected, because serde_json parses
+/// `-0` as a float to preserve the sign, making it a type error for integer
+/// fields (found by the MLB lane, pinned against serde_json in the tests).
 pub fn num_i16(text: &str) -> Option<i16> {
+    if text == "-0" {
+        return None;
+    }
     let digits = text.strip_prefix('-').unwrap_or(text);
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
