@@ -78,12 +78,15 @@ real corpus.
 Gate to start: S0 tokenizer chosen. Gate to exit: corpus parity with the
 backend's transforms.
 
-- [ ] New `no_std` crate (working name `scoreboard-espn`): declarative const
-      path tables per sport
-      (`$.events[*].competitions[0].competitors[*].score → field`),
-      skip-unknown-by-default, every extracted value copied into bounded
-      `Text<N>` storage (bounds from corpus + assert-on-corpus test).
-- [ ] **Resolve the feed-seam shape** (design item, this phase):
+- [x] New `no_std` crate `scoreboard-espn` (2026-08-16/17): the path-matcher
+      engine (bitset alive-sets over picojson push events, skip-by-masking,
+      chunk-split invariance proven over the corpus) plus all four sport
+      tables. **33/33 committed wire goldens byte-identical** through
+      stream-extraction; 107 tests; rulings 14–16 grew out of the lanes
+      (validate-until-found detail policy, one helper-consolidation pass,
+      Exact refuse-to-truncate compare keys). `crates/scoreboard-espn/
+      DESIGN.md` carries the architecture and all sixteen rulings.
+- [x] **Resolve the feed-seam shape** (design item, this phase):
       `GameFeed::detail` takes a complete `&[u8]` payload — a whole-payload
       contract a 300–450 KB streamed body can never satisfy. Recommended
       shape: stream-extract into an owned bounded per-sport extract struct,
