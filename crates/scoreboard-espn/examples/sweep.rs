@@ -83,7 +83,7 @@ fn main() {
         if result.is_err() {
             stats.panics.push(format!("body #{n} in {key}"));
         }
-        if n % 2000 == 0 {
+        if n.is_multiple_of(2000) {
             eprintln!("[sweep] {n} bodies…");
             std::io::stderr().flush().ok();
         }
@@ -169,7 +169,7 @@ fn process(
 
     // Detail + encode: sampled, plus every anomalous body.
     let anomalous = failed > 0;
-    if anomalous || stats.bodies % sample_every == 0 {
+    if anomalous || stats.bodies.is_multiple_of(sample_every) {
         for id in event_ids(body) {
             stats.detail_runs += 1;
             detail_pass(sport, league, body, &id, stats);
