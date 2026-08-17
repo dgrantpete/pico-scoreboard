@@ -78,44 +78,40 @@ impl EspnClient {
         Ok(bytes)
     }
 
-    /// Fetch JSON from an ESPN endpoint, deserializing into `T`.
-    ///
-    /// Serves as the single choke-point for all ESPN JSON deserialization so
-    /// structured error logging (including the exact JSON path of a failure
-    /// and the full raw payload) is emitted uniformly across every league.
-    pub async fn fetch_json<T: serde::de::DeserializeOwned>(
-        &self,
-        url: &str,
-    ) -> Result<T, AppError> {
-        let bytes = self.fetch_json_bytes(url).await?;
-        Self::deserialize_logged(url, &bytes)
-    }
-
-    /// Like `fetch_json`, but serves from a short-TTL cache keyed by URL.
+    /// Fetch a raw ESPN JSON body, served from a short-TTL cache keyed by URL.
     ///
     /// Use for endpoints that many clients poll for identical data (a
-    /// league's scoreboard). Each cache hit still deserializes — cheap next
-    /// to the upstream round-trip it saves.
-    pub async fn fetch_json_cached<T: serde::de::DeserializeOwned>(
-        &self,
-        url: &str,
-    ) -> Result<T, AppError> {
+    /// league's scoreboard). The sport handlers stream these bytes through
+    /// the shared `scoreboard-espn` extractors; the bytes are cached as
+    /// fetched, before any parsing.
+    pub async fn fetch_bytes_cached(&self, url: &str) -> Result<Bytes, AppError> {
         {
             let mut cache = self.json_cache.lock().unwrap();
             if let Some((fetched_at, bytes)) = cache.get(url)
                 && fetched_at.elapsed() < JSON_CACHE_TTL
             {
-                return Self::deserialize_logged(url, bytes);
+                return Ok(bytes.clone());
             }
         }
 
         let bytes = self.fetch_json_bytes(url).await?;
-        let value = Self::deserialize_logged(url, &bytes)?;
         self.json_cache
             .lock()
             .unwrap()
-            .put(url.to_string(), (Instant::now(), bytes));
-        Ok(value)
+            .put(url.to_string(), (Instant::now(), bytes.clone()));
+        Ok(bytes)
+    }
+
+    /// Like [`Self::fetch_bytes_cached`], but deserializing into `T` with the
+    /// uniform structured error logging (exact JSON path of a failure plus
+    /// the full raw payload). Used by the payload-resolved logo endpoint;
+    /// the sport handlers consume the raw bytes instead.
+    pub async fn fetch_json_cached<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+    ) -> Result<T, AppError> {
+        let bytes = self.fetch_bytes_cached(url).await?;
+        Self::deserialize_logged(url, &bytes)
     }
 
     async fn fetch_json_bytes(&self, url: &str) -> Result<Bytes, AppError> {

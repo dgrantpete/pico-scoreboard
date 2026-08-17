@@ -165,6 +165,7 @@ dependencies = [
  "maxminddb",
  "memmap2",
  "reqwest",
+ "scoreboard-espn",
  "scoreboard-wire",
  "serde",
  "serde_json",

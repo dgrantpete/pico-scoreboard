@@ -48,19 +48,6 @@ pub enum AppError {
     InvalidFwChannel,
 }
 
-impl AppError {
-    /// Fill in the upstream URL on an `EspnDeserialize` error whose producer
-    /// didn't have it in scope (the transformation helpers in `mlb.rs`).
-    pub fn with_url(mut self, request_url: &str) -> Self {
-        if let AppError::EspnDeserialize { ref mut url, .. } = self
-            && url.is_empty()
-        {
-            *url = request_url.to_string();
-        }
-        self
-    }
-}
-
 /// Error response body
 #[derive(Serialize, ToSchema)]
 pub struct ErrorResponse {

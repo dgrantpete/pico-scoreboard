@@ -1,24 +1,13 @@
 use axum::{http::HeaderMap, response::Response};
 
+use super::adapter;
+use super::types::FootballGame;
 use super::wire::encode_game;
 use crate::AppState;
 use crate::error::{AppError, ErrorResponse};
 use crate::espn::league::{self, FootballLeague};
-use crate::shared::game::{GameListEntry, GameState};
-use crate::shared::handler::{self, EventParts};
-
-use super::transform::{
-    final_competition_to_game, live_competition_to_game, pregame_competition_to_game,
-};
-use super::types::{EspnCompetition, FootballGame};
-
-fn list_state(competition: &EspnCompetition) -> Option<GameState> {
-    Some(match competition {
-        EspnCompetition::PreGame { .. } => GameState::Pregame,
-        EspnCompetition::Live { .. } => GameState::Live,
-        EspnCompetition::Final { .. } => GameState::Final,
-    })
-}
+use crate::shared::game::GameListEntry;
+use crate::shared::handler;
 
 /// GET /football/{league}/games — today's games for one league with their
 /// current state (pregame/live/final), like the soccer list.
@@ -44,13 +33,10 @@ pub async fn list_games(
     league: FootballLeague,
     headers: &HeaderMap,
 ) -> Result<Response, AppError> {
-    handler::list_games_response::<EspnCompetition>(
-        state,
-        &league::scoreboard_url(&state.config.espn, &league),
-        headers,
-        list_state,
-    )
-    .await
+    let url = league::scoreboard_url(&state.config.espn, &league);
+    let bytes = state.espn_client.fetch_bytes_cached(&url).await?;
+    let entries = adapter::list_entries(&bytes, &url)?;
+    Ok(handler::list_response(entries, headers))
 }
 
 /// GET /football/{league}/games/{game_id} — state snapshot for one game.
@@ -75,38 +61,7 @@ pub async fn get_game(
     headers: &HeaderMap,
 ) -> Result<Response, AppError> {
     let url = league::scoreboard_url(&state.config.espn, &league);
-    let EventParts {
-        id,
-        date,
-        competition,
-        ..
-    } = handler::fetch_game_parts::<EspnCompetition>(state, &url, game_id).await?;
-
-    let game = match competition {
-        EspnCompetition::PreGame {
-            competitors,
-            venue_name,
-        } => FootballGame::Pregame(
-            pregame_competition_to_game(id, &date, venue_name, competitors, league.is_college())
-                .map_err(|e| e.with_url(&url))?,
-        ),
-        EspnCompetition::Live {
-            competitors,
-            period,
-            display_clock,
-            phase,
-            situation,
-        } => FootballGame::Live(
-            live_competition_to_game(id, competitors, period, display_clock, phase, situation)
-                .map_err(|e| e.with_url(&url))?,
-        ),
-        EspnCompetition::Final {
-            competitors,
-            period,
-        } => FootballGame::Final(
-            final_competition_to_game(id, competitors, period).map_err(|e| e.with_url(&url))?,
-        ),
-    };
-
+    let bytes = state.espn_client.fetch_bytes_cached(&url).await?;
+    let game = adapter::detail_game(&bytes, game_id, league.is_college(), &url)?;
     Ok(handler::game_response(headers, &game, encode_game))
 }

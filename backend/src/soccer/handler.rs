@@ -1,17 +1,15 @@
 use axum::{http::HeaderMap, response::Response};
 
+use super::adapter;
+use super::types::SoccerGame;
 use super::wire::encode_game;
 use crate::AppState;
 use crate::error::{AppError, ErrorResponse};
 use crate::espn::league::{self, SoccerLeague};
-use crate::shared::game::{GameListEntry, GameState};
-use crate::shared::handler::{self, EventParts};
+use crate::shared::game::GameListEntry;
+use crate::shared::handler;
 
-use super::transform::{
-    final_competition_to_game, latest_commentary, live_competition_to_game,
-    pregame_competition_to_game,
-};
-use super::types::{Commentary, EspnCompetition, RawSummary, SoccerGame};
+use scoreboard_espn::soccer::{CommentaryExtract, SoccerExtract};
 
 /// Latest commentary line for a live game, best-effort: commentary is polish,
 /// so a summary fetch/parse failure degrades to None (with a warning) rather
@@ -20,27 +18,15 @@ async fn fetch_commentary(
     state: &AppState,
     league: &SoccerLeague,
     event_id: &str,
-) -> Option<Commentary> {
+) -> Option<CommentaryExtract> {
     let url = league::summary_url(&state.config.espn, league, event_id);
-    match state
-        .espn_client
-        .fetch_json_cached::<RawSummary>(&url)
-        .await
-    {
-        Ok(summary) => latest_commentary(summary),
+    match state.espn_client.fetch_bytes_cached(&url).await {
+        Ok(bytes) => adapter::summary_commentary(&bytes, &url),
         Err(e) => {
             tracing::warn!(url = %url, error = ?e, "soccer summary fetch failed; serving live without commentary");
             None
         }
     }
-}
-
-fn list_state(competition: &EspnCompetition) -> Option<GameState> {
-    Some(match competition {
-        EspnCompetition::PreGame { .. } => GameState::Pregame,
-        EspnCompetition::Live { .. } => GameState::Live,
-        EspnCompetition::Final { .. } => GameState::Final,
-    })
 }
 
 /// GET /soccer/{league}/games — today's games for one league with their
@@ -62,13 +48,10 @@ pub async fn list_games(
     league: SoccerLeague,
     headers: &HeaderMap,
 ) -> Result<Response, AppError> {
-    handler::list_games_response::<EspnCompetition>(
-        state,
-        &league::scoreboard_url(&state.config.espn, &league),
-        headers,
-        list_state,
-    )
-    .await
+    let url = league::scoreboard_url(&state.config.espn, &league);
+    let bytes = state.espn_client.fetch_bytes_cached(&url).await?;
+    let entries = adapter::list_entries(&bytes, &url)?;
+    Ok(handler::list_response(entries, headers))
 }
 
 /// GET /soccer/{league}/games/{game_id} — state snapshot for one game.
@@ -93,53 +76,17 @@ pub async fn get_game(
     headers: &HeaderMap,
 ) -> Result<Response, AppError> {
     let url = league::scoreboard_url(&state.config.espn, &league);
-    let EventParts {
-        id,
-        date,
-        competition,
-        ..
-    } = handler::fetch_game_parts::<EspnCompetition>(state, &url, game_id).await?;
+    let bytes = state.espn_client.fetch_bytes_cached(&url).await?;
+    let extract = adapter::detail_extract(&bytes, game_id, &url)?;
 
-    let game = match competition {
-        EspnCompetition::PreGame {
-            competitors,
-            venue_name,
-        } => SoccerGame::Pregame(
-            pregame_competition_to_game(id, &date, venue_name, competitors)
-                .map_err(|e| e.with_url(&url))?,
-        ),
-        EspnCompetition::Live {
-            competitors,
-            display_clock,
-            clock_seconds,
-            period,
-            on_break,
-            details,
-        } => {
-            let commentary = fetch_commentary(state, &league, &id).await;
-            SoccerGame::Live(
-                live_competition_to_game(
-                    id,
-                    competitors,
-                    display_clock,
-                    clock_seconds,
-                    period,
-                    on_break,
-                    details,
-                    commentary,
-                )
-                .map_err(|e| e.with_url(&url))?,
-            )
-        }
-        EspnCompetition::Final {
-            competitors,
-            details,
-            flavor,
-        } => SoccerGame::Final(
-            final_competition_to_game(id, competitors, details, flavor)
-                .map_err(|e| e.with_url(&url))?,
-        ),
+    // Live games get the per-event summary's latest commentary line;
+    // pregame/final have no commentary slot.
+    let commentary = if matches!(extract, SoccerExtract::Live(_)) {
+        fetch_commentary(state, &league, game_id).await
+    } else {
+        None
     };
 
+    let game = adapter::game_from_extract(&extract, commentary);
     Ok(handler::game_response(headers, &game, encode_game))
 }

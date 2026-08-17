@@ -1,6 +1,7 @@
 //! Wire-format corpus harness (tests only).
 //!
-//! Every fixture in `testdata/` is run through its sport's real transform,
+//! Every fixture in `testdata/` is run through the REAL serving path — the
+//! shared `scoreboard-espn` streaming extraction plus each sport's adapter —
 //! encoded, and pinned byte-for-byte to a committed golden under
 //! `testdata/wire/`. The goldens are the format's identity contract: they were
 //! captured from the encoder that shipped to the deployed firmware, so any diff
@@ -14,6 +15,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::error::AppError;
 use crate::football::FootballGame;
 use crate::mlb::MlbGame;
 use crate::nba::NbaGame;
@@ -52,167 +54,66 @@ fn fixture_names(sport: &str) -> Vec<String> {
     names
 }
 
-fn read_fixture<E: serde::de::DeserializeOwned>(sport: &str, name: &str) -> E {
+/// One fixture as the extractors consume it: the event's id and a synthetic
+/// one-event scoreboard body built from the RAW fixture text (key order
+/// preserved — a serde_json round trip would launder exactly the property
+/// the streaming tables must not depend on, ruling 4).
+fn fixture_body(sport: &str, name: &str) -> (String, String) {
     let path = testdata().join(sport).join(format!("{name}.json"));
     let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
+    let value: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parse {path:?}: {e}"));
+    let id = value["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{path:?}: event has a string id"))
+        .to_string();
+    (id, format!("{{\"events\":[{raw}]}}"))
 }
 
 /// MLB: one entry per fixture, except the rain-delay fixture — a live game in a
-/// non-inning state has no displayable payload and never reaches the encoder
-/// (see `mlb::transform::parse_inning_half`).
+/// non-inning state has no displayable payload (today's 404, the veto now
+/// pinned inside `scoreboard-espn::mlb`) and never reaches the encoder.
 pub(crate) fn mlb_games() -> Vec<(String, MlbGame)> {
-    use crate::mlb::transform::{
-        final_competition_to_game, live_competition_to_game, pregame_competition_to_game,
-    };
-    use crate::mlb::types::{EspnCompetition, EspnEvent};
-
     fixture_names("mlb")
         .into_iter()
         .filter_map(|name| {
-            let event: EspnEvent = read_fixture("mlb", &name);
-            let id = event.id;
-            let competition = event.competitions.into_iter().next().expect("competition");
-            let game = match competition {
-                EspnCompetition::PreGame {
-                    competitors,
-                    venue_name,
-                } => MlbGame::Pregame(
-                    pregame_competition_to_game(
-                        id,
-                        &event.date,
-                        event.weather.as_ref(),
-                        venue_name,
-                        competitors,
-                    )
-                    .expect("pregame transforms"),
-                ),
-                EspnCompetition::Live {
-                    competitors,
-                    situation,
-                    period,
-                    short_detail,
-                } => {
-                    match live_competition_to_game(id, competitors, situation, period, short_detail)
-                    {
-                        Ok(live) => MlbGame::Live(live),
-                        Err(_) => return None,
-                    }
-                }
-                EspnCompetition::Final {
-                    competitors,
-                    period,
-                } => MlbGame::Final(
-                    final_competition_to_game(id, competitors, period).expect("final transforms"),
-                ),
-            };
-            Some((name, game))
+            let (id, body) = fixture_body("mlb", &name);
+            match crate::mlb::adapter::detail_game(body.as_bytes(), &id, "test://corpus/mlb") {
+                Ok(game) => Some((name, game)),
+                Err(AppError::GameNotFound(_)) => None,
+                Err(e) => panic!("mlb/{name}: {e:?}"),
+            }
         })
         .collect()
 }
 
 pub(crate) fn nba_games() -> Vec<(String, NbaGame)> {
-    use crate::nba::transform::{
-        final_competition_to_game, live_competition_to_game, pregame_competition_to_game,
-    };
-    use crate::nba::types::{EspnCompetition, EspnEvent};
-
     fixture_names("nba")
         .into_iter()
         .map(|name| {
-            let event: EspnEvent = read_fixture("nba", &name);
-            let id = event.id;
-            let competition = event.competitions.into_iter().next().expect("competition");
-            let game = match competition {
-                EspnCompetition::PreGame {
-                    competitors,
-                    venue_name,
-                } => NbaGame::Pregame(
-                    pregame_competition_to_game(id, &event.date, venue_name, competitors)
-                        .expect("pregame transforms"),
-                ),
-                EspnCompetition::Live {
-                    competitors,
-                    period,
-                    display_clock,
-                    phase,
-                    situation,
-                } => NbaGame::Live(
-                    live_competition_to_game(
-                        id,
-                        competitors,
-                        period,
-                        display_clock,
-                        phase,
-                        situation,
-                    )
-                    .expect("live transforms"),
-                ),
-                EspnCompetition::Final {
-                    competitors,
-                    period,
-                } => NbaGame::Final(
-                    final_competition_to_game(id, competitors, period).expect("final transforms"),
-                ),
-            };
+            let (id, body) = fixture_body("nba", &name);
+            let game = crate::nba::adapter::detail_game(body.as_bytes(), &id, "test://corpus/nba")
+                .unwrap_or_else(|e| panic!("nba/{name}: {e:?}"));
             (name, game)
         })
         .collect()
 }
 
 /// Football fixtures nest under their ESPN league slug; `college-football/`
-/// drives `is_college` (the only per-league input to the transform).
+/// drives `is_college` (the only per-league input to the extraction).
 pub(crate) fn football_games() -> Vec<(String, FootballGame)> {
-    use crate::football::transform::{
-        final_competition_to_game, live_competition_to_game, pregame_competition_to_game,
-    };
-    use crate::football::types::{EspnCompetition, EspnEvent};
-
     fixture_names("football")
         .into_iter()
         .map(|name| {
             let is_college = name.starts_with("college-football/");
-            let event: EspnEvent = read_fixture("football", &name);
-            let id = event.id;
-            let competition = event.competitions.into_iter().next().expect("competition");
-            let game = match competition {
-                EspnCompetition::PreGame {
-                    competitors,
-                    venue_name,
-                } => FootballGame::Pregame(
-                    pregame_competition_to_game(
-                        id,
-                        &event.date,
-                        venue_name,
-                        competitors,
-                        is_college,
-                    )
-                    .expect("pregame transforms"),
-                ),
-                EspnCompetition::Live {
-                    competitors,
-                    period,
-                    display_clock,
-                    phase,
-                    situation,
-                } => FootballGame::Live(
-                    live_competition_to_game(
-                        id,
-                        competitors,
-                        period,
-                        display_clock,
-                        phase,
-                        situation,
-                    )
-                    .expect("live transforms"),
-                ),
-                EspnCompetition::Final {
-                    competitors,
-                    period,
-                } => FootballGame::Final(
-                    final_competition_to_game(id, competitors, period).expect("final transforms"),
-                ),
-            };
+            let (id, body) = fixture_body("football", &name);
+            let game = crate::football::adapter::detail_game(
+                body.as_bytes(),
+                &id,
+                is_college,
+                "test://corpus/football",
+            )
+            .unwrap_or_else(|e| panic!("football/{name}: {e:?}"));
             (name, game)
         })
         .collect()
@@ -222,55 +123,17 @@ pub(crate) fn football_games() -> Vec<(String, FootballGame)> {
 /// separate summary endpoint that the scoreboard fixtures don't carry. The
 /// commentary-bearing layout is covered by the crate's own goldens.
 pub(crate) fn soccer_games() -> Vec<(String, SoccerGame)> {
-    use crate::soccer::transform::{
-        final_competition_to_game, live_competition_to_game, pregame_competition_to_game,
-    };
-    use crate::soccer::types::{EspnCompetition, EspnEvent};
-
     fixture_names("soccer")
         .into_iter()
         .map(|name| {
-            let event: EspnEvent = read_fixture("soccer", &name);
-            let id = event.id;
-            let competition = event.competitions.into_iter().next().expect("competition");
-            let game = match competition {
-                EspnCompetition::PreGame {
-                    competitors,
-                    venue_name,
-                } => SoccerGame::Pregame(
-                    pregame_competition_to_game(id, &event.date, venue_name, competitors)
-                        .expect("pregame transforms"),
-                ),
-                EspnCompetition::Live {
-                    competitors,
-                    display_clock,
-                    clock_seconds,
-                    period,
-                    on_break,
-                    details,
-                } => SoccerGame::Live(
-                    live_competition_to_game(
-                        id,
-                        competitors,
-                        display_clock,
-                        clock_seconds,
-                        period,
-                        on_break,
-                        details,
-                        None,
-                    )
-                    .expect("live transforms"),
-                ),
-                EspnCompetition::Final {
-                    competitors,
-                    details,
-                    flavor,
-                } => SoccerGame::Final(
-                    final_competition_to_game(id, competitors, details, flavor)
-                        .expect("final transforms"),
-                ),
-            };
-            (name, game)
+            let (id, body) = fixture_body("soccer", &name);
+            let extract = crate::soccer::adapter::detail_extract(
+                body.as_bytes(),
+                &id,
+                "test://corpus/soccer",
+            )
+            .unwrap_or_else(|e| panic!("soccer/{name}: {e:?}"));
+            (name, crate::soccer::adapter::game_from_extract(&extract, None))
         })
         .collect()
 }

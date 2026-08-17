@@ -1,29 +1,16 @@
 use axum::{http::HeaderMap, response::Response};
 
+use super::adapter;
+use super::types::NbaGame;
 use super::wire::encode_game;
 use crate::AppState;
 use crate::error::{AppError, ErrorResponse};
 use crate::espn::league::{self, Nba};
-use crate::shared::game::{GameListEntry, GameState};
-use crate::shared::handler::{self, EventParts};
-
-use super::transform::{
-    final_competition_to_game, live_competition_to_game, pregame_competition_to_game,
-};
-use super::types::{EspnCompetition, NbaGame};
+use crate::shared::game::GameListEntry;
+use crate::shared::handler;
 
 fn scoreboard_url(state: &AppState) -> String {
     league::scoreboard_url(&state.config.espn, &Nba)
-}
-
-/// Every NBA state is displayable — breaks render via the live `phase` — so
-/// the list state is a straight mapping, with no MLB-style delay exclusions.
-fn list_state(competition: &EspnCompetition) -> Option<GameState> {
-    Some(match competition {
-        EspnCompetition::PreGame { .. } => GameState::Pregame,
-        EspnCompetition::Live { .. } => GameState::Live,
-        EspnCompetition::Final { .. } => GameState::Final,
-    })
 }
 
 /// GET /basketball/nba/games — list today's NBA games with their current state.
@@ -38,13 +25,10 @@ fn list_state(competition: &EspnCompetition) -> Option<GameState> {
     tag = "nba"
 )]
 pub async fn list_games(state: &AppState, headers: &HeaderMap) -> Result<Response, AppError> {
-    handler::list_games_response::<EspnCompetition>(
-        state,
-        &scoreboard_url(state),
-        headers,
-        list_state,
-    )
-    .await
+    let url = scoreboard_url(state);
+    let bytes = state.espn_client.fetch_bytes_cached(&url).await?;
+    let entries = adapter::list_entries(&bytes, &url)?;
+    Ok(handler::list_response(entries, headers))
 }
 
 /// GET /basketball/nba/games/{game_id} — state snapshot for one NBA game.
@@ -65,38 +49,7 @@ pub async fn get_game(
     headers: &HeaderMap,
 ) -> Result<Response, AppError> {
     let url = scoreboard_url(state);
-    let EventParts {
-        id,
-        date,
-        competition,
-        ..
-    } = handler::fetch_game_parts::<EspnCompetition>(state, &url, game_id).await?;
-
-    let game = match competition {
-        EspnCompetition::PreGame {
-            competitors,
-            venue_name,
-        } => NbaGame::Pregame(
-            pregame_competition_to_game(id, &date, venue_name, competitors)
-                .map_err(|e| e.with_url(&url))?,
-        ),
-        EspnCompetition::Live {
-            competitors,
-            period,
-            display_clock,
-            phase,
-            situation,
-        } => NbaGame::Live(
-            live_competition_to_game(id, competitors, period, display_clock, phase, situation)
-                .map_err(|e| e.with_url(&url))?,
-        ),
-        EspnCompetition::Final {
-            competitors,
-            period,
-        } => NbaGame::Final(
-            final_competition_to_game(id, competitors, period).map_err(|e| e.with_url(&url))?,
-        ),
-    };
-
+    let bytes = state.espn_client.fetch_bytes_cached(&url).await?;
+    let game = adapter::detail_game(&bytes, game_id, &url)?;
     Ok(handler::game_response(headers, &game, encode_game))
 }

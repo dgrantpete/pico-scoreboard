@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 scoreboard-wire = { path = "../crates/scoreboard-wire", features = ["alloc"] }
+scoreboard-espn = { path = "../crates/scoreboard-espn" }
 axum = "0.8.8"
 config = "0.15"
 reqwest = { version = "0.13.1", features = ["json"] }
