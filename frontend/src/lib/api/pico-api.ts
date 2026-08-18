@@ -4,7 +4,8 @@ import type {
 	ConfigUpdate,
 	LogEntry,
 	NetworkStatus,
-	RebootResponse
+	RebootResponse,
+	TimezoneDocument
 } from './types';
 
 // Every request gets a finite timeout: the device can silently drop
@@ -115,6 +116,38 @@ export const picoApi = {
 			signal
 		);
 		return handleResponse<Config>(response);
+	},
+
+	/**
+	 * GET /api/timezone - The UTC offset schedule the device is holding.
+	 * The response is a valid body for setTimezone(): the device ignores the
+	 * derived effective_offset_minutes field on the way back in.
+	 */
+	async getTimezone(signal?: AbortSignal): Promise<TimezoneDocument> {
+		const response = await apiFetch('/api/timezone', {}, DEFAULT_TIMEOUT_MS, signal);
+		return handleResponse<TimezoneDocument>(response);
+	},
+
+	/**
+	 * PUT /api/timezone - Replace the offset schedule and the manual override.
+	 *
+	 * REPLACES, does not merge: absent fields are absent values. Always send
+	 * the whole document, which is why the seed flow reads before it writes.
+	 * The device writes flash only when a value actually changed, so posting
+	 * an unchanged document on every page load costs it nothing.
+	 */
+	async setTimezone(document: TimezoneDocument, signal?: AbortSignal): Promise<TimezoneDocument> {
+		const response = await apiFetch(
+			'/api/timezone',
+			{
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(document)
+			},
+			DEFAULT_TIMEOUT_MS,
+			signal
+		);
+		return handleResponse<TimezoneDocument>(response);
 	},
 
 	/**
