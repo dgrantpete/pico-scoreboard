@@ -125,8 +125,10 @@ async fn main(spawner: Spawner) {
     let (device, mut control, runner) = cyw43::new(state, pwr, spi, FIRMWARE, NVRAM).await;
     spawner.spawn(unwrap!(cyw43_runner(runner)));
     control.init(CLM).await;
+    // App parity (net/wifi.rs does the same): the first measurement round
+    // ran PowerSave and its BUDGET numbers carry that caveat.
     control
-        .set_power_management(cyw43::PowerManagementMode::PowerSave)
+        .set_power_management(cyw43::PowerManagementMode::None)
         .await;
 
     let seed = RoscRng.next_u64();
@@ -164,12 +166,21 @@ async fn main(spawner: Spawner) {
     let response = RESPONSE.take();
     let tls_seed = RoscRng.next_u64();
 
+    const MOCK_URL: &str = concat!("https://", env!("SPIKE_TERMINATOR"), "/baseball/mlb/scoreboard");
+
+    // Soak build (SPIKE_SOAK=1): sustained keep-alive polling of the
+    // fronted mock at the poller's cadence — the S2 exit line's soak.
+    // Never touches the real hosts; the one-pass build does that.
+    if option_env!("SPIKE_SOAK").is_some() {
+        soak(stack, tcp_state, tls_read, tls_write, response, tls_seed, MOCK_URL).await;
+    }
+
     let targets = [
         Target {
             label: "terminator-mock",
             // The mock's own path shape (tools/espn/mockserver.py), not
             // ESPN's — the terminator is a byte pipe, not a rewriter.
-            url: concat!("https://", env!("SPIKE_TERMINATOR"), "/baseball/mlb/scoreboard"),
+            url: MOCK_URL,
         },
         Target {
             label: "espn-real",
@@ -263,6 +274,98 @@ async fn main(spawner: Spawner) {
     info!("=== TLS SPIKE COMPLETE ===");
     loop {
         Timer::after(Duration::from_secs(60)).await;
+    }
+}
+
+/// The sustained soak: a kept-alive connection polled at the app's
+/// cadence, reconnecting on any failure the way the real poller would.
+/// Diverges (never returns) — the numbers stream out over defmt, one line
+/// per poll and a summary every ten.
+async fn soak(
+    stack: embassy_net::Stack<'static>,
+    tcp_state: &'static TcpClientState<1, 512, 1536>,
+    tls_read: &'static mut [u8; TLS_READ_BYTES],
+    tls_write: &'static mut [u8; TLS_WRITE_BYTES],
+    response: &'static mut [u8; 4096],
+    tls_seed: u64,
+    url: &str,
+) -> ! {
+    const CADENCE: Duration = Duration::from_secs(30);
+    let mut polls: u32 = 0;
+    let mut ok: u32 = 0;
+    let mut failed: u32 = 0;
+    let mut reconnects: u32 = 0;
+    let mut sum_us: u64 = 0;
+
+    info!("SOAK start: {=str}, cadence {=u64} s", url, CADENCE.as_secs());
+    loop {
+        // One connection per iteration of this outer loop; the inner loop
+        // holds it across polls until something breaks.
+        let tcp = TcpClient::new(stack, tcp_state);
+        let dns = DnsSocket::new(stack);
+        let tls = TlsConfig::new(tls_seed, &mut *tls_read, &mut *tls_write, TlsVerify::None);
+        let mut client = HttpClient::new_with_tls(&tcp, &dns, tls);
+
+        let setup = with_timeout(Duration::from_secs(20), client.resource(url)).await;
+        let mut resource = match setup {
+            Ok(Ok(resource)) => resource,
+            outcome => {
+                reconnects = reconnects.saturating_add(1);
+                warn!(
+                    "SOAK reconnect FAILED (timeout={=bool}); retrying in {=u64} s",
+                    outcome.is_err(),
+                    CADENCE.as_secs()
+                );
+                Timer::after(CADENCE).await;
+                continue;
+            }
+        };
+
+        loop {
+            let t0 = Instant::now();
+            let outcome = with_timeout(Duration::from_secs(20), async {
+                let mut request = resource.get("").headers(&[("User-Agent", USER_AGENT)]);
+                let sent = request.send(response).await?;
+                let status: u16 = sent.status.0;
+                let body_len = drain_body(sent.body().reader()).await?;
+                Ok::<_, reqwless::Error>((status, body_len))
+            })
+            .await;
+            let us = t0.elapsed().as_micros();
+            polls += 1;
+            match outcome {
+                Ok(Ok((status, body_len))) => {
+                    ok += 1;
+                    sum_us += us;
+                    info!(
+                        "SOAK poll={=u32}: {=u64} us (status {=u16}, {=usize} B)",
+                        polls, us, status, body_len
+                    );
+                }
+                outcome => {
+                    failed += 1;
+                    warn!(
+                        "SOAK poll={=u32}: FAILED (timeout={=bool}) after {=u64} us; reconnecting",
+                        polls,
+                        outcome.is_err(),
+                        us
+                    );
+                    Timer::after(CADENCE).await;
+                    break;
+                }
+            }
+            if polls.is_multiple_of(10) {
+                info!(
+                    "SOAK-SUMMARY polls={=u32} ok={=u32} failed={=u32} reconnects={=u32} avg_ok={=u64} us",
+                    polls,
+                    ok,
+                    failed,
+                    reconnects,
+                    sum_us / u64::from(ok.max(1))
+                );
+            }
+            Timer::after(CADENCE).await;
+        }
     }
 }
 
