@@ -30,7 +30,9 @@ use embassy_time::{Duration, Instant};
 use scoreboard_model::poll::PollError;
 use scoreboard_model::sports::LocalClock;
 
-use crate::net::api_client::{ApiClient, url};
+use crate::net::api_client::ApiClient;
+#[cfg(not(feature = "direct"))]
+use crate::net::api_client::url;
 
 /// Between successful syncs.
 ///
@@ -85,23 +87,66 @@ pub async fn sync(client: &mut ApiClient, buffer: &mut [u8], base: &str) -> Dura
     }
 }
 
+#[cfg(not(feature = "direct"))]
 async fn fetch(client: &mut ApiClient, buffer: &mut [u8], base: &str) -> Result<(), PollError> {
     let endpoint = url(base, format_args!("/time"))?;
     let time = client.time(&endpoint, buffer).await?;
-    let uptime = Instant::now().as_secs() as u32;
-    EPOCH_AT_BOOT.store(
-        time.unix_seconds.saturating_sub(uptime).max(1),
-        Ordering::Relaxed,
-    );
+    anchor(time.unix_seconds);
     UTC_OFFSET_S.store(time.utc_offset_s, Ordering::Relaxed);
-    // The ring log's stamps become real from here on. Entries already recorded
-    // keep the boot-relative ones they were written with — rewriting them would
-    // move a client's `?since=` cursor onto a different entry.
-    crate::ringlog::set_wall_clock(time.unix_seconds);
     crate::debug!(
         "time: synced, unix {}, utc offset {} s",
         time.unix_seconds,
         time.utc_offset_s
     );
     Ok(())
+}
+
+/// The same phase with no backend behind it: the epoch comes from the NTP pool
+/// (S3-DESIGN decision 7) and the offset does not come at all.
+///
+/// The signature is the backend path's, unchanged, because the call site is the
+/// poller's and the poller belongs to another lane — `buffer` and `base` are a
+/// receive buffer and a base URL, and SNTP wants neither.
+///
+/// **`UTC_OFFSET_S` is deliberately not written here, and no offset is
+/// invented.** NTP carries UTC and no timezone, so there is nothing honest to
+/// put in it; the offset comes from [`crate::timezone`]'s browser-seeded
+/// schedule, under its own storage key and on its own cadence.
+///
+/// Which leaves one thing open, and it is not this module's to close:
+/// [`local_clock`] gates the offset on the *epoch*, so with `UTC_OFFSET_S`
+/// still initialised to `0` a `direct` device answers `Some(0)` — "I am in
+/// UTC" — from its first sync, having been told nothing of the sort. That is
+/// exactly the failure the module docs' "`None` is not `Some(0)`" section
+/// exists to prevent, and the fix is an unset sentinel on `UTC_OFFSET_S`
+/// (`i32::MIN`; real offsets are within ±14 h) so that `local_clock` reports
+/// `None` until something writes a real one. It belongs with the code that
+/// writes the offset, which is the timezone lane's.
+#[cfg(feature = "direct")]
+async fn fetch(client: &mut ApiClient, _buffer: &mut [u8], _base: &str) -> Result<(), PollError> {
+    let unix_seconds = super::sntp::epoch(client.stack()).await?;
+    anchor(unix_seconds);
+    crate::debug!(
+        "time: synced from {}, unix {}",
+        super::sntp::POOL_HOST,
+        unix_seconds
+    );
+    Ok(())
+}
+
+/// Pin the Unix second to [`Instant`] zero.
+///
+/// Shared by both fetch paths rather than written twice, so the two can never
+/// disagree about what a synced clock means — the arithmetic below is the whole
+/// of SPEC §7.4's "there is no RTC here".
+fn anchor(unix_seconds: u32) {
+    let uptime = Instant::now().as_secs() as u32;
+    EPOCH_AT_BOOT.store(
+        unix_seconds.saturating_sub(uptime).max(1),
+        Ordering::Relaxed,
+    );
+    // The ring log's stamps become real from here on. Entries already recorded
+    // keep the boot-relative ones they were written with — rewriting them would
+    // move a client's `?since=` cursor onto a different entry.
+    crate::ringlog::set_wall_clock(unix_seconds);
 }

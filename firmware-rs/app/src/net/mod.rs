@@ -67,6 +67,11 @@ pub mod hosts;
 pub mod mdns;
 #[cfg(feature = "net-probe")]
 mod probe;
+/// `direct` only: with no backend there is no `GET /time`, so the clock comes
+/// from the NTP pool instead. Gated rather than always-compiled because it
+/// claims a socket slot the table above has no room to hand out twice.
+#[cfg(feature = "direct")]
+pub mod sntp;
 pub mod status;
 pub mod timesync;
 pub mod wifi;
@@ -215,8 +220,14 @@ pub async fn bringup(
     let (stack, runner) = embassy_net::new(device, Default::default(), resources, seed);
     spawner.spawn(defmt::unwrap!(net_runner(runner)));
 
-    let outcome =
-        wifi::provision(&mut control, stack, &mut *store, &mut publisher, &credentials).await;
+    let outcome = wifi::provision(
+        &mut control,
+        stack,
+        &mut *store,
+        &mut publisher,
+        &credentials,
+    )
+    .await;
 
     let hosts = match outcome {
         Provisioned::Station { ip } => {

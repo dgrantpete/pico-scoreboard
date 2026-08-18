@@ -19,6 +19,12 @@
 //!   portal proper, but it is the same *kind* of thing: a decision the HTTP
 //!   server makes about request bytes before it has consulted any state, and
 //!   one that fails silently on a device with no serial port.
+//! - [`sntp`] — the SNTP request and the checks a reply has to pass, for the
+//!   Phase S firmware that has no backend to ask what time it is. Also not the
+//!   portal, and here for [`conditional`]'s reason twice over: it is a UDP
+//!   payload in and a rejection out, which is [`dns`] and [`mdns`]'s exact
+//!   shape, and a clock that silently accepts a wrong answer is the definition
+//!   of failing quietly.
 //!
 //! Ports of `main.py:496-558` and `dns.py` respectively; each module's docs
 //! carry the line references and the deviations.
@@ -30,6 +36,7 @@ pub mod conditional;
 pub mod dns;
 pub mod hosts;
 pub mod mdns;
+pub mod sntp;
 
 pub use hosts::MyHosts;
 pub use mdns::Responder;
