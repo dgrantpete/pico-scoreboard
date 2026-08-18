@@ -30,12 +30,18 @@ exit gate (same goldens as proxy mode) is the proof.
    "soccer/usa.1") is exactly ESPN's path segment. Scoreboard:
    `https://site.api.espn.com/apis/site/v2/sports/{key}/scoreboard`.
    No new registry.
-3. **One fetch, two extractors**: ESPN's scoreboard body carries the whole
-   slate *and* every game's detail. Per poll, the body streams once and
-   each chunk feeds both the list extractor and the detail extractor
-   (validate-until-found on the displayed game). Parse CPU roughly doubles
-   (S1/S2 numbers say that is fine); a second 6-second-class fetch is
-   avoided. Revisit only if silicon disagrees.
+3. **One fetch, two extractors — now per-sport** (amended 2026-08-18 on
+   the extracts lane's measurements): concurrent list+detail extractor
+   state is fine for MLB (14.8 KB), NBA, and football (21 KB), but
+   soccer's bounds put it at **61.8 KB before scratch** — roughly twice
+   the whole BACKLOG-94 re-earn. And the trade that motivated
+   concurrency has shifted: with S2's 16 KB receive window a fetch is
+   ~1 s, not ~6 s. So: concurrent extraction for MLB/NBA/football,
+   **sequential two-fetch for soccer** (list pass, then detail pass) as
+   the wave-2 default, with the alternative lever — shrinking soccer's
+   SCORING_MAX/LIST_MAX bounds toward corpus reality (7 and ~15 observed
+   vs 32 and 64 allocated) — priced during integration, measured not
+   estimated, and taken only if the RAM is needed elsewhere.
 4. **Soccer commentary**: fetched, per the standing S1 recommendation —
    the summary endpoint streams like everything else and the extractor
    already exists (39,649 real summaries clean in the S1 sweep). The
@@ -59,12 +65,19 @@ exit gate (same goldens as proxy mode) is the proof.
 
 Wave 1 (host-side, parallel, disjoint):
 
-- **extracts** — `crates/scoreboard-direct`: per-sport Extract structs +
-  sink impls over `scoreboard-espn` extractors + `GameDetail` view
-  construction. Parity gate: over `backend/testdata`, extract-then-view
-  must equal WireFeed-decoding of the committed wire goldens, field for
-  field. The backend's `backend/src/*/adapter.rs` files are the
-  authoritative mapping references.
+- **extracts** — `crates/scoreboard-direct` (LANDED 2026-08-18, 33/33
+  golden parity, workspace 734 green). Thinner than briefed, correctly:
+  S1's extract structs + `as_game()` views already were the owned seam,
+  so the crate supplies only the genuinely missing layer — `DirectExtract`
+  sport dispatch into `GameDetail`, `DetailStream` unifying four divergent
+  extractor surfaces, the backend's 404-vs-502 verdict fold (the device's
+  "game ended" signal), the soccer two-body commentary seam, and the
+  parity gate with a loud-comparator negative control. Structural
+  finding for the S1 API-unification pass: a uniform *list* stream is
+  blocked until the list extractors converge on owning their sinks
+  (football's shape); until then the poller dispatches the four list
+  extractors directly. Measured extract sizes live as const-asserts in
+  the crate; the soccer number amended decision 3 above.
 - **crest-hrefs** — make the crest URL reachable in direct mode
   (survey-first: what does `backend/src/logo.rs` + `team.rs` actually use;
   extend `scoreboard-espn` tables only if construction is impossible).

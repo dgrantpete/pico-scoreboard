@@ -1,0 +1,20 @@
+[package]
+name = "scoreboard-direct"
+version = "0.1.0"
+edition = "2024"
+description = "The S3 direct feed seam: streaming ESPN extraction to borrowed GameDetail views"
+
+[dependencies]
+scoreboard-espn = { path = "../scoreboard-espn" }
+scoreboard-model = { path = "../scoreboard-model" }
+scoreboard-wire = { path = "../scoreboard-wire" }
+
+[dev-dependencies]
+# The parity gate wraps each raw fixture as a one-event scoreboard body and
+# reads its `id`; the fixture text itself is never re-serialized (key order is
+# load-bearing, scoreboard-espn DESIGN.md ruling 4). Never shipped.
+serde_json = "1"
+# Building a `CommentaryExtract` by hand, which only the summary-merge test
+# does — the poller always gets one from `CommentaryStream`. Pinned exactly
+# like the rest of the workspace (SPEC.md §14).
+heapless = "=0.9.3"
