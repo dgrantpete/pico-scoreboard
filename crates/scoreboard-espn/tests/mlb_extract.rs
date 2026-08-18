@@ -592,3 +592,78 @@ fn malformed_total_record_degrades_with_quirk() {
     );
     assert_eq!(quirks.0, vec![Quirk::MalformedRecord]);
 }
+
+// ------------------------------------------------------------ crest paths
+
+/// The `homeAway`-keyed crest hrefs the backend would have resolved, read
+/// straight out of the fixture so the expectation cannot drift from it.
+fn expected_crests(raw: &str) -> (Option<String>, Option<String>) {
+    let event = parse(raw);
+    let mut away = None;
+    let mut home = None;
+    for competitor in event["competitions"][0]["competitors"]
+        .as_array()
+        .expect("competitors array")
+    {
+        let logo = competitor["team"]["logo"].as_str().map(|href| {
+            href.strip_prefix("https://a.espncdn.com")
+                .expect("fixture logos are on the ESPN CDN")
+                .to_string()
+        });
+        match competitor["homeAway"].as_str().expect("marker") {
+            "away" => away = logo,
+            "home" => home = logo,
+            other => panic!("unexpected marker {other}"),
+        }
+    }
+    (away, home)
+}
+
+#[test]
+fn every_fixture_exposes_both_crests_ordered_by_home_away() {
+    for name in ["final", "live_inning", "pregame", "pregame_weather_normal"] {
+        let raw = fixture(name);
+        let body = wrap(&[&raw]);
+        let extract = detail(&body, &event_id(&raw)).expect("extract");
+
+        let (away, home) = expected_crests(&raw);
+        let crests = extract.crests();
+        assert_eq!(
+            crests.away.as_ref().map(|p| p.as_str().to_string()),
+            away,
+            "{name}: away crest"
+        );
+        assert_eq!(
+            crests.home.as_ref().map(|p| p.as_str().to_string()),
+            home,
+            "{name}: home crest"
+        );
+        assert!(
+            crests.away.is_some() && crests.home.is_some(),
+            "{name}: MLB fixtures all carry logos"
+        );
+    }
+}
+
+#[test]
+fn a_malformed_crest_never_costs_the_event() {
+    for junk in [
+        serde_json::json!(42),
+        serde_json::json!(null),
+        serde_json::json!("https://evil.example.com/i/teamlogos/mlb/500/scoreboard/sf.png"),
+    ] {
+        let mut event = parse(&fixture("pregame"));
+        event["competitions"][0]["competitors"][0]["team"]["logo"] = junk.clone();
+        let mutated = event.to_string();
+        let body = wrap(&[&mutated]);
+
+        let (extract, counts) =
+            detail_counts(&body, &event_id(&mutated)).expect("event still extracts");
+        assert_eq!(counts.failed, 0, "{junk}: the event still parses");
+        assert_eq!(
+            hex(&encode(&extract)),
+            hex(&golden("pregame")),
+            "{junk}: the wire bytes are untouched"
+        );
+    }
+}

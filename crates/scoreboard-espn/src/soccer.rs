@@ -33,8 +33,9 @@ use scoreboard_wire::soccer::{
 use scoreboard_wire::{GameState, Side, TeamColors, TeamState};
 
 use crate::common::{
-    EText, Exact, HomeAway, IgnoreQuirks, Quirk, Quirks, WireText, compose, num_u8, num_u32,
-    order_home_away, parse_hex_rgb, parse_start_time, push_trunc, saturate_score, set_text,
+    CrestPath, Crests, EText, Exact, HomeAway, IgnoreQuirks, Quirk, Quirks, WireText, compose,
+    crest_path, num_u8, num_u32, order_home_away, parse_hex_rgb, parse_start_time, push_trunc,
+    saturate_score, set_text,
 };
 use crate::path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 
@@ -92,6 +93,8 @@ pub enum SoccerExtract {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PregameExtract {
     pub game_id: EText,
+    /// Direct mode's crest sources; outside the wire view by design.
+    pub crests: Crests,
     /// Unix epoch seconds UTC, from `event.date`.
     pub start_time: u32,
     /// Stadium `venue.fullName`.
@@ -109,6 +112,8 @@ pub struct PregameTeamExtract {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiveExtract {
     pub game_id: EText,
+    /// Direct mode's crest sources; outside the wire view by design.
+    pub crests: Crests,
     /// Raw display-shaped clock (e.g. `"45'+6'"`) — JSON-DTO-only; the wire
     /// carries only [`Self::clock_seconds`].
     pub clock: EText,
@@ -149,6 +154,8 @@ pub struct LastEventExtract {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FinalExtract {
     pub game_id: EText,
+    /// Direct mode's crest sources; outside the wire view by design.
+    pub crests: Crests,
     pub flavor: FinalFlavor,
     pub away: FinalTeamExtract,
     pub home: FinalTeamExtract,
@@ -174,6 +181,15 @@ pub struct CommentaryExtract {
 }
 
 impl SoccerExtract {
+    /// The crest paths for this game's two teams.
+    pub fn crests(&self) -> &Crests {
+        match self {
+            SoccerExtract::Pregame(game) => &game.crests,
+            SoccerExtract::Live(game) => &game.crests,
+            SoccerExtract::Final(game) => &game.crests,
+        }
+    }
+
     /// A borrowed wire-shaped view over the extract's own storage.
     pub fn as_game(&self) -> WireGame<'_> {
         match self {
@@ -363,6 +379,10 @@ const P_DRED: usize = 28;
 const P_DATHLETES: usize = 29;
 const P_DATHLETE: usize = 30;
 const P_DATH_NAME: usize = 31;
+/// Direct mode only: the crest artwork the backend used to resolve for the
+/// device. Appended rather than filed with the other `team.*` patterns so
+/// the indices above keep matching the inventory they were derived from.
+const P_TEAM_LOGO: usize = 32;
 
 /// Only `competitions[0]` is ever consumed (the backend reads exactly that);
 /// the deliberately-unread corpus fields (`shootoutScore`, `attendance`,
@@ -427,6 +447,8 @@ static SCOREBOARD_TABLE: &[Pattern] = &[
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("details"), AnyIndex, Key("athletesInvolved"), AnyIndex],
     /* P_DATH_NAME   */
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("details"), AnyIndex, Key("athletesInvolved"), AnyIndex, Key("shortName")],
+    /* P_TEAM_LOGO   */
+    &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("team"), Key("logo")],
 ];
 
 // Summary body: everything except `commentary[*].{sequence,text}` (boxscore,
@@ -448,6 +470,10 @@ static SUMMARY_TABLE: &[Pattern] = &[
 #[derive(Debug, Clone, Default)]
 struct CompetitorScratch {
     home_away: Option<HomeAway>,
+    /// `team.logo` as a CDN path. Unlike its neighbours this is not an
+    /// `Exact`: the backend's games pipeline never deserializes the field,
+    /// so nothing about it may invalidate an event.
+    crest: Option<CrestPath>,
     score: Exact<SCORE_BYTES>,
     team_id: Exact<ID_BYTES>,
     abbreviation: WireText,
@@ -656,6 +682,10 @@ fn transform<Q: Quirks>(
         order_home_away((marker_a, 0usize), (marker_b, 1usize)).ok_or(TransformError::Sides)?;
     let home = &s.competitors[home_idx];
     let away = &s.competitors[away_idx];
+    let crests = Crests {
+        away: away.crest.clone(),
+        home: home.crest.clone(),
+    };
 
     let state = s.state.unwrap_or(GameState::Pregame); // DU guaranteed Some
     match state {
@@ -667,6 +697,7 @@ fn transform<Q: Quirks>(
                 .ok_or(TransformError::Date)?;
             Ok(SoccerExtract::Pregame(PregameExtract {
                 game_id: owned(s.id.as_str()),
+                crests,
                 start_time,
                 venue: owned(s.venue_name.as_str()),
                 away: PregameTeamExtract {
@@ -712,6 +743,7 @@ fn transform<Q: Quirks>(
             }
             Ok(SoccerExtract::Live(LiveExtract {
                 game_id: owned(s.id.as_str()),
+                crests,
                 clock: owned(s.display_clock.as_str()),
                 clock_seconds: parse_display_clock(
                     s.display_clock.as_str(),
@@ -767,6 +799,7 @@ fn transform<Q: Quirks>(
             home_team.scorers = scorers_for(recs, home_id);
             Ok(SoccerExtract::Final(FinalExtract {
                 game_id: owned(s.id.as_str()),
+                crests,
                 flavor,
                 away: away_team,
                 home: home_team,
@@ -1023,7 +1056,8 @@ impl<Q: Quirks> Sink for SoccerSink<Q> {
                 s.competitor_count = s.competitor_count.saturating_add(1);
                 s.invalid = true;
             }
-            P_HOMEAWAY | P_SCORE | P_TEAM_ID | P_TEAM_ABBR | P_TEAM_COLOR | P_TEAM_ALT => {
+            P_HOMEAWAY | P_SCORE | P_TEAM_ID | P_TEAM_ABBR | P_TEAM_COLOR | P_TEAM_ALT
+            | P_TEAM_LOGO => {
                 let slot = indices[1] as usize;
                 if slot >= 2 {
                     // Extra competitors already fail the len==2 rule; their
@@ -1041,6 +1075,10 @@ impl<Q: Quirks> Sink for SoccerSink<Q> {
                     (P_TEAM_ABBR, Value::Str(text)) => competitor.abbreviation.set(text),
                     (P_TEAM_COLOR, Value::Str(text)) => competitor.color.set(text),
                     (P_TEAM_ALT, Value::Str(text)) => competitor.alternate.set(text),
+                    (P_TEAM_LOGO, Value::Str(href)) => competitor.crest = crest_path(href),
+                    // Invisible to the backend's parse, so a malformed one
+                    // must cost the event nothing.
+                    (P_TEAM_LOGO, _) => {}
                     _ => s.invalid = true,
                 }
             }

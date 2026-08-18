@@ -542,3 +542,94 @@ fn malformed_total_record_drops_to_none_with_a_quirk() {
     }
     assert_eq!(quirks.0, vec![Quirk::MalformedRecord]);
 }
+
+// ------------------------------------------------------------ crest paths
+
+/// The `homeAway`-keyed crest hrefs the backend would have resolved, read
+/// straight out of the fixture so the expectation cannot drift from it.
+fn expected_crests(event: &serde_json::Value) -> (Option<String>, Option<String>) {
+    let mut away = None;
+    let mut home = None;
+    for competitor in event["competitions"][0]["competitors"]
+        .as_array()
+        .expect("competitors array")
+    {
+        let logo = competitor["team"]["logo"].as_str().map(|href| {
+            href.strip_prefix("https://a.espncdn.com")
+                .expect("fixture logos are on the ESPN CDN")
+                .to_string()
+        });
+        match competitor["homeAway"].as_str().expect("marker") {
+            "away" => away = logo,
+            "home" => home = logo,
+            other => panic!("unexpected marker {other}"),
+        }
+    }
+    (away, home)
+}
+
+#[test]
+fn every_fixture_exposes_both_crests_ordered_by_home_away() {
+    for stem in STEMS {
+        let event = fixture(stem);
+        let body = wrap(&[&event]);
+        let (outcome, _) = run_detail(&body, &event_id(&event), &[body.len()]);
+        let extract = found(outcome);
+
+        let (away, home) = expected_crests(&fixture_value(stem));
+        assert_eq!(
+            extract.crests.away.as_ref().map(|p| p.as_str().to_string()),
+            away,
+            "{stem}: away crest"
+        );
+        assert_eq!(
+            extract.crests.home.as_ref().map(|p| p.as_str().to_string()),
+            home,
+            "{stem}: home crest"
+        );
+        assert!(
+            extract.crests.away.is_some() && extract.crests.home.is_some(),
+            "{stem}: NBA fixtures all carry logos"
+        );
+    }
+}
+
+#[test]
+fn an_off_cdn_crest_is_dropped_without_touching_the_game() {
+    let mut event = fixture_value("pregame");
+    event["competitions"][0]["competitors"][0]["team"]["logo"] =
+        serde_json::Value::String("https://evil.example.com/i/teamlogos/nba/500/lal.png".into());
+    let mutated = event.to_string();
+    let body = wrap(&[&mutated]);
+
+    let (outcome, _) = run_detail(&body, &event_id(&mutated), &[body.len()]);
+    let extract = found(outcome);
+    // Fixture order is [home, away].
+    assert!(extract.crests.home.is_none(), "off-CDN href yields no crest");
+    assert!(extract.crests.away.is_some(), "the other side is untouched");
+}
+
+#[test]
+fn a_malformed_crest_never_costs_the_event() {
+    for junk in [
+        serde_json::json!(42),
+        serde_json::json!(null),
+        serde_json::json!({"href": "x"}),
+        serde_json::json!("https://a.espncdn.com.evil.test/i/teamlogos/nba/500/lal.png"),
+    ] {
+        let mut event = fixture_value("pregame");
+        event["competitions"][0]["competitors"][0]["team"]["logo"] = junk.clone();
+        let mutated = event.to_string();
+        let body = wrap(&[&mutated]);
+
+        let (outcome, stats) = run_detail(&body, &event_id(&mutated), &[body.len()]);
+        let extract = found(outcome);
+        assert_eq!(stats.failed, 0, "{junk}: the event still parses");
+        assert!(extract.crests.home.is_none(), "{junk}: no crest");
+        assert_eq!(
+            encode(&extract),
+            golden("pregame"),
+            "{junk}: the wire bytes are untouched"
+        );
+    }
+}
