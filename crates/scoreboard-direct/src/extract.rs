@@ -5,7 +5,7 @@ use scoreboard_espn::{football, mlb, nba, soccer};
 use scoreboard_model::feed::GameDetail;
 use scoreboard_wire::GameState;
 
-use crate::{CommentaryExtract, Sport};
+use crate::{CommentaryExtract, Crests, Sport};
 
 /// One extracted game, owned and bounded — the direct feed's answer to a
 /// decoded wire payload.
@@ -86,6 +86,29 @@ impl DirectExtract {
                 soccer::SoccerExtract::Live(_) => GameState::Live,
                 soccer::SoccerExtract::Final(_) => GameState::Final,
             },
+        }
+    }
+
+    /// Both teams' crest CDN paths, away and home.
+    ///
+    /// Outside the wire view by design — `as_game()` does not carry them, so
+    /// crests can never perturb wire parity. They ride the extract because the
+    /// poller needs them from the same body it already streamed, and fetching
+    /// one is `crest_url(path, pixels)`.
+    ///
+    /// `None` per side when ESPN's `team.logo` is absent, off-host, or too
+    /// long. That costs the game nothing — the backend's games pipeline never
+    /// deserializes the field, so treating it as a failure would itself be the
+    /// parity bug. Both sides come out `None` for the whole football corpus,
+    /// whose fixtures are trimmed projections carrying no `logo` key at all.
+    pub fn crests(&self) -> &Crests {
+        match self {
+            DirectExtract::Mlb(extract) => extract.crests(),
+            // The one lane that exposes a field rather than an accessor; the
+            // asymmetry stops here rather than reaching the poller.
+            DirectExtract::Nba(extract) => &extract.crests,
+            DirectExtract::Football(extract) => extract.crests(),
+            DirectExtract::Soccer(extract) => extract.crests(),
         }
     }
 

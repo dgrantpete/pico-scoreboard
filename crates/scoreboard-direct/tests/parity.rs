@@ -522,6 +522,71 @@ fn the_feed_a_league_selects_matches_its_espn_slug() {
     }
 }
 
+/// Crest paths must reach the poller through the one accessor, for every
+/// sport — three lanes expose `crests()`, NBA exposes a bare field, and that
+/// asymmetry is supposed to stop at this crate.
+///
+/// Football is asserted absent rather than skipped: its fixtures are trimmed
+/// projections with no `logo` key at all, and a missing crest must cost the
+/// game nothing (the gate above already extracts every one of them to its
+/// golden). Asserting the absence keeps the day those fixtures gain logos from
+/// passing silently.
+#[test]
+fn crest_paths_reach_through_the_seam() {
+    for (sport, name) in corpus() {
+        let (id, body) = fixture_body(sport, &name);
+        let extract = found(feed_for(sport, &name), &id, body.as_bytes(), CHUNK);
+        let crests = extract.crests();
+
+        if sport == "football" {
+            assert_eq!(
+                (crests.away.as_deref(), crests.home.as_deref()),
+                (None, None),
+                "{sport}/{name}: the football fixtures carry no logo href"
+            );
+            continue;
+        }
+
+        for (side, path) in [("away", &crests.away), ("home", &crests.home)] {
+            let path = path
+                .as_deref()
+                .unwrap_or_else(|| panic!("{sport}/{name}: no {side} crest path"));
+            assert!(
+                path.starts_with("/i/teamlogos/"),
+                "{sport}/{name}: {side} crest path {path:?} is not a CDN team-logo path"
+            );
+            // The path is only useful if it composes into a fetchable URL.
+            let url = scoreboard_direct::crest_url(path, 100)
+                .unwrap_or_else(|| panic!("{sport}/{name}: {side} crest URL does not fit"));
+            assert!(
+                url.starts_with(scoreboard_direct::CDN_ORIGIN) && url.contains("&w=100&h=100"),
+                "{sport}/{name}: {side} crest URL is malformed: {url}"
+            );
+        }
+    }
+}
+
+/// Crests ride the extract but must stay out of the wire view, or they would
+/// be able to break parity. The gate proves the views match; this proves the
+/// crests were non-empty while it did, so that agreement is not vacuous.
+#[test]
+fn crests_are_populated_without_touching_the_view() {
+    let (id, body) = fixture_body("mlb", "live_inning");
+    let extract = found(Feed::Mlb, &id, body.as_bytes(), CHUNK);
+    assert!(
+        extract.crests().away.is_some() && extract.crests().home.is_some(),
+        "the fixture must actually carry crests for this test to mean anything"
+    );
+
+    let golden = std::fs::read(golden_path("mlb", "live_inning")).unwrap();
+    let wire = WireFeed.detail(Sport::Mlb, &golden).unwrap();
+    assert_eq!(
+        extract.detail(),
+        wire,
+        "a populated crest pair must leave the wire view untouched"
+    );
+}
+
 /// The owned extract is the poller's biggest single allocation on a device
 /// whose static budget is counted in kilobytes, so its size is pinned rather
 /// than assumed. Sized by the largest variant; football's is the largest.

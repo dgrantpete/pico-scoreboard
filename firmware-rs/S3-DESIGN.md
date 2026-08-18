@@ -32,9 +32,13 @@ exit gate (same goldens as proxy mode) is the proof.
    No new registry.
 3. **One fetch, two extractors — now per-sport** (amended 2026-08-18 on
    the extracts lane's measurements): concurrent list+detail extractor
-   state is fine for MLB (14.8 KB), NBA, and football (21 KB), but
-   soccer's bounds put it at **61.8 KB before scratch** — roughly twice
-   the whole BACKLOG-94 re-earn. And the trade that motivated
+   state is fine for MLB (14.8 KB), NBA, and football (21.6 KB), but
+   soccer's bounds put it at **62.0 KB before scratch** — roughly twice
+   the whole BACKLOG-94 re-earn. (Sizes are device-measured and
+   const-asserted in scoreboard-direct; post-crest-exposure the peak
+   under sequential fetching is ~31.0 KB. Device and host sizes differ —
+   the crest option costs 144 B/extract on thumbv8m, not the host's 160 —
+   BUDGET.md takes device numbers only.) And the trade that motivated
    concurrency has shifted: with S2's 16 KB receive window a fetch is
    ~1 s, not ~6 s. So: concurrent extraction for MLB/NBA/football,
    **sequential two-fetch for soccer** (list pass, then detail pass) as

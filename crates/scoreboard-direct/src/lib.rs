@@ -38,6 +38,10 @@
 //!   the same thing it does in proxy mode.
 //! - **The soccer commentary seam** — [`CommentaryStream`], the second body a
 //!   live soccer poll needs (see below).
+//! - **One crest accessor** — [`DirectExtract::crests`]. Three sport lanes
+//!   expose `crests()` and NBA exposes a bare field; the poller sees one
+//!   method. Crest paths ride the extract but stay out of the wire view, so
+//!   they cannot affect parity.
 //!
 //! # Soccer commentary is two bodies, not one
 //!
@@ -97,7 +101,9 @@ pub use commentary::CommentaryStream;
 pub use detail::{DetailReport, DetailStream, Outcome};
 pub use extract::DirectExtract;
 
-pub use scoreboard_espn::common::{Quirk, Quirks};
+pub use scoreboard_espn::common::{
+    CDN_ORIGIN, CrestPath, CrestUrl, Crests, Quirk, Quirks, crest_url,
+};
 pub use scoreboard_espn::soccer::{CommentaryExtract, SummaryOutcome};
 pub use scoreboard_model::feed::{GameDetail, LeagueId, Sport};
 pub use scoreboard_wire::GameState;
