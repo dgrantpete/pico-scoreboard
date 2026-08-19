@@ -53,7 +53,7 @@ use embassy_rp::pio::{
     Config, Direction, InterruptHandler, Pio, ShiftConfig, ShiftDirection, StateMachine,
 };
 use embassy_rp::{Peri, bind_interrupts};
-use embassy_time::{Duration, Instant, Ticker};
+use embassy_time::{Duration, Instant, Ticker, Timer};
 use fixed::traits::ToFixed;
 use scoreboard_input::button::{
     DEBOUNCE_MS, EventDecoder, POLL_PERIOD_MS, PressTracker, TICK_PERIOD_MS, debounce_reload,
@@ -93,13 +93,30 @@ pub async fn run(mut p: InputPeripherals, system_clock_hz: u32) -> ! {
         ..
     } = Pio::new(p.pio, Irqs);
 
-    // Sampled through a plain input before the pins become PIO pins, so the
+    // Sampled through plain inputs before the pins become PIO pins, so the
     // fold starts from the boundary condition `Button.__init__` captured: the
     // real level, and the time it was read. The PIO converges on the same state
     // within about two iterations without pushing anything, so the seed and the
     // event stream agree without being synchronised.
-    let a_pressed = Input::new(p.a.reborrow(), Pull::Up).is_low();
-    let b_pressed = Input::new(p.b.reborrow(), Pull::Up).is_low();
+    //
+    // The read waits out one debounce window first, and that wait fixed a
+    // fielded bug: these pads float from reset until this task starts —
+    // seconds into boot — so the harness holds no charge, and a sample taken
+    // the instant the pull-up first switches on loses the RC race and reads a
+    // phantom press. The wrong seed then cost the first real press of every
+    // boot (`PressTracker` read it as a same-state non-edge). DEBOUNCE_MS
+    // rather than a new constant: the seed obeys the same
+    // stable-for-one-window discipline as every edge the PIO reports. The
+    // tracker also heals a wrong seed now — a finger on the button during
+    // this window costs nothing either — so the wait is about starting
+    // honest, not surviving.
+    let a_input = Input::new(p.a.reborrow(), Pull::Up);
+    let b_input = Input::new(p.b.reborrow(), Pull::Up);
+    Timer::after_millis(DEBOUNCE_MS as u64).await;
+    let a_pressed = a_input.is_low();
+    let b_pressed = b_input.is_low();
+    drop(a_input);
+    drop(b_input);
     let seeded_at = Instant::now().as_millis();
 
     let mut a_pin = common.make_pio_pin(p.a);

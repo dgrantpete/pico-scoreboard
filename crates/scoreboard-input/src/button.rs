@@ -320,9 +320,22 @@ impl PressTracker {
                 self.press_ms = None;
                 short
             }
-            // A same-state pair: a sub-debounce blip was swallowed, so there is
-            // no edge. See the module docs.
-            _ => None,
+            // A pressed event while already tracking "pressed" means the
+            // *tracked* state was wrong, never that the button repeated
+            // itself: the PIO alternates states by construction (a
+            // sub-debounce blip pushes nothing at all), so the only source is
+            // a bad seed — a boot-time sample that lost the pull-up's RC race,
+            // or a finger on the button across the sample. Starting the press
+            // is what makes the seed non-load-bearing; dropping it here was a
+            // fielded bug (the first press after every reboot did nothing).
+            (true, true) => {
+                self.press_ms = Some(event.at_ms);
+                None
+            }
+            // The same wrong-seed signature in the other direction: a release
+            // for a press that predates tracking. Nothing to complete, and
+            // nothing worth healing — the state corrects below either way.
+            (false, false) => None,
         };
         self.pressed = event.pressed;
         press
@@ -464,19 +477,36 @@ mod tests {
         );
     }
 
+    /// The fielded first-press-after-reboot bug, pinned: the boot seed read a
+    /// phantom "pressed" (the sample lost the pull-up's RC race against a
+    /// harness that had floated since reset), and the first real press then
+    /// arrived as a same-state event and was dropped — along with its release.
     #[test]
-    fn a_swallowed_blip_produces_no_edge() {
-        let mut tracker = PressTracker::new(false);
-        assert_eq!(tracker.event(ButtonEvent { pressed: true, at_ms: 100 }), None);
-        // The release was swallowed, so the next accepted edge repeats HIGH.
+    fn a_wrong_pressed_seed_does_not_eat_the_first_press() {
+        let mut tracker = PressTracker::new(true);
         assert_eq!(
-            tracker.event(ButtonEvent { pressed: true, at_ms: 150 }),
+            tracker.event(ButtonEvent { pressed: true, at_ms: 100 }),
             None,
-            "same-state events must not be read as a release"
+            "the healed press still fires on release, not on the edge"
         );
         assert_eq!(
-            tracker.event(ButtonEvent { pressed: false, at_ms: 200 }),
-            Some(Press::Short)
+            tracker.event(ButtonEvent { pressed: false, at_ms: 300 }),
+            Some(Press::Short),
+            "the press the wrong seed used to swallow"
+        );
+    }
+
+    /// The heal covers the long path too: a first press under a wrong seed
+    /// still crosses the hold threshold from the PIO's own timestamp.
+    #[test]
+    fn a_wrong_seed_still_yields_a_long_press() {
+        let mut tracker = PressTracker::new(true);
+        tracker.event(ButtonEvent { pressed: true, at_ms: 100 });
+        assert_eq!(tracker.poll(100 + LONG_PRESS_MS), Some(Press::Long));
+        assert_eq!(
+            tracker.event(ButtonEvent { pressed: false, at_ms: 3_000 }),
+            None,
+            "consumed by the long action, as on a correct seed"
         );
     }
 
