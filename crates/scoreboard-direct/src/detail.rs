@@ -7,6 +7,7 @@
 //! itself. All four differences are absorbed in this file so the poller sees
 //! one `new`/`write`/`finish` and one verdict vocabulary.
 
+use scoreboard_espn::common::NoRows;
 use scoreboard_espn::path::StreamMatcher;
 use scoreboard_espn::{football, mlb, nba, soccer};
 
@@ -87,7 +88,7 @@ pub struct DetailStream<'c, 's, Q: Quirks> {
 enum Inner<'c, 's, Q: Quirks> {
     Mlb(mlb::DetailExtractor<'c, 's, Q>),
     // NBA's extractor is the sink itself, not a driver over one.
-    Nba(StreamMatcher<'static, 's, nba::Extractor<'c, Q>>),
+    Nba(StreamMatcher<'static, 's, nba::Extractor<'c, NoRows, Q>>),
     Football(football::DetailExtractor<'s, ByRef<'c, Q>>),
     Soccer(soccer::GameExtractor<'s, ByRef<'c, Q>>),
 }
@@ -188,7 +189,7 @@ fn finish_mlb<Q: Quirks>(
 }
 
 fn finish_nba<Q: Quirks>(
-    matcher: StreamMatcher<'static, '_, nba::Extractor<'_, Q>>,
+    matcher: StreamMatcher<'static, '_, nba::Extractor<'_, NoRows, Q>>,
 ) -> Result<DetailReport, Error> {
     let extractor = matcher.finish()?;
     let stats = extractor.stats();

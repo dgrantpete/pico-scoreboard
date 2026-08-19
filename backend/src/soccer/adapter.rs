@@ -3,6 +3,7 @@
 //! league scoreboard (list + detail) and, for live games only, the per-event
 //! summary whose single wire-relevant field is the latest commentary line.
 
+use scoreboard_espn::common::{ListRow, ListSink};
 use scoreboard_espn::soccer::{
     self, CommentaryExtract, ExtractError, GameOutcome, SoccerExtract, TransformError,
 };
@@ -21,30 +22,33 @@ use super::types::{
     SoccerGame, SoccerLiveGame, SoccerPregameGame, SoccerPregameTeam,
 };
 
+#[derive(Default)]
+struct Entries(Vec<GameListEntry>);
+
+impl ListSink for Entries {
+    fn row(&mut self, row: ListRow<'_>) {
+        self.0.push(GameListEntry {
+            id: row.id.to_string(),
+            state: domain_state(row.state),
+        });
+    }
+}
+
 /// Games list: every clean event with a competition, in body order.
 pub(crate) fn list_entries(bytes: &[u8], url: &str) -> Result<Vec<GameListEntry>, AppError> {
     let mut scratch = vec![0u8; SCRATCH_LEN];
     let mut extractor =
-        soccer::ListExtractor::new(&mut scratch).map_err(|e| stream_error(url, e))?;
+        soccer::ListExtractor::new(Entries::default(), TracingQuirks::new("soccer"), &mut scratch)
+            .map_err(|e| stream_error(url, e))?;
     extractor.write(bytes).map_err(|e| stream_error(url, e))?;
-    let list = extractor.finish().map_err(|e| match e {
+    let report = extractor.finish().map_err(|e| match e {
         ExtractError::Stream(e) => stream_error(url, e),
         ExtractError::MalformedBody => events_malformed(url),
         // List mode has no target; the transform tier never fires.
         ExtractError::Transform(kind) => transform_error(transform_kind(kind), url),
     })?;
-    if list.overflowed {
-        tracing::warn!(url = %url, "soccer games list overflowed the extractor's bound — excess dropped");
-    }
-    warn_failed_events(url, u64::from(list.failed));
-    Ok(list
-        .games
-        .iter()
-        .map(|entry| GameListEntry {
-            id: entry.id.as_str().to_owned(),
-            state: domain_state(entry.state),
-        })
-        .collect())
+    warn_failed_events(url, u64::from(report.failed));
+    Ok(report.entries.0)
 }
 
 /// Detail front half: extract the target event (the handler fetches the

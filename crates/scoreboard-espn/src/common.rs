@@ -4,7 +4,7 @@
 //! documented; the DESIGN.md rulings say which. Divergence from the backend
 //! is a parity bug even when the backend's behavior looks accidental.
 
-use scoreboard_wire::{MAX_STRING_BYTES, truncate_utf8};
+use scoreboard_wire::{GameState, MAX_STRING_BYTES, truncate_utf8};
 
 /// Extract-struct string storage: bound at the wire cap, never tighter
 /// (ruling 2). Tighter bounds live downstream in `scoreboard-model`.
@@ -450,6 +450,83 @@ pub fn crest_url(path: &str, pixels: u16) -> Option<CrestUrl> {
     )
     .ok()?;
     Some(url)
+}
+
+// ---------------------------------------------------------------------------
+// The games list: what a list pass hands back per listed event.
+//
+// Proxy mode needed only `(id, state)` — the device asked the backend for a
+// detail payload and the backend resolved the artwork itself. Direct mode's
+// crest warmer needs two abbreviations and two artwork paths per game, and
+// fetching a 300–450 KB per-event summary just to learn them is the "probe"
+// this row deletes: the scoreboard body the list pass already streams carries
+// all four.
+//
+// The extras are best-effort and never a validity gate. An event that lists
+// today lists identically with every extra empty, because list membership is a
+// parity contract against a backend that reads none of these fields.
+
+/// One side's list-row extras.
+///
+/// `None` means the payload named nothing usable — deliberately distinct from
+/// `Some("")`, which is a payload that really did send an empty abbreviation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ListTeam<'a> {
+    /// `team.abbreviation`, bound at the wire cap like every other stored
+    /// string (ruling 2).
+    pub abbreviation: Option<&'a str>,
+    /// `team.logo` reduced to a [`CrestPath`] by [`crest_path`] — the host is
+    /// already checked, so this is a path, never a URL.
+    pub crest: Option<&'a str>,
+}
+
+/// One games-list row. Borrowed from the extractor's per-event scratch, so it
+/// is valid only for the duration of the [`ListSink::row`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListRow<'a> {
+    pub id: &'a str,
+    pub state: GameState,
+    pub away: ListTeam<'a>,
+    pub home: ListTeam<'a>,
+}
+
+/// Receives one [`ListRow`] per listed event, in body order.
+///
+/// All four lanes own their sink and hand it back at `finish`. That uniformity
+/// is load-bearing rather than tidy: `scoreboard-direct` documented that a
+/// borrowed sink in one lane and a borrowed closure in another cannot be
+/// wrapped in a single streaming API without `unsafe` or a second copy of a
+/// sport's transform, because the orphan rules forbid one type being both.
+pub trait ListSink {
+    fn row(&mut self, row: ListRow<'_>);
+}
+
+/// The stand-in for detail mode, which lists nothing.
+#[derive(Debug, Default)]
+pub struct NoRows;
+
+impl ListSink for NoRows {
+    fn row(&mut self, _row: ListRow<'_>) {}
+}
+
+/// `(away, home)` extras ordered by `homeAway` marker, never by array position
+/// — the discipline every detail transform already follows.
+///
+/// Markers that are missing, or that agree (two homes, two aways), yield empty
+/// extras on BOTH sides. The row still lists; it simply cannot say which crest
+/// belongs to whom, and artwork attached to the wrong team is worse than no
+/// artwork.
+pub fn order_list_teams<'a>(
+    first: (Option<HomeAway>, ListTeam<'a>),
+    second: (Option<HomeAway>, ListTeam<'a>),
+) -> (ListTeam<'a>, ListTeam<'a>) {
+    let (Some(first_side), Some(second_side)) = (first.0, second.0) else {
+        return (ListTeam::default(), ListTeam::default());
+    };
+    match order_home_away((first_side, first.1), (second_side, second.1)) {
+        Some((home, away)) => (away, home),
+        None => (ListTeam::default(), ListTeam::default()),
+    }
 }
 
 /// Wire-bound string plus a presence flag: copies with the shared

@@ -34,9 +34,10 @@
 //!   (ruling 14), so a missing target always comes with exact counts.
 
 use crate::common::{
-    CrestPath, Crests, EText, HomeAway, LivePhase, Quirk, Quirks, crest_path, linescore_byte,
-    num_i16, num_u8, order_home_away, parse_hex_rgb, parse_live_phase, parse_record,
-    parse_start_time, saturate_score, set_text, stable_sort_by_key, wire_phase,
+    CrestPath, Crests, EText, HomeAway, ListRow, ListSink, ListTeam, LivePhase, NoRows, Quirk,
+    Quirks, crest_path, linescore_byte, num_i16, num_u8, order_home_away, order_list_teams,
+    parse_hex_rgb, parse_live_phase, parse_record, parse_start_time, saturate_score, set_text,
+    stable_sort_by_key, wire_phase,
 };
 use crate::path::{ContainerKind, Directive, Pattern, Seg, Sink, Value};
 use scoreboard_wire::{self as wire, GameState, MAX_LINE_SCORE, Record, TeamColors};
@@ -467,56 +468,54 @@ struct EntryScratch {
 
 // ------------------------------------------------------------ the extractor
 
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Detail holds the found extract in place; boxing needs alloc"
-)]
+/// Which pass is running. The list sink and the detail outcome are sink
+/// *fields* rather than mode payloads: the sink is a type parameter (detail
+/// mode carries a zero-sized [`NoRows`]), and keeping the outcome out leaves
+/// `Mode` small and `Copy`.
+#[derive(Clone, Copy)]
 enum Mode<'c> {
-    List {
-        /// Called once per clean event that has a competition, with the
-        /// event id and its state — the games-list payload.
-        on_game: &'c mut dyn FnMut(&str, GameState),
-    },
-    Detail {
-        target: &'c str,
-        outcome: Option<DetailOutcome>,
-    },
+    List,
+    Detail { target: &'c str },
 }
 
 /// The NBA sink: one implementation, two entry uses. Drive it with
 /// `StreamMatcher::new(nba::PATHS, extractor, scratch)`, feed the body, then
-/// [`Extractor::stats`] / [`Extractor::into_detail`] on the finished sink.
-pub struct Extractor<'c, Q: Quirks> {
+/// [`Extractor::stats`] / [`Extractor::into_detail`] / [`Extractor::into_list`]
+/// on the finished sink.
+pub struct Extractor<'c, L: ListSink, Q: Quirks> {
     mode: Mode<'c>,
+    entries: L,
+    outcome: Option<DetailOutcome>,
     quirks: &'c mut Q,
     scratch: EventScratch,
     stats: ScanStats,
 }
 
-impl<'c, Q: Quirks> Extractor<'c, Q> {
-    /// Games-list mode: every clean event with a competition yields
-    /// `(id, state)` — NBA's `list_state` is total, no exclusions.
-    pub fn games_list(on_game: &'c mut dyn FnMut(&str, GameState), quirks: &'c mut Q) -> Self {
-        Self::new(Mode::List { on_game }, quirks)
-    }
-
+impl<'c, Q: Quirks> Extractor<'c, NoRows, Q> {
     /// Game-detail mode for one event id. Every event is validated and
     /// counted until the target resolves (ruling 14 — the counts must be
     /// exact when the target is missing); after that, remaining events are
     /// fast-forwarded with `Directive::SkipElement` and left uncounted.
+    ///
+    /// Pinned to [`NoRows`] so callers need no turbofish for the sink slot
+    /// detail mode never uses.
     pub fn game_detail(target: &'c str, quirks: &'c mut Q) -> Self {
-        Self::new(
-            Mode::Detail {
-                target,
-                outcome: None,
-            },
-            quirks,
-        )
+        Self::new(Mode::Detail { target }, NoRows, quirks)
+    }
+}
+
+impl<'c, L: ListSink, Q: Quirks> Extractor<'c, L, Q> {
+    /// Games-list mode: every clean event with a competition yields a
+    /// [`ListRow`] — NBA's `list_state` is total, no exclusions.
+    pub fn games_list(entries: L, quirks: &'c mut Q) -> Self {
+        Self::new(Mode::List, entries, quirks)
     }
 
-    fn new(mode: Mode<'c>, quirks: &'c mut Q) -> Self {
+    fn new(mode: Mode<'c>, entries: L, quirks: &'c mut Q) -> Self {
         Self {
             mode,
+            entries,
+            outcome: None,
             quirks,
             scratch: EventScratch::default(),
             stats: ScanStats::default(),
@@ -530,8 +529,16 @@ impl<'c, Q: Quirks> Extractor<'c, Q> {
     /// The detail result; `None` when constructed in list mode.
     pub fn into_detail(self) -> Option<DetailOutcome> {
         match self.mode {
-            Mode::List { .. } => None,
-            Mode::Detail { outcome, .. } => Some(outcome.unwrap_or(DetailOutcome::NotFound)),
+            Mode::List => None,
+            Mode::Detail { .. } => Some(self.outcome.unwrap_or(DetailOutcome::NotFound)),
+        }
+    }
+
+    /// The list sink back; `None` when constructed in detail mode.
+    pub fn into_list(self) -> Option<L> {
+        match self.mode {
+            Mode::List => Some(self.entries),
+            Mode::Detail { .. } => None,
         }
     }
 
@@ -555,22 +562,28 @@ impl<'c, Q: Quirks> Extractor<'c, Q> {
             _ => LivePhase::InProgress,
         };
 
-        match &mut self.mode {
-            Mode::List { on_game } => {
+        match self.mode {
+            Mode::List => {
                 if let Some(state) = s.state {
                     let listed = match state {
                         StateKind::Pre => GameState::Pregame,
                         StateKind::In => GameState::Live,
                         StateKind::Post => GameState::Final,
                     };
-                    on_game(s.id.as_str(), listed);
+                    let (away, home) = list_teams(&s.competitors);
+                    self.entries.row(ListRow {
+                        id: s.id.as_str(),
+                        state: listed,
+                        away,
+                        home,
+                    });
                 }
                 // A clean event with an empty competitions array lists
                 // nothing, exactly like the backend's filter_map.
             }
-            Mode::Detail { outcome, .. } => {
-                if s.is_target && outcome.is_none() {
-                    *outcome = Some(match s.state {
+            Mode::Detail { .. } => {
+                if s.is_target && self.outcome.is_none() {
+                    self.outcome = Some(match s.state {
                         None => DetailOutcome::NoCompetition,
                         Some(state) => match transform(s, state, phase, &mut *self.quirks) {
                             Ok(extract) => DetailOutcome::Found(extract),
@@ -583,15 +596,10 @@ impl<'c, Q: Quirks> Extractor<'c, Q> {
     }
 
     /// Detail mode with the outcome already decided: everything after is
-    /// skipped and uncounted (ruling 14).
+    /// skipped and uncounted (ruling 14). List mode never resolves an
+    /// outcome, so this is false for the whole body there.
     fn target_found(&self) -> bool {
-        matches!(
-            self.mode,
-            Mode::Detail {
-                outcome: Some(_),
-                ..
-            }
-        )
+        matches!(self.mode, Mode::Detail { .. }) && self.outcome.is_some()
     }
 
     fn competitor(&mut self, indices: &[u16]) -> Option<&mut CompetitorScratch> {
@@ -602,7 +610,7 @@ impl<'c, Q: Quirks> Extractor<'c, Q> {
     }
 }
 
-impl<Q: Quirks> Sink for Extractor<'_, Q> {
+impl<L: ListSink, Q: Quirks> Sink for Extractor<'_, L, Q> {
     fn enter(&mut self, pattern: usize, _indices: &[u16], kind: ContainerKind) -> Directive {
         match pattern {
             // `{"events":{…}}` must 502-shape like a scalar shell; only an
@@ -723,8 +731,8 @@ impl<Q: Quirks> Sink for Extractor<'_, Q> {
                     // events validate and count in full (ruling 14) —
                     // skipping starts only after the target resolves, at
                     // the next event's enter.
-                    if let Mode::Detail { target, .. } = &self.mode {
-                        if text == *target {
+                    if let Mode::Detail { target } = self.mode {
+                        if text == target {
                             s.is_target = true;
                         }
                     }
@@ -1095,6 +1103,27 @@ fn transform<Q: Quirks>(
         crests: crests(home, away),
         kind,
     })
+}
+
+/// One competitor's list-row extras, straight off the scratch it already
+/// buffered for the detail transform.
+fn list_team(competitor: &CompetitorScratch) -> ListTeam<'_> {
+    ListTeam {
+        abbreviation: competitor
+            .abbreviation_seen
+            .then(|| competitor.abbreviation.as_str()),
+        crest: competitor.crest.as_deref(),
+    }
+}
+
+/// The list row's `(away, home)` extras. Never a validity gate: `deserializes`
+/// has already decided the event lists, and unresolvable markers here empty
+/// the extras rather than dropping the row.
+fn list_teams(competitors: &[CompetitorScratch; 2]) -> (ListTeam<'_>, ListTeam<'_>) {
+    order_list_teams(
+        (competitors[0].home_away, list_team(&competitors[0])),
+        (competitors[1].home_away, list_team(&competitors[1])),
+    )
 }
 
 /// Both crests, taken from the `homeAway`-ordered scratch pair.

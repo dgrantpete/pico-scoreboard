@@ -14,9 +14,8 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use scoreboard_espn::common::{Quirk, Quirks};
+use scoreboard_espn::common::{IgnoreQuirks, NoRows, Quirk, Quirks};
 use scoreboard_espn::{football, mlb, nba, soccer};
-use scoreboard_wire::GameState;
 
 #[derive(Default)]
 struct QuirkCount(BTreeMap<String, u64>);
@@ -182,16 +181,11 @@ fn list_pass(sport: &str, body: &[u8], stats: &mut Stats) -> (u64, u64) {
     let mut scratch = vec![0u8; SCRATCH];
     let counts = match sport {
         "mlb" => {
-            struct NoopSink;
-            impl mlb::ListSink for NoopSink {
-                fn entry(&mut self, _id: &str, _state: GameState) {}
-            }
-            let mut sink = NoopSink;
             let mut ex =
-                mlb::ListExtractor::new(&mut sink, &mut quirks, &mut scratch).expect("table");
+                mlb::ListExtractor::new(NoRows, &mut quirks, &mut scratch).expect("table");
             match ex.write(body).and(Ok(())) {
                 Ok(()) => match ex.finish() {
-                    Ok(c) => Some((u64::from(c.ok), u64::from(c.failed))),
+                    Ok((_, c)) => Some((u64::from(c.ok), u64::from(c.failed))),
                     Err(e) => {
                         *stats.list_errors.entry(format!("mlb:{e:?}")).or_insert(0) += 1;
                         None
@@ -204,8 +198,7 @@ fn list_pass(sport: &str, body: &[u8], stats: &mut Stats) -> (u64, u64) {
             }
         }
         "nba" => {
-            let mut on_game = |_id: &str, _state: GameState| {};
-            let extractor = nba::Extractor::games_list(&mut on_game, &mut quirks);
+            let extractor = nba::Extractor::games_list(NoRows, &mut quirks);
             let mut matcher =
                 scoreboard_espn::StreamMatcher::new(nba::PATHS, extractor, &mut scratch)
                     .expect("table");
@@ -230,12 +223,8 @@ fn list_pass(sport: &str, body: &[u8], stats: &mut Stats) -> (u64, u64) {
             }
         }
         "football" => {
-            struct NoopEntries;
-            impl football::ListEntries for NoopEntries {
-                fn entry(&mut self, _id: &str, _state: GameState) {}
-            }
-            let mut ex = football::ListExtractor::new(NoopEntries, quirks, &mut scratch)
-                .expect("table");
+            let mut ex =
+                football::ListExtractor::new(NoRows, quirks, &mut scratch).expect("table");
             quirks = QuirkCount::default();
             match ex.write(body) {
                 Ok(()) => match ex.finish() {
@@ -261,10 +250,11 @@ fn list_pass(sport: &str, body: &[u8], stats: &mut Stats) -> (u64, u64) {
             }
         }
         "soccer" => {
-            let mut ex = soccer::ListExtractor::new(&mut scratch).expect("table");
+            let mut ex = soccer::ListExtractor::new(NoRows, IgnoreQuirks, &mut scratch)
+                .expect("table");
             match ex.write(body) {
                 Ok(()) => match ex.finish() {
-                    Ok(list) => Some((u64::from(list.ok), u64::from(list.failed))),
+                    Ok(report) => Some((u64::from(report.ok), u64::from(report.failed))),
                     Err(e) => {
                         *stats.list_errors.entry(format!("soccer:{e:?}")).or_insert(0) += 1;
                         None

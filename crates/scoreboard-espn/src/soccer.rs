@@ -33,9 +33,9 @@ use scoreboard_wire::soccer::{
 use scoreboard_wire::{GameState, Side, TeamColors, TeamState};
 
 use crate::common::{
-    CrestPath, Crests, EText, Exact, HomeAway, IgnoreQuirks, Quirk, Quirks, WireText, compose,
-    crest_path, num_u8, num_u32, order_home_away, parse_hex_rgb, parse_start_time, push_trunc,
-    saturate_score, set_text,
+    CrestPath, Crests, EText, Exact, HomeAway, ListRow, ListSink, ListTeam, NoRows, Quirk, Quirks,
+    WireText, compose, crest_path, num_u8, num_u32, order_home_away, order_list_teams,
+    parse_hex_rgb, parse_start_time, push_trunc, saturate_score, set_text,
 };
 use crate::path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 
@@ -67,10 +67,6 @@ const DATE_BYTES: usize = 32;
 /// details in a match (`final_after_penalties`, 12 details total); 4× margin.
 /// Overflow drops the excess — beyond anything ESPN-covered soccer produces.
 const SCORING_MAX: usize = 32;
-/// Games kept by the list extractor: an ESPN soccer league plays at most
-/// ~15 matches a day (a full MLS slate); 4× margin. Overflow is reported via
-/// [`GamesList::overflowed`], never silent.
-const LIST_MAX: usize = 64;
 /// `u32::MAX` stringifies to 10 digits — the commentary id is generated, not
 /// copied, so this bound is structural.
 const SEQ_BYTES: usize = 10;
@@ -644,6 +640,25 @@ fn side_of(
     }
 }
 
+/// One competitor's list-row extras, straight off the scratch the detail
+/// transform already buffers.
+fn list_team(competitor: &CompetitorScratch) -> ListTeam<'_> {
+    ListTeam {
+        abbreviation: competitor.abbreviation.get(),
+        crest: competitor.crest.as_deref(),
+    }
+}
+
+/// The list row's `(away, home)` extras. Never a validity gate: `du_ok` has
+/// already decided the event lists, and unresolvable markers here empty the
+/// extras rather than dropping the row.
+fn list_teams(competitors: &[CompetitorScratch; 2]) -> (ListTeam<'_>, ListTeam<'_>) {
+    order_list_teams(
+        (competitors[0].home_away, list_team(&competitors[0])),
+        (competitors[1].home_away, list_team(&competitors[1])),
+    )
+}
+
 fn clock_cmp(a: f64, b: f64) -> Ordering {
     a.partial_cmp(&b).unwrap_or(Ordering::Equal)
 }
@@ -823,14 +838,11 @@ enum DetailResult {
 }
 
 #[derive(Debug)]
-// The list vec dwarfs the detail arm; one Mode exists per stream and no_std
-// forbids boxing it away.
+// Detail carries the whole bounded extract while List carries nothing; one
+// Mode exists per stream and no_std forbids boxing the extract away.
 #[allow(clippy::large_enum_variant)]
 enum Mode {
-    List {
-        games: heapless::Vec<ListEntry, LIST_MAX>,
-        overflowed: bool,
-    },
+    List,
     Detail {
         /// Compare key, refuse-to-truncate (ruling 16): an over-bound target
         /// matches nothing rather than false-matching on a prefix.
@@ -840,8 +852,9 @@ enum Mode {
     },
 }
 
-struct SoccerSink<Q: Quirks> {
+struct SoccerSink<L: ListSink, Q: Quirks> {
     mode: Mode,
+    entries: L,
     scratch: EventScratch,
     quirks: Q,
     ok: u16,
@@ -851,10 +864,11 @@ struct SoccerSink<Q: Quirks> {
     body_bad: bool,
 }
 
-impl<Q: Quirks> SoccerSink<Q> {
-    fn new(mode: Mode, quirks: Q) -> Self {
+impl<L: ListSink, Q: Quirks> SoccerSink<L, Q> {
+    fn new(mode: Mode, entries: L, quirks: Q) -> Self {
         Self {
             mode,
+            entries,
             scratch: EventScratch::default(),
             quirks,
             ok: 0,
@@ -941,17 +955,16 @@ impl<Q: Quirks> SoccerSink<Q> {
         }
         self.ok = self.ok.saturating_add(1);
         match &mut self.mode {
-            Mode::List { games, overflowed } => {
+            Mode::List => {
                 if scratch.comp0_present {
                     if let Some(state) = scratch.state {
-                        let entry = ListEntry {
+                        let (away, home) = list_teams(&scratch.competitors);
+                        self.entries.row(ListRow {
+                            id: scratch.id.as_str(),
                             state,
-                            id: owned(scratch.id.as_str()),
-                        };
-                        if games.push(entry).is_err() {
-                            *overflowed = true;
-                            self.quirks.quirk(Quirk::BoundedOverflow);
-                        }
+                            away,
+                            home,
+                        });
                     }
                 }
                 Directive::Continue
@@ -975,7 +988,7 @@ impl<Q: Quirks> SoccerSink<Q> {
     }
 }
 
-impl<Q: Quirks> Sink for SoccerSink<Q> {
+impl<L: ListSink, Q: Quirks> Sink for SoccerSink<L, Q> {
     fn value(&mut self, pattern: usize, indices: &[u16], value: Value<'_>) -> Directive {
         if self.done() {
             return Directive::SkipElement;
@@ -1251,7 +1264,7 @@ pub struct DetailReport<Q> {
 /// Every event is fully validated and counted until the target is found
 /// (ruling 14); only the post-found remainder is skipped, uncounted.
 pub struct GameExtractor<'scratch, Q: Quirks> {
-    matcher: StreamMatcher<'static, 'scratch, SoccerSink<Q>>,
+    matcher: StreamMatcher<'static, 'scratch, SoccerSink<NoRows, Q>>,
 }
 
 impl<'scratch, Q: Quirks> GameExtractor<'scratch, Q> {
@@ -1270,6 +1283,7 @@ impl<'scratch, Q: Quirks> GameExtractor<'scratch, Q> {
                 done: false,
                 result: None,
             },
+            NoRows,
             quirks,
         );
         Ok(Self {
@@ -1313,42 +1327,35 @@ impl<'scratch, Q: Quirks> GameExtractor<'scratch, Q> {
     }
 }
 
-/// One games-list entry: the cross-sport `(state, id)` pair.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ListEntry {
-    pub state: GameState,
-    pub id: EText,
-}
-
-/// The games list plus the counts `find_event` semantics need (ruling 13).
+/// Result of a list extraction: the sink back, the per-event tallies, and the
+/// quirk receiver handed back.
 #[derive(Debug)]
-pub struct GamesList {
-    /// DU-clean events with a competition, in body order.
-    pub games: heapless::Vec<ListEntry, LIST_MAX>,
+pub struct ListReport<L, Q> {
+    pub entries: L,
     /// Events that parsed clean (including competition-less ones).
     pub ok: u16,
     /// Events the backend's per-event parse would have dropped.
     pub failed: u16,
-    /// More than [`LIST_MAX`] listable games arrived; the excess was dropped.
-    pub overflowed: bool,
+    pub quirks: Q,
 }
 
 /// Streams one league scoreboard body into the games list — the same
 /// per-event validation as [`GameExtractor`] (ruling 14), never terminating
 /// early, so every event in the body is counted.
-pub struct ListExtractor<'scratch> {
-    matcher: StreamMatcher<'static, 'scratch, SoccerSink<IgnoreQuirks>>,
+///
+/// Rows are pushed to the caller's sink as they finalize. The lane used to
+/// accumulate them in a bounded `heapless::Vec` and hand the whole slate back;
+/// that could not carry the direct-mode extras without multiplying a per-slate
+/// buffer by the abbreviation and crest storage of both sides, for data the
+/// poller consumes one row at a time. Pushing also deletes the overflow bound,
+/// which is what the backend (an unbounded `Vec`) always did.
+pub struct ListExtractor<'scratch, L: ListSink, Q: Quirks> {
+    matcher: StreamMatcher<'static, 'scratch, SoccerSink<L, Q>>,
 }
 
-impl<'scratch> ListExtractor<'scratch> {
-    pub fn new(scratch: &'scratch mut [u8]) -> Result<Self, Error> {
-        let sink = SoccerSink::new(
-            Mode::List {
-                games: heapless::Vec::new(),
-                overflowed: false,
-            },
-            IgnoreQuirks,
-        );
+impl<'scratch, L: ListSink, Q: Quirks> ListExtractor<'scratch, L, Q> {
+    pub fn new(entries: L, quirks: Q, scratch: &'scratch mut [u8]) -> Result<Self, Error> {
+        let sink = SoccerSink::new(Mode::List, entries, quirks);
         Ok(Self {
             matcher: StreamMatcher::new(SCOREBOARD_TABLE, sink, scratch)?,
         })
@@ -1358,27 +1365,17 @@ impl<'scratch> ListExtractor<'scratch> {
         self.matcher.write(chunk)
     }
 
-    pub fn finish(self) -> Result<GamesList, ExtractError> {
+    pub fn finish(self) -> Result<ListReport<L, Q>, ExtractError> {
         let sink = self.matcher.finish()?;
         if sink.body_bad {
             return Err(ExtractError::MalformedBody);
         }
-        let (ok, failed) = (sink.ok, sink.failed);
-        match sink.mode {
-            Mode::List { games, overflowed } => Ok(GamesList {
-                games,
-                ok,
-                failed,
-                overflowed,
-            }),
-            // Unreachable by construction (the constructor sets List mode).
-            Mode::Detail { .. } => Ok(GamesList {
-                games: heapless::Vec::new(),
-                ok,
-                failed,
-                overflowed: false,
-            }),
-        }
+        Ok(ListReport {
+            entries: sink.entries,
+            ok: sink.ok,
+            failed: sink.failed,
+            quirks: sink.quirks,
+        })
     }
 }
 

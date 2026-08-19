@@ -7,9 +7,9 @@
 //! Fixtures are single EVENT objects; the extractor sees the real
 //! scoreboard shape, so every test wraps them as `{"events":[…]}`.
 
-use scoreboard_espn::common::{Quirk, Quirks};
+use scoreboard_espn::common::{ListRow, ListSink, Quirk, Quirks};
 use scoreboard_espn::mlb::{
-    Counts, DetailError, DetailExtractor, Extract, ListExtractor, ListSink, TransformError,
+    Counts, DetailError, DetailExtractor, Extract, ListExtractor, TransformError,
 };
 use scoreboard_wire::{GameState, SliceSink};
 use serde_json::{Value, json};
@@ -48,12 +48,44 @@ fn wrap(events: &[&str]) -> Vec<u8> {
     format!("{{\"events\":[{}]}}", events.join(",")).into_bytes()
 }
 
+/// One [`ListRow`] copied into owned storage. A row borrows the extractor's
+/// per-event scratch, so nothing survives the callback uncopied — which is
+/// the property these tests exist to keep honest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Row {
+    id: String,
+    state: GameState,
+    away_abbreviation: Option<String>,
+    home_abbreviation: Option<String>,
+    away_crest: Option<String>,
+    home_crest: Option<String>,
+}
+
+fn owned_row(row: ListRow<'_>) -> Row {
+    Row {
+        id: row.id.to_string(),
+        state: row.state,
+        away_abbreviation: row.away.abbreviation.map(str::to_string),
+        home_abbreviation: row.home.abbreviation.map(str::to_string),
+        away_crest: row.away.crest.map(str::to_string),
+        home_crest: row.home.crest.map(str::to_string),
+    }
+}
+
+impl Row {
+    /// The `(id, state)` pair the list has always delivered — what the
+    /// membership assertions compare, unchanged by the extras.
+    fn pair(&self) -> (String, GameState) {
+        (self.id.clone(), self.state)
+    }
+}
+
 #[derive(Default)]
-struct Entries(Vec<(String, GameState)>);
+struct Entries(Vec<Row>);
 
 impl ListSink for Entries {
-    fn entry(&mut self, id: &str, state: GameState) {
-        self.0.push((id.to_string(), state));
+    fn row(&mut self, row: ListRow<'_>) {
+        self.0.push(owned_row(row));
     }
 }
 
@@ -88,15 +120,19 @@ fn detail_counts(body: &[u8], id: &str) -> Result<(Extract, Counts), DetailError
     detail_chunked(body, id, usize::MAX, &mut Recorded::default())
 }
 
-fn list(body: &[u8]) -> (Vec<(String, GameState)>, Counts, Vec<Quirk>) {
+fn list_rows(body: &[u8]) -> (Vec<Row>, Counts, Vec<Quirk>) {
     let mut scratch = vec![0u8; 16 * 1024];
-    let mut entries = Entries::default();
     let mut quirks = Recorded::default();
-    let mut extractor =
-        ListExtractor::new(&mut entries, &mut quirks, &mut scratch).expect("table validates");
+    let mut extractor = ListExtractor::new(Entries::default(), &mut quirks, &mut scratch)
+        .expect("table validates");
     extractor.write(body).expect("body accepted");
-    let counts = extractor.finish().expect("scoreboard shape valid");
+    let (entries, counts) = extractor.finish().expect("scoreboard shape valid");
     (entries.0, counts, quirks.0)
+}
+
+fn list(body: &[u8]) -> (Vec<(String, GameState)>, Counts, Vec<Quirk>) {
+    let (rows, counts, quirks) = list_rows(body);
+    (rows.iter().map(Row::pair).collect(), counts, quirks)
 }
 
 fn encode(extract: &Extract) -> Vec<u8> {
@@ -666,4 +702,129 @@ fn a_malformed_crest_never_costs_the_event() {
             "{junk}: the wire bytes are untouched"
         );
     }
+}
+
+// ------------------------------------------------------- list-row extras
+
+/// The `homeAway`-keyed abbreviations, read straight out of the fixture so
+/// the expectation cannot drift from it (the crest twin of this is
+/// [`expected_crests`]).
+fn expected_abbreviations(raw: &str) -> (Option<String>, Option<String>) {
+    let event = parse(raw);
+    let mut away = None;
+    let mut home = None;
+    for competitor in event["competitions"][0]["competitors"]
+        .as_array()
+        .expect("competitors array")
+    {
+        let abbreviation = competitor["team"]["abbreviation"]
+            .as_str()
+            .map(str::to_string);
+        match competitor["homeAway"].as_str().expect("marker") {
+            "away" => away = abbreviation,
+            "home" => home = abbreviation,
+            other => panic!("unexpected marker {other}"),
+        }
+    }
+    (away, home)
+}
+
+/// The probe-elimination contract: everything the crest warmer needs is on
+/// the list row the poller already pays for, `homeAway`-ordered exactly like
+/// the detail extract's own crests.
+#[test]
+fn list_rows_carry_both_abbreviations_and_both_crests() {
+    for name in ["final", "live_inning", "pregame", "pregame_weather_normal"] {
+        let raw = fixture(name);
+        let (rows, _, _) = list_rows(&wrap(&[&raw]));
+        let [row] = rows.as_slice() else {
+            panic!("{name}: expected exactly one listed row, got {rows:?}");
+        };
+
+        let (away_abbreviation, home_abbreviation) = expected_abbreviations(&raw);
+        let (away_crest, home_crest) = expected_crests(&raw);
+        assert_eq!(row.away_abbreviation, away_abbreviation, "{name}: away abbr");
+        assert_eq!(row.home_abbreviation, home_abbreviation, "{name}: home abbr");
+        assert_eq!(row.away_crest, away_crest, "{name}: away crest");
+        assert_eq!(row.home_crest, home_crest, "{name}: home crest");
+        assert!(
+            row.away_crest.is_some() && row.home_crest.is_some(),
+            "{name}: MLB fixtures all carry logos"
+        );
+
+        // The row and the detail extract must not disagree about which
+        // artwork belongs to whom — one `homeAway` discipline, two readers.
+        let extract = detail(&wrap(&[&raw]), &event_id(&raw)).expect("extract");
+        assert_eq!(
+            row.away_crest.as_deref(),
+            extract.crests().away.as_deref(),
+            "{name}: list and detail disagree on the away crest"
+        );
+        assert_eq!(
+            row.home_crest.as_deref(),
+            extract.crests().home.as_deref(),
+            "{name}: list and detail disagree on the home crest"
+        );
+    }
+}
+
+/// Tolerance: an event whose two competitors claim the same side still
+/// LISTS — marker conflicts are transform-tier, and the list never runs the
+/// transform. The extras go empty on both sides rather than guessing from
+/// array position.
+#[test]
+fn conflicting_markers_still_list_with_empty_extras() {
+    let mut event = parse(&fixture("pregame"));
+    for competitor in event["competitions"][0]["competitors"]
+        .as_array_mut()
+        .expect("competitors array")
+    {
+        competitor["homeAway"] = serde_json::json!("home");
+    }
+    let mutated = event.to_string();
+    let (rows, counts, _) = list_rows(&wrap(&[&mutated]));
+
+    assert_eq!(counts, Counts { ok: 1, failed: 0 }, "still a clean parse");
+    let [row] = rows.as_slice() else {
+        panic!("the event must still list, got {rows:?}");
+    };
+    assert_eq!(row.state, GameState::Pregame);
+    assert_eq!(row.away_abbreviation, None, "unresolvable side");
+    assert_eq!(row.home_abbreviation, None, "unresolvable side");
+    assert_eq!(row.away_crest, None, "unresolvable side");
+    assert_eq!(row.home_crest, None, "unresolvable side");
+
+    // Detail mode, over the same body, reports the conflict as it always did.
+    assert_eq!(
+        detail(&wrap(&[&mutated]), &event_id(&mutated)),
+        Err(DetailError::Transform(TransformError::HomeAway))
+    );
+}
+
+/// Tolerance: a payload with no `team.logo` at all still lists, still names
+/// both teams, and simply has no artwork — the extras are best-effort, never
+/// a gate.
+#[test]
+fn a_logo_less_event_lists_with_abbreviations_and_no_crests() {
+    let mut event = parse(&fixture("final"));
+    for competitor in event["competitions"][0]["competitors"]
+        .as_array_mut()
+        .expect("competitors array")
+    {
+        competitor["team"]
+            .as_object_mut()
+            .expect("team object")
+            .remove("logo");
+    }
+    let mutated = event.to_string();
+    let (rows, counts, _) = list_rows(&wrap(&[&mutated]));
+
+    assert_eq!(counts, Counts { ok: 1, failed: 0 });
+    let [row] = rows.as_slice() else {
+        panic!("the event must still list, got {rows:?}");
+    };
+    assert_eq!(row.away_abbreviation.as_deref(), Some("MIL"));
+    assert_eq!(row.home_abbreviation.as_deref(), Some("STL"));
+    assert_eq!(row.away_crest, None);
+    assert_eq!(row.home_crest, None);
 }

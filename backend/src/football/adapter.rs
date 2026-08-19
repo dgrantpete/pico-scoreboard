@@ -4,9 +4,8 @@
 //! (`GameExtract::as_game`), so the DTO is built from that view — it covers
 //! every football DTO field.
 
-use scoreboard_espn::football::{
-    self, DetailOutcome, ExtractError, FootballError, GameExtract, ListEntries,
-};
+use scoreboard_espn::common::{ListRow, ListSink};
+use scoreboard_espn::football::{self, DetailOutcome, ExtractError, FootballError, GameExtract};
 use scoreboard_wire as wire;
 
 use crate::error::AppError;
@@ -25,11 +24,11 @@ use super::types::{
 #[derive(Default)]
 struct Entries(Vec<GameListEntry>);
 
-impl ListEntries for Entries {
-    fn entry(&mut self, game_id: &str, state: wire::GameState) {
+impl ListSink for Entries {
+    fn row(&mut self, row: ListRow<'_>) {
         self.0.push(GameListEntry {
-            id: game_id.to_string(),
-            state: domain_state(state),
+            id: row.id.to_string(),
+            state: domain_state(row.state),
         });
     }
 }

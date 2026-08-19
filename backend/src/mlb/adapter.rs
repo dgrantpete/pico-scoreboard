@@ -3,6 +3,7 @@
 //! reproduce `find_event` + the rain-delay veto exactly (DESIGN.md rulings
 //! 1 and 14); the extraction itself is the shared crate's.
 
+use scoreboard_espn::common::{ListRow, ListSink};
 use scoreboard_espn::mlb::{self, DetailError, Extract, ListError, TransformError};
 
 use crate::error::AppError;
@@ -18,13 +19,14 @@ use super::types::{
     MlbLiveGame, MlbPregameGame, MlbPregameTeam, MlbWeather,
 };
 
+#[derive(Default)]
 struct Entries(Vec<GameListEntry>);
 
-impl mlb::ListSink for Entries {
-    fn entry(&mut self, id: &str, state: scoreboard_wire::GameState) {
+impl ListSink for Entries {
+    fn row(&mut self, row: ListRow<'_>) {
         self.0.push(GameListEntry {
-            id: id.to_string(),
-            state: domain_state(state),
+            id: row.id.to_string(),
+            state: domain_state(row.state),
         });
     }
 }
@@ -32,13 +34,12 @@ impl mlb::ListSink for Entries {
 /// Games list: one entry per event that passes today's lenient parse. The
 /// rain-delay veto and the empty-competitions skip happen inside the crate.
 pub(crate) fn list_entries(bytes: &[u8], url: &str) -> Result<Vec<GameListEntry>, AppError> {
-    let mut entries = Entries(Vec::new());
     let mut quirks = TracingQuirks::new("mlb");
     let mut scratch = vec![0u8; SCRATCH_LEN];
-    let mut extractor = mlb::ListExtractor::new(&mut entries, &mut quirks, &mut scratch)
+    let mut extractor = mlb::ListExtractor::new(Entries::default(), &mut quirks, &mut scratch)
         .map_err(|e| stream_error(url, e))?;
     extractor.write(bytes).map_err(|e| stream_error(url, e))?;
-    let counts = extractor.finish().map_err(|e| match e {
+    let (entries, counts) = extractor.finish().map_err(|e| match e {
         ListError::Stream(e) => stream_error(url, e),
         ListError::Events => events_malformed(url),
     })?;

@@ -5,15 +5,9 @@
 //!
 //! Usage: detail_bench <body.json> <first_id> <last_id> [--college] [iters]
 
-use scoreboard_espn::common::IgnoreQuirks;
+use scoreboard_espn::common::{IgnoreQuirks, NoRows};
 use scoreboard_espn::football;
-use scoreboard_wire::GameState;
 use std::time::Instant;
-
-struct NoopEntries;
-impl football::ListEntries for NoopEntries {
-    fn entry(&mut self, _id: &str, _state: GameState) {}
-}
 
 fn feed<F: FnMut(&[u8])>(body: &[u8], mut write: F) {
     let mut chunk_buf = [0u8; 4096];
@@ -44,7 +38,7 @@ fn main() {
 
     let t0 = Instant::now();
     for _ in 0..iters {
-        let mut ex = football::ListExtractor::new(NoopEntries, IgnoreQuirks, &mut scratch).unwrap();
+        let mut ex = football::ListExtractor::new(NoRows, IgnoreQuirks, &mut scratch).unwrap();
         feed(&body, |c| ex.write(c).unwrap());
         ex.finish().unwrap();
     }

@@ -3,7 +3,7 @@
 //! One const path table over the ESPN scoreboard body (`$.events[*]…`)
 //! drives both entry points:
 //!
-//! - [`ListExtractor`] — the games list: `(game_id, state)` per displayable
+//! - [`ListExtractor`] — the games list: one [`ListRow`] per displayable
 //!   event plus ok/failed counts. The list is not a cheaper parse: every
 //!   event runs the full deserialize-tier validation, exactly like the
 //!   backend's `parse_events` (DESIGN.md rulings 1 and 13).
@@ -40,9 +40,10 @@
 use core::fmt::Write as _;
 
 use crate::common::{
-    CrestPath, Crests, EText, Exact, HomeAway, Quirk, Quirks, crest_path, linescore_byte, num_i16,
-    num_u8, num_u16, order_home_away, parse_hex_rgb, parse_live_phase, parse_record,
-    parse_start_time, saturate_score, set_text, stable_sort_by_key, wire_phase,
+    CrestPath, Crests, EText, Exact, HomeAway, ListRow, ListSink, ListTeam, NoRows, Quirk, Quirks,
+    crest_path, linescore_byte, num_i16, num_u8, num_u16, order_home_away, order_list_teams,
+    parse_hex_rgb, parse_live_phase, parse_record, parse_start_time, saturate_score, set_text,
+    stable_sort_by_key, wire_phase,
 };
 use crate::path::{self, ContainerKind, Directive, Pattern, Seg, Sink, StreamMatcher, Value};
 use scoreboard_wire::football as wire;
@@ -290,25 +291,10 @@ pub struct DetailReport<Q> {
 
 /// Result of a list extraction.
 #[derive(Debug)]
-pub struct ListReport<E, Q> {
-    pub entries: E,
+pub struct ListReport<L, Q> {
+    pub entries: L,
     pub counts: Counts,
     pub quirks: Q,
-}
-
-/// Receives finalized games-list entries in event order. `game_id` borrows
-/// the extractor's scratch and is only valid for the duration of the call
-/// (bounded at the wire's 255-byte string cap, same truncation as encode).
-pub trait ListEntries {
-    fn entry(&mut self, game_id: &str, state: GameState);
-}
-
-/// The detail extractor's stand-in — detail mode emits no list entries.
-#[derive(Debug, Default)]
-pub struct NoEntries;
-
-impl ListEntries for NoEntries {
-    fn entry(&mut self, _game_id: &str, _state: GameState) {}
 }
 
 // --------------------------------------------------------- the extract
@@ -643,8 +629,8 @@ enum DState {
     Failed(ExtractError),
 }
 
-struct FootballSink<E: ListEntries, Q: Quirks> {
-    entries: E,
+struct FootballSink<L: ListSink, Q: Quirks> {
+    entries: L,
     quirks: Q,
     counts: Counts,
     /// `Some` = detail mode; `None` = list mode.
@@ -661,8 +647,8 @@ struct FootballSink<E: ListEntries, Q: Quirks> {
     ev: EventScratch,
 }
 
-impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
-    fn new(entries: E, quirks: Q, detail: Option<DetailCfg>) -> Self {
+impl<L: ListSink, Q: Quirks> FootballSink<L, Q> {
+    fn new(entries: L, quirks: Q, detail: Option<DetailCfg>) -> Self {
         Self {
             entries,
             quirks,
@@ -1108,7 +1094,13 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
             None => {
                 if self.ev.comp_count > 0 {
                     if let Some(state) = self.ev.comp0.state {
-                        self.entries.entry(&self.ev.id, state.game_state());
+                        let (away, home) = list_teams(&self.ev.comp0.competitors);
+                        self.entries.row(ListRow {
+                            id: &self.ev.id,
+                            state: state.game_state(),
+                            away,
+                            home,
+                        });
                     }
                 }
                 Directive::Continue
@@ -1135,7 +1127,7 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
     }
 }
 
-impl<E: ListEntries, Q: Quirks> Sink for FootballSink<E, Q> {
+impl<L: ListSink, Q: Quirks> Sink for FootballSink<L, Q> {
     fn value(&mut self, pattern: usize, indices: &[u16], value: Value<'_>) -> Directive {
         if self.done {
             return Directive::SkipElement;
@@ -1164,6 +1156,33 @@ impl<E: ListEntries, Q: Quirks> Sink for FootballSink<E, Q> {
         }
         self.on_leave(pattern, indices)
     }
+}
+
+// -------------------------------------------------------- the list row
+
+/// One competitor's list-row extras, straight off the `competitions[0]`
+/// scratch the detail transform already buffers.
+///
+/// The abbreviation is reported unconditionally: a row only reaches the sink
+/// after `finish_competitor` accepted every competitor, and that check
+/// requires `team.abbreviation`. An empty string here is therefore a payload
+/// that really sent one, not a missing field — which is exactly why this
+/// carries no `_seen` twin.
+fn list_team(competitor: &Comp0Competitor) -> ListTeam<'_> {
+    ListTeam {
+        abbreviation: Some(competitor.abbreviation.as_str()),
+        crest: competitor.crest.as_deref(),
+    }
+}
+
+/// The list row's `(away, home)` extras. Never a validity gate: the event has
+/// already been judged listable, and unresolvable markers here empty the
+/// extras rather than dropping the row.
+fn list_teams(competitors: &[Comp0Competitor; 2]) -> (ListTeam<'_>, ListTeam<'_>) {
+    order_list_teams(
+        (competitors[0].home_away, list_team(&competitors[0])),
+        (competitors[1].home_away, list_team(&competitors[1])),
+    )
 }
 
 // -------------------------------------------------------- the transform
@@ -1369,7 +1388,7 @@ fn build_rank_line(dst: &mut EText, rank: u16, name: &str) {
 /// Streaming extractor for `GET /football/{league}/games/{game_id}`:
 /// feed the scoreboard body in chunks, finish into a [`DetailReport`].
 pub struct DetailExtractor<'s, Q: Quirks> {
-    matcher: StreamMatcher<'static, 's, FootballSink<NoEntries, Q>>,
+    matcher: StreamMatcher<'static, 's, FootballSink<NoRows, Q>>,
 }
 
 impl<'s, Q: Quirks> DetailExtractor<'s, Q> {
@@ -1387,11 +1406,7 @@ impl<'s, Q: Quirks> DetailExtractor<'s, Q> {
     ) -> Result<Self, path::Error> {
         let mut target = Exact::default();
         target.set(game_id);
-        let sink = FootballSink::new(
-            NoEntries,
-            quirks,
-            Some(DetailCfg { target, is_college }),
-        );
+        let sink = FootballSink::new(NoRows, quirks, Some(DetailCfg { target, is_college }));
         Ok(Self {
             matcher: StreamMatcher::new(&PATHS, sink, scratch)?,
         })
@@ -1423,12 +1438,12 @@ impl<'s, Q: Quirks> DetailExtractor<'s, Q> {
 /// Streaming extractor for `GET /football/{league}/games`: entries are
 /// delivered to `E` in event order; the counts carry the backend's
 /// lenient-parse ok/failed tally.
-pub struct ListExtractor<'s, E: ListEntries, Q: Quirks> {
-    matcher: StreamMatcher<'static, 's, FootballSink<E, Q>>,
+pub struct ListExtractor<'s, L: ListSink, Q: Quirks> {
+    matcher: StreamMatcher<'static, 's, FootballSink<L, Q>>,
 }
 
-impl<'s, E: ListEntries, Q: Quirks> ListExtractor<'s, E, Q> {
-    pub fn new(entries: E, quirks: Q, scratch: &'s mut [u8]) -> Result<Self, path::Error> {
+impl<'s, L: ListSink, Q: Quirks> ListExtractor<'s, L, Q> {
+    pub fn new(entries: L, quirks: Q, scratch: &'s mut [u8]) -> Result<Self, path::Error> {
         let sink = FootballSink::new(entries, quirks, None);
         Ok(Self {
             matcher: StreamMatcher::new(&PATHS, sink, scratch)?,
@@ -1439,7 +1454,7 @@ impl<'s, E: ListEntries, Q: Quirks> ListExtractor<'s, E, Q> {
         self.matcher.write(chunk)
     }
 
-    pub fn finish(self) -> Result<ListReport<E, Q>, FootballError> {
+    pub fn finish(self) -> Result<ListReport<L, Q>, FootballError> {
         let sink = self.matcher.finish()?;
         if sink.events_malformed {
             return Err(FootballError::MalformedEvents);

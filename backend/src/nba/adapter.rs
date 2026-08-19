@@ -4,7 +4,7 @@
 //! drives `StreamMatcher` itself.
 
 use scoreboard_espn::StreamMatcher;
-use scoreboard_espn::common::LivePhase as ExtractPhase;
+use scoreboard_espn::common::{ListRow, ListSink, LivePhase as ExtractPhase};
 use scoreboard_espn::nba::{self, DetailOutcome, Extract, Kind, TransformError};
 
 use crate::error::AppError;
@@ -19,30 +19,37 @@ use super::types::{
     NbaFinalGame, NbaFinalTeam, NbaGame, NbaLiveGame, NbaPregameGame, NbaPregameTeam,
 };
 
+#[derive(Default)]
+struct Entries(Vec<GameListEntry>);
+
+impl ListSink for Entries {
+    fn row(&mut self, row: ListRow<'_>) {
+        self.0.push(GameListEntry {
+            id: row.id.to_string(),
+            state: domain_state(row.state),
+        });
+    }
+}
+
 /// Games list: every clean event with a competition — NBA's list state is
 /// total, no exclusions.
 pub(crate) fn list_entries(bytes: &[u8], url: &str) -> Result<Vec<GameListEntry>, AppError> {
-    let mut entries: Vec<GameListEntry> = Vec::new();
-    let mut on_game = |id: &str, state: scoreboard_wire::GameState| {
-        entries.push(GameListEntry {
-            id: id.to_string(),
-            state: domain_state(state),
-        });
-    };
     let mut quirks = TracingQuirks::new("nba");
-    let extractor = nba::Extractor::games_list(&mut on_game, &mut quirks);
+    let extractor = nba::Extractor::games_list(Entries::default(), &mut quirks);
     let mut scratch = vec![0u8; SCRATCH_LEN];
     let mut matcher =
         StreamMatcher::new(nba::PATHS, extractor, &mut scratch).map_err(|e| stream_error(url, e))?;
     matcher.write(bytes).map_err(|e| stream_error(url, e))?;
     let sink = matcher.finish().map_err(|e| stream_error(url, e))?;
     let stats = sink.stats();
-    drop(sink);
     if stats.events_malformed {
         return Err(events_malformed(url));
     }
     warn_failed_events(url, stats.failed as u64);
-    Ok(entries)
+    let entries = sink
+        .into_list()
+        .expect("extractor was constructed in list mode");
+    Ok(entries.0)
 }
 
 /// Detail: extract one game or map the outcome to today's status codes.

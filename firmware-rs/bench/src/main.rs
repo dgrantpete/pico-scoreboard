@@ -22,9 +22,8 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Instant, Timer};
 use panic_probe as _;
 use png_stream::{Rgb8, Scratch, SpriteDecoder};
-use scoreboard_espn::common::IgnoreQuirks;
+use scoreboard_espn::common::{IgnoreQuirks, NoRows};
 use scoreboard_espn::{football, mlb, soccer};
-use scoreboard_wire::GameState;
 use static_cell::{ConstStaticCell, StaticCell};
 
 static MLB_BODY: &[u8] = include_bytes!("../assets/body-mlb-max.json");
@@ -58,15 +57,6 @@ static LOGOS: [(&str, &[u8]); 6] = [
     ("nfl-500-kc", include_bytes!("../assets/nfl-500-kc.png")),
     ("ncaa-500-2294", include_bytes!("../assets/ncaa-500-2294.png")),
 ];
-
-struct NoopSink;
-impl mlb::ListSink for NoopSink {
-    fn entry(&mut self, _id: &str, _state: GameState) {}
-}
-struct NoopEntries;
-impl football::ListEntries for NoopEntries {
-    fn entry(&mut self, _id: &str, _state: GameState) {}
-}
 
 fn feed<F: FnMut(&[u8])>(body: &[u8], chunk_buf: &mut [u8], chunk: usize, mut write: F) {
     let mut pos = 0;
@@ -106,18 +96,17 @@ async fn main(_spawner: Spawner) {
     for &chunk in &[4096usize, 1379] {
         for rep in 0..3u32 {
             // MLB list.
-            let mut sink = NoopSink;
             let mut quirks = IgnoreQuirks;
             let t0 = Instant::now();
-            let mut ex = mlb::ListExtractor::new(&mut sink, &mut quirks, scratch).unwrap();
+            let mut ex = mlb::ListExtractor::new(NoRows, &mut quirks, scratch).unwrap();
             feed(MLB_BODY, chunk_buf, chunk, |c| ex.write(c).unwrap());
-            let counts = ex.finish().unwrap();
+            let (_, counts) = ex.finish().unwrap();
             let us = t0.elapsed().as_micros();
             report("mlb-489K", chunk, rep, MLB_BODY.len(), us, counts.ok, counts.failed);
 
             // College football list — the 1.21 MB body.
             let t0 = Instant::now();
-            let mut ex = football::ListExtractor::new(NoopEntries, IgnoreQuirks, scratch).unwrap();
+            let mut ex = football::ListExtractor::new(NoRows, IgnoreQuirks, scratch).unwrap();
             feed(CFB_BODY, chunk_buf, chunk, |c| ex.write(c).unwrap());
             let rep_out = ex.finish().unwrap();
             let us = t0.elapsed().as_micros();
@@ -133,7 +122,7 @@ async fn main(_spawner: Spawner) {
 
             // MLS list.
             let t0 = Instant::now();
-            let mut ex = soccer::ListExtractor::new(scratch).unwrap();
+            let mut ex = soccer::ListExtractor::new(NoRows, IgnoreQuirks, scratch).unwrap();
             feed(MLS_BODY, chunk_buf, chunk, |c| ex.write(c).unwrap());
             let list = ex.finish().unwrap();
             let us = t0.elapsed().as_micros();
@@ -167,7 +156,7 @@ async fn main(_spawner: Spawner) {
         );
 
         let t0 = Instant::now();
-        let mut ex = soccer::ListExtractor::new(scratch).unwrap();
+        let mut ex = soccer::ListExtractor::new(NoRows, IgnoreQuirks, scratch).unwrap();
         feed(mls_ram, chunk_buf, 4096, |c| ex.write(c).unwrap());
         let list = ex.finish().unwrap();
         let us = t0.elapsed().as_micros();

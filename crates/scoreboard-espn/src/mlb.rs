@@ -7,8 +7,9 @@
 //!
 //! - [`ListExtractor`] — the games list: every event is validated against the
 //!   backend's per-state required-field rules (the same lenient
-//!   `parse_events` pass) and yields `(id, state)` through a caller
-//!   [`ListSink`], plus ok/failed counts (DESIGN.md ruling 13).
+//!   `parse_events` pass) and yields a [`ListRow`] through a caller
+//!   [`ListSink`] the extractor owns and hands back, plus ok/failed counts
+//!   (DESIGN.md ruling 13).
 //! - [`DetailExtractor`] — one game: every event is validated until the
 //!   target is found (ruling 14 — the failure counts are exact precisely
 //!   when the 404-vs-502 verdict consumes them: a missing target means
@@ -68,9 +69,9 @@
 use core::mem;
 
 use crate::common::{
-    CrestPath, Crests, EText, HomeAway, Quirk, Quirks, crest_path, linescore_byte, num_i16, num_u8,
-    order_home_away, parse_hex_rgb, parse_record, parse_start_time, saturate_score, set_text,
-    stable_sort_by_key,
+    CrestPath, Crests, EText, HomeAway, ListRow, ListSink, ListTeam, NoRows, Quirk, Quirks,
+    crest_path, linescore_byte, num_i16, num_u8, order_home_away, order_list_teams, parse_hex_rgb,
+    parse_record, parse_start_time, saturate_score, set_text, stable_sort_by_key,
 };
 use crate::path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 use scoreboard_wire::mlb::{AtBat as WireAtBat, Bases, Count, Inning, InningHalf, Weather as WireWeather};
@@ -461,13 +462,6 @@ static PATHS: &[Pattern] = &[
 
 // -------------------------------------------------------------- entry uses
 
-/// Receives one games-list entry per event that passes today's parse.
-/// Rain-delayed live games never arrive (the veto), and an event with an
-/// empty `competitions` array parses but yields nothing — both as today.
-pub trait ListSink {
-    fn entry(&mut self, id: &str, state: GameState);
-}
-
 /// `parse_events`' tallies: `ok` counts events that deserialize (including
 /// ones that yield no list entry), `failed` counts DU-tier rejects. The
 /// 404-vs-502 rule needs `failed` (ruling 13).
@@ -485,8 +479,8 @@ pub struct ListExtractor<'c, 's, L: ListSink, Q: Quirks> {
 }
 
 impl<'c, 's, L: ListSink, Q: Quirks> ListExtractor<'c, 's, L, Q> {
-    pub fn new(entries: &'c mut L, quirks: &'c mut Q, scratch: &'s mut [u8]) -> Result<Self, Error> {
-        let sink = MlbSink::new(Mode::List { entries }, quirks);
+    pub fn new(entries: L, quirks: &'c mut Q, scratch: &'s mut [u8]) -> Result<Self, Error> {
+        let sink = MlbSink::new(Mode::List, entries, quirks);
         Ok(Self {
             matcher: StreamMatcher::new(PATHS, sink, scratch)?,
         })
@@ -496,32 +490,31 @@ impl<'c, 's, L: ListSink, Q: Quirks> ListExtractor<'c, 's, L, Q> {
         self.matcher.write(chunk)
     }
 
-    pub fn finish(self) -> Result<Counts, ListError> {
+    /// The sink back, with the counts. Owning it is what lets one caller-side
+    /// type serve every sport (see [`ListSink`]).
+    pub fn finish(self) -> Result<(L, Counts), ListError> {
         let sink = self.matcher.finish().map_err(ListError::Stream)?;
         if sink.events_malformed {
             return Err(ListError::Events);
         }
-        Ok(Counts {
-            ok: sink.ok,
-            failed: sink.failed,
-        })
+        Ok((
+            sink.entries,
+            Counts {
+                ok: sink.ok,
+                failed: sink.failed,
+            },
+        ))
     }
 }
 
 /// Streaming game-detail pass for one target id.
 pub struct DetailExtractor<'c, 's, Q: Quirks> {
-    matcher: StreamMatcher<'static, 's, MlbSink<'c, NoEntries, Q>>,
+    matcher: StreamMatcher<'static, 's, MlbSink<'c, NoRows, Q>>,
 }
 
 impl<'c, 's, Q: Quirks> DetailExtractor<'c, 's, Q> {
     pub fn new(game_id: &'c str, quirks: &'c mut Q, scratch: &'s mut [u8]) -> Result<Self, Error> {
-        let sink = MlbSink::new(
-            Mode::Detail {
-                target: game_id,
-                done: false,
-            },
-            quirks,
-        );
+        let sink = MlbSink::new(Mode::Detail { target: game_id }, NoRows, quirks);
         Ok(Self {
             matcher: StreamMatcher::new(PATHS, sink, scratch)?,
         })
@@ -553,13 +546,6 @@ impl<'c, 's, Q: Quirks> DetailExtractor<'c, 's, Q> {
             None => Err(DetailError::NotFound),
         }
     }
-}
-
-/// Detail mode's zero-sized stand-in for the unused list-sink type slot.
-struct NoEntries;
-
-impl ListSink for NoEntries {
-    fn entry(&mut self, _id: &str, _state: GameState) {}
 }
 
 // ------------------------------------------------------------- event sink
@@ -738,9 +724,13 @@ impl EventScratch {
     }
 }
 
-enum Mode<'c, L> {
-    List { entries: &'c mut L },
-    Detail { target: &'c str, done: bool },
+/// Which pass is running. The list sink is a sink *field* rather than a mode
+/// payload so that detail mode carries a zero-sized [`NoRows`] instead of an
+/// unused borrow, and so `Mode` stays `Copy`.
+#[derive(Clone, Copy)]
+enum Mode<'c> {
+    List,
+    Detail { target: &'c str },
 }
 
 /// Internal detail outcome for the target event.
@@ -750,7 +740,8 @@ enum Fail {
 }
 
 struct MlbSink<'c, L: ListSink, Q: Quirks> {
-    mode: Mode<'c, L>,
+    mode: Mode<'c>,
+    entries: L,
     quirks: &'c mut Q,
     event: EventScratch,
     ok: u32,
@@ -760,9 +751,10 @@ struct MlbSink<'c, L: ListSink, Q: Quirks> {
 }
 
 impl<'c, L: ListSink, Q: Quirks> MlbSink<'c, L, Q> {
-    fn new(mode: Mode<'c, L>, quirks: &'c mut Q) -> Self {
+    fn new(mode: Mode<'c>, entries: L, quirks: &'c mut Q) -> Self {
         Self {
             mode,
+            entries,
             quirks,
             event: EventScratch::default(),
             ok: 0,
@@ -772,8 +764,10 @@ impl<'c, L: ListSink, Q: Quirks> MlbSink<'c, L, Q> {
         }
     }
 
+    /// Ruling 14's skip gate. A resolved `result` *is* the found target: the
+    /// two were always set together, so there is no second flag to drift.
     fn detail_done(&self) -> bool {
-        matches!(self.mode, Mode::Detail { done: true, .. })
+        self.result.is_some()
     }
 
     fn finish_event(&mut self) {
@@ -791,30 +785,35 @@ impl<'c, L: ListSink, Q: Quirks> MlbSink<'c, L, Q> {
             return;
         }
         self.ok += 1;
-        match &mut self.mode {
-            Mode::List { entries } => {
+        match self.mode {
+            Mode::List => {
                 if !scratch.competition0_seen {
                     return;
                 }
-                let id = scratch.id.as_deref().unwrap_or_default();
-                match scratch.state.expect("state was validated by parses()") {
-                    State::Pre => entries.entry(id, GameState::Pregame),
-                    State::Post => entries.entry(id, GameState::Final),
+                let state = match scratch.state.expect("state was validated by parses()") {
+                    State::Pre => GameState::Pregame,
+                    State::Post => GameState::Final,
                     State::In => {
-                        if scratch.half.is_some() {
-                            entries.entry(id, GameState::Live);
-                        } else {
+                        if scratch.half.is_none() {
                             // The veto: dropped from the list entirely.
                             self.quirks.quirk(Quirk::UnknownInningHalf);
+                            return;
                         }
+                        GameState::Live
                     }
-                }
+                };
+                let (away, home) = list_teams(&scratch.comps);
+                self.entries.row(ListRow {
+                    id: scratch.id.as_deref().unwrap_or_default(),
+                    state,
+                    away,
+                    home,
+                });
             }
-            Mode::Detail { done, .. } => {
-                if *done || !scratch.id_matched {
+            Mode::Detail { .. } => {
+                if self.detail_done() || !scratch.id_matched {
                     return;
                 }
-                *done = true;
                 self.result = Some(build_extract(scratch, self.quirks));
             }
         }
@@ -849,6 +848,25 @@ impl<'c, L: ListSink, Q: Quirks> MlbSink<'c, L, Q> {
             }
         }
     }
+}
+
+/// One competitor's list-row extras, straight off the scratch it already
+/// buffered for the detail transform.
+fn list_team(competitor: &CompetitorScratch) -> ListTeam<'_> {
+    ListTeam {
+        abbreviation: competitor.abbreviation.as_deref(),
+        crest: competitor.crest.as_deref(),
+    }
+}
+
+/// The list row's `(away, home)` extras. Never a validity gate: `parses()`
+/// has already decided the event lists, and unresolvable markers here empty
+/// the extras rather than dropping the row.
+fn list_teams(comps: &[CompetitorScratch; 2]) -> (ListTeam<'_>, ListTeam<'_>) {
+    order_list_teams(
+        (comps[0].home_away, list_team(&comps[0])),
+        (comps[1].home_away, list_team(&comps[1])),
+    )
 }
 
 /// The competitor an `AnyIndex`-bound pattern fired under; out-of-range
@@ -934,8 +952,8 @@ impl<L: ListSink, Q: Quirks> Sink for MlbSink<'_, L, Q> {
                     // the target is fully validated so the failure counts
                     // stay exact. The compare runs on the full text, before
                     // the wire-cap copy could truncate.
-                    if let Mode::Detail { target, .. } = &self.mode {
-                        self.event.id_matched = text == *target;
+                    if let Mode::Detail { target } = self.mode {
+                        self.event.id_matched = text == target;
                     }
                     self.event.id = Some(etext(text));
                 }

@@ -19,3 +19,11 @@ pub mod path;
 pub mod soccer;
 
 pub use path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
+
+/// The games-list seam, hoisted beside the engine's own for the same reason:
+/// callers OUTSIDE this crate implement it (the backend's four adapters
+/// today, the firmware poller next), so it should not read as an internal of
+/// `common`. Note the neighbours are different sinks at different altitudes —
+/// [`Sink`] receives raw matched JSON nodes, [`ListSink`] receives one
+/// finished row per listed event.
+pub use common::{ListRow, ListSink, ListTeam, NoRows};
