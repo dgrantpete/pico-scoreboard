@@ -57,7 +57,7 @@ use scoreboard_model::prefetch::{Step, WarmIndex};
 use scoreboard_model::snapshot::{ABBR, GAME_ID};
 use scoreboard_model::store::Logos;
 use scoreboard_model::text::{Text, set_plain};
-use static_cell::{ConstStaticCell, StaticCell};
+use static_cell::ConstStaticCell;
 
 use super::{Cadence, Poller};
 use crate::logos::WARM_GAMES;
@@ -98,9 +98,16 @@ static EXTRACT_SCRATCH: ConstStaticCell<[u8; EXTRACT_SCRATCH_BYTES]> =
     ConstStaticCell::new([0; EXTRACT_SCRATCH_BYTES]);
 static LIST_SCRATCH: ConstStaticCell<[u8; LIST_SCRATCH_BYTES]> =
     ConstStaticCell::new([0; LIST_SCRATCH_BYTES]);
-/// The PNG decoder's window and tables. `StaticCell` rather than `const`
-/// because [`png_stream::Scratch::new`] is not `const`.
-static DECODE: StaticCell<png_stream::Scratch> = StaticCell::new();
+/// The PNG decoder's window and tables, initialized IN PLACE.
+///
+/// Not `StaticCell<Scratch>` + `init(Scratch::new())`: a by-value `Scratch`
+/// is ~60 KB and `init`'s argument materializes in the constructing frame —
+/// on this build that was a stack spike into a 97 KB budget, and the first
+/// direct image boot-looped on the resulting STKOF HardFault before its
+/// first poll. `Scratch::init_at` writes the slot field by field instead;
+/// its doc carries the argument.
+static DECODE: ConstStaticCell<core::mem::MaybeUninit<png_stream::Scratch>> =
+    ConstStaticCell::new(core::mem::MaybeUninit::uninit());
 
 /// Everything the direct build adds to the poller, in one field so the
 /// `Poller` struct grows one `#[cfg]` rather than five.
@@ -121,7 +128,7 @@ impl DirectState {
             paths: PathIndex::new(),
             extract_scratch: EXTRACT_SCRATCH.take(),
             list_scratch: LIST_SCRATCH.take(),
-            decode: DECODE.init(png_stream::Scratch::new()),
+            decode: png_stream::Scratch::init_at(DECODE.take()),
         }
     }
 }

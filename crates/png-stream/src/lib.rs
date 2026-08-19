@@ -65,6 +65,8 @@ mod down;
 
 pub use decode::RowSink;
 
+use core::mem::MaybeUninit;
+
 use decode::Core;
 use down::Down;
 use miniz_oxide::inflate::core::{DecompressorOxide, TINFL_LZ_DICT_SIZE};
@@ -160,6 +162,39 @@ impl Scratch {
             rows: [0; 2 * MAX_STRIDE],
             acc: [0; 4 * SPRITE_PIXELS],
             col_map: [0; MAX_DIM],
+        }
+    }
+
+    /// Construct into a caller-provided slot, without the value ever existing
+    /// on the stack.
+    ///
+    /// `Scratch` is ~60 KB, and `new()` — like any by-value constructor —
+    /// materializes it in the caller's frame before it is moved anywhere: a
+    /// `StaticCell::init(Scratch::new())` on the RP2350 is a 60 KB stack
+    /// spike into a budget an order of magnitude smaller, found as a
+    /// boot-loop `HardFault` (STKOF) on the first direct-feed image. This is
+    /// the constructor for statics; `new()` remains for hosts and tests,
+    /// where stacks are measured in megabytes.
+    ///
+    /// The stack cost here is one `DecompressorOxide` (~10.5 KiB), which is
+    /// the one field with a non-trivial initial state. The arrays are zeroed
+    /// in place — their contents never matter across decodes anyway, since
+    /// each `*Decoder::new` re-initializes the whole scratch.
+    pub fn init_at(slot: &mut MaybeUninit<Scratch>) -> &mut Scratch {
+        let scratch = slot.as_mut_ptr();
+        // SAFETY: `addr_of_mut!` projects into the uninitialized slot without
+        // creating references to uninitialized memory. Every field is written
+        // exactly once below — `inflate` by value, the four arrays by
+        // `write_bytes(0)`, which is their `new()` value bit for bit — so by
+        // the `assume_init_mut` every byte of the struct is initialized.
+        // `Scratch` has no padding-sensitive invariants and no `Drop`.
+        unsafe {
+            core::ptr::addr_of_mut!((*scratch).inflate).write(DecompressorOxide::new());
+            core::ptr::addr_of_mut!((*scratch).window).write_bytes(0, 1);
+            core::ptr::addr_of_mut!((*scratch).rows).write_bytes(0, 1);
+            core::ptr::addr_of_mut!((*scratch).acc).write_bytes(0, 1);
+            core::ptr::addr_of_mut!((*scratch).col_map).write_bytes(0, 1);
+            slot.assume_init_mut()
         }
     }
 }
