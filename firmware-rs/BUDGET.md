@@ -931,10 +931,24 @@ stable-der build fix, and unconditional RSA signature-scheme advertising —
 without which ESPN's edge aborts a no-verify client's handshake outright;
 measured before/after on this silicon).
 
-Caveats attached to these numbers: Wi-Fi ran in `PowerSave` mode (the
-spike's choice; re-measure a lane with it off before treating the
-throughput floors as physics), and the multi-hour sustained-poll soak of
-the fronted mock is still owed — the S2 exit line carries it.
+Both caveats these numbers carried are now closed (2026-08-19):
+
+- **Sustained soak, 28.5 h against the fronted mock** — 2,890 polls over
+  one kept-alive TLS connection at a 33 s median cadence (p95 36 s,
+  worst interval 94 s). ~29 device handshakes total: the kept-alive
+  connection occasionally dropped and every reconnect succeeded. The
+  only failure class all run was Wi-Fi association loss (the known
+  BACKLOG 69/71 family, not TLS): one 76-minute stall in the first hour
+  cleared by reset, and one 4-minute event at hour three that the
+  spike's reconnect-on-failure recovered with **no intervention**.
+  ~25.5 h unbroken after that. TLS never wedged; the S3 poller inherits
+  the app's existing association-liveness machinery for the Wi-Fi class.
+- **PowerSave control** — the soak build ran
+  `PowerManagementMode::None` (the first measurement round's PowerSave
+  was the spike's only power-state difference). Per-poll fetch time on
+  the LAN lane was unchanged (~3 s for the ~490 KB body, the same
+  window/RTT floor as the PowerSave round), so the throughput floors
+  above are TCP-window physics, not a power-state artifact.
 
 ## Caveats to close before the numbers can be trusted end to end
 

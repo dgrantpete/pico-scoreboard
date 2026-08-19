@@ -200,11 +200,14 @@ and steady-state numbers in BUDGET.md.
 - [x] User-Agent: the spike sent the allowlisted prefix from
       `backend/config/default.toml` on every request — five real ESPN
       fetches answered 200, no 403s (2026-08-17).
-- [ ] Exit: real-fetch and numbers portions DONE (five real ESPN fetches;
-      RAM delta and handshake times in BUDGET.md "Phase S2"). Still owed:
-      the multi-hour sustained-poll soak of the fronted mock (rig persists:
-      mock :8787 + terminator :8443 recipe in the spike's docs), a
-      PowerSave-off throughput control, then merge to `main`.
+- [x] Exit (2026-08-19): five real ESPN fetches, RAM delta and handshake
+      times in BUDGET.md "Phase S2"; **28.5 h sustained soak of the
+      fronted mock clean** (2,890 polls, 33 s median cadence, every TLS
+      reconnect succeeded; only failure class = the known Wi-Fi
+      association loss, one event self-recovered) and the PowerSave-off
+      control answered (soak ran `PowerManagementMode::None`, throughput
+      floors unchanged — window/RTT physics). Numbers folded into
+      BUDGET.md "Phase S2". Merge to `main` at this boundary.
 
 ## S3 — the direct feed (device, still merge-clean)
 
