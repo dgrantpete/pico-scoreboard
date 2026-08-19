@@ -98,6 +98,56 @@ cross-core rules), the crest PNG pipeline integration, replay parity
 through the TLS-fronted mock, then the bench-unit field trial the owner
 asked for: real ESPN, real display, soak on live data.
 
+## Wave 2 — the poller's direct path (decided 2026-08-19, orchestrator's lane)
+
+8. **The probe dies with the list pass.** The wire backend's games list
+   carries `(id, state)` only, which is why the warmer's probe exists: a
+   whole detail fetch to learn two abbreviations. ESPN's scoreboard body —
+   the body the list extractors already stream — carries every
+   competitor's abbreviation and logo href. So the list extractors grow
+   best-effort per-event team identity (abbreviations + crest CDN paths;
+   never a validity gate — an event with missing markers still lists with
+   the extras empty), the poller's list pass feeds `WarmIndex::learned`
+   and a crest-path index for free, and `Step::Probe` in a direct build
+   answers `warm.missed()` without a fetch: a game whose list row lacked
+   identity retires after the standing give-up count and gets its crests
+   the normal way when the rotation reaches it. A ~300–450 KB summary
+   fetch per unshown game becomes zero fetches.
+9. **The crest-path index is the app's, not the model's.** `WarmIndex`
+   stays exactly as it is — wire builds have no paths to remember, and
+   the model's contract does not grow a direct-only field. The app keeps
+   a bounded `{league key}/{abbreviation}` → `CrestPath` map
+   (direct-gated, pool-sized), refilled by every list pass, so a stale or
+   evicted entry self-heals within one refresh. A warmer crest step whose
+   path is missing marks the game missed — same vocabulary as every
+   other unfetchable thing.
+10. **One transport seam.** `net::espn::EspnClient::fetch(url, sink)`
+    streams the body chunk-by-chunk into a `&mut dyn FnMut(&[u8]) -> bool`
+    (one monomorphization — the picoserve future-duplication lesson,
+    BUDGET.md addendum). 404 is a value (`Fetched::NotFound`), matching
+    the wire client's "game left today's scoreboard" arm. Keep-alive to
+    the last host, reconnect-once-on-failure — the 28.5 h soak's proven
+    recipe.
+11. **Extract and scratch live in StaticCells, never the task arena.**
+    `DirectExtract` (soccer sequential peak ~31.0 KB device) and the
+    16 KiB picojson scratch are taken once at poller start. The commit
+    borrow shape is preserved from wire mode: crest paths are copied out
+    of the extract *before* the crest fetches await, and the
+    `detail()` borrow spans only the synchronous commit — no borrow
+    across an await, same rule, same reason.
+12. **Refresh ticks decide list strategy per decision 3**, with one open
+    item to measure, not estimate: whether the list extractor's scratch
+    can be small (captured list tokens are ≤ 255 B; whether *skipped*
+    tokens transit scratch is a picojson property to verify on the
+    corpus). If a second 16 KiB scratch is the price of concurrent
+    list+detail, sequential two-fetch for every sport on refresh ticks
+    is the fallback decision 3 already prices.
+13. **The replay lever is the spike's.** The ESPN base URL is a
+    compile-time override (env at build, exactly `SPIKE_TERMINATOR`'s
+    pattern) so the same `direct` image points at the TLS-fronted mock
+    for replay parity and at real ESPN for the field trial, with no
+    runtime switch to ship by accident.
+
 ## Validation ladder
 
 Host: crate suites + the extract-vs-wire-golden parity test + clippy both
