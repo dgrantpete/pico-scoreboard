@@ -46,14 +46,15 @@ the frontend actually changed, not that somebody rebuilt it.
 
 | | |
 |---|---|
-| SHA-1 | `8f3da1a8a347aabe343947c357f73f4d3fa4d264` |
-| ETag (first 8 bytes) | `8f3da1a8a347aabe` |
-| Size | 54,641 B |
-| Built | 2026-08-08, `bun 1.3.6`, from the `frontend/` of the commit that carries it |
+| SHA-1 | `e436e6431b630e7b48cbbbe3ce851ca51b6b77b3` |
+| ETag (first 8 bytes) | `e436e6431b630e7b` |
+| Size | 56,305 B |
+| Built | 2026-08-19, `bun 1.3.6`, from the `frontend/` of commit `3259128` |
 
-The provenance line names no commit hash because it cannot: the rule above puts
-the bundle and the source change in one commit, so the hash would have to
-reference the commit it is inside. The previous artifact was 54,528 B with SHA-1
-`6547ed61…`, built from `frontend/` at commit `18a05c8`; the 113-byte growth is
-the 60 FPS scroll-speed options and the stale-value hint in
-`ScreenLayoutsCard.svelte`.
+This artifact names a source commit, which the rule above says it should not
+need to: the timezone lane's frontend change (`3259128`) landed without its
+bake, so the bundle follows in a commit of its own — the failure mode the rule
+warns about, caught at the next flash boundary rather than on a device. The
+1,664-byte growth is the timezone card, its store, and the offset-schedule API
+surface. The previous artifact was 54,641 B with SHA-1 `8f3da1a8…`, built
+2026-08-08.
