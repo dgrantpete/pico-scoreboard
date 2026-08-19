@@ -262,6 +262,19 @@ Gate to start: S2 exit. Gate to exit: replay parity.
       sustained replay window (running), golden-assertion pass against
       the captures, then merge to `main`. Field trial (real ESPN + real
       display + live soak) follows per the owner's ask.
+      Update 2026-08-20: replay window done (~24 h through the mock,
+      all four sports; one Wi-Fi-class stall reset by hand — the bench
+      config had the watchdog off). **FIELD TRIAL RUNNING**: real-ESPN
+      image flashed (no base override), live MLB committed and rendered
+      from `site.api.espn.com` within a minute of boot, real CDN
+      crests, a rotation of 6 real games across 3 sources; MLS then
+      added and the watchdog ENABLED via `PUT /api/config` + reboot, so
+      the association-loss class self-heals for the rest of the soak.
+      The NFL-crest gap the owner saw in the replay was the
+      trimmed-fixture artifact the list lane pinned (no `team.logo` in
+      `testdata/football/nfl`), not firmware — real NFL bodies carry
+      logos. First-press-after-reboot input bug fixed the same day
+      (seed settles one debounce window; tracker heals a wrong seed).
 
 ## S4 — the standalone build and the deletion sweep (phase-s diverges here)
 
