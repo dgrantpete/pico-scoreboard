@@ -34,9 +34,9 @@
 //!   (ruling 14), so a missing target always comes with exact counts.
 
 use crate::common::{
-    EText, HomeAway, LivePhase, Quirk, Quirks, linescore_byte, num_i16, num_u8, order_home_away,
-    parse_hex_rgb, parse_live_phase, parse_record, parse_start_time, saturate_score, set_text,
-    stable_sort_by_key, wire_phase,
+    CrestPath, Crests, EText, HomeAway, LivePhase, Quirk, Quirks, crest_path, linescore_byte,
+    num_i16, num_u8, order_home_away, parse_hex_rgb, parse_live_phase, parse_record,
+    parse_start_time, saturate_score, set_text, stable_sort_by_key, wire_phase,
 };
 use crate::path::{ContainerKind, Directive, Pattern, Seg, Sink, Value};
 use scoreboard_wire::{self as wire, GameState, MAX_LINE_SCORE, Record, TeamColors};
@@ -83,6 +83,10 @@ const P_LINESCORES: usize = 32;
 const P_LINESCORE: usize = 33;
 const P_LINESCORE_VALUE: usize = 34;
 const P_LINESCORE_PERIOD: usize = 35;
+/// Direct mode only: the crest artwork the backend used to resolve for the
+/// device. Appended rather than filed with the other `team.*` patterns so
+/// the indices above keep matching the inventory they were derived from.
+const P_TEAM_LOGO: usize = 36;
 
 /// The NBA scoreboard path table. 18 wire-relevant leaves plus the
 /// parse-gating-only fields (`team.id`, `weather.*`, `shortDisplayName`) the
@@ -132,6 +136,7 @@ pub static PATHS: &[Pattern] = &[
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("linescores"), AnyIndex],
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("linescores"), AnyIndex, Key("value")],
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("linescores"), AnyIndex, Key("period")],
+    &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("team"), Key("logo")],
 ];
 
 // ------------------------------------------------------------- the extract
@@ -143,6 +148,10 @@ pub static PATHS: &[Pattern] = &[
 #[derive(Debug, Clone)]
 pub struct Extract {
     pub game_id: EText,
+    /// Direct mode's crest sources. Outside the wire view by design — the
+    /// proxy resolved these itself, so nothing about them reaches `as_game`
+    /// and the parity gate is untouched.
+    pub crests: Crests,
     pub kind: Kind,
 }
 
@@ -434,6 +443,10 @@ struct CompetitorScratch {
     /// transform. Capacity is the wire's `MAX_LINE_SCORE`.
     line: heapless::Vec<(u8, u8), MAX_LINE_SCORE>,
     line_clipped: bool,
+    /// `team.logo` as a CDN path. No `_bad` twin: the backend's games
+    /// pipeline never deserializes this field, so nothing about it can fail
+    /// an event without breaking parity.
+    crest: Option<CrestPath>,
 }
 
 /// Scratch for the records/linescores array element in progress. One shared
@@ -836,6 +849,13 @@ impl<Q: Quirks> Sink for Extractor<'_, Q> {
                     }
                 }
             }
+            P_TEAM_LOGO => {
+                if let Some(competitor) = self.competitor(indices) {
+                    if let Value::Str(href) = value {
+                        competitor.crest = crest_path(href);
+                    }
+                }
+            }
             P_TEAM_ID => {
                 if let Some(competitor) = self.competitor(indices) {
                     match value {
@@ -1072,8 +1092,17 @@ fn transform<Q: Quirks>(
     };
     Ok(Extract {
         game_id: s.id.clone(),
+        crests: crests(home, away),
         kind,
     })
+}
+
+/// Both crests, taken from the `homeAway`-ordered scratch pair.
+fn crests(home: &CompetitorScratch, away: &CompetitorScratch) -> Crests {
+    Crests {
+        away: away.crest.clone(),
+        home: home.crest.clone(),
+    }
 }
 
 fn colors(competitor: &CompetitorScratch) -> Result<TeamColors, TransformError> {

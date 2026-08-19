@@ -25,6 +25,14 @@ link-standalone = []
 # ships, and the only profile that can install an update.
 link-boot-integrated = ["dep:embassy-boot-rp", "dep:sha2"]
 
+# Standalone mode (Phase S, SPEC §14): the firmware fetches from ESPN itself
+# instead of from the backend, so every phase of the poll loop that assumed a
+# backend needs a second implementation. Compile-time rather than a runtime flag
+# — S3-DESIGN.md decision 1 — so `main` can carry both and ship neither by
+# accident. What it selects so far is `net::sntp` in place of `GET /time`; the
+# fetch, crest and timezone lanes add to it.
+direct = []
+
 # Bench instrument, off in every shipped build: once station mode is up, fetch
 # `{DEV_API_URL}/time` over plain HTTP and log what came back. It exists to
 # prove the stack moves bytes in both directions against the real backend

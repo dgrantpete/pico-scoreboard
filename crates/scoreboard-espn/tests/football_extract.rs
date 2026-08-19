@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use scoreboard_espn::common::{IgnoreQuirks, Quirk, Quirks};
+use scoreboard_espn::common::{Crests, IgnoreQuirks, Quirk, Quirks};
 use scoreboard_espn::football::{
     Counts, DetailExtractor, DetailOutcome, FootballError, GameExtract, ListEntries,
     ListExtractor,
@@ -570,4 +570,102 @@ fn possession_resolves_independent_of_field_order() {
     let s = situation.expect("goal-to-go is a valid snap");
     assert_eq!(s.possession, scoreboard_wire::Side::Away);
     assert!(s.red_zone);
+}
+
+// ------------------------------------------------------------ crest paths
+
+/// The committed football fixtures are trimmed projections — their team
+/// objects carry only what the wire needs, with no `logo` at all. Absence
+/// has to be free: no crest, no failure, no change to the bytes.
+#[test]
+fn trimmed_fixtures_yield_no_crest_and_no_failure() {
+    for name in fixture_names() {
+        let event = fixture_json(&name);
+        let value: serde_json::Value = serde_json::from_str(&event).expect("fixture parses");
+        assert!(
+            value["competitions"][0]["competitors"][0]["team"]["logo"].is_null(),
+            "{name}: fixture unexpectedly grew a logo — assert its value instead"
+        );
+
+        let body = wrap(&event);
+        let game = found(&body, &event_id(&event), is_college(&name), body.len());
+        assert_eq!(
+            game.crests(),
+            &Crests::default(),
+            "{name}: no logo in, no crest out"
+        );
+    }
+}
+
+/// A real college-football slate keys its crests by numeric team id
+/// (`/i/teamlogos/ncaa/500/{id}.png`), not by abbreviation — the shape
+/// difference the construct-vs-expose ruling turned on. Hrefs are quoted
+/// from `firmware-rs/bench/assets/body-cfb-live.json`, where all 198 teams
+/// carry them.
+#[test]
+fn ncaa_crests_ride_the_home_away_ordering() {
+    const AWAY: &str = "https://a.espncdn.com/i/teamlogos/ncaa/500/194.png";
+    const HOME: &str = "https://a.espncdn.com/i/teamlogos/ncaa/500/130.png";
+
+    let name = "college-football/pregame_ranked";
+    let mut value: serde_json::Value =
+        serde_json::from_str(&fixture_json(name)).expect("fixture parses");
+    {
+        let competitors = value["competitions"][0]["competitors"]
+            .as_array_mut()
+            .expect("competitors array");
+        for competitor in competitors.iter_mut() {
+            let href = match competitor["homeAway"].as_str().expect("marker") {
+                "away" => AWAY,
+                _ => HOME,
+            };
+            competitor["team"]["logo"] = serde_json::Value::String(href.into());
+        }
+    }
+    let event = value.to_string();
+    let body = wrap(&event);
+    let game = found(&body, &event_id(&event), true, body.len());
+
+    assert_eq!(
+        game.crests().away.as_ref().map(|p| p.as_str()),
+        Some("/i/teamlogos/ncaa/500/194.png")
+    );
+    assert_eq!(
+        game.crests().home.as_ref().map(|p| p.as_str()),
+        Some("/i/teamlogos/ncaa/500/130.png")
+    );
+    assert_eq!(
+        hex(&extract_bytes(name, true, body.len())),
+        hex(&golden(name)),
+        "the wire bytes are untouched by the crests"
+    );
+}
+
+#[test]
+fn a_malformed_crest_never_costs_the_event() {
+    let name = "nfl/pregame";
+    for junk in [
+        serde_json::json!(42),
+        serde_json::json!(null),
+        serde_json::json!("https://evil.example.com/i/teamlogos/nfl/500/kc.png"),
+    ] {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&fixture_json(name)).expect("fixture parses");
+        value["competitions"][0]["competitors"][0]["team"]["logo"] = junk.clone();
+        let event = value.to_string();
+        let body = wrap(&event);
+
+        let (outcome, counts) = run_detail(&body, &event_id(&event), false, body.len());
+        let game = match outcome {
+            DetailOutcome::Found(game) => game,
+            other => panic!("{junk}: expected Found, got {other:?}"),
+        };
+        assert_eq!(counts.failed, 0, "{junk}: the event still parses");
+        assert_eq!(game.crests(), &Crests::default(), "{junk}: no crest");
+        assert_eq!(
+            hex(&encode(&game.as_game())),
+            hex(&golden(name)),
+            "{junk}: the wire bytes are untouched"
+        );
+    }
 }

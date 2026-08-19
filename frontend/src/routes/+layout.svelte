@@ -1,11 +1,23 @@
 <script lang="ts">
 	import '../app.css';
+	import { onMount } from 'svelte';
 	import { browser } from '$app/environment';
 	import Sun from '@lucide/svelte/icons/sun';
 	import Moon from '@lucide/svelte/icons/moon';
 	import Monitor from '@lucide/svelte/icons/monitor';
+	import { timezoneStore } from '$lib/stores/timezone.svelte';
 
 	let { children } = $props();
+
+	// The device cannot know what timezone it is in and nothing upstream can
+	// tell it, so this browser does — in the background, on every page load, so
+	// that a scoreboard nobody opens the settings for still crosses the next
+	// DST boundary correctly. It lives in the layout rather than on the
+	// settings page because the logs and setup pages are visits too. Silent on
+	// failure by design; see the store.
+	onMount(() => {
+		timezoneStore.seed();
+	});
 
 	// Dark mode state: 'auto' | 'light' | 'dark'
 	type ThemeMode = 'auto' | 'light' | 'dark';

@@ -1,0 +1,15 @@
+[build]
+target = "thumbv8m.main-none-eabihf"
+
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+# probe-rs 0.32 wants RP235x ("RP2350" only matches via wildcard, with a
+# warning). Adjust if the local probe-rs version complains.
+runner = "probe-rs run --chip RP235x"
+rustflags = [
+  "-C", "link-arg=--nmagic",
+  "-C", "link-arg=-Tlink.x",
+  "-C", "link-arg=-Tdefmt.x",
+]
+
+[env]
+DEFMT_LOG = "info"

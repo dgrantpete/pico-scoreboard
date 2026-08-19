@@ -16,6 +16,7 @@
 	import ScreenLayoutsCard from "$lib/components/settings/ScreenLayoutsCard.svelte";
 	import DisplayCard from "$lib/components/settings/DisplayCard.svelte";
 	import ColorsCard from "$lib/components/settings/ColorsCard.svelte";
+	import TimezoneCard from "$lib/components/settings/TimezoneCard.svelte";
 	import AdvancedCard from "$lib/components/settings/AdvancedCard.svelte";
 
 	let rebootDialog: HTMLDialogElement;
@@ -69,6 +70,7 @@
 		<ScreenLayoutsCard />
 		<DisplayCard />
 		<ColorsCard />
+		<TimezoneCard />
 		<AdvancedCard />
 
 		{#if settingsStore.error}

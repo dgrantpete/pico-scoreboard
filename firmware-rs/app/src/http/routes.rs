@@ -32,12 +32,65 @@
 //! the same answer for it — `no_network`, which it returned when its OTA task
 //! had not started.
 //!
-//! # The two routes that touch flash
+//! # `GET` and `PUT /api/timezone`
+//!
+//! The one route with no counterpart in `api_routes.py`: the browser tells the
+//! device what timezone it is in, because nothing upstream can (BACKLOG 95,
+//! SPEC §9's fourth key, and [`crate::timezone`]'s module docs for the whole
+//! argument). The contract, in full:
+//!
+//! ```text
+//! GET  /api/timezone  →  200 application/json
+//! PUT  /api/timezone  ←  application/json  →  200 (the stored document)
+//!
+//! {
+//!   "offset_minutes":           -360 | null,   // UTC offset now, minutes east
+//!   "next_offset_minutes":      -300 | null,   // the offset after the change
+//!   "transition_epoch_s": 1805270400 | null,   // when it changes, unix seconds
+//!   "manual_offset_minutes":     330 | null,   // the override, if one is set
+//!   "effective_offset_minutes": -360 | null    // GET only; see below
+//! }
+//! ```
+//!
+//! **Minutes east of UTC**, which is `-Date.prototype.getTimezoneOffset()` — the
+//! browser's own unit, so nothing has to agree about a conversion. The device
+//! converts to seconds once, at [`crate::timezone::offset_seconds_at`], because
+//! seconds is what the display speaks.
+//!
+//! **`PUT` replaces; it does not patch.** Every absent field is an absent
+//! value, so a body of `{}` clears the timezone entirely. That is the opposite
+//! of `PUT /api/config` and deliberately so: the configuration is a large
+//! document edited a section at a time by ten different cards, where patching
+//! is the only workable shape; this is four numbers written by one page, where
+//! patching would need "absent" and "null" to mean different things — a
+//! distinction `serde` cannot express through `Option` without a custom
+//! deserializer, and one that would exist purely to let a client clear an
+//! override. Replacement makes the state after a `PUT` exactly the body of the
+//! `PUT`, which is also what makes `GET`-then-`PUT` a safe way to change one
+//! field. The SPA does exactly that.
+//!
+//! Validation is all-or-nothing, like `DeviceConfig::apply`: an offset outside
+//! UTC−12:00..=UTC+14:00 is `400 invalid_offset`, and a half-specified
+//! transition — or an instant that is not plausibly unix seconds, which is how
+//! a client that posted milliseconds finds out — is `400 invalid_schedule`.
+//! Neither changes anything.
+//!
+//! `effective_offset_minutes` is `GET`-only and derived: the offset the device
+//! would use *right now*, after the override precedence and the transition
+//! flip. It exists so the page can show what the device believes rather than
+//! what the browser assumes, and the `PUT` parser ignores it — so a body read
+//! from `GET` can be posted back unchanged.
+//!
+//! # The routes that touch flash
 //!
 //! `PUT /api/config` and `POST /api/reset-network` both end in [`persist`],
 //! which is **one** write per request and stops the panel for its duration —
-//! see that function. Nothing else here reaches storage: `/api/logs/previous`
-//! serves a record read once at boot.
+//! see that function. `PUT /api/timezone` is the third, with one difference
+//! that matters: the SPA posts it on *every* page load, so it writes only when
+//! the values actually changed ([`crate::timezone::apply`] holds that check).
+//! The steady state is therefore a `PUT` that costs no flash and no frame.
+//! Nothing else here reaches storage: `/api/logs/previous` serves a record read
+//! once at boot.
 //!
 //! # `POST /api/induce-panic`
 //!
@@ -57,7 +110,7 @@ use scoreboard_config::ConfigPatch;
 
 use crate::http::scratch::{self, Lease};
 use crate::http::{spa, status::Status};
-use crate::{config, poller, ringlog, settings, supervise};
+use crate::{config, poller, ringlog, settings, supervise, timezone};
 
 /// Build the router. See the module docs for why it is one layer deep.
 pub fn build() -> picoserve::Router<impl picoserve::routing::PathRouter> {
@@ -95,6 +148,12 @@ impl<State> picoserve::routing::PathRouterService<State> for Dispatch {
         if path == "/api/config" {
             return get(get_config)
                 .put(put_config)
+                .call_method_handler(state, (), request, response_writer)
+                .await;
+        }
+        if path == "/api/timezone" {
+            return get(get_timezone)
+                .put(put_timezone)
                 .call_method_handler(state, (), request, response_writer)
                 .await;
         }
@@ -279,6 +338,32 @@ impl<'r, State> picoserve::extract::FromRequest<'r, State> for ConfigBody {
     }
 }
 
+/// The `PUT /api/timezone` body, already parsed.
+///
+/// [`ConfigBody`]'s shape for [`ConfigBody`]'s reasons — a borrowed slice
+/// cannot be a handler argument, and this route owes the SPA its own error body
+/// rather than picoserve's. Validation is *not* done here: the extractor's job
+/// ends at "this was JSON of the right shape", and the handler decides whether
+/// the numbers in it are a timezone, because those two failures deserve
+/// different error codes.
+struct TimezoneBody(Option<timezone::Document>);
+
+impl<'r, State> picoserve::extract::FromRequest<'r, State> for TimezoneBody {
+    type Rejection = core::convert::Infallible;
+
+    async fn from_request<R: io::Read>(
+        _state: &'r State,
+        _parts: picoserve::request::RequestParts<'r>,
+        body: picoserve::request::RequestBody<'r, R>,
+    ) -> Result<TimezoneBody, Self::Rejection> {
+        Ok(TimezoneBody(body.read_all().await.ok().and_then(|bytes| {
+            serde_json_core::from_slice::<timezone::Document>(bytes)
+                .ok()
+                .map(|(document, _)| document)
+        })))
+    }
+}
+
 /// `?since=<seq>`, the log stream's cursor.
 struct Since(u32);
 
@@ -460,6 +545,133 @@ async fn put_config(body: ConfigBody) -> impl IntoResponse {
 fn persist() {
     if !config::persist() {
         crate::error!("api: the configuration was applied but not saved");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// /api/timezone
+// ---------------------------------------------------------------------------
+
+/// `GET /api/timezone` — what the device believes, in a body it will accept
+/// back. See the module docs for the contract.
+async fn get_timezone() -> impl IntoResponse {
+    json(render_timezone())
+}
+
+/// `PUT /api/timezone` — replace the schedule and the override together.
+///
+/// The order is `put_config`'s: parse, validate the whole document, and only
+/// then commit. A rejected request changes nothing, including the fields in it
+/// that were fine.
+async fn put_timezone(body: TimezoneBody) -> impl IntoResponse {
+    let Some(document) = body.0 else {
+        crate::error!("api: PUT /api/timezone body was not a timezone document");
+        return Either::A(error_response(
+            StatusCode::BAD_REQUEST,
+            r#"{"error":"invalid_json","message":"Body is not a timezone document"}"#,
+        ));
+    };
+
+    let record = match document.into_record() {
+        Ok(record) => record,
+        Err(timezone::Invalid::Offset) => {
+            crate::error!("api: PUT /api/timezone carried an offset outside UTC-12:00..UTC+14:00");
+            return Either::A(error_response(
+                StatusCode::BAD_REQUEST,
+                r#"{"error":"invalid_offset","message":"Offsets must be between -720 and 840 minutes"}"#,
+            ));
+        }
+        Err(timezone::Invalid::Schedule) => {
+            crate::error!("api: PUT /api/timezone carried an incoherent schedule");
+            return Either::A(error_response(
+                StatusCode::BAD_REQUEST,
+                r#"{"error":"invalid_schedule","message":"next_offset_minutes and transition_epoch_s (unix seconds) go together, and need an offset_minutes to transition from"}"#,
+            ));
+        }
+    };
+
+    // Writes flash only if this differs from what is stored — see
+    // `timezone::apply`, and the module docs on why that check lives there.
+    if !timezone::apply(record) {
+        return Either::A(error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"error":"storage_failed","message":"The timezone was not saved"}"#,
+        ));
+    }
+
+    Either::B(json(render_timezone()))
+}
+
+/// Serialize the stored record into a pooled buffer.
+///
+/// Built by hand into a small stack string and copied, exactly as
+/// [`render_check_answer`] does and for the same two reasons: a `serde`
+/// serializer would want an owned struct threaded through picoserve's response
+/// machinery to save nothing, and the string is a local of a plain `fn` so it
+/// never lands inside a handler's future, where BUDGET.md's multiplier would
+/// charge for it once per router layer.
+fn render_timezone() -> Option<JsonBody> {
+    let record = timezone::stored().unwrap_or_default();
+    let schedule = record.schedule;
+    let transition = schedule.and_then(|s| s.next);
+    let mut body = TimezoneJson::new();
+
+    body.push('{').ok()?;
+    write_offset(&mut body, "offset_minutes", schedule.map(|s| s.offset_minutes))?;
+    body.push(',').ok()?;
+    write_offset(
+        &mut body,
+        "next_offset_minutes",
+        transition.map(|next| next.offset_minutes),
+    )?;
+    match transition {
+        Some(next) => write!(&mut body, r#","transition_epoch_s":{}"#, next.at_epoch_s).ok()?,
+        None => body.push_str(r#","transition_epoch_s":null"#).ok()?,
+    }
+    body.push(',').ok()?;
+    write_offset(&mut body, "manual_offset_minutes", record.manual_minutes)?;
+    body.push(',').ok()?;
+    // Derived, and `PUT` ignores it. It comes from the same accessor the
+    // display will read rather than from the record above, which is the whole
+    // point of the field: if the two ever disagreed, a value re-derived here
+    // would hide exactly the bug this exists to show. Seconds are the display's
+    // unit and minutes are the endpoint's, so the seam is crossed back here —
+    // exactly, because every stored offset is a whole number of minutes.
+    //
+    // The device's clock is the other input, so before the first sync this is
+    // the schedule's *current* offset. That is the honest answer: a transition
+    // cannot have passed on a device that does not know what time it is.
+    write_offset(
+        &mut body,
+        "effective_offset_minutes",
+        timezone::offset_seconds_at(crate::net::timesync::local_clock().now_epoch_s)
+            .map(|seconds| (seconds / 60) as i16),
+    )?;
+    body.push('}').ok()?;
+
+    let mut lease = scratch::claim()?;
+    let bytes = body.as_bytes();
+    lease.as_mut().get_mut(..bytes.len())?.copy_from_slice(bytes);
+    Some(JsonBody {
+        lease,
+        len: bytes.len(),
+    })
+}
+
+/// The timezone document, before it is copied into a pooled slot.
+///
+/// 224 B against a widest rendering of 143 B — five numbers, five keys and the
+/// braces, with `transition_epoch_s` at its full ten digits. Sized here rather
+/// than borrowing a [`scratch`] slot for the assembly because the slot is 3 KB
+/// and this is the whole response.
+type TimezoneJson = heapless::String<224>;
+
+/// `"<key>":<minutes|null>`. The `null` is load-bearing — it is how the SPA
+/// tells "no override" from "an override of UTC+00:00".
+fn write_offset(body: &mut TimezoneJson, key: &str, minutes: Option<i16>) -> Option<()> {
+    match minutes {
+        Some(minutes) => write!(body, r#""{key}":{minutes}"#).ok(),
+        None => write!(body, r#""{key}":null"#).ok(),
     }
 }
 

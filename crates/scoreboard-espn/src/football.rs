@@ -40,9 +40,9 @@
 use core::fmt::Write as _;
 
 use crate::common::{
-    EText, Exact, HomeAway, Quirk, Quirks, linescore_byte, num_i16, num_u8, num_u16,
-    order_home_away, parse_hex_rgb, parse_live_phase, parse_record, parse_start_time,
-    saturate_score, set_text, stable_sort_by_key, wire_phase,
+    CrestPath, Crests, EText, Exact, HomeAway, Quirk, Quirks, crest_path, linescore_byte, num_i16,
+    num_u8, num_u16, order_home_away, parse_hex_rgb, parse_live_phase, parse_record,
+    parse_start_time, saturate_score, set_text, stable_sort_by_key, wire_phase,
 };
 use crate::path::{self, ContainerKind, Directive, Pattern, Seg, Sink, StreamMatcher, Value};
 use scoreboard_wire::football as wire;
@@ -121,7 +121,11 @@ const CURATED_CURRENT: usize = 44;
 /// length-2+ rows): catches a scoreboard shell whose `events` is a scalar
 /// or null, the backend's whole-body deserialize failure.
 const EVENTS: usize = 45;
-const PATTERN_COUNT: usize = 46;
+/// Direct mode only: the crest artwork the backend used to resolve for the
+/// device. Appended rather than filed with the other `TEAM_*` patterns so
+/// the indices above keep matching the inventory they were derived from.
+const TEAM_LOGO: usize = 46;
+const PATTERN_COUNT: usize = 47;
 
 static PATHS: [Pattern; PATTERN_COUNT] = [
     /* 00 EVENT            */ &[Key("events"), AnyIndex],
@@ -206,6 +210,8 @@ static PATHS: [Pattern; PATTERN_COUNT] = [
     /* 44 CURATED_CURRENT  */
     &[Key("events"), AnyIndex, Key("competitions"), AnyIndex, Key("competitors"), AnyIndex, Key("curatedRank"), Key("current")],
     /* 45 EVENTS           */ &[Key("events")],
+    /* 46 TEAM_LOGO        */
+    &[Key("events"), AnyIndex, Key("competitions"), AnyIndex, Key("competitors"), AnyIndex, Key("team"), Key("logo")],
 ];
 
 // ----------------------------------------------------------- public types
@@ -334,6 +340,10 @@ pub struct GameExtract {
     last_play_text: EText,
     away: TeamExtract,
     home: TeamExtract,
+    /// Direct mode's crest sources. Outside the wire view by design — the
+    /// proxy resolved these itself, so nothing about them reaches
+    /// `as_game` and the parity gate is untouched.
+    crests: Crests,
 }
 
 #[derive(Debug, Default)]
@@ -403,11 +413,17 @@ impl GameExtract {
             last_play_text: EText::new(),
             away: TeamExtract::default(),
             home: TeamExtract::default(),
+            crests: Crests::default(),
         }
     }
 
     pub fn state(&self) -> GameState {
         self.state
+    }
+
+    /// The crest paths for this game's two teams.
+    pub fn crests(&self) -> &Crests {
+        &self.crests
     }
 
     pub fn game_id(&self) -> &str {
@@ -560,6 +576,10 @@ impl Default for Comp0Data {
 #[derive(Debug, Default)]
 struct Comp0Competitor {
     home_away: Option<HomeAway>,
+    /// `team.logo` as a CDN path. Unlike its neighbours this has no
+    /// presence flag: the backend's games pipeline never deserializes the
+    /// field, so nothing about it may invalidate an event.
+    crest: Option<CrestPath>,
     score: EText,
     /// Compared as a *string* against `situation.possession` — never
     /// parsed, so `"012" != "12"` (backend parity). Compare key
@@ -848,6 +868,15 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
                 }
                 _ => self.invalid(),
             },
+            // No `invalid()` arm: the field is invisible to the backend's
+            // parse, so a malformed one must cost the event nothing.
+            TEAM_LOGO => {
+                if let Value::Str(href) = v {
+                    if let Some(k) = Self::slot(idx) {
+                        self.ev.comp0.competitors[k].crest = crest_path(href);
+                    }
+                }
+            }
             TEAM_ABBR | TEAM_COLOR | TEAM_ALT_COLOR => match v {
                 Value::Str(s) => {
                     let check = &mut self.ev.check.competitor;
@@ -1164,6 +1193,10 @@ fn transform(
     let marker = |k: usize| d.competitors[k].home_away.expect("validated marker");
     let (home_k, away_k) =
         order_home_away((marker(0), 0usize), (marker(1), 1usize)).ok_or(ExtractError::HomeAwayConflict)?;
+    g.crests = Crests {
+        away: d.competitors[away_k].crest.clone(),
+        home: d.competitors[home_k].crest.clone(),
+    };
 
     match state {
         St::Pre => {

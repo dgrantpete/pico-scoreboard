@@ -2145,6 +2145,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "scoreboard-direct"
+version = "0.1.0"
+dependencies = [
+ "heapless 0.9.3",
+ "scoreboard-espn",
+ "scoreboard-model",
+ "scoreboard-wire",
+ "serde_json",
+]
+
+[[package]]
 name = "scoreboard-espn"
 version = "0.1.0"
 dependencies = [

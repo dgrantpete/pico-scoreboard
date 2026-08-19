@@ -1,7 +1,7 @@
 //! The 980 KB of flash the device gets to keep things in.
 //!
 //! SPEC §9: a `sequential-storage` map over the region
-//! [`scoreboard_layout`] reserves at `0x30_B000`. Three keys, and the reasons
+//! [`scoreboard_layout`] reserves at `0x30_B000`. Four keys, and the reasons
 //! for each are in [`Key`]. Everything else about persistence — the
 //! merge, the defaults, the never-raises promise — belongs to
 //! [`scoreboard_config`] and is host-tested there; what is here is the flash.
@@ -146,6 +146,18 @@ const BUFFER_BYTES: usize = 3 * 1024;
 /// it exists to break, and it changes on a different clock — once per update
 /// attempt rather than once per settings save. Folding it in would rewrite the
 /// whole document, wifi password and all, every time an update started.
+///
+/// # The fourth key, and why it is not config either
+///
+/// Phase S added [`Key::Timezone`] — the browser-seeded UTC offset schedule
+/// ([`crate::timezone`]). The OTA argument above transfers almost unchanged: a
+/// different writer on a different cadence. The settings page writes the
+/// configuration when a person presses Save; it writes this in the background
+/// on every page load, with no person involved. One document is one write, so
+/// folding the offset in would mean the SPA's background seed rewriting the
+/// wifi password — and a `PUT /api/config` that changed the brightness
+/// discarding the timezone. They are separate facts with separate lifecycles,
+/// which is the whole of SPEC §9's test.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum Key {
@@ -162,6 +174,9 @@ enum Key {
     /// What the OTA client last tried to install, and how it went. See
     /// [`scoreboard_ota::attempt`].
     OtaAttempt = 3,
+    /// The UTC offset schedule the settings page seeded. See
+    /// [`crate::timezone`].
+    Timezone = 4,
 }
 
 /// The flash handle's storage. Written once, by [`install`].
@@ -553,6 +568,60 @@ pub fn save_ota_attempt(record: &Attempt) -> bool {
             false
         }
         None => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The timezone record
+// ---------------------------------------------------------------------------
+
+/// Read the stored UTC offset schedule.
+///
+/// `None` covers the three cases [`crate::timezone`] treats alike — nothing has
+/// ever been seeded, the record is from a firmware whose encoding changed, or
+/// the read failed — because all three mean the display has no timezone to show
+/// a local time in, which is a state it already handles.
+pub fn load_timezone() -> Option<crate::timezone::Record> {
+    let mut buffer = [0u8; BUFFER_BYTES];
+    let fetched = with_map(|map| {
+        block_on(map.fetch_item::<&[u8]>(&mut buffer, &(Key::Timezone as u8)))
+    })?;
+    match fetched {
+        Ok(Some(record)) => crate::timezone::Record::decode(record),
+        Ok(None) => None,
+        Err(error) => {
+            defmt::error!("storage: timezone read failed: {}", error);
+            None
+        }
+    }
+}
+
+/// Write the UTC offset schedule, replacing whatever was there.
+///
+/// One write per *change*, not per `PUT`: the settings page posts on every
+/// visit and [`crate::timezone::apply`] compares before it calls this, so a
+/// page reload costs no flash and no dropped frame. That check is the caller's
+/// and not this function's for the same reason `save_config`'s batching is
+/// `put_config`'s — the module that knows what changed is the module that owns
+/// the running copy.
+pub fn save_timezone(record: &crate::timezone::Record) -> bool {
+    let mut buffer = [0u8; BUFFER_BYTES];
+    let mut encoded = [0u8; crate::timezone::MAX_BYTES];
+    record.encode(&mut encoded);
+    let value: &[u8] = &encoded;
+    let stored = with_map(|map| {
+        block_on(map.store_item(&mut buffer, &(Key::Timezone as u8), &value))
+    });
+    match stored {
+        Some(Ok(())) => true,
+        Some(Err(error)) => {
+            crate::error!("storage: timezone save failed: {}", Complaint::of(&error));
+            false
+        }
+        None => {
+            crate::error!("storage: timezone save before install");
+            false
+        }
     }
 }
 

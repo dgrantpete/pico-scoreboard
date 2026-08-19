@@ -41,6 +41,14 @@ static SCRATCH: ConstStaticCell<[u8; 16 * 1024]> = ConstStaticCell::new([0; 16 *
 /// lane's device-placement note (avoids a transient stack copy).
 static PNG_SCRATCH: StaticCell<Scratch> = StaticCell::new();
 
+/// RAM copy of the MLS body (the one slate that fits in SRAM). The real
+/// firmware parses socket data that already sits in RAM; this bench's
+/// flash-resident bodies stream through the XIP cache and evict hot code as
+/// a side effect. Feeding the same extraction from RAM isolates that
+/// artifact from real parse cost.
+const MLS_LEN: usize = 207_433;
+static MLS_RAM: ConstStaticCell<[u8; MLS_LEN]> = ConstStaticCell::new([0; MLS_LEN]);
+
 /// The six real CDN logos: 500 px originals and 100 px combiner variants.
 static LOGOS: [(&str, &[u8]); 6] = [
     ("nyy-100", include_bytes!("../assets/nyy-100.png")),
@@ -139,6 +147,39 @@ async fn main(_spawner: Spawner) {
                 u32::from(list.failed),
             );
         }
+    }
+
+    // Data-source attribution: the same MLS list extraction fed from RAM,
+    // plus a memcpy+sum control that measures the flash->RAM streaming cost
+    // (and its XIP-cache pollution) by itself.
+    let mls_ram = MLS_RAM.take();
+    mls_ram.copy_from_slice(MLS_BODY);
+    for rep in 0..3u32 {
+        let t0 = Instant::now();
+        let mut acc: u32 = 0;
+        feed(MLS_BODY, chunk_buf, 4096, |c| {
+            acc = acc.wrapping_add(c.iter().map(|&b| b as u32).sum::<u32>());
+        });
+        let us = t0.elapsed().as_micros();
+        info!(
+            "CTRL mls flash-memcpy+sum rep={=u32}: {=u64} us (acc {=u32})",
+            rep, us, acc
+        );
+
+        let t0 = Instant::now();
+        let mut ex = soccer::ListExtractor::new(scratch).unwrap();
+        feed(mls_ram, chunk_buf, 4096, |c| ex.write(c).unwrap());
+        let list = ex.finish().unwrap();
+        let us = t0.elapsed().as_micros();
+        report(
+            "mls-207K-RAMSRC",
+            4096,
+            rep,
+            MLS_LEN,
+            us,
+            u32::from(list.ok),
+            u32::from(list.failed),
+        );
     }
 
     // Detail extraction: the poll loop's real per-game cost, 4 KB chunks.

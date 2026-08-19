@@ -788,3 +788,77 @@ fn pregame_event_missing_venue_is_dropped() {
     assert_eq!(report.outcome, GameOutcome::Absent);
     assert_eq!((report.ok, report.failed), (0, 1));
 }
+
+// ------------------------------------------------------------ crest paths
+
+/// The `homeAway`-keyed crest hrefs the backend would have resolved, read
+/// straight out of the fixture so the expectation cannot drift from it.
+fn expected_crests(event_json: &str) -> (Option<String>, Option<String>) {
+    let event: serde_json::Value = serde_json::from_str(event_json).expect("fixture is JSON");
+    let mut away = None;
+    let mut home = None;
+    for competitor in event["competitions"][0]["competitors"]
+        .as_array()
+        .expect("competitors array")
+    {
+        let logo = competitor["team"]["logo"].as_str().map(|href| {
+            href.strip_prefix("https://a.espncdn.com")
+                .expect("fixture logos are on the ESPN CDN")
+                .to_string()
+        });
+        match competitor["homeAway"].as_str().expect("marker") {
+            "away" => away = logo,
+            "home" => home = logo,
+            other => panic!("unexpected marker {other}"),
+        }
+    }
+    (away, home)
+}
+
+/// World Cup teams are country flags (`/i/teamlogos/countries/500/…`), not
+/// the club artwork MLS carries — the shape difference the construct-vs-
+/// expose ruling turned on.
+#[test]
+fn every_fixture_exposes_both_crests_ordered_by_home_away() {
+    for name in FIXTURES {
+        let event = fixture(name);
+        let extract = found(&wrap(&[&event]), &id_of(&event));
+
+        let (away, home) = expected_crests(&event);
+        let crests = extract.crests();
+        assert_eq!(
+            crests.away.as_ref().map(|p| p.as_str().to_string()),
+            away,
+            "{name}: away crest"
+        );
+        assert_eq!(
+            crests.home.as_ref().map(|p| p.as_str().to_string()),
+            home,
+            "{name}: home crest"
+        );
+        let away_path = crests.away.as_ref().expect("fixtures carry logos");
+        assert!(
+            away_path.starts_with("/i/teamlogos/countries/500/"),
+            "{name}: expected a country flag, got {away_path}"
+        );
+    }
+}
+
+#[test]
+fn a_malformed_crest_never_costs_the_event() {
+    for junk in [
+        serde_json::json!(42),
+        serde_json::json!(null),
+        serde_json::json!("https://evil.example.com/i/teamlogos/countries/500/usa.png"),
+    ] {
+        let event = mutate(&fixture("pregame"), |value| {
+            value["competitions"][0]["competitors"][0]["team"]["logo"] = junk.clone();
+        });
+        let extract = found(&wrap(&[&event]), &id_of(&event));
+        assert_eq!(
+            hex(&encode(&extract)),
+            hex(&golden("pregame")),
+            "{junk}: the wire bytes are untouched"
+        );
+    }
+}

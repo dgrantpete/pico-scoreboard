@@ -118,6 +118,13 @@ pub struct Fetched<'buf> {
 
 /// The backend clock. `main.py:453-488`.
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(
+    feature = "direct",
+    allow(
+        dead_code,
+        reason = "the direct build's clock comes from `net::sntp`, not from a backend"
+    )
+)]
 pub struct BackendTime {
     /// Unix seconds, UTC.
     pub unix_seconds: u32,
@@ -141,6 +148,18 @@ impl ApiClient {
             stack,
             state: TCP_STATE.take(),
         }
+    }
+
+    /// The stack this client was built over.
+    ///
+    /// One caller, `direct` only: [`timesync`](crate::net::timesync)'s SNTP
+    /// path needs a `Stack` and the poller does not keep one — it hands the
+    /// stack to [`ApiClient::new`] and lets the client own it from there. A
+    /// `Stack` is a `Copy` handle rather than a resource, so lending it out
+    /// gives away nothing this client is holding.
+    #[cfg(feature = "direct")]
+    pub fn stack(&self) -> Stack<'static> {
+        self.stack
     }
 
     /// A league's games list, with the conditional request `poller.py` sends on
@@ -177,7 +196,9 @@ impl ApiClient {
         url: &str,
         buf: &'buf mut [u8],
     ) -> Result<Option<&'buf [u8]>, PollError> {
-        let fetched = self.get(url, &[("Accept", STRUCT_CONTENT_TYPE)], buf).await?;
+        let fetched = self
+            .get(url, &[("Accept", STRUCT_CONTENT_TYPE)], buf)
+            .await?;
         if fetched.status == 404 {
             return Ok(None);
         }
@@ -207,8 +228,17 @@ impl ApiClient {
     }
 
     /// `GET /time`. JSON, not the struct format — the endpoint predates it.
+    #[cfg_attr(
+        feature = "direct",
+        allow(
+            dead_code,
+            reason = "the direct build's clock comes from `net::sntp`, not from a backend"
+        )
+    )]
     pub async fn time(&mut self, url: &str, buf: &mut [u8]) -> Result<BackendTime, PollError> {
-        let fetched = self.get(url, &[("Accept", "application/json")], buf).await?;
+        let fetched = self
+            .get(url, &[("Accept", "application/json")], buf)
+            .await?;
         if fetched.status != 200 {
             return Err(error_from_body(fetched.status, fetched.body));
         }
@@ -286,7 +316,10 @@ impl ApiClient {
     /// would reset the device in the middle of an update that was working.
     #[cfg_attr(
         not(feature = "link-boot-integrated"),
-        allow(dead_code, reason = "reached only through the OTA install path, which needs a bootloader")
+        allow(
+            dead_code,
+            reason = "reached only through the OTA install path, which needs a bootloader"
+        )
     )]
     pub async fn download(
         &mut self,
@@ -321,17 +354,16 @@ impl ApiClient {
 
         let mut reader = response.body().reader();
         loop {
-            let read = reader.read(chunk).await.map_err(|_| {
-                PollError::Transport(scoreboard_model::poll::Transport::Io)
-            })?;
+            let read = reader
+                .read(chunk)
+                .await
+                .map_err(|_| PollError::Transport(scoreboard_model::poll::Transport::Io))?;
             if read == 0 {
                 return Ok(());
             }
             LAST_ANSWER_S.store(Instant::now().as_secs() as u32, Ordering::Relaxed);
             if !sink(&chunk[..read]) {
-                return Err(PollError::Transport(
-                    scoreboard_model::poll::Transport::Io,
-                ));
+                return Err(PollError::Transport(scoreboard_model::poll::Transport::Io));
             }
         }
     }
@@ -514,7 +546,10 @@ pub fn base_url(configured: &str) -> heapless::String<URL_BYTES> {
 ///
 /// A URL that does not fit is [`Transport::BadUrl`] at the call site rather
 /// than a truncated request to somewhere unintended.
-pub fn url(base: &str, path: core::fmt::Arguments<'_>) -> Result<heapless::String<URL_BYTES>, PollError> {
+pub fn url(
+    base: &str,
+    path: core::fmt::Arguments<'_>,
+) -> Result<heapless::String<URL_BYTES>, PollError> {
     let mut url = heapless::String::new();
     url.push_str(base)
         .map_err(|_| PollError::Transport(Transport::BadUrl))?;

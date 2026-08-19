@@ -351,6 +351,107 @@ impl<const N: usize> Exact<N> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Crest artwork: where a team's logo image lives on ESPN's CDN.
+//
+// Proxy mode never needed this — the backend resolved the href and handed the
+// device a finished 24×24 sprite. Direct mode fetches the PNG itself, so the
+// href has to survive extraction. It is taken from the payload rather than
+// built from the team's abbreviation or id, because there is no single
+// convention to build from: the corpus carries five different shapes across
+// five leagues (`mlb/500/scoreboard/{abbrev}`, `nba/500/scoreboard/{abbrev}`,
+// `ncaa/500/{id}`, `soccer/500/{id}`, `countries/500/{abbrev}`), and three of
+// the eight leagues the firmware ships have no captured body to check a sixth
+// guess against. `backend/src/team.rs` reached the same conclusion first.
+
+/// The only CDN origin a crest is ever fetched from.
+///
+/// The backend refuses to proxy a payload href off this host so that a feed
+/// cannot steer the fetch elsewhere; direct mode inherits the rule here,
+/// where the href is first seen, rather than re-deriving it at the socket.
+pub const CDN_ORIGIN: &str = "https://a.espncdn.com";
+
+/// Storage for a crest's CDN path — the payload href minus [`CDN_ORIGIN`].
+///
+/// The origin is identical for every crest, so carrying it per team would
+/// cost 21 bytes a side for nothing. 64 leaves comfortable headroom over the
+/// corpus maximum of 40 bytes (an NBA scoreboard-variant path); an href that
+/// somehow exceeds it is treated as no crest rather than silently truncated
+/// into a URL that would 404.
+pub const CREST_PATH_BYTES: usize = 64;
+
+pub type CrestPath = heapless::String<CREST_PATH_BYTES>;
+
+/// A team's crest path from its payload `team.logo` href.
+///
+/// `None` for an href on any other host, or one too long to hold — which is
+/// the backend's own answer: it warns on the off-host case and treats the
+/// team as having no logo at all. Requiring the `/` after the origin is what
+/// makes this a host match rather than a prefix match, so a lookalike host
+/// like `a.espncdn.com.evil.test` cannot pass.
+pub fn crest_path(href: &str) -> Option<CrestPath> {
+    let path = href.strip_prefix(CDN_ORIGIN)?;
+    if !path.starts_with('/') {
+        return None;
+    }
+    let mut out = CrestPath::new();
+    out.push_str(path).ok()?;
+    Some(out)
+}
+
+/// Both teams' crest paths, ordered by `homeAway` like every other pair in
+/// an extract — never by array position.
+///
+/// `None` a side means the payload named no usable crest. That is not an
+/// extraction failure: the games pipeline the backend runs never reads
+/// `team.logo` at all, so a missing or malformed one must cost exactly what
+/// it costs the backend, which is nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Crests {
+    pub away: Option<CrestPath>,
+    pub home: Option<CrestPath>,
+}
+
+const COMBINER_PREFIX: &str = "/combiner/i?img=";
+
+/// Alpha has to survive the resize: the panel has no alpha, so the crest is
+/// composited against black by the decoder (`backend/src/logo.rs` semantics),
+/// and a flattened source would arrive with a box around it. ESPN's own
+/// combiner URL in the corpus — the MLB dark league logo — carries the same
+/// parameter.
+const COMBINER_SUFFIX: &str = "&transparent=true";
+
+/// Room for `&w=NNNNN&h=NNNNN` at `u16`'s widest.
+const COMBINER_SIZE_BYTES: usize = 2 * ("&w=".len() + 5);
+
+/// Bytes needed for the longest URL [`crest_url`] can build.
+pub const CREST_URL_BYTES: usize = CDN_ORIGIN.len()
+    + COMBINER_PREFIX.len()
+    + CREST_PATH_BYTES
+    + COMBINER_SIZE_BYTES
+    + COMBINER_SUFFIX.len();
+
+pub type CrestUrl = heapless::String<CREST_URL_BYTES>;
+
+/// The CDN combiner URL for one crest, rendered `pixels` square.
+///
+/// Payload hrefs point at 500 px artwork, which is 13–40 KB of PNG and
+/// 156–209 ms to decode on silicon; the combiner's 100 px variant is 3–4 KB
+/// and ~8.3 ms (PARSE-PERF.md). Nothing in the payload links the small
+/// variant — the corpus has no team-level combiner URL at all — so the size
+/// is asked for here.
+pub fn crest_url(path: &str, pixels: u16) -> Option<CrestUrl> {
+    use core::fmt::Write;
+
+    let mut url = CrestUrl::new();
+    write!(
+        url,
+        "{CDN_ORIGIN}{COMBINER_PREFIX}{path}&w={pixels}&h={pixels}{COMBINER_SUFFIX}"
+    )
+    .ok()?;
+    Some(url)
+}
+
 /// Wire-bound string plus a presence flag: copies with the shared
 /// `truncate_utf8` (ruling 2).
 #[derive(Debug, Clone, Default)]

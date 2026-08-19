@@ -163,6 +163,33 @@ export interface CheckUpdateResponse {
 	message?: string;
 }
 
+// GET/PUT /api/timezone — the browser-seeded UTC offset schedule.
+//
+// Every offset is minutes east of UTC (UTC−06:00 is -360), which is
+// `-Date.prototype.getTimezoneOffset()`. The device converts to seconds once,
+// on its side.
+//
+// The PUT REPLACES; it does not merge. Every absent or null field is an absent
+// value, so a body of {} clears the timezone entirely — which is why the seed
+// flow reads the document before it writes one (see stores/timezone.svelte.ts).
+export interface TimezoneDocument {
+	/** The offset in force now, per the last seed. */
+	offset_minutes: number | null;
+	/** The offset after the next DST transition; null in a zone without DST. */
+	next_offset_minutes: number | null;
+	/** When the offset changes, Unix seconds; null in a zone without DST. */
+	transition_epoch_s: number | null;
+	/** A fixed offset set by hand. Wins over the schedule whenever it is set. */
+	manual_offset_minutes: number | null;
+	/**
+	 * GET only, derived, ignored by PUT: the offset the DEVICE would use right
+	 * now, after the override precedence and the transition flip. Null when the
+	 * device has never been seeded. This is what it believes, not what this
+	 * browser assumes — the two can differ, and that is the point.
+	 */
+	effective_offset_minutes?: number | null;
+}
+
 export interface Color {
 	r: number;
 	g: number;

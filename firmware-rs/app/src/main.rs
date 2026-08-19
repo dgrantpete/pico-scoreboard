@@ -57,6 +57,7 @@ mod settings;
 mod storage;
 mod ota;
 mod supervise;
+mod timezone;
 mod veml7700;
 
 use core::cell::UnsafeCell;
@@ -227,6 +228,12 @@ fn main() -> ! {
     // rollback writes the attempt record and a flash write is free until the
     // render loop is up.
     ota::read_boot_state();
+
+    // The UTC offset the settings page last seeded, into the static the poll
+    // loop reads. Here rather than lazily on first use for the same reason as
+    // everything above it: the read is free before core 1 starts and costs the
+    // panel a frame after.
+    timezone::load();
 
     // Read before the watchdog task can arm it again, and logged because it is
     // the one fact that separates "somebody pulled the plug" from "this device

@@ -140,27 +140,74 @@ Gate to start: **BACKLOG 94 settled** — headroom re-earned to ≥40 % *plus*
 the smarthome reservation, measured, not estimated. Gate to exit: handshake
 and steady-state numbers in BUDGET.md.
 
-- [ ] BACKLOG-94 levers, measured then chosen: Store-into-back-buffer fold
-      (2,848 B), crest pool 32→16 (18,432 B), picoserve arena layout
-      (`-Zprint-type-sizes`), flatten the route tree. Boxing is not a lever
-      (no-alloc).
-- [ ] embedded-tls via reqwless, against a TLS terminator fronting the
-      `tools/espn` mock first (the mock speaks plain HTTP), then real hosts.
-- [ ] **Protocol check, early**: embedded-tls is TLS 1.3-only. Verify 1.3 on
-      all four hosts the standalone build will touch:
-      `site.api.espn.com`, `a.espncdn.com` (logo hrefs are absolute),
-      `github.com`, `objects.githubusercontent.com` (release-asset
-      redirect target). Any 1.2-only host is a stop-and-redesign finding.
-- [ ] Root CA strategy: pin multiple roots per host family; write the
-      rotation runbook (a CA rotation is an OTA event).
-- [ ] Measure the handshake on silicon before believing any figure — the
-      house rule PHASE-S.md earned at 8× on the hash estimate. Keep-alive
-      amortization is load-bearing, not nice-to-have.
-- [ ] User-Agent: device sends the allowlisted prefix from
-      `backend/config/default.toml` (ESPN's edge 403s unknown UAs).
-- [ ] Exit: sustained TLS polling of the fronted mock + one real ESPN fetch
-      from the bench unit; RAM delta and handshake time in BUDGET.md;
-      merge to `main`.
+- [x] BACKLOG-94 levers, measured then chosen (2026-08-17): the
+      `-Zprint-type-sizes` walk found the arena was mostly duplication, and
+      the two structural levers alone re-earned the budget — flat route
+      dispatch (−7,360 B) and picoserve's select-duplication fix on fork
+      `dgrantpete/picoserve` `perf/select-by-ref` (−25,408 B). Statics
+      337,712 → 304,944 B = **42.7 % headroom, measured**; HTTP behavior
+      byte-identical under a 16-probe matrix on the seated unit. Store fold
+      and crest halving priced, deliberately untaken. Residual (BACKLOG 94):
+      beyond-40 % slack is 14,544 B — covers the smarthome reservation at
+      10 KB, 816 B short at 15 KB, and `ram-exec` at S3 wants 5–10 KB more;
+      the owner names the reservation and the S3-time lever if one is
+      needed. Gate is open on the 10 KB reading.
+- [x] embedded-tls via reqwless, against a TLS terminator fronting the
+      `tools/espn` mock first, then real hosts (2026-08-17 night,
+      `firmware-rs/tls-spike` on the seated unit): full 481–498 KB mock
+      bodies and real 215 KB `site.api.espn.com` scoreboards fetched over
+      TLS 1.3 under the ruled posture, plus github.com. Two ecosystem
+      walls found and fixed on fork `dgrantpete/embedded-tls`
+      `port/der-0.8-stable`: (1) published embedded-tls cannot build
+      against today's crates.io (der rc-pin rot; upstream PR #196 fixes
+      main, unreleased), and (2) the default config only advertises RSA
+      signature schemes with `alloc` on, so ESPN's RSA-only edge aborts a
+      no-verify client at the handshake — advertising unconditionally
+      fixed it, measured before/after on silicon. Numbers and the
+      TCP-window-limited finding: BUDGET.md "Phase S2".
+- [x] **Protocol check, early** (2026-08-17, from the dev machine): all four
+      hosts the standalone build will touch — `site.api.espn.com`,
+      `a.espncdn.com` (logo hrefs are absolute), `github.com`,
+      `objects.githubusercontent.com` (release-asset redirect target) —
+      negotiate TLS 1.3 with `TLS_AES_128_GCM_SHA256` specifically
+      (embedded-tls's primary suite; verified via openssl s_client forced to
+      that suite). No stop-and-redesign finding. The on-device handshake
+      against real hosts remains S2's own exit evidence.
+- [x] **Verification posture decided (owner, 2026-08-17 evening)** — the
+      root-CA-pinning item dissolved into a per-host-family policy once the
+      chain recon landed. ESPN and `a.espncdn.com` serve RSA-only chains
+      (no ECDSA dual certs — verified by forcing ECDSA-only offers), and
+      embedded-tls's RSA verification hard-requires `alloc`; the owner
+      ruled the no-alloc contract wins: **ESPN runs `TlsVerify::None`** —
+      transport encryption, no server auth. Damage ceiling accepted as
+      wrong-game-data; strictly stronger than today's plain-HTTP data
+      plane. The honest corollary, stated once: the parser and png-stream
+      are now the security boundary for hostile payloads — evidence is the
+      no-alloc bounded design, 149k-body sweep at 0 panics, and clean-Err
+      overflow paths; S0's thin-fuzzing note inherits a little more weight.
+      OTA plane: ed25519 carries the trust end-to-end as designed;
+      `github.com` is all-ECDSA so full `rustpki` verification is free —
+      take it there; `objects.githubusercontent.com` (RSA) rides the
+      signature. No CA pinning, so no CA-rotation runbook — the only
+      TLS-shaped OTA event left is embedded-tls capability drift.
+- [x] Measure the handshake on silicon before believing any figure
+      (2026-08-17 night): connect+handshake 132–198 ms LAN / 311 ms ESPN /
+      ~400 ms github; kept-alive requests 50–310 ms vs cold fetches of
+      0.6–6 s — keep-alive amortization confirmed load-bearing. The 8×-class
+      surprise this time was elsewhere: bulk transfer is TCP-window-limited
+      (1.5 KB rx buffer), not crypto-limited — the S3 rx-buffer sizing
+      lever in BUDGET.md "Phase S2".
+- [x] User-Agent: the spike sent the allowlisted prefix from
+      `backend/config/default.toml` on every request — five real ESPN
+      fetches answered 200, no 403s (2026-08-17).
+- [x] Exit (2026-08-19): five real ESPN fetches, RAM delta and handshake
+      times in BUDGET.md "Phase S2"; **28.5 h sustained soak of the
+      fronted mock clean** (2,890 polls, 33 s median cadence, every TLS
+      reconnect succeeded; only failure class = the known Wi-Fi
+      association loss, one event self-recovered) and the PowerSave-off
+      control answered (soak ran `PowerManagementMode::None`, throughput
+      floors unchanged — window/RTT physics). Numbers folded into
+      BUDGET.md "Phase S2". Merge to `main` at this boundary.
 
 ## S3 — the direct feed (device, still merge-clean)
 
