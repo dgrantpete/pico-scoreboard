@@ -101,17 +101,38 @@ use scoreboard_model::feed::LeagueId;
 use scoreboard_model::poll::{
     self, FailureTracker, Health, PollError, SkipKind, SkipMachine, SkipVerdict,
 };
-use scoreboard_model::prefetch::{Step, WarmIndex};
+use scoreboard_model::prefetch::WarmIndex;
+#[cfg(not(feature = "direct"))]
+use scoreboard_model::prefetch::Step;
 use scoreboard_model::slate::MAX_SOURCES;
-use scoreboard_model::snapshot::{ABBR, GAME_ID, Millis};
+#[cfg(not(feature = "direct"))]
+use scoreboard_model::snapshot::ABBR;
+#[cfg(not(feature = "direct"))]
+use scoreboard_model::snapshot::GAME_ID;
+use scoreboard_model::snapshot::Millis;
+#[cfg(not(feature = "direct"))]
 use scoreboard_model::store::Logos;
+#[cfg(not(feature = "direct"))]
 use scoreboard_model::text::{Text, set_plain};
-use scoreboard_model::{GameFeed, Mode, Publisher, Slate, Sport, Store, WireFeed};
+#[cfg(not(feature = "direct"))]
+use scoreboard_model::{GameFeed, WireFeed};
+use scoreboard_model::{Mode, Publisher, Slate, Sport, Store};
 
-use crate::logos::{CrestDirectory, WARM_GAMES, Warm};
-use crate::net::api_client::{ApiClient, Etag, ResponseBuffer, base_url, url};
+#[cfg(not(feature = "direct"))]
+use crate::logos::Warm;
+use crate::logos::{CrestDirectory, WARM_GAMES};
+#[cfg(not(feature = "direct"))]
+use crate::net::api_client::{Etag, url};
+use crate::net::api_client::{ApiClient, ResponseBuffer, base_url};
 use crate::net::timesync;
 use crate::settings;
+
+/// The fetch phases' direct-feed twins (SPEC §14): same names, same
+/// signatures, fed from ESPN instead of the backend. Selected per-function
+/// rather than by swapping the whole poller, because everything that is not
+/// a fetch — the rotation, the skip machine, the commit — must not fork.
+#[cfg(feature = "direct")]
+mod direct;
 
 /// What the poller can be asked to do from outside.
 ///
@@ -209,9 +230,25 @@ pub fn health() -> Health {
     Health {
         streak: FAILURE_STREAK.load(Ordering::Relaxed),
         since_success_s: (last_success != NEVER).then(|| now.saturating_sub(last_success)),
-        since_answer_s: crate::net::api_client::last_answer_uptime_s()
-            .map(|at| now.saturating_sub(at)),
+        since_answer_s: last_answer_uptime_s().map(|at| now.saturating_sub(at)),
     }
+}
+
+/// The link's last answer, whichever client heard it. A `direct` build's data
+/// plane is `net::espn` and its OTA plane is still `api_client`, so the
+/// *newer* of the two clocks is the honest reading — merging is what keeps a
+/// device that only ever talks to ESPN from looking permanently silent to
+/// [`poll::gate`], which resets on silence.
+fn last_answer_uptime_s() -> Option<u32> {
+    let backend = crate::net::api_client::last_answer_uptime_s();
+    #[cfg(feature = "direct")]
+    let answer = match (backend, crate::net::espn::last_answer_uptime_s()) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
+    #[cfg(not(feature = "direct"))]
+    let answer = backend;
+    answer
 }
 
 // ---------------------------------------------------------------------------
@@ -313,8 +350,14 @@ struct Poller {
     failures: FailureTracker,
     skips: SkipMachine,
     /// Per-source, parallel to [`Slate::sources`]. `None` until a list refresh
-    /// has returned one.
+    /// has returned one. Wire only: ESPN serves no ETag worth a conditional
+    /// request, so the direct build has nothing to store.
+    #[cfg(not(feature = "direct"))]
     etags: [Option<Etag>; MAX_SOURCES],
+    /// The direct feed's client, scratches and crest-path index, in one field
+    /// so the wire build carries none of it. See [`direct::DirectState`].
+    #[cfg(feature = "direct")]
+    direct: direct::DirectState,
     /// When the rotation last advanced. `None` until the first list refresh,
     /// which is what `poller.py` used to mean "this is the first tick".
     last_rotation_ms: Option<Millis>,
@@ -351,7 +394,10 @@ pub async fn run(
         warm: WarmIndex::new(),
         failures: FailureTracker::new(),
         skips: SkipMachine::new(),
+        #[cfg(not(feature = "direct"))]
         etags: [const { None }; MAX_SOURCES],
+        #[cfg(feature = "direct")]
+        direct: direct::DirectState::new(stack),
         last_rotation_ms: None,
         next_time_sync: Instant::now(),
         menu: MenuController::new(),
@@ -520,6 +566,7 @@ impl Poller {
     /// **A single source failing keeps its cached slate** — a dead league feed
     /// must not blank the others — and the tick only counts as failed when
     /// every source failed (`poller.py:439-475`).
+    #[cfg(not(feature = "direct"))]
     async fn refresh_lists(&mut self, cadence: &Cadence, initial: bool) -> Result<(), PollError> {
         let Poller {
             client,
@@ -617,6 +664,7 @@ impl Poller {
     /// flip mid-view rather than waiting for the next rotation. It does not
     /// flicker, because the store restamps the animation clock only when the
     /// displayed `(mode, game id)` changes.
+    #[cfg(not(feature = "direct"))]
     async fn poll_current(&mut self, cadence: &Cadence) -> Result<(), PollError> {
         let Some(entry) = self.slate.current() else {
             return Ok(());
@@ -718,6 +766,7 @@ impl Poller {
     /// `deadline` is the moment the next tick is due. Stopping there is what
     /// keeps the poll cadence exactly what it would be on a board that does no
     /// warming at all.
+    #[cfg(not(feature = "direct"))]
     async fn warm_crests(&mut self, cadence: &Cadence, deadline: Instant) {
         for _ in 0..WARM_FETCHES {
             // Both checks between fetches, not only before the first. The
@@ -806,6 +855,7 @@ impl Poller {
     /// this, a 404 is an ordinary game that left today's scoreboard, and a
     /// transport failure has already been logged by whatever the *tick* did
     /// next.
+    #[cfg(not(feature = "direct"))]
     async fn probe(
         client: &mut ApiClient,
         buffer: &mut ResponseBuffer,

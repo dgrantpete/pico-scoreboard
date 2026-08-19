@@ -63,6 +63,13 @@ use scoreboard_wire::STRUCT_CONTENT_TYPE;
 use static_cell::ConstStaticCell;
 
 /// The crest format the panel blits directly (`display.py`'s `LogoPool`).
+#[cfg_attr(
+    feature = "direct",
+    allow(
+        dead_code,
+        reason = "the direct build's crests arrive as PNG and are decoded on-device"
+    )
+)]
 pub const LOGO_CONTENT_TYPE: &str = "image/x-rgb565";
 
 /// A base URL plus the longest path the poller builds — a college-football
@@ -111,6 +118,13 @@ static TCP_STATE: ConstStaticCell<TcpClientState<1, TCP_TX_BYTES, TCP_RX_BYTES>>
 pub struct Fetched<'buf> {
     pub status: u16,
     /// The `ETag` header, verbatim. Absent on responses that carry none.
+    #[cfg_attr(
+        feature = "direct",
+        allow(
+            dead_code,
+            reason = "conditional requests are the wire list refresh's; ESPN serves no ETag worth one"
+        )
+    )]
     pub etag: Option<Etag>,
     /// Empty for a `304`, which carries no body at all.
     pub body: &'buf [u8],
@@ -167,6 +181,13 @@ impl ApiClient {
     ///
     /// A `304` comes back with an empty body and the ETag echoed; the caller
     /// keeps its cached slate.
+    #[cfg_attr(
+        feature = "direct",
+        allow(
+            dead_code,
+            reason = "the direct build's data plane is `net::espn`; this client keeps OTA and nothing else"
+        )
+    )]
     pub async fn game_list<'buf>(
         &mut self,
         url: &str,
@@ -191,6 +212,13 @@ impl ApiClient {
     /// `get_game_state`'s `404 → None` (`api_client.py:249-252`), and *only*
     /// for a detail: a `404` on a games list is a real error, because a
     /// configured league that does not exist is a configuration to fix.
+    #[cfg_attr(
+        feature = "direct",
+        allow(
+            dead_code,
+            reason = "the direct build's data plane is `net::espn`; this client keeps OTA and nothing else"
+        )
+    )]
     pub async fn game_detail<'buf>(
         &mut self,
         url: &str,
@@ -214,6 +242,13 @@ impl ApiClient {
     /// pool, which logged a miss and cached nothing. Same here: a non-200 is
     /// `Ok(None)`, not an error, because a league with no crest for one team
     /// must not count as a failed poll.
+    #[cfg_attr(
+        feature = "direct",
+        allow(
+            dead_code,
+            reason = "the direct build's data plane is `net::espn`; this client keeps OTA and nothing else"
+        )
+    )]
     pub async fn team_logo<'buf>(
         &mut self,
         url: &str,

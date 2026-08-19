@@ -32,6 +32,12 @@ fn main() {
 
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=../layout/src/lib.rs");
+    // The direct feed's replay lever (S3-DESIGN decision 13): `poller::direct`
+    // reads this with `option_env!`, which cargo does not track by itself — a
+    // changed override without this line would keep serving the old base out
+    // of an incremental build, which is exactly the kind of stale-image
+    // confusion a bench session cannot afford.
+    println!("cargo::rerun-if-env-changed=SCOREBOARD_ESPN_BASE");
 }
 
 /// Stamp in the version this image answers to, which is also its OTA identity.

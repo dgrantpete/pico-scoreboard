@@ -113,12 +113,6 @@
 //! [`poll::gate`](scoreboard_model::poll::gate), which resets the device on
 //! the silence rule.
 
-#![allow(
-    dead_code,
-    reason = "the poller and the crest pipeline are this transport's callers \
-              and land after it; nothing in the tree reaches it yet"
-)]
-
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -328,6 +322,10 @@ struct Connection {
     authority: heapless::String<AUTHORITY_BYTES>,
     /// Declared last so the session is released after everything borrowing it
     /// has been dropped.
+    #[allow(
+        dead_code,
+        reason = "never read, held for its Drop — the release side of the lend"
+    )]
     lend: Lend,
 }
 
@@ -500,6 +498,12 @@ impl EspnClient {
     /// caller that knows it is finished for a while, such as the crest
     /// pipeline after a refill: an idle connection ESPN will drop anyway is
     /// worth less than the socket slot it sits in.
+    #[allow(
+        dead_code,
+        reason = "that caller has not landed; whether the warmer takes this is \
+                  a field-trial question — the held connection's idle behavior \
+                  against the CDN is a thing to observe, not assume"
+    )]
     pub fn close(&mut self) {
         if self.connection.take().is_some() {
             defmt::debug!("espn: connection closed by the caller");
