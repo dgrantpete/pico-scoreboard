@@ -311,6 +311,16 @@ enum Wake {
     Later,
 }
 
+/// How the rotation moves after a list refresh — the difference between the
+/// three arms that used to each carry their own `refresh_lists` call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Advance {
+    /// The first tick: refresh, don't move.
+    None,
+    League,
+    Game,
+}
+
 impl defmt::Format for DescribedError {
     fn format(&self, formatter: defmt::Formatter<'_>) {
         defmt::write!(
@@ -535,17 +545,29 @@ impl Poller {
             .is_some_and(|last| now.saturating_sub(last) >= cadence.rotation_ms);
 
         // Animation restamps are the store's, under the view-identity rule, so
-        // rotating needs no flag here.
-        if self.last_rotation_ms.is_none() {
-            self.refresh_lists(cadence, true).await?;
-            self.last_rotation_ms = Some(now);
+        // rotating needs no flag here. One `refresh_lists` await site rather
+        // than one per arm: every await site embeds its own future slot in
+        // this generator, the direct build's refresh future is ~20 KB, and
+        // rustc does not overlap the slots — three sites was task-arena RAM
+        // spent on two copies nothing could ever run. The arms' own work
+        // happens after the shared refresh, exactly as it did per-arm.
+        let advance = if self.last_rotation_ms.is_none() {
+            Some(Advance::None)
         } else if skip == Some(SkipKind::League) {
-            self.refresh_lists(cadence, false).await?;
-            self.slate.advance_league();
-            self.last_rotation_ms = Some(now);
+            Some(Advance::League)
         } else if skip == Some(SkipKind::Game) || (rotation_due && !self.slate.locked()) {
-            self.refresh_lists(cadence, false).await?;
-            self.slate.advance();
+            Some(Advance::Game)
+        } else {
+            None
+        };
+        if let Some(advance) = advance {
+            let initial = self.last_rotation_ms.is_none();
+            self.refresh_lists(cadence, initial).await?;
+            match advance {
+                Advance::None => {}
+                Advance::League => self.slate.advance_league(),
+                Advance::Game => self.slate.advance(),
+            }
             self.last_rotation_ms = Some(now);
         }
 
