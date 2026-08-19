@@ -500,6 +500,13 @@ fn transport_error(error: reqwless::Error) -> PollError {
         reqwless::Error::Network(ErrorKind::ConnectionRefused | ErrorKind::ConnectionReset) => {
             Transport::Connect
         }
+        // The variant only exists when `direct` links embedded-tls. A TLS
+        // failure means no usable session with the host was established —
+        // the Connect bucket's meaning — and the client site logs the
+        // underlying TlsError before mapping, which is where the detail
+        // that would justify a finer split actually lives.
+        #[cfg(feature = "direct")]
+        reqwless::Error::Tls(_) => Transport::Connect,
         reqwless::Error::Network(_) => Transport::Io,
     })
 }

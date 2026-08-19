@@ -29,9 +29,17 @@ link-boot-integrated = ["dep:embassy-boot-rp", "dep:sha2"]
 # instead of from the backend, so every phase of the poll loop that assumed a
 # backend needs a second implementation. Compile-time rather than a runtime flag
 # — S3-DESIGN.md decision 1 — so `main` can carry both and ship neither by
-# accident. What it selects so far is `net::sntp` in place of `GET /time`; the
-# fetch, crest and timezone lanes add to it.
-direct = []
+# accident. It selects `net::sntp` in place of `GET /time`, the ESPN TLS
+# client (`reqwless/embedded-tls` — the wire build's whole affordability
+# argument for reqwless was that TLS never links; this feature is where that
+# trade reverses, priced in BUDGET.md "Phase S2"), the streaming extractors,
+# and the on-device PNG decode for crests.
+direct = [
+    "reqwless/embedded-tls",
+    "dep:scoreboard-espn",
+    "dep:scoreboard-direct",
+    "dep:png-stream",
+]
 
 # Bench instrument, off in every shipped build: once station mode is up, fetch
 # `{DEV_API_URL}/time` over plain HTTP and log what came back. It exists to
@@ -54,6 +62,14 @@ scoreboard-render = { path = "../../crates/scoreboard-render" }
 # `GameFeed`. Already in the graph under `scoreboard-model`; named here because
 # `net::api_client` sends the header itself.
 scoreboard-wire = { path = "../../crates/scoreboard-wire" }
+
+# The direct feed (Phase S3), all three only under `direct`: the per-sport
+# streaming extractors (the poller dispatches the four list extractors
+# itself — scoreboard-direct's module docs carry why), the detail/verdict
+# seam over them, and the PNG-to-sprite decode for CDN crests.
+scoreboard-espn = { path = "../../crates/scoreboard-espn", optional = true }
+scoreboard-direct = { path = "../../crates/scoreboard-direct", optional = true }
+png-stream = { path = "../../crates/png-stream", optional = true }
 
 # Pre-1.0 ecosystem: pinned exactly (SPEC.md §14).
 #
@@ -201,3 +217,14 @@ codegen-units = 1
 # release lands.
 [patch.crates-io]
 picoserve = { git = "https://github.com/dgrantpete/picoserve", rev = "5f21fe115ee02ee2c504cd3101e8fcb54415b01e" }
+# embedded-tls 0.18.0 as published cannot build against today's crates.io
+# (der 0.8.0-rc.2's rc-era API is gone; upstream #196 fixes main, unreleased)
+# and only advertises RSA signature schemes with alloc on — which ESPN's
+# RSA-only edge requires even under TlsVerify::None. Same pin as tls-spike;
+# drop when a release + a reqwless bump cover both (BACKLOG 97). Only linked
+# under `direct`.
+embedded-tls = { git = "https://github.com/dgrantpete/embedded-tls", rev = "c7d1aa27abbfd683383e9d696b7f51fb0f2c924f" }
+# scoreboard-espn's tokenizer. This is a standalone workspace, so the root
+# workspace's identical pin does not reach it — same rev, same drop
+# condition (kaidokert/picojson-rs#98). Only linked under `direct`.
+picojson = { git = "https://github.com/dgrantpete/picojson-rs", rev = "4fd6eeac86cc4757c9cc07e41dde4398d85e3249" }

@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
 name = "aead"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -563,6 +569,7 @@ checksum = "a69dedd701da44b0536442edf09c81a64b0ab97a7a4a5e3d1971f00027cbc63d"
 dependencies = [
  "const-oid 0.10.2",
  "der_derive",
+ "heapless 0.9.3",
  "time",
 ]
 
@@ -1041,8 +1048,7 @@ dependencies = [
 [[package]]
 name = "embedded-tls"
 version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09d1e46155b61b5b5cc486e01dacc55a623689bded89835965b15436734f078a"
+source = "git+https://github.com/dgrantpete/embedded-tls?rev=c7d1aa27abbfd683383e9d696b7f51fb0f2c924f#c7d1aa27abbfd683383e9d696b7f51fb0f2c924f"
 dependencies = [
  "aes-gcm",
  "const-oid 0.10.2",
@@ -1534,6 +1540,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "miniz_oxide"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+]
+
+[[package]]
 name = "nb"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1709,6 +1724,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5be167a7af36ee22fe3115051bc51f6e6c7054c9348e28deb4f49bd6f705a315"
 
 [[package]]
+name = "picojson"
+version = "0.2.3"
+source = "git+https://github.com/dgrantpete/picojson-rs?rev=4fd6eeac86cc4757c9cc07e41dde4398d85e3249#4fd6eeac86cc4757c9cc07e41dde4398d85e3249"
+
+[[package]]
 name = "picoserve"
 version = "0.19.0"
 source = "git+https://github.com/dgrantpete/picoserve?rev=5f21fe115ee02ee2c504cd3101e8fcb54415b01e#5f21fe115ee02ee2c504cd3101e8fcb54415b01e"
@@ -1819,6 +1839,13 @@ checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
 dependencies = [
  "der 0.7.10",
  "spki",
+]
+
+[[package]]
+name = "png-stream"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide",
 ]
 
 [[package]]
@@ -2138,9 +2165,12 @@ dependencies = [
  "hub75",
  "panic-probe",
  "picoserve",
+ "png-stream",
  "reqwless",
  "rp235x-pac",
  "scoreboard-config",
+ "scoreboard-direct",
+ "scoreboard-espn",
  "scoreboard-input",
  "scoreboard-layout",
  "scoreboard-log",
@@ -2166,6 +2196,24 @@ dependencies = [
  "scoreboard-render",
  "serde",
  "serde-json-core",
+]
+
+[[package]]
+name = "scoreboard-direct"
+version = "0.1.0"
+dependencies = [
+ "scoreboard-espn",
+ "scoreboard-model",
+ "scoreboard-wire",
+]
+
+[[package]]
+name = "scoreboard-espn"
+version = "0.1.0"
+dependencies = [
+ "heapless 0.9.3",
+ "picojson",
+ "scoreboard-wire",
 ]
 
 [[package]]
