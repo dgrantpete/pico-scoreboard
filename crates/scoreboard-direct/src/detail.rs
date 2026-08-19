@@ -11,7 +11,7 @@ use scoreboard_espn::common::NoRows;
 use scoreboard_espn::path::StreamMatcher;
 use scoreboard_espn::{football, mlb, nba, soccer};
 
-use crate::{ByRef, Counts, DirectExtract, Error, Feed, Quirks, TransformError};
+use crate::{ByRef, Counts, DirectExtract, Error, Feed, Quirks, TransformError, count};
 
 /// What a detail extraction concluded about the requested game.
 ///
@@ -150,12 +150,6 @@ fn absent(counts: Counts) -> Outcome {
     }
 }
 
-/// Football counts in `usize`. Saturating rather than `as`, so an
-/// implausible tally degrades to a large number instead of a small one.
-fn count(value: usize) -> u32 {
-    u32::try_from(value).unwrap_or(u32::MAX)
-}
-
 fn finish_mlb<Q: Quirks>(
     extractor: mlb::DetailExtractor<'_, '_, Q>,
 ) -> Result<DetailReport, Error> {
@@ -227,12 +221,9 @@ fn finish_football<Q: Quirks>(
     let report = extractor.finish().map_err(|error| match error {
         football::FootballError::Stream(error) => Error::Stream(error),
         football::FootballError::MalformedEvents => Error::MalformedBody,
-        football::FootballError::Extract(kind) => Error::Transform(match kind {
-            football::ExtractError::BadStartTime => TransformError::StartTime,
-            football::ExtractError::HomeAwayConflict => TransformError::HomeAway,
-            football::ExtractError::BadScore => TransformError::Score,
-            football::ExtractError::BadColor => TransformError::Color,
-        }),
+        football::FootballError::Extract(kind) => {
+            Error::Transform(crate::fold_football_kind(kind))
+        }
     })?;
     let counts = Counts {
         ok: count(report.counts.ok),
@@ -256,12 +247,7 @@ fn finish_soccer<Q: Quirks>(
     let report = extractor.finish().map_err(|error| match error {
         soccer::ExtractError::Stream(error) => Error::Stream(error),
         soccer::ExtractError::MalformedBody => Error::MalformedBody,
-        soccer::ExtractError::Transform(kind) => Error::Transform(match kind {
-            soccer::TransformError::Date => TransformError::StartTime,
-            soccer::TransformError::Sides => TransformError::HomeAway,
-            soccer::TransformError::Score => TransformError::Score,
-            soccer::TransformError::Color => TransformError::Color,
-        }),
+        soccer::ExtractError::Transform(kind) => Error::Transform(crate::fold_soccer_kind(kind)),
     })?;
     let counts = Counts {
         ok: u32::from(report.ok),

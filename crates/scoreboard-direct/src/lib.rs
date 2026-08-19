@@ -56,31 +56,21 @@
 //! not. The committed soccer goldens encode the no-commentary shape, which is
 //! why the parity gate exercises exactly that path.
 //!
-//! # The games list is not here, and that is a finding
+//! # The games list: [`ListStream`], and the convergence that unblocked it
 //!
-//! A sport-uniform *list* stream cannot be built over today's
-//! `scoreboard-espn` surface without either `unsafe` or a duplicated
-//! transform, and the blocker is structural rather than a matter of effort:
-//! `mlb::ListExtractor` borrows its sink (`&'c mut L where L: mlb::ListSink`),
-//! so the sink must be a caller-owned *local type*, while `nba::Extractor`'s
-//! list mode borrows a callback (`&'c mut dyn FnMut(&str, GameState)`), so its
-//! sink must be a caller-owned *closure*. Rust's orphan rules forbid
-//! implementing `mlb::ListSink` for a closure type, and `FnMut` is not
-//! implementable on stable — one object cannot be both, and a stream that owns
-//! either one and hands a `&mut` to an extractor it also owns is
-//! self-referential. Wrapping the two in one API therefore means either two
-//! caller-owned objects (half of them dead on every call) or re-implementing a
-//! sport's transform. Neither earns its keep when the poller's alternative is
-//! the `match sport` it already has to write.
-//!
-//! The fix belongs one crate up: the S1 checklist already carries an open
-//! API-unification pass ("shared Counts/TransformError/Report shapes") driven
-//! by the backend adapter's friction report. The concrete ask this lane adds
-//! is that the list extractors converge on **owning** their sink and handing
-//! it back at `finish` — the shape `football::ListExtractor` already has —
-//! after which a uniform `ListStream` here is about thirty lines. Until then
-//! the poller calls the four list extractors directly; the vocabulary they
-//! report in ([`GameState`] and the ids) is already shared.
+//! An earlier revision of this charter documented a uniform list stream as
+//! *unbuildable*: `mlb::ListExtractor` borrowed a caller-owned sink type and
+//! `nba::Extractor`'s list mode borrowed a caller-owned closure, the orphan
+//! rules forbid one object being both, and a stream that owns either and
+//! hands a `&mut` to an extractor it also owns is self-referential. The named
+//! fix — the list extractors converge on **owning** their sink and handing it
+//! back at `finish`, football's shape — landed 2026-08-19 together with the
+//! shared per-event row (`scoreboard_espn::{ListRow, ListSink}`, which also
+//! carries the team identity that deletes the direct-mode crest probe). So
+//! the promised stream exists now: [`ListStream`], one `new`/`write`/`finish`
+//! over the four list extractors, folding the same surface divergences
+//! [`DetailStream`] already absorbs for details. The poller dispatches
+//! neither; it names a [`Feed`] twice.
 //!
 //! # Bounds, allocation, and the target
 //!
@@ -96,10 +86,12 @@
 mod commentary;
 mod detail;
 mod extract;
+mod list;
 
 pub use commentary::CommentaryStream;
 pub use detail::{DetailReport, DetailStream, Outcome};
 pub use extract::DirectExtract;
+pub use list::{ListReport, ListStream};
 
 pub use scoreboard_espn::common::{
     CDN_ORIGIN, CrestPath, CrestUrl, Crests, Quirk, Quirks, crest_url,
@@ -212,5 +204,34 @@ pub(crate) struct ByRef<'a, Q: ?Sized>(pub(crate) &'a mut Q);
 impl<Q: Quirks + ?Sized> Quirks for ByRef<'_, Q> {
     fn quirk(&mut self, quirk: Quirk) {
         self.0.quirk(quirk);
+    }
+}
+
+/// Football counts in `usize`. Saturating rather than `as`, so an
+/// implausible tally degrades to a large number instead of a small one.
+pub(crate) fn count(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+/// The football lane's transform-error spelling, folded once for both the
+/// detail and list streams.
+pub(crate) fn fold_football_kind(kind: scoreboard_espn::football::ExtractError) -> TransformError {
+    use scoreboard_espn::football::ExtractError;
+    match kind {
+        ExtractError::BadStartTime => TransformError::StartTime,
+        ExtractError::HomeAwayConflict => TransformError::HomeAway,
+        ExtractError::BadScore => TransformError::Score,
+        ExtractError::BadColor => TransformError::Color,
+    }
+}
+
+/// The soccer lane's spelling, likewise.
+pub(crate) fn fold_soccer_kind(kind: scoreboard_espn::soccer::TransformError) -> TransformError {
+    use scoreboard_espn::soccer::TransformError as Soccer;
+    match kind {
+        Soccer::Date => TransformError::StartTime,
+        Soccer::Sides => TransformError::HomeAway,
+        Soccer::Score => TransformError::Score,
+        Soccer::Color => TransformError::Color,
     }
 }
