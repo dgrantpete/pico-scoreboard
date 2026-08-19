@@ -426,6 +426,12 @@ pub async fn run(
             poller.check_for_update(&cadence).await;
         }
 
+        // Also before the tick, and from this frame on purpose: the TLS
+        // handshake must run over the shallowest stack the loop has — see
+        // `direct::Poller::pre_connect`.
+        #[cfg(feature = "direct")]
+        poller.pre_connect().await;
+
         let now = Instant::now().as_millis();
         let outcome = poller.tick(&cadence, now).await;
         // Fixed here, before the warmer runs: the poll interval has always been

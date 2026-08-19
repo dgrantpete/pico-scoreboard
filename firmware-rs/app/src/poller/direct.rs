@@ -294,6 +294,20 @@ impl RowSink for SlateRows<'_> {
 }
 
 impl Poller {
+    /// Hold the ESPN connection open from the shallowest frame there is.
+    ///
+    /// Called from `run`'s loop, NOT from inside the fetch phases: the tick's
+    /// poll frame carries the streams' staging allocas, and a TLS handshake
+    /// under it was measured meeting the stack guard. Out here the handshake
+    /// runs over executor-depth stack only, and the fetches that follow find
+    /// the connection already held. A failure is a debug line — the fetch
+    /// redials for itself and reports properly.
+    pub(super) async fn pre_connect(&mut self) {
+        if let Ok(url) = scoreboard_url("") {
+            self.direct.espn.connect_to(url.as_str()).await;
+        }
+    }
+
     /// Refresh every source's list and rebuild the rotation — the wire twin's
     /// contract, kept clause for clause: a single source failing keeps its
     /// cached slate, and the tick only counts as failed when every source
@@ -313,13 +327,6 @@ impl Poller {
             direct,
             ..
         } = self;
-
-        // A tiny frame, before the fat ones: the TLS handshake's depth and
-        // the streaming helpers' poll-frame allocas must never stack — the
-        // first on-silicon runs measured them meeting at the stack guard.
-        if let Ok(url) = scoreboard_url("") {
-            direct.espn.connect_to(url.as_str()).await;
-        }
 
         let mut failures = 0usize;
         let mut last_error = None;
@@ -381,11 +388,6 @@ impl Poller {
             direct,
             ..
         } = self;
-
-        // The small-frame pre-connect, same reasoning as the list pass's.
-        if let Ok(url) = scoreboard_url("") {
-            direct.espn.connect_to(url.as_str()).await;
-        }
 
         let report = fetch_detail(direct, &league, game_id.as_str()).await?;
         let mut extract = match report {
