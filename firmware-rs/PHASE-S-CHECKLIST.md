@@ -213,28 +213,50 @@ and steady-state numbers in BUDGET.md.
 
 Gate to start: S2 exit. Gate to exit: replay parity.
 
-- [ ] Direct feed over the shared transform crate: scoreboard JSON per
-      configured league; summary fetch for live soccer (per S1 decision).
-- [ ] `png-stream` crate (SPEC §14): streaming inflate (32 KB window,
-      unioned with OTA scratch) → downsample → 24×24 RGB565 sprite; alpha
-      handling matching backend `logo.rs` (premultiplied resize, background
-      blend). Prefer the CDN combiner's size parameters over decoding
-      500×500 sources — verify what the corpus hrefs support.
-- [ ] SNTP over UDP for the epoch (one transient socket; `SOCKETS = 10` has
-      room).
-- [ ] Browser-seeded timezone (BACKLOG 95, decided): SPA posts the offset
-      schedule (current offset, next DST transition instant, offset after);
-      firmware endpoint + storage; manual override rides along. Storage
-      shape recommendation: **own sequential-storage key**, by SPEC §9's own
-      reasoning — different writer, different cadence, and a config `PUT`
-      must not reset it. Write only on change.
-- [ ] Polling economics stated in the module docs: no usable upstream ETags;
-      every poll pays a full streamed parse (~20 ms/300 KB — fine); cadence
-      respects today's `poll_interval_seconds`.
+- [x] Direct feed over the shared transform crate (2026-08-19,
+      code-complete): `crates/scoreboard-direct` (DetailStream +
+      ListStream + the 404-vs-502 verdict fold, 33/33 golden parity +
+      a list-parity oracle gate) under `poller/direct.rs` — same fetch-
+      phase names and signatures as the wire twins, streaming transport
+      in `net::espn` (one held TLS connection, TlsVerify::None per the
+      S2 ruling, redial-once on an untouched sink). Soccer summary
+      fetched for live games, best-effort (S1 decision taken). The
+      warmer's probe class is DELETED: list rows carry team identity
+      (abbreviations + crest paths), so the warm index fills from the
+      list pass and `Step::Probe` marks missed without a fetch
+      (S3-DESIGN decisions 8–13, all wave-2 design in that file).
+- [x] `png-stream` crate (SPEC §14): landed at S1 validation; wired to
+      the pool 2026-08-19 via `get_direct`/`prefetch_direct` — CDN
+      combiner 100 px variant (~8.3 ms decode), black background blend
+      matching backend `logo.rs`, decode-before-claim preserving the
+      no-torn-slot rule, RGB565 layout verified at all three ends and
+      const-asserted. (The 32 KB-window union with OTA scratch was NOT
+      taken: `png_stream::Scratch` is its own 61.7 KB static — priced
+      in BUDGET "Phase S3"; union is a shrink lever if RAM tightens.)
+- [x] SNTP over UDP for the epoch (2026-08-18, sntp lane): portal codec
+      host-tested, app transport `direct`-gated. `SOCKETS` is 12 under
+      `direct`, not 10 — the held ESPN connection took the tenth slot
+      and the margin was re-established (+704 B, table in `net`'s docs).
+- [x] Browser-seeded timezone (2026-08-18, tz lane): endpoint + own
+      sequential-storage key + manual override + SPA card; pure schedule
+      logic in `scoreboard_config::timezone` (20 host tests); offset
+      chain manual > schedule > GeoIP > None with `OFFSET_UNKNOWN`
+      sentinel. SPA bundle re-baked 2026-08-19.
+- [x] Polling economics stated in the module docs (`poller/direct.rs`):
+      no upstream ETags — every poll pays a full streamed parse; the
+      real number is S2's window/RTT law (sub-second at 16 KB rx), and
+      the paper ~20 ms/300 KB was corrected 30× by the S1 silicon bench.
+      Cadence respects `poll_interval_seconds` unchanged.
 - [ ] Exit: full pregame→final captures for every sport replayed through the
       TLS-fronted mock, asserted against the parity harness — same goldens
       as proxy mode. Merge to `main` (additive: the direct feed exists,
       nothing uses it on `main`).
+      Status 2026-08-19: crate-level parity green (33/33 + list oracle);
+      device replay is next — direct image links (BUDGET "Phase S3"),
+      replay lever verified against the mock's routing, football
+      scenario to be added to mock.yml (fixtures exist), then the bench
+      flash. Field trial (real ESPN + real display + live soak) follows
+      per the owner's ask.
 
 ## S4 — the standalone build and the deletion sweep (phase-s diverges here)
 

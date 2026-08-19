@@ -950,6 +950,46 @@ Both caveats these numbers carried are now closed (2026-08-19):
   window/RTT floor as the PowerSave round), so the throughput floors
   above are TCP-window physics, not a power-state artifact.
 
+## Phase S3 — what the direct feed costs, measured 2026-08-19
+
+Both numbers from `link-standalone` release builds of the same tree
+(`arm-none-eabi-size`, dev-local):
+
+| | text (flash) | statics (bss) |
+|---|---:|---:|
+| wire build | 1,039,512 | 293,648 |
+| `--features direct` | 1,571,800 | 434,760 |
+| **direct increment** | **+532,288** | **+141,112** |
+
+The flash increment is embedded-tls (P-256, SHA-2, the record machinery),
+the four streaming extractors and the PNG decoder — none of it links in a
+wire build, which is the whole point of the feature gate. The RAM
+increment decomposes into measured lines (`nm --size-sort` on the ELF):
+
+| line | bytes | what |
+|---|---:|---|
+| `poller::direct::DECODE` | 61,704 | `png_stream::Scratch` — the 32 KB inflate window plus tables and accumulators, taken once |
+| `net::espn` statics | 41,918 | TLS session 20,880 (16,640 read + 4,096 write records + connect slots) + socket state 16,897 (the 16 KB rx window) + 4 KB headers |
+| poller task pool growth | +39,240 | 16,112 → 55,352: `DetailStream` (~31 KB, soccer-sized), the extract, and the streaming locals live in the run future |
+| extract + list scratch | 18,432 | 16 KiB picojson detail/commentary scratch + 2 KiB list scratch (both measured minima with slack) |
+| `StackResources` 10 → 12 | +704 | 352 B/slot: SNTP transient + the held ESPN connection |
+
+The lines sum to ~162 KB against a measured +141 KB delta; the ~21 KB
+residual is other pools and layout shrinking under `direct`'s cfg-gates
+(the wire fetch path leaves the poller future) — the totals are what the
+device pays and the lines are where the big money is.
+
+What is left for core-0 stack under `direct`: 532,480 − 434,760 =
+**97,720 B**, against a 25,816 B measured high-water — 3.8× margin, with
+the watermark supervision still reporting every 10 s. The BACKLOG-94
+re-earn (42.7 % headroom at S2's gate) is what this spent; the 10 KB
+smarthome reservation survives inside the remaining margin.
+
+Caveats: dev-local build, boot-integrated direct image not yet sized;
+on-silicon RAM watermark and poll-cycle timings land with the field
+trial. The per-poll transfer numbers this build should hit are Phase
+S2's (16 KB window ⇒ sub-second scoreboard fetches).
+
 ## Caveats to close before the numbers can be trusted end to end
 
 - **Stacks are still not in `size`'s output**, but both are now measured
