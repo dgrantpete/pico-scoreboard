@@ -82,22 +82,21 @@ const BASE: &str = match option_env!("SCOREBOARD_ESPN_BASE") {
 /// override base may carry an address and a port.
 const URL_BYTES: usize = 192;
 
-/// picojson token scratch for the detail and commentary streams. 16 KiB is
-/// the bench's proven size against every corpus body (S1 validation); the
-/// backend uses 64 KiB only because it can.
+/// picojson token scratch for the streams, carved from the front of the PNG
+/// decoder's loaned window (see [`DirectState::decode`]). 16 KiB is the
+/// bench's proven size against every corpus body (S1 validation); the
+/// backend uses 64 KiB only because it can. The list pass borrows the same
+/// carve — its measured need is 210–464 B (`scoreboard-direct`'s
+/// `list_scratch.rs` pins 2 KiB), and should the one-body optimization ever
+/// run list and detail streams together, the 32 KB window carves both
+/// disjointly with room to spare.
 const EXTRACT_SCRATCH_BYTES: usize = 16 * 1024;
 
-/// Token scratch for the list pass. Measured minima across the repo's
-/// full-slate captures are 210–464 B (`scoreboard-direct`'s `list_scratch.rs`
-/// pins 2 KiB with 4× slack), which is what makes running a list stream
-/// *beside* a detail stream affordable if the one-body optimization is ever
-/// taken.
-const LIST_SCRATCH_BYTES: usize = 2 * 1024;
+const _: () = assert!(
+    EXTRACT_SCRATCH_BYTES <= png_stream::WINDOW_BYTES,
+    "the token scratch is a loan from the PNG window and must fit in it"
+);
 
-static EXTRACT_SCRATCH: ConstStaticCell<[u8; EXTRACT_SCRATCH_BYTES]> =
-    ConstStaticCell::new([0; EXTRACT_SCRATCH_BYTES]);
-static LIST_SCRATCH: ConstStaticCell<[u8; LIST_SCRATCH_BYTES]> =
-    ConstStaticCell::new([0; LIST_SCRATCH_BYTES]);
 /// The PNG decoder's window and tables, initialized IN PLACE.
 ///
 /// Not `StaticCell<Scratch>` + `init(Scratch::new())`: a by-value `Scratch`
@@ -111,23 +110,26 @@ static DECODE: ConstStaticCell<core::mem::MaybeUninit<png_stream::Scratch>> =
 
 /// Everything the direct build adds to the poller, in one field so the
 /// `Poller` struct grows one `#[cfg]` rather than five.
+///
+/// There is deliberately no separate JSON scratch here: the streams borrow
+/// [`png_stream::Scratch::loan_window`] instead — 32 KB of bytes that carry
+/// nothing between decodes, on a device where extraction and crest decoding
+/// never overlap by the poller's own sequencing. The borrow checker enforces
+/// the never-overlap: a stream holding the loan pins `decode` until it
+/// finishes.
 pub(super) struct DirectState {
     pub espn: EspnClient,
     pub paths: PathIndex,
-    extract_scratch: &'static mut [u8; EXTRACT_SCRATCH_BYTES],
-    list_scratch: &'static mut [u8; LIST_SCRATCH_BYTES],
     pub decode: &'static mut png_stream::Scratch,
 }
 
 impl DirectState {
-    /// Panics on a second call, transitively: the scratches and the client's
-    /// own statics are all take-once, and there is one poller.
+    /// Panics on a second call, transitively: the decode scratch and the
+    /// client's own statics are all take-once, and there is one poller.
     pub fn new(stack: Stack<'static>) -> DirectState {
         DirectState {
             espn: EspnClient::new(stack),
             paths: PathIndex::new(),
-            extract_scratch: EXTRACT_SCRATCH.take(),
-            list_scratch: LIST_SCRATCH.take(),
             decode: png_stream::Scratch::init_at(DECODE.take()),
         }
     }
@@ -533,21 +535,26 @@ async fn fetch_list(
 ) -> Result<u32, PollError> {
     let url = scoreboard_url(league.key.as_str())?;
     let feed = Feed::from_league(league);
+    let DirectState {
+        espn,
+        paths,
+        decode,
+    } = direct;
+    let scratch = &mut decode.loan_window()[..EXTRACT_SCRATCH_BYTES];
     let mut quirks = CountQuirks(0);
     let sink = SlateRows {
         update: slate.update_source(source),
         warm,
-        paths: &mut direct.paths,
+        paths,
         source,
         league_key: league.key.as_str(),
         slate_full: false,
     };
-    let mut stream = ListStream::new(feed, sink, &mut quirks, &mut direct.list_scratch[..])
-        .map_err(|error| feed_error(&error))?;
+    let mut stream =
+        ListStream::new(feed, sink, &mut quirks, scratch).map_err(|error| feed_error(&error))?;
 
     let mut stream_error = None;
-    let fetched = direct
-        .espn
+    let fetched = espn
         .fetch(url.as_str(), &mut |chunk| match stream.write(chunk) {
             Ok(()) => true,
             Err(error) => {
@@ -595,18 +602,14 @@ async fn fetch_detail(
 ) -> Result<Outcome, PollError> {
     let url = scoreboard_url(league.key.as_str())?;
     let feed = Feed::from_league(league);
+    let DirectState { espn, decode, .. } = direct;
+    let scratch = &mut decode.loan_window()[..EXTRACT_SCRATCH_BYTES];
     let mut quirks = CountQuirks(0);
-    let mut stream = DetailStream::new(
-        feed,
-        game_id,
-        &mut quirks,
-        &mut direct.extract_scratch[..],
-    )
-    .map_err(|error| feed_error(&error))?;
+    let mut stream =
+        DetailStream::new(feed, game_id, &mut quirks, scratch).map_err(|error| feed_error(&error))?;
 
     let mut stream_error = None;
-    let fetched = direct
-        .espn
+    let fetched = espn
         .fetch(url.as_str(), &mut |chunk| match stream.write(chunk) {
             Ok(()) => true,
             Err(error) => {
@@ -649,14 +652,15 @@ async fn fetch_commentary(
         Ok(url) => url,
         Err(_) => return None,
     };
-    let mut stream = match CommentaryStream::new(&mut direct.extract_scratch[..]) {
+    let DirectState { espn, decode, .. } = direct;
+    let scratch = &mut decode.loan_window()[..EXTRACT_SCRATCH_BYTES];
+    let mut stream = match CommentaryStream::new(scratch) {
         Ok(stream) => stream,
         Err(_) => return None,
     };
 
     let mut failed = false;
-    let fetched = direct
-        .espn
+    let fetched = espn
         .fetch(url.as_str(), &mut |chunk| match stream.write(chunk) {
             Ok(()) => true,
             Err(_) => {

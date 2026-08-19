@@ -197,7 +197,30 @@ impl Scratch {
             slot.assume_init_mut()
         }
     }
+
+    /// Loan the LZ77 window out as plain scratch bytes — [`WINDOW_BYTES`] of
+    /// them, zero-cost and safe.
+    ///
+    /// Between decodes a `Scratch` carries nothing: every `*Decoder::new`
+    /// re-initializes all of it, window included. A caller that also needs a
+    /// large transient byte buffer — the firmware's streaming-JSON token
+    /// scratch is the one this was built for — can therefore borrow this one
+    /// instead of budgeting a second static, provided its use and a decode
+    /// never overlap. The borrow checker enforces exactly that: the loan
+    /// borrows the whole `Scratch`, so no decoder can be constructed over it
+    /// while the loan lives.
+    ///
+    /// The window and nothing else: the other fields carry a type
+    /// (`DecompressorOxide`) whose bytes are not ours to hand out, and 32 KB
+    /// is the useful prize anyway.
+    pub fn loan_window(&mut self) -> &mut [u8; WINDOW_BYTES] {
+        &mut self.window
+    }
 }
+
+/// The size of [`Scratch::loan_window`]'s loan: the PNG spec's maximal
+/// deflate history, which is why it cannot shrink.
+pub const WINDOW_BYTES: usize = WINDOW;
 
 impl Default for Scratch {
     fn default() -> Self {

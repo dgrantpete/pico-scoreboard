@@ -66,6 +66,16 @@ const DATE_BYTES: usize = 32;
 /// waits for finalize, so both sides share the pool). Corpus max is 7 scoring
 /// details in a match (`final_after_penalties`, 12 details total); 4× margin.
 /// Overflow drops the excess — beyond anything ESPN-covered soccer produces.
+///
+/// **32 is also a parity bound, not only a margin** — do not shrink it for
+/// RAM without noticing what the overflow test pins: 32 short buffered
+/// entries still join past the 255-byte wire cap, so the cap's truncation
+/// lands inside buffered text and the encoded scorers match the backend's
+/// unbounded join-then-truncate byte for byte. A smaller bound would make an
+/// implausible-but-possible high-scoring match encode *differently* from the
+/// backend, which this crate's charter calls a bug even when it looks
+/// affordable. (S3's stack crunch reached for this lever and was turned back
+/// here — the RAM came from `png_stream::Scratch::loan_window` instead.)
 const SCORING_MAX: usize = 32;
 /// `u32::MAX` stringifies to 10 digits — the commentary id is generated, not
 /// copied, so this bound is structural.
