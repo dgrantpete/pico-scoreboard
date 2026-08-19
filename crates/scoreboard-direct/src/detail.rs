@@ -130,6 +130,14 @@ impl<'c, 's, Q: Quirks> DetailStream<'c, 's, Q> {
         Ok(())
     }
 
+    /// `inline(always)` is a stack decision, not a speed one: `self` is the
+    /// enum, sized by its largest variant, and consuming it by value in a
+    /// non-inlined callee materializes a whole extra copy in a *nested*
+    /// frame — measured as a 32 KB `sub sp` under the poller's own ~38 KB
+    /// poll frame on the RP2350, which together overran the stack guard.
+    /// Fused into the caller, the copy shares the frame the stream already
+    /// occupies.
+    #[inline(always)]
     pub fn finish(self) -> Result<DetailReport, Error> {
         match self.inner {
             Inner::Mlb(extractor) => finish_mlb(extractor),

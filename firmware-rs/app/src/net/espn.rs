@@ -491,6 +491,36 @@ impl EspnClient {
         Ok(outcome)
     }
 
+    /// Hold a connection to `url`'s host, dialing if the held one is absent
+    /// or elsewhere. A no-op when the right connection is already held.
+    ///
+    /// `fetch` dials lazily and does not need this. It exists for the stack:
+    /// a TLS 1.3 handshake is the deepest synchronous work this module does,
+    /// and the poller's streaming phases carry ~20 KB poll-frame allocas of
+    /// their own — the S3 bring-up faulted exactly where the two met. Called
+    /// from a small frame before the fat phases, the handshake's depth and
+    /// the extractors' never stack. A failure is logged and swallowed: the
+    /// fetch that follows will dial for itself and report properly.
+    pub async fn connect_to(&mut self, url: &str) {
+        let Ok((authority, _)) = split_url(url) else {
+            return;
+        };
+        if self
+            .connection
+            .as_ref()
+            .is_some_and(|held| held.authority.eq_ignore_ascii_case(authority))
+        {
+            return;
+        }
+        self.connection = None;
+        match with_timeout(super::api_client::REQUEST_TIMEOUT, self.connect(authority)).await {
+            Ok(Ok(connection)) => self.connection = Some(connection),
+            Ok(Err(_)) | Err(_) => {
+                defmt::debug!("espn: pre-connect failed, the fetch will redial");
+            }
+        }
+    }
+
     /// Drop the held connection, if there is one.
     ///
     /// Nothing needs this to be correct — a fetch to another host redials by

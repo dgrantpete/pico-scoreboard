@@ -98,6 +98,12 @@ impl<'c, 's, L: ListSink, Q: Quirks> ListStream<'c, 's, L, Q> {
         Ok(())
     }
 
+    /// `inline(always)` for the stack, not for speed — the reasoning and the
+    /// on-silicon measurement live on [`DetailStream::finish`], and the same
+    /// by-value-enum arithmetic applies here.
+    ///
+    /// [`DetailStream::finish`]: crate::DetailStream::finish
+    #[inline(always)]
     pub fn finish(self) -> Result<ListReport<L>, Error> {
         match self.inner {
             Inner::Mlb(extractor) => {

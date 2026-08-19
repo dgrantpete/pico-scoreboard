@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 description = "The deployed diagnostic surface: a fixed RAM ring of log entries, and the NDJSON encoding /api/logs serves them as"
 
+[features]
+# Halve the ring (200 → 100 slots, ~14 KB of RAM back). For the direct-feed
+# firmware, whose poll task needs the stack more than the ring needs the
+# depth — `SLOTS`'s doc carries the measurement and the trade.
+small-ring = []
+
 [dependencies]
 # Pre-1.0 ecosystem: pinned exactly (SPEC.md §14). Default features only —
 # `alloc` stays off (SPEC.md §10).

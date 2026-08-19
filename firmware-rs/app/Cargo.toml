@@ -39,6 +39,9 @@ direct = [
     "dep:scoreboard-espn",
     "dep:scoreboard-direct",
     "dep:png-stream",
+    # The poll task's stack outranks the ring's depth in this build — the
+    # S3 bring-up measured them meeting at the stack guard.
+    "scoreboard-log/small-ring",
 ]
 
 # Bench instrument, off in every shipped build: once station mode is up, fetch

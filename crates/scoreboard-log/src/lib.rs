@@ -55,10 +55,17 @@ pub mod breadcrumb;
 pub const MAX_MESSAGE: usize = 128;
 
 /// Slots in the ring, and therefore the most entries a client can be behind by
-/// before it misses some. `logger.py`'s `_SLOTS`, unchanged: at the SPA's 3 s
-/// poll interval this is minutes of history, and it is the number the
-/// `?since=` contract is sized against.
-pub const SLOTS: usize = 200;
+/// before it misses some. `logger.py`'s `_SLOTS`, unchanged in the default
+/// build: at the SPA's 3 s poll interval this is minutes of history, and it
+/// is the number the `?since=` contract is sized against.
+///
+/// `small-ring` halves it, trading retained history for ~14 KB of RAM. It
+/// exists for the direct-feed firmware, whose poll task needs the stack more
+/// than the ring needs the depth — the S3 bring-up measured the two meeting
+/// at the stack guard. 100 slots is still minutes of history at any log rate
+/// the shipped filters produce; a client further behind than that re-syncs
+/// through the same `?since=` gap contract it always had.
+pub const SLOTS: usize = if cfg!(feature = "small-ring") { 100 } else { 200 };
 
 /// A message, already bounded.
 pub type Message = String<MAX_MESSAGE>;

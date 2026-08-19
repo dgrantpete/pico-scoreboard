@@ -314,6 +314,13 @@ impl Poller {
             ..
         } = self;
 
+        // A tiny frame, before the fat ones: the TLS handshake's depth and
+        // the streaming helpers' poll-frame allocas must never stack — the
+        // first on-silicon runs measured them meeting at the stack guard.
+        if let Ok(url) = scoreboard_url("") {
+            direct.espn.connect_to(url.as_str()).await;
+        }
+
         let mut failures = 0usize;
         let mut last_error = None;
         let sources = slate.sources().len();
@@ -374,6 +381,11 @@ impl Poller {
             direct,
             ..
         } = self;
+
+        // The small-frame pre-connect, same reasoning as the list pass's.
+        if let Ok(url) = scoreboard_url("") {
+            direct.espn.connect_to(url.as_str()).await;
+        }
 
         let report = fetch_detail(direct, &league, game_id.as_str()).await?;
         let mut extract = match report {
