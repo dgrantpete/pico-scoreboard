@@ -37,21 +37,29 @@
 //! # Socket budget
 //!
 //! [`SOCKETS`] sizes the whole stack, and station and AP mode want different
-//! things, so it covers the larger of the two:
+//! things, so it covers the larger of the two. The `direct` column is the
+//! standalone build (SPEC §14), which adds two consumers to station mode and
+//! nothing to AP mode:
 //!
-//! | Socket | Station | AP | Owner |
-//! |---|:-:|:-:|---|
-//! | embassy-net's DNS resolver | 1 | 1 | embassy-net, always added |
-//! | DHCP *client* | 1 | — | embassy-net, while `ConfigV4::Dhcp` |
-//! | poller **and OTA** | 1 | — | [`api_client`] |
-//! | HTTP server | 4 | 4 | task #10 (four since drill day — the iOS captive-portal storm; its module docs) |
-//! | mDNS responder | 1 | 1 | [`mdns`] |
-//! | captive DNS | — | 1 | [`captive_dns`] |
-//! | DHCP *server* | — | 1 | [`dhcp_server`] |
-//! | **total** | **8** | **8** | |
+//! | Socket | Station | Station, `direct` | AP | Owner |
+//! |---|:-:|:-:|:-:|---|
+//! | embassy-net's DNS resolver | 1 | 1 | 1 | embassy-net, always added |
+//! | DHCP *client* | 1 | 1 | — | embassy-net, while `ConfigV4::Dhcp` |
+//! | poller **and OTA** | 1 | 1 | — | [`api_client`] |
+//! | HTTP server | 4 | 4 | 4 | task #10 (four since drill day — the iOS captive-portal storm; its module docs) |
+//! | mDNS responder | 1 | 1 | 1 | [`mdns`] |
+//! | SNTP, for the length of one exchange | — | 1 | — | [`sntp`] |
+//! | ESPN, held open between polls | — | 1 | — | [`espn`] |
+//! | captive DNS | — | — | 1 | [`captive_dns`] |
+//! | DHCP *server* | — | — | 1 | [`dhcp_server`] |
+//! | **total** | **8** | **10** | **8** | |
 //!
-//! Nine is the working ceiling; [`SOCKETS`] is 10 so that adding one consumer
-//! is a budget line rather than a rewrite.
+//! [`SOCKETS`] is the total plus two, in both builds: 10 without `direct` and
+//! 12 with it, so that adding one consumer is a budget line rather than a
+//! rewrite. The two `direct` slots are not alike — [`sntp`]'s is claimed for a
+//! few seconds a day and returned by `Drop`, while [`espn`]'s is *held* across
+//! polls, because a handshake per fetch is 311 ms the crest pipeline would pay
+//! dozens of times over (BUDGET.md, "Phase S2").
 //!
 //! **The OTA slot this table used to reserve is gone**, and that is worth a
 //! line because it looks like an omission. An update is a *phase of the poll
@@ -63,6 +71,13 @@
 pub mod api_client;
 pub mod captive_dns;
 pub mod dhcp_server;
+/// `direct` only: the ESPN HTTPS client, which is the data plane when there is
+/// no backend to proxy one. Gated rather than always-compiled because it links
+/// the TLS stack the wire build's whole affordability argument for reqwless
+/// rests on never linking, and because it holds a socket slot the table above
+/// only has under `direct`.
+#[cfg(feature = "direct")]
+pub mod espn;
 pub mod hosts;
 pub mod mdns;
 #[cfg(feature = "net-probe")]
@@ -97,7 +112,11 @@ bind_interrupts!(struct Irqs {
 });
 
 /// Socket slots in the stack's `SocketSet`. See the module docs' table.
-pub const SOCKETS: usize = 10;
+///
+/// Two more under `direct`, for the SNTP exchange and the held ESPN
+/// connection. They are paid for in `StackResources`, which is sized by this
+/// constant — BUDGET.md carries what a slot costs.
+pub const SOCKETS: usize = if cfg!(feature = "direct") { 12 } else { 10 };
 
 /// The radio's silicon, taken from `Peripherals` in `main` so the resource map
 /// is decided in one place and passed here whole.
