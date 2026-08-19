@@ -985,10 +985,51 @@ the watermark supervision still reporting every 10 s. The BACKLOG-94
 re-earn (42.7 % headroom at S2's gate) is what this spent; the 10 KB
 smarthome reservation survives inside the remaining margin.
 
+### The stack, settled on silicon (2026-08-19, the bring-up night)
+
+The table above was the first direct image, and it boot-looped: the
+poll task's stack is what the direct feature actually contends for, and
+three silicon-only failures taught the final shape. Recorded here
+because every one of them is invisible to host gates:
+
+1. **`StaticCell::init(big_value)` stages the value in the constructing
+   frame.** The ~60 KB `png_stream::Scratch` transited the poller's
+   stack before reaching its static — instant STKOF at task start.
+   Fix: `Scratch::init_at`, field-wise in-place construction.
+2. **The JSON scratches now ride the PNG window** (`loan_window`):
+   extraction and crest decoding never overlap, so the 32 KB inflate
+   window doubles as the picojson token scratch. −18.4 KB of statics.
+3. **Await sites embed future slots rustc does not overlap.** Three
+   `refresh_lists` call sites carried three ~20 KB slots; SP probes on
+   the poll path measured the redundant staging as 23 KB of *live
+   stack* during the list phase. One call site (the `Advance` fold)
+   moved request-entry depth from 87.6 KB to 64.5 KB. The
+   `Pin<&mut dyn Future>` phase-seam experiment is documented in
+   482f346's message as a NET LOSS (~19 KB of task arena per seam) —
+   do not rediscover it.
+4. **`small-ring` (48 slots)** funds the remainder: the direct build's
+   ring trades ~22 KB of history depth for stack.
+
+Final direct image (replay build): statics **394,424 B**, core-0 stack
+**97,376 B** by the linker (89,096 painted/supervised), and the number
+that matters — **measured high-water 80,340 B** across live rotation,
+list refreshes, detail commits and real-CDN crest decodes, steady over
+every 10 s report. Margin ~9 KB supervised, MSPLIM below it. The
+structural slimming that would widen it (extractor `finish(&mut self)`
+retiring the by-value enum copies) is BACKLOG'd with the S1 API
+unification.
+
+First-pixels evidence, same night: all four sports rendered through
+the rotation from the TLS-fronted mock (`Mode(mlb_live)`, `Mode(final)`,
+`Mode(football_live)`, `Mode(nba_live)`), 60 FPS, zero overruns, crests
+fetched from the real `a.espncdn.com` and decoded on-device (~8 ms,
+inside the idle window).
+
 Caveats: dev-local build, boot-integrated direct image not yet sized;
-on-silicon RAM watermark and poll-cycle timings land with the field
-trial. The per-poll transfer numbers this build should hit are Phase
-S2's (16 KB window ⇒ sub-second scoreboard fetches).
+sustained replay soak and the real-ESPN field trial carry the rest.
+The per-poll transfer numbers this build hits are Phase S2's (16 KB
+window ⇒ sub-second scoreboard fetches; kept-alive reconnects 128–340 ms
+observed against the rig).
 
 ## Caveats to close before the numbers can be trusted end to end
 

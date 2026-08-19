@@ -1067,3 +1067,19 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     not an unsafe block); keep each PR a refinement with one idea; label
     stacked PRs as stacked; file the issue before the PR when the change is
     a judgment call rather than a defect.
+
+98. **Retire the by-value stream copies on the poll path (found on the S3
+    bring-up night, 2026-08-19).** `DetailStream`/`ListStream` — and the
+    four sport extractors under them — consume `self` at `finish`, so
+    every finish memcpys an enum sized by its largest variant (~17 KB)
+    from the task pool through the stack, and every await site that holds
+    a stream embeds a slot rustc will not overlap with its siblings. SP
+    probes measured the whole class at 20–40 KB of transient stack; the
+    bring-up paid for it with the small-ring lever and a one-call-site
+    refresh fold (BUDGET.md "Phase S3", the settled-stack section).
+    The structural fix rides the S1 API-unification pass: extractors
+    finish through `&mut self` (husk state behind, report out), which
+    retires the copies everywhere at once and lets the ring lever be
+    given back. Priced when that pass opens; the measuring tools are
+    `scoreboard-espn`'s `sizes` example and the `sub sp` objdump sweep
+    recorded in 1c4b795's message.

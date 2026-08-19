@@ -251,12 +251,17 @@ Gate to start: S2 exit. Gate to exit: replay parity.
       TLS-fronted mock, asserted against the parity harness — same goldens
       as proxy mode. Merge to `main` (additive: the direct feed exists,
       nothing uses it on `main`).
-      Status 2026-08-19: crate-level parity green (33/33 + list oracle);
-      device replay is next — direct image links (BUDGET "Phase S3"),
-      replay lever verified against the mock's routing, football
-      scenario to be added to mock.yml (fixtures exist), then the bench
-      flash. Field trial (real ESPN + real display + live soak) follows
-      per the owner's ask.
+      Status 2026-08-19 (bring-up night): crate-level parity green
+      (33/33 + list oracle). **The device replay RUNS**: bench unit on
+      the TLS-fronted mock, all four sports committed and rendered
+      through the live rotation (`mlb_live`, `final`, `football_live`,
+      `nba_live`), 60 FPS, zero overruns, crests from the real CDN
+      decoded on-device. The road there was three silicon-only stack
+      failures, fixed with SP-probe evidence — BUDGET "Phase S3"'s
+      settled-stack section is the record. Remaining for exit: a
+      sustained replay window (running), golden-assertion pass against
+      the captures, then merge to `main`. Field trial (real ESPN + real
+      display + live soak) follows per the owner's ask.
 
 ## S4 — the standalone build and the deletion sweep (phase-s diverges here)
 
