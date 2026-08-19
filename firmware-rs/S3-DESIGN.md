@@ -135,13 +135,15 @@ asked for: real ESPN, real display, soak on live data.
     of the extract *before* the crest fetches await, and the
     `detail()` borrow spans only the synchronous commit — no borrow
     across an await, same rule, same reason.
-12. **Refresh ticks decide list strategy per decision 3**, with one open
-    item to measure, not estimate: whether the list extractor's scratch
-    can be small (captured list tokens are ≤ 255 B; whether *skipped*
-    tokens transit scratch is a picojson property to verify on the
-    corpus). If a second 16 KiB scratch is the price of concurrent
-    list+detail, sequential two-fetch for every sport on refresh ticks
-    is the fallback decision 3 already prices.
+12. **Refresh ticks run list+detail concurrently, and the second scratch
+    is 2 KiB** (measured 2026-08-19, `scoreboard-direct`'s
+    `list_scratch.rs`): the list pass over the repo's biggest real
+    captures needs 210–464 B of picojson scratch (binary-searched
+    minimum; MLB max 210, college-football Saturday 464, MLS 245), so
+    concurrent extraction costs 16 KiB + 2 KiB, not 2 × 16 KiB. The
+    test pins 2 KiB and fails the day ESPN ships a longer token.
+    Soccer stays sequential per decision 3 — its problem was extract
+    state, never scratch.
 13. **The replay lever is the spike's.** The ESPN base URL is a
     compile-time override (env at build, exactly `SPIKE_TERMINATOR`'s
     pattern) so the same `direct` image points at the TLS-fronted mock
