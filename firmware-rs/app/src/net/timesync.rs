@@ -162,17 +162,9 @@ async fn fetch(client: &mut ApiClient, buffer: &mut [u8], base: &str) -> Result<
 /// **`UTC_OFFSET_S` is deliberately not written here, and no offset is
 /// invented.** NTP carries UTC and no timezone, so there is nothing honest to
 /// put in it; the offset comes from [`crate::timezone`]'s browser-seeded
-/// schedule, under its own storage key and on its own cadence.
-///
-/// Which leaves one thing open, and it is not this module's to close:
-/// [`local_clock`] gates the offset on the *epoch*, so with `UTC_OFFSET_S`
-/// still initialised to `0` a `direct` device answers `Some(0)` — "I am in
-/// UTC" — from its first sync, having been told nothing of the sort. That is
-/// exactly the failure the module docs' "`None` is not `Some(0)`" section
-/// exists to prevent, and the fix is an unset sentinel on `UTC_OFFSET_S`
-/// (`i32::MIN`; real offsets are within ±14 h) so that `local_clock` reports
-/// `None` until something writes a real one. It belongs with the code that
-/// writes the offset, which is the timezone lane's.
+/// schedule, under its own storage key and on its own cadence. The
+/// `Some(0)`-from-nothing hazard an earlier revision of this comment left
+/// open is closed by [`OFFSET_UNKNOWN`] — its doc carries the story.
 #[cfg(feature = "direct")]
 async fn fetch(client: &mut ApiClient, _buffer: &mut [u8], _base: &str) -> Result<(), PollError> {
     let unix_seconds = super::sntp::epoch(client.stack()).await?;
