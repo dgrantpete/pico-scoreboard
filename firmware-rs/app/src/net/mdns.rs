@@ -27,14 +27,46 @@
 //! embassy-net exposes that as [`Stack::join_multicast_group`]. Without it the
 //! socket binds and receives nothing at all, which is a failure that looks
 //! exactly like "no queries are arriving".
+//!
+//! # Staying joined, and announcing — BACKLOG 90
+//!
+//! Answering queries is necessary but was never sufficient. Drill day
+//! (2026-08-16) recorded resolution dying **minutes after boot** on Windows
+//! and iOS while the responder answered every query form correctly; the
+//! 2026-08-22 session pinned the mechanism on live rx logging. The house AP
+//! snoops multicast memberships and ages them out, and the LAN has no IGMP
+//! querier to refresh them — so a few minutes after the boot-time join, the
+//! switch simply stops delivering group traffic to the station and the
+//! responder goes deaf mid-conversation. smoltcp answers IGMP queries fine
+//! (`ToSpecificQuery` in its multicast state machine); nothing ever asks.
+//!
+//! Two periodic acts, every [`KEEPALIVE`], both aimed at that network:
+//!
+//! * **Leave and re-join the group.** A fresh join emits a fresh IGMPv2
+//!   membership report — the packet a querier would have solicited — and the
+//!   snooping table starts its clock over.
+//! * **Announce, unsolicited** ([`Responder::announcement`], RFC 6762 §8.3).
+//!   The cadence is half the record's TTL, so every listener whose *own*
+//!   membership is alive holds our A record in cache continuously and never
+//!   needs its query to reach us at all. On this network that is the leg that
+//!   actually resolves names when the query leg is down.
 
 use core::net::Ipv4Addr;
 
+use embassy_futures::select::{Either, select};
 use embassy_futures::yield_now;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{IpAddress, IpEndpoint, IpListenEndpoint, Stack};
+use embassy_time::{Duration, Ticker, Timer};
 use scoreboard_portal::mdns::{self, Reply, Responder};
 use static_cell::ConstStaticCell;
+
+/// How often to refresh the group membership and re-announce.
+///
+/// Half of the responder's record TTL (120 s), so a cached record is renewed
+/// well before it can lapse; and comfortably inside every snooping-table
+/// timeout observed in the wild (they run minutes).
+const KEEPALIVE: Duration = Duration::from_secs(60);
 
 /// Payload buffers.
 ///
@@ -84,9 +116,18 @@ pub async fn serve(stack: Stack<'static>, responder: Responder) -> ! {
     let mut response = [0u8; mdns::MAX_RESPONSE];
     let multicast = IpEndpoint::new(IpAddress::Ipv4(group), mdns::PORT);
 
+    // §8.3 wants the boot announcement made more than once — a listener that
+    // missed the first (its own membership mid-refresh, a lossy 2.4 GHz
+    // moment) catches the second, and after that the keepalive's cadence
+    // carries it.
+    announce(&socket, &responder, &mut response, multicast).await;
+    Timer::after_secs(1).await;
+    announce(&socket, &responder, &mut response, multicast).await;
+
+    let mut keepalive = Ticker::every(KEEPALIVE);
     loop {
-        match socket.recv_from(&mut query).await {
-            Ok((length, from)) => {
+        match select(socket.recv_from(&mut query), keepalive.next()).await {
+            Either::First(Ok((length, from))) => {
                 // The source *port* is what separates a modern resolver from a
                 // legacy one, so it is passed through rather than discarded.
                 let reply = responder.answer(&query[..length], from.endpoint.port, &mut response);
@@ -100,11 +141,34 @@ pub async fn serve(stack: Stack<'static>, responder: Responder) -> ! {
                     }
                 }
             }
-            Err(error) => defmt::warn!("mdns: dropped a packet: {}", error),
+            Either::First(Err(error)) => defmt::warn!("mdns: dropped a packet: {}", error),
+            Either::Second(()) => {
+                // Leave-then-join rather than join alone: joining a group the
+                // stack believes it is already in is a no-op, and the whole
+                // point is the fresh IGMP report on the wire.
+                let _ = stack.leave_multicast_group(IpAddress::Ipv4(group));
+                if let Err(error) = stack.join_multicast_group(IpAddress::Ipv4(group)) {
+                    defmt::warn!("mdns: keepalive re-join failed: {}", error);
+                }
+                announce(&socket, &responder, &mut response, multicast).await;
+            }
         }
 
         // As in `captive_dns`: hand the executor back between packets so a
         // burst on a busy group cannot starve the web server.
         yield_now().await;
+    }
+}
+
+/// Multicast one unsolicited announcement of our name.
+async fn announce(
+    socket: &UdpSocket<'_>,
+    responder: &Responder,
+    response: &mut [u8; mdns::MAX_RESPONSE],
+    multicast: IpEndpoint,
+) {
+    let length = responder.announcement(response);
+    if let Err(error) = socket.send_to(&response[..length], multicast).await {
+        defmt::warn!("mdns: announcement failed: {}", error);
     }
 }

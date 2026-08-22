@@ -62,16 +62,22 @@
 //!    a name only this device owns, and what stops a stale address surviving a
 //!    DHCP lease change.
 //!
-//! # What is deliberately not answered
+//! # The types we do not have
 //!
-//! **AAAA.** [`crate::dns`] answers every query type with an A record on
-//! purpose — a captive-portal probe that gets any answer at all concludes it is
-//! behind a portal. Here the opposite is true: a resolver that asks for AAAA
-//! and receives an A record has been handed a malformed answer, and the correct
-//! response from a host with no IPv6 address is silence, after which the
-//! resolver asks for A. (A strictly-correct responder would send an NSEC
-//! saying "I own this name and have no AAAA"; that is BACKLOG 18's territory
-//! and buys a fraction of a second.)
+//! **AAAA, HTTPS, and every other type paired with an A question.**
+//! [`crate::dns`] answers every query type with an A record on purpose — a
+//! captive-portal probe that gets any answer at all concludes it is behind a
+//! portal. Here that would be a malformed answer; what a host that owns the
+//! name but not the record must send instead is an **NSEC** asserting the
+//! nonexistence (RFC 6762 §6.1), whose type bit map says "A, and nothing
+//! else". Silence was the original behaviour and it cost real time: phones
+//! ask A+AAAA together and sit on the unanswered half until it times out
+//! (BACKLOG 90's follow-up (a); the old note filing it under "buys a
+//! fraction of a second" undersold multi-second resolver timeouts). Legacy
+//! askers get ordinary DNS's spelling of the same fact — the question echoed
+//! with zero answers.
+//!
+//! # What is deliberately not answered
 //!
 //! **Known-answer suppression** (§7.1): a query may carry records the asker
 //! already holds, and a responder should stay quiet if its own copy is not
@@ -104,12 +110,17 @@ const LOCAL: &[u8] = b"local";
 /// 512-byte classic-DNS ceiling.
 pub const MAX_QUERY: usize = 1500;
 
+/// The longest name this answers for: `<32-byte device name>.local.` encodes
+/// to 40 bytes.
+const MAX_NAME: usize = 1 + MAX_DEVICE_NAME + 1 + LOCAL.len() + 1;
+
 /// The longest response this builds.
 ///
-/// Header 12, then the longest name (`<32-byte device name>.local.` encodes to
-/// 40 bytes) or, for a legacy reply, the echoed question (44) plus a two-byte
-/// pointer, then the A record's fixed 14 bytes.
-pub const MAX_RESPONSE: usize = 12 + (MAX_DEVICE_NAME + 1) + (LOCAL.len() + 1) + 1 + 4 + 2 + 14;
+/// The negative answer is the biggest: header 12, the name, the NSEC record's
+/// fixed ten bytes (type, class, TTL, rdlength), then the name *again* as the
+/// NSEC next-domain, and the three-byte type bit map. Everything else — the A
+/// answer, the legacy echo — fits inside it.
+pub const MAX_RESPONSE: usize = 12 + MAX_NAME + 10 + MAX_NAME + 3;
 
 /// The A record's TTL, in seconds. RFC 6762 §10 recommends 120 for records
 /// containing a host name.
@@ -190,9 +201,15 @@ impl Responder {
         let questions = u16::from_be_bytes([qd_high, qd_low]);
 
         // A query may ask several things at once; the answer is the same record
-        // whichever of them matched, so the walk stops at the first hit.
+        // whichever of them matched, so the walk stops at the first positive
+        // hit. A question for our name with a type we do not have — AAAA from
+        // every phone, HTTPS (65) from every modern browser — is remembered as
+        // a *negative* match instead: RFC 6762 §6.1 says the name's owner must
+        // assert the record's nonexistence, because a resolver that asked
+        // A+AAAA together will sit on the unanswered half until it times out.
         let mut cursor = 12;
         let mut matched = None;
+        let mut negative = None;
         for _ in 0..questions {
             let (name_end, is_ours) = self.walk_name(query, cursor)?;
             let &[type_high, type_low, class_high, class_low] =
@@ -205,16 +222,30 @@ impl Responder {
             let unicast_requested = class_high & 0x80 != 0;
             let class = u16::from_be_bytes([class_high & 0x7F, class_low]);
 
-            // A (1) and ANY (255) only — see the module docs on AAAA. Class IN,
-            // or ANY class, which is what a `dig -c ANY` sends.
-            let wanted = matches!(query_type, 1 | 255) && matches!(class, 1 | 255);
-            if is_ours && wanted {
-                matched = Some((cursor, name_end, unicast_requested));
-                break;
+            // A (1) and ANY (255) get the address; class IN, or ANY class,
+            // which is what a `dig -c ANY` sends.
+            if is_ours && matches!(class, 1 | 255) {
+                if matches!(query_type, 1 | 255) {
+                    matched = Some((cursor, name_end, unicast_requested));
+                    break;
+                }
+                if negative.is_none() {
+                    negative = Some((cursor, name_end, unicast_requested));
+                }
             }
             cursor = name_end + 4;
         }
-        let (name_start, name_end, unicast_requested) = matched?;
+        let Some((name_start, name_end, unicast_requested)) = matched else {
+            let (name_start, name_end, unicast_requested) = negative?;
+            return Some(self.negative_answer(
+                query,
+                name_start,
+                name_end,
+                from_port,
+                unicast_requested,
+                out,
+            ));
+        };
 
         // §6.7: a query from any port but 5353 is a legacy resolver expecting
         // ordinary DNS — unicast, with the question and the transaction id
@@ -267,6 +298,99 @@ impl Responder {
         } else {
             Reply::Multicast(written)
         })
+    }
+
+    /// The reply to a question for our name whose type we do not have.
+    ///
+    /// mDNS-style (source port 5353): an NSEC record (RFC 6762 §6.1) whose
+    /// type bit map says "type A, and nothing else" — one record that closes
+    /// the AAAA half, the HTTPS half, and any other type a resolver paired
+    /// with its A question. Legacy-style: ordinary DNS has said "no such
+    /// record" since 1035 by answering with nothing — the question echoed,
+    /// zero answer records — so that is what a legacy asker gets; an NSEC in
+    /// the answer section would only confuse a resolver that predates it.
+    fn negative_answer(
+        &self,
+        query: &[u8],
+        name_start: usize,
+        name_end: usize,
+        from_port: u16,
+        unicast_requested: bool,
+        out: &mut [u8; MAX_RESPONSE],
+    ) -> Reply {
+        let legacy = from_port != PORT;
+        let mut written = 0;
+        let mut put = |bytes: &[u8]| {
+            out[written..written + bytes.len()].copy_from_slice(bytes);
+            written += bytes.len();
+        };
+
+        if legacy {
+            put(&query[0..2]); // the transaction id, echoed
+            put(&[0x84, 0x00]);
+            put(&[0, 1, 0, 0, 0, 0, 0, 0]); // QD=1 AN=0 — a NODATA answer
+            put(&query[name_start..name_end + 4]);
+            return Reply::Unicast(written);
+        }
+
+        put(&[0, 0]); // §18.1: multicast responses carry id zero
+        put(&[0x84, 0x00]);
+        put(&[0, 0, 0, 1, 0, 0, 0, 0]); // QD=0 AN=1 — the NSEC is the answer
+        let name = |put: &mut dyn FnMut(&[u8])| {
+            put(&[self.name.len() as u8]);
+            put(self.name.as_bytes());
+            put(&[LOCAL.len() as u8]);
+            put(LOCAL);
+            put(&[0]);
+        };
+        name(&mut put);
+        put(&[0, 47]); // type NSEC
+        put(&[0x80, 0x01]); // IN, cache-flush — ours alone, like the A
+        put(&TTL_SECONDS.to_be_bytes());
+        let rdlength = (self.name.len() + 8 + 3) as u16;
+        put(&rdlength.to_be_bytes());
+        name(&mut put); // NSEC next-domain: ourselves — mDNS uses no zone order
+        put(&[0x00, 0x01, 0x40]); // window 0, one byte: bit set for type A only
+
+        if unicast_requested {
+            Reply::Unicast(written)
+        } else {
+            Reply::Multicast(written)
+        }
+    }
+
+    /// The bytes of an unsolicited announcement: our A record, multicast to
+    /// the group with nobody having asked.
+    ///
+    /// RFC 6762 §8.3's announcement, and byte-identical to what [`answer`]
+    /// multicasts for a group-sourced A query — id zero, no question echoed,
+    /// cache-flush set — because an announcement *is* that response, minus the
+    /// query. What it buys is documented at the caller
+    /// (`firmware-rs/app/src/net/mdns.rs`): on a network whose switch ages
+    /// multicast memberships out with no querier to refresh them (BACKLOG 90),
+    /// a listener that can no longer reach us with a *query* still holds our
+    /// record in cache as long as announcements keep landing inside
+    /// [`TTL_SECONDS`].
+    pub fn announcement(&self, out: &mut [u8; MAX_RESPONSE]) -> usize {
+        let mut written = 0;
+        let mut put = |bytes: &[u8]| {
+            out[written..written + bytes.len()].copy_from_slice(bytes);
+            written += bytes.len();
+        };
+        put(&[0, 0]); // §18.1: multicast responses carry id zero
+        put(&[0x84, 0x00]); // response, authoritative
+        put(&[0, 0, 0, 1, 0, 0, 0, 0]); // QD=0 AN=1
+        put(&[self.name.len() as u8]);
+        put(self.name.as_bytes());
+        put(&[LOCAL.len() as u8]);
+        put(LOCAL);
+        put(&[0]);
+        put(&[0, 1]); // type A
+        put(&[0x80, 0x01]); // IN, cache-flush: we are this name's only owner
+        put(&TTL_SECONDS.to_be_bytes());
+        put(&[0, 4]);
+        put(&self.address);
+        written
     }
 
     /// Walk a question's name, returning where it ends and whether it is ours.
@@ -380,6 +504,24 @@ mod tests {
     }
 
     #[test]
+    fn an_announcement_is_the_multicast_answer_with_nobody_asking() {
+        // The equivalence the doc comment claims, pinned: a listener cannot
+        // tell an announcement from the response its own query would have
+        // drawn, so the two must never drift apart.
+        let mut answered = [0u8; MAX_RESPONSE];
+        let Reply::Multicast(answer_length) =
+            responder().answer(&ours(1), PORT, &mut answered).unwrap()
+        else {
+            panic!("an mDNS query gets a multicast reply");
+        };
+
+        let mut announced = [0u8; MAX_RESPONSE];
+        let announce_length = responder().announcement(&mut announced);
+
+        assert_eq!(announced[..announce_length], answered[..answer_length]);
+    }
+
+    #[test]
     fn a_legacy_query_gets_ordinary_dns_back_unicast() {
         let mut out = [0u8; MAX_RESPONSE];
         // Source port 51234: an ephemeral port, so a legacy resolver.
@@ -451,11 +593,103 @@ mod tests {
     }
 
     #[test]
-    fn an_aaaa_query_gets_silence_rather_than_an_a_record() {
-        // The deliberate difference from `dns::answer`, which answers every
-        // type with an A record because lying is the point there.
+    fn an_aaaa_query_gets_a_nonexistence_proof_not_an_a_record() {
+        // §6.1: we own the name, we do not own the record, and silence makes
+        // the asker wait out a timeout. The NSEC's bit map says only A exists.
         let mut out = [0u8; MAX_RESPONSE];
-        assert!(responder().answer(&ours(28), PORT, &mut out).is_none());
+        let reply = responder().answer(&ours(28), PORT, &mut out).unwrap();
+        let Reply::Multicast(length) = reply else {
+            panic!("a group-sourced AAAA gets a multicast NSEC, got {reply:?}");
+        };
+        let response = &out[..length];
+
+        assert_eq!(&response[0..2], &[0, 0], "multicast responses use id zero");
+        assert_eq!(&response[2..4], &[0x84, 0x00], "response, authoritative");
+        assert_eq!(&response[4..12], &[0, 0, 0, 1, 0, 0, 0, 0], "no question, one answer");
+        let name_len = 1 + NAME.len() + 1 + LOCAL.len() + 1;
+        let record = &response[12 + name_len..];
+        assert_eq!(&record[0..2], &[0, 47], "type NSEC");
+        assert_eq!(&record[2..4], &[0x80, 0x01], "class IN with cache-flush set");
+        assert_eq!(&record[4..8], &TTL_SECONDS.to_be_bytes());
+        let rdlength = u16::from_be_bytes([record[8], record[9]]) as usize;
+        assert_eq!(rdlength, name_len + 3, "next-domain plus one window block");
+        assert_eq!(
+            &record[10..10 + name_len],
+            &response[12..12 + name_len],
+            "the NSEC next-domain is our own name"
+        );
+        assert_eq!(
+            &record[10 + name_len..10 + name_len + 3],
+            &[0x00, 0x01, 0x40],
+            "window 0, one byte, the bit for type A alone"
+        );
+        assert_eq!(length, 12 + name_len + 10 + name_len + 3);
+    }
+
+    #[test]
+    fn an_https_query_gets_the_same_nonexistence_proof() {
+        // Type 65, what Safari pairs with A+AAAA. One NSEC covers every
+        // absent type, so the bytes must match the AAAA answer exactly.
+        let mut aaaa = [0u8; MAX_RESPONSE];
+        let aaaa_reply = responder().answer(&ours(28), PORT, &mut aaaa).unwrap();
+        let mut https = [0u8; MAX_RESPONSE];
+        let https_reply = responder().answer(&ours(65), PORT, &mut https).unwrap();
+        assert_eq!(aaaa[..aaaa_reply.len()], https[..https_reply.len()]);
+    }
+
+    #[test]
+    fn a_legacy_aaaa_query_gets_nodata_not_nsec() {
+        // Ordinary DNS spells "no such record" with an empty answer section;
+        // an NSEC in the answer would only confuse a resolver from 1035.
+        let mut out = [0u8; MAX_RESPONSE];
+        let reply = responder()
+            .answer(&query(&[NAME, "local"], 28, 1, 0xBEEF), 51234, &mut out)
+            .unwrap();
+        let Reply::Unicast(length) = reply else {
+            panic!("a legacy query gets a unicast reply, got {reply:?}");
+        };
+        let response = &out[..length];
+        assert_eq!(&response[0..2], &[0xBE, 0xEF], "the transaction id, echoed");
+        assert_eq!(&response[4..12], &[0, 1, 0, 0, 0, 0, 0, 0], "QD=1 AN=0");
+        let question = &ours(28)[12..];
+        assert_eq!(&response[12..], question, "the question echoed, nothing else");
+    }
+
+    #[test]
+    fn an_aaaa_for_another_devices_name_stays_silent() {
+        // The nonexistence proof is an owner's statement; for a name that is
+        // not ours there is nothing to assert.
+        let mut out = [0u8; MAX_RESPONSE];
+        let unrelated = query(&["printer", "local"], 28, 1, 0);
+        assert!(responder().answer(&unrelated, PORT, &mut out).is_none());
+    }
+
+    #[test]
+    fn a_paired_a_and_aaaa_question_prefers_the_address() {
+        // The A answer beats the NSEC when both questions are in one message,
+        // whichever order they arrive in.
+        for questions in [[1u16, 28u16], [28u16, 1u16]] {
+            let mut message = Message::new();
+            let mut put = |bytes: &[u8]| message.extend_from_slice(bytes).unwrap();
+            put(&[0, 0, 0x00, 0x00, 0, 2, 0, 0, 0, 0, 0, 0]); // QD=2
+            for qtype in questions {
+                put(&[NAME.len() as u8]);
+                put(NAME.as_bytes());
+                put(&[LOCAL.len() as u8]);
+                put(LOCAL);
+                put(&[0]);
+                put(&qtype.to_be_bytes());
+                put(&1u16.to_be_bytes());
+            }
+            let mut out = [0u8; MAX_RESPONSE];
+            let reply = responder().answer(&message, PORT, &mut out).unwrap();
+            let record_type = {
+                let name_len = 1 + NAME.len() + 1 + LOCAL.len() + 1;
+                [out[12 + name_len], out[12 + name_len + 1]]
+            };
+            assert_eq!(record_type, [0, 1], "the answer is the A record, questions {questions:?}");
+            assert!(matches!(reply, Reply::Multicast(_)));
+        }
     }
 
     #[test]

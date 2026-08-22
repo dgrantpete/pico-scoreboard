@@ -956,6 +956,19 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     scratchpad; the `dev.toml`-era note "mDNS from this PC flaky, use the
     IP" is this bug.
 
+    **(a) and (b) LANDED 2026-08-22** — live rx logging on the seated
+    unit pinned the mechanism exactly as diagnosed (group traffic stops
+    reaching the station minutes after the boot-time join; the responder
+    itself was never wrong), and the keepalive + announcements held
+    resolution alive at 15+ minutes uptime, triple the old death window,
+    with a full page fetch by name. What remains open here: the router
+    lever above (a proper IGMP querier would make the keepalive
+    belt-and-braces instead of load-bearing), and a separate desk-PC
+    path quirk found the same day — the bench PC's ICMP and unicast UDP
+    to the device vanish while its TCP flows; harmless to users
+    (resolvers ride multicast) but worth remembering before trusting a
+    ping from that machine.
+
 91. **Smarthome support.** Owner wish-list (2026-08-16, no spec yet): let the
     scoreboard participate in the house's smart home — the obvious shapes are
     Home Assistant discovery, MQTT state/command topics (power, brightness,
