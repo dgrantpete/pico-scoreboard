@@ -45,7 +45,10 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY backend/Cargo.toml backend/
 COPY crates/hub75/Cargo.toml crates/hub75/
+COPY crates/png-stream/Cargo.toml crates/png-stream/
 COPY crates/scoreboard-config/Cargo.toml crates/scoreboard-config/
+COPY crates/scoreboard-direct/Cargo.toml crates/scoreboard-direct/
+COPY crates/scoreboard-espn/Cargo.toml crates/scoreboard-espn/
 COPY crates/scoreboard-input/Cargo.toml crates/scoreboard-input/
 COPY crates/scoreboard-log/Cargo.toml crates/scoreboard-log/
 COPY crates/scoreboard-model/Cargo.toml crates/scoreboard-model/
@@ -68,12 +71,13 @@ RUN mkdir -p backend/src && echo "fn main() {}" > backend/src/main.rs && \
     # hub75's `pack` bench.
     mkdir -p crates/hub75/benches && : > crates/hub75/benches/pack.rs && \
     cargo build --release -p backend && \
-    rm -rf backend/src crates/scoreboard-wire/src
-# Only the two members that receive real sources below lose their stubs; the
+    rm -rf backend/src crates/scoreboard-wire/src crates/scoreboard-espn/src
+# Only the three members that receive real sources below lose their stubs; the
 # rest keep them, because the final build still has to load the workspace.
 
 # Now copy the actual source code
 COPY crates/scoreboard-wire/src/ crates/scoreboard-wire/src/
+COPY crates/scoreboard-espn/src/ crates/scoreboard-espn/src/
 COPY backend/src/ backend/src/
 
 # Copy the config directory (contains default.toml with non-secret defaults)
@@ -81,7 +85,7 @@ COPY backend/config/ backend/config/
 
 # Touch the stubbed-over roots so Cargo recompiles them (otherwise it might
 # think the stubs are still current)
-RUN touch backend/src/main.rs crates/scoreboard-wire/src/lib.rs && \
+RUN touch backend/src/main.rs crates/scoreboard-wire/src/lib.rs crates/scoreboard-espn/src/lib.rs && \
     cargo build --release -p backend
 
 # =============================================================================
