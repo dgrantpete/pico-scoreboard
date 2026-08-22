@@ -120,6 +120,12 @@ pub struct NetPeripherals {
 /// talk to until the poller exists. So they arrive here and are spawned by
 /// whichever arm won, which is the same shape [`bringup`] already uses for the
 /// poller and the captive portal.
+///
+/// Under `link-boot-integrated` the first half of that argument cuts the other
+/// way: the bootloader's 8 s watchdog is already running *through* the join,
+/// and deferring the feeder means nothing feeds it. That gap is
+/// [`crate::supervise::boot_feeder`]'s to bridge — it starts with the executor
+/// and retires the moment the arm that wins spawns the real task here.
 pub struct Deferred {
     pub inputs: crate::inputs::InputPeripherals,
     pub watchdog: embassy_rp::watchdog::Watchdog,

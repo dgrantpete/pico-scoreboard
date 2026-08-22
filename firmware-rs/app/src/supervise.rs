@@ -538,6 +538,10 @@ pub async fn watchdog(
     let timeout = Duration::from_millis(timeout_ms as u64);
     hardware.start(timeout);
     ARMED_TIMEOUT_MS.store(timeout_ms, Ordering::Relaxed);
+    // Relieves `boot_feeder` of the bootloader's watchdog. Order matters only
+    // in the direction this already has: the store happens after `start`, so
+    // the feeder can never observe "armed" while nothing is feeding.
+    WATCHDOG_TASK_UP.store(true, Ordering::Release);
     // embassy-rp's `feed` reloads the counter with the timeout it is given, so
     // the value has to be repeated on every feed rather than remembered from
     // `start`.
@@ -672,12 +676,14 @@ pub const BOOT_WATCHDOG_TIMEOUT_MS: u32 = 8_000;
 /// read-modify-write, and no state in the `Watchdog` handle that two of them
 /// could disagree about. Two writers of a reload register is what feeding *is*.
 ///
-/// It exists for one caller: the OTA verify, which walks the DFU partition in
+/// It exists for two callers. The OTA verify walks the DFU partition in
 /// 4 KB chunks and feeds between them. The feeder is a *task*, and drill day
 /// proved the arrangement that leaned on it: a single blocking hash call
 /// starves the task for the whole walk, which measured past the 8 s window on
 /// a 1.1 MB image and reset the device at the end of every install. Feeding
 /// from the verify's own loop is what makes the walk's duration irrelevant.
+/// [`boot_feeder`] is the other, bridging the window before [`watchdog`] owns
+/// the peripheral at all.
 #[cfg_attr(
     not(feature = "link-boot-integrated"),
     allow(dead_code, reason = "reached only through the OTA install path, which needs a bootloader")
@@ -691,6 +697,75 @@ pub fn feed_watchdog() {
     watchdog.feed(Duration::from_millis(
         ARMED_TIMEOUT_MS.load(Ordering::Relaxed) as u64,
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Bridging the bootloader's watchdog across the network phase
+// ---------------------------------------------------------------------------
+
+/// Set by [`watchdog`] the moment it has re-armed the hardware, read by
+/// [`boot_feeder`] to know its job is done.
+static WATCHDOG_TASK_UP: AtomicBool = AtomicBool::new(false);
+
+/// How long [`boot_feeder`] will keep a boot alive that has not finished
+/// provisioning.
+///
+/// The worst *legitimate* boot is a station that cannot find its network:
+/// three join attempts against the 20 s connect timeout, plus scans, before
+/// the AP arm takes over and arms the real feeder — around 90 s. Twice that,
+/// and still far under the 600 s confirm deadline, so a trial image that
+/// wedges inside `net::bringup` starves, resets and reverts the same evening
+/// it was installed rather than holding a dark panel forever.
+#[cfg(feature = "link-boot-integrated")]
+const BOOT_FEED_DEADLINE_S: u64 = 180;
+
+/// Feed the bootloader's watchdog until [`watchdog`] takes over.
+///
+/// The bootloader arms 8 s before this program's first instruction, and the
+/// real feeder is spawned by whichever provisioning arm wins — an arrangement
+/// inherited from `main.py`, where nothing was counting yet. Between the two
+/// lies the whole network phase, and nothing else feeds: a scan that retries,
+/// a join the AP answers slowly, any provision past the window, and the boot
+/// resets — which after an OTA swap is not a retry but a **revert**. The
+/// 2026-08-21 field flip is when that stopped being theoretical: three
+/// probe-run boots in a row died mid-join at wd-age 8 s, and the first OTA of
+/// the day rolled back a healthy image because its one swap boot drew a slow
+/// join.
+///
+/// The bridge is deliberately dumb: feed on the same quarter-window cadence
+/// the real task uses, stop the moment it is up, and refuse to outlive
+/// [`BOOT_FEED_DEADLINE_S`] — past that the watchdog gets its way, because a
+/// boot that cannot resolve provisioning in three minutes is exactly what the
+/// revert path exists for.
+#[cfg(feature = "link-boot-integrated")]
+#[embassy_executor::task]
+pub async fn boot_feeder() {
+    let mut ticker = Ticker::every(Duration::from_millis(
+        (BOOT_WATCHDOG_TIMEOUT_MS / 4) as u64,
+    ));
+    loop {
+        if WATCHDOG_TASK_UP.load(Ordering::Acquire) {
+            return;
+        }
+        if Instant::now().as_secs() >= BOOT_FEED_DEADLINE_S {
+            // The record first, as everywhere: after the reset this is the
+            // only thing that will say the network phase never resolved.
+            let mut crumb = describe(Cause::WatchdogStarved);
+            crumb.set_message(format_args!(
+                "watchdog starved: provisioning unresolved at {BOOT_FEED_DEADLINE_S} s; \
+                 letting the bootloader's watchdog rule"
+            ));
+            stash_breadcrumb(&crumb);
+            crate::error!(
+                "watchdog: boot feeder giving up at {} s; hardware reset within {} ms",
+                BOOT_FEED_DEADLINE_S,
+                BOOT_WATCHDOG_TIMEOUT_MS
+            );
+            return;
+        }
+        feed_watchdog();
+        ticker.next().await;
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -308,7 +308,9 @@ fn main() -> ! {
     // and the watchdog are both *after the network phase* by design — the
     // buttons because there is no poller to send presses to in setup mode, and
     // the watchdog because arming it around a blocking Wi-Fi join would reset
-    // the device mid-join. `main.py` ordered both the same way.
+    // the device mid-join. `main.py` ordered both the same way. Under a
+    // bootloader that ordering leaves the 8 s watchdog unfed for the whole
+    // network phase — `supervise::boot_feeder`, spawned below, is the bridge.
     let deferred = net::Deferred {
         inputs: inputs::InputPeripherals {
             pio: peripherals.PIO1,
@@ -328,6 +330,12 @@ fn main() -> ! {
 
     let executor = EXECUTOR0.init(Executor::new());
     executor.run(|spawner| {
+        // First, because everything below it is on the clock it feeds: the
+        // bootloader's 8 s watchdog has been running since before this
+        // program's first instruction, and the real feeder does not exist
+        // until a provisioning arm wins.
+        #[cfg(feature = "link-boot-integrated")]
+        spawner.spawn(defmt::unwrap!(supervise::boot_feeder()));
         // Owns the store and the publisher through the boot — together they are
         // what draws the startup screen — and hands both to whichever mode
         // wins. On the station path that is the poller; in setup mode nothing
