@@ -1,11 +1,21 @@
 //! Core 1: the render loop, and nothing else.
 //!
 //! The port of `display.py`'s `run_display_thread`. Core 1 never touches the
-//! network, storage, or flash. Everything it reads from core 0 arrives through
-//! exactly two channels, both of them lock-free: the
+//! network, storage, or flash — it *reads* flash, where an event's clip lies,
+//! but never writes it. Everything it reads from core 0 arrives lock-free: the
 //! [`SnapshotChannel`](scoreboard_model::SnapshotChannel) it latches once per
-//! frame, and the [`BRIGHTNESS`] atomic. Everything it publishes back is
-//! [`FRAME_SEQ`].
+//! frame, the [`BRIGHTNESS`] atomic, and [`crate::event`]'s live-event and
+//! dismiss atomics. Everything it publishes back is [`FRAME_SEQ`] and whether
+//! a press would dismiss the event on screen.
+//!
+//! # Events take the whole panel
+//!
+//! While an event clip plays, the tick decodes a clip frame onto the surface
+//! instead of rendering a screen; [`EventPlayer`] says which, and how far to
+//! scale the brightness for its fades. The screen underneath keeps its rail,
+//! its prepared view and its commits — it is only not drawn — and the memo is
+//! invalidated when the clip leaves, because a static screen has no commit
+//! coming to repaint over the clip's last frame.
 //!
 //! # Pacing: deadline-based, and it never fast-forwards
 //!
@@ -64,6 +74,7 @@ use hub75::display::Hub75Display;
 use hub75::driver::Hub75Driver;
 use scoreboard_model::Reader;
 use scoreboard_render::blit::Canvas;
+use scoreboard_render::event::{Clip, Draw, EventPlayer};
 use scoreboard_render::game::{Logos, Scene};
 use scoreboard_render::geometry::{HEIGHT, RenderSettings, WIDTH};
 use scoreboard_render::time::{FPS, FrameRail, WallMs, frame_us};
@@ -96,7 +107,21 @@ struct LoopState {
     memo: SkipMemo,
     probe: FrameProbe,
     /// Last value pushed into the driver, so an unchanged atomic costs nothing.
+    ///
+    /// The *effective* value: [`BRIGHTNESS`] scaled by the event player's fade.
+    /// A fade moves it every frame for about a second, at the 112–190 µs a
+    /// change costs (BUDGET.md), well inside the frame.
     brightness: u8,
+    event: EventPlayer,
+    /// The live event's clip, parsed once when the event goes live rather than
+    /// per frame, and which [`crate::event::EVENTS`] index it was parsed for —
+    /// `Some(index)` with no clip is an event whose clip was rejected, kept so
+    /// the rejection is logged once and not every frame.
+    clip_for: Option<u8>,
+    clip: Option<Clip<'static>>,
+    /// Slowest clip-frame decode of the current play, for the one line logged
+    /// when it ends — how a bench run answers "does this fit the frame".
+    clip_decode_max_us: u32,
     /// The configured variants, dividers and scroll speed.
     ///
     /// Cross-frame state, so it lives here and nowhere else — the mutation
@@ -173,6 +198,10 @@ pub async fn render_loop(
         probe: FrameProbe::new(),
         brightness: BRIGHTNESS.load(Ordering::Relaxed),
         settings: RenderSettings::new(),
+        event: EventPlayer::new(),
+        clip_for: None,
+        clip: None,
+        clip_decode_max_us: 0,
     };
     // Whatever the atomic said at startup has not reached the driver yet.
     display
@@ -208,11 +237,39 @@ pub async fn render_loop(
         // caused by logging is still counted as one.
         state.probe.begin_tick(Screen::of(snapshot));
 
+        let live = crate::event::live();
+        if live.map(|(index, _)| index) != state.clip_for {
+            // A different event, or none: whatever was playing belongs to the
+            // old clip, and its deltas mean nothing on top of the new one.
+            state.event.abort(now);
+            state.clip_for = live.map(|(index, _)| index);
+            state.clip = live.and_then(|(_, event)| match Clip::parse(event.clip) {
+                Ok(clip) => Some(clip),
+                Err(error) => {
+                    defmt::error!(
+                        "core 1: event {} clip rejected: {}",
+                        event.name,
+                        defmt::Debug2Format(&error)
+                    );
+                    None
+                }
+            });
+        }
+        let step = state.event.tick(
+            now,
+            state.clip.map(|clip| clip.timing()),
+            snapshot.mode,
+            snapshot.menu.active,
+            crate::event::take_dismiss(),
+        );
+        crate::event::set_capturing(step.captures_input);
+
         let requested = BRIGHTNESS.load(Ordering::Relaxed);
-        if requested != state.brightness {
+        let effective = ((requested as u16 * step.fade as u16 + 127) / 255) as u8;
+        if effective != state.brightness {
             let lap = Lap::start();
-            display.sink_mut().set_brightness(requested as f64 / 255.0);
-            state.brightness = requested;
+            display.sink_mut().set_brightness(effective as f64 / 255.0);
+            state.brightness = effective;
             state.probe.record_brightness(lap.elapsed_us());
         }
 
@@ -239,17 +296,59 @@ pub async fn render_loop(
             play: state.rail.play_elapsed(),
         };
 
-        if state.memo.should_render(snapshot, now) {
-            let lap = Lap::start();
-            {
-                let mut canvas = Canvas::new(display.buffer_mut(), WIDTH, HEIGHT);
-                frame::render(&mut canvas, &scene);
-            }
-            state.probe.record_render(lap.elapsed_us());
+        match step.draw {
+            Draw::Screen { redraw } => {
+                if redraw {
+                    state.memo.invalidate();
+                    defmt::info!(
+                        "core 1: event clip off, slowest decode {} us",
+                        state.clip_decode_max_us
+                    );
+                }
+                if state.memo.should_render(snapshot, now) {
+                    let lap = Lap::start();
+                    {
+                        let mut canvas = Canvas::new(display.buffer_mut(), WIDTH, HEIGHT);
+                        frame::render(&mut canvas, &scene);
+                    }
+                    state.probe.record_render(lap.elapsed_us());
 
-            let lap = Lap::start();
-            display.show();
-            state.probe.record_show(lap.elapsed_us());
+                    let lap = Lap::start();
+                    display.show();
+                    state.probe.record_show(lap.elapsed_us());
+                }
+            }
+            Draw::ClipFrame(index) => {
+                let lap = Lap::start();
+                // The player only plays with a clip, so `None` cannot happen;
+                // it is handled like a decode failure rather than unwrapped.
+                if index == 0 {
+                    defmt::info!("core 1: event clip on");
+                    state.clip_decode_max_us = 0;
+                }
+                let decoded = state
+                    .clip
+                    .map(|clip| clip.decode_into(index, display.buffer_mut()));
+                let decode_us = lap.elapsed_us();
+                state.clip_decode_max_us = state.clip_decode_max_us.max(decode_us);
+                state.probe.record_render(decode_us);
+                if let Some(Ok(())) = decoded {
+                    let lap = Lap::start();
+                    display.show();
+                    state.probe.record_show(lap.elapsed_us());
+                } else {
+                    // The surface holds a partial frame, which is never shown:
+                    // the next tick repaints the screen over it.
+                    defmt::error!(
+                        "core 1: event clip frame {} failed: {}",
+                        index,
+                        defmt::Debug2Format(&decoded)
+                    );
+                    state.event.abort(now);
+                }
+            }
+            // The clip frame on the panel stays up for its second tick.
+            Draw::Hold => {}
         }
 
         FRAME_SEQ.fetch_add(1, Ordering::Relaxed);

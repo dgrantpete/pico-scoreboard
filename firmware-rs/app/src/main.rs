@@ -46,6 +46,7 @@
 mod brightness;
 mod config;
 mod display_core1;
+mod event;
 mod http;
 mod inputs;
 mod logos;

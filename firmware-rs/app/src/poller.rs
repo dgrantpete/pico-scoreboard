@@ -459,6 +459,8 @@ impl Poller {
                 timesync::sync(&mut self.client, &mut self.buffer, &cadence.base_url).await;
             self.next_time_sync = Instant::now() + delay;
         }
+        // After the sync, so the first tick after boot already knows the date.
+        crate::event::refresh(timesync::local_clock());
 
         let skip = self.skips.consume();
         let result = self.tick_inner(cadence, now, skip).await;

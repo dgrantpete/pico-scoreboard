@@ -25,7 +25,9 @@
 //!
 //! # Where the presses go
 //!
-//! Into [`crate::poller`]'s command channel, and nowhere else. The poller owns
+//! Into [`crate::poller`]'s command channel — unless an event clip is on
+//! screen, in which case the press dismisses it and goes no further
+//! ([`crate::event::capture_press`]). The poller owns
 //! the `Store`, the `Slate` and the skip machine — the arm/reject decision for a
 //! press is about *its* state and `poller.py` made it in the same place — so
 //! this task decodes and forwards, and never touches display state.
@@ -219,6 +221,13 @@ impl ButtonState {
     }
 
     fn send(&self, button: Button, press: scoreboard_input::button::Press) {
+        // An event on screen takes the press: it is what the person is looking
+        // at, so the press means "dismiss", never a skip or a menu opening
+        // behind a clip they cannot see through.
+        if crate::event::capture_press() {
+            crate::debug!("input: button {} dismissed the event", self.name);
+            return;
+        }
         crate::debug!(
             "input: button {} {} press",
             self.name,

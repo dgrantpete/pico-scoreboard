@@ -53,6 +53,7 @@
 //! CLI but *building* needs only cargo. Same pattern as `hub75`'s goldens.
 
 pub mod blit;
+pub mod event;
 pub mod font;
 pub mod frame;
 pub mod game;

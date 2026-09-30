@@ -1080,3 +1080,31 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     not an unsafe block); keep each PR a refinement with one idea; label
     stacked PRs as stacked; file the issue before the PR when the change is
     a judgment call rather than a defect.
+
+98. **Remove the `colin-birthday-2026` event after its window (closes
+    2026-10-02).** Its clip is 324 KB of the image — 71 % → 92 % of the active
+    partition, 127 KB left. In the first release after 2026-10-02 delete its
+    `EVENTS` entry (`firmware-rs/app/src/event.rs`), the `.sbev` and
+    `.sbev.frames` in `firmware-rs/app/assets/events/`, its `SHIPPED` row in
+    `crates/scoreboard-render/tests/event.rs`, and its provenance row. Keep
+    `tools/events/colin_birthday_2026.py` — it is the art's source.
+99. **Events as content: download a clip once, play it from flash (owner
+    direction, 2026-09-30).** Today every event is a firmware release, because
+    clips are embedded. The shape agreed on: the backend publishes events
+    (window + signed clip, the `/fw/*` ed25519 key), the device fetches a live
+    event's clip once into a dedicated flash region, verifies it, and plays it
+    from there with the existing `Clip`/`EventPlayer` unchanged. Rejected for
+    real-time streaming: the one HTTP client's 1,536 B receive window caps
+    throughput at window ÷ RTT (~31 KB/s measured to iad) against a clip that
+    averages ~25 KB/s, it would starve polling for 13 s every play, and a
+    Wi-Fi blip freezes the panel mid-clip. Rejected for on-device procedural
+    generation: every event becomes firmware code, and the particle state
+    alone eats a real share of the ~14.5 KB RAM headroom. **The hard part is
+    the region:** the only space large enough is inside the 980 KB storage
+    partition, and `sequential-storage` erases the whole map — config, Wi-Fi
+    credentials and all — if its range changes under it (`storage.rs`
+    `reset_region`). Needs a migration that reads every key under the old
+    range and rewrites it under the new one, power-loss-safe, drilled on the
+    bench before any fielded device takes it. Targeting a single friend's
+    unit wants `X-Device-Id` on the events request (today only `/fw/*` sends
+    it).
