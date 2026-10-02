@@ -399,6 +399,30 @@ pub fn crest_path(href: &str) -> Option<CrestPath> {
     Some(out)
 }
 
+/// ESPN's dark-background variant of a crest path: the first `/500/` segment
+/// becomes `/500-dark/`.
+///
+/// The payload links the default artwork, which is drawn for white pages; on
+/// the black panel navy and black marks disappear (the Yankees, the Padres,
+/// the Lightning, the Capitals, 27 college teams). The dark variant is the
+/// same mark redrawn for dark backgrounds. A 2026-10-01 audit of every team
+/// in every shipping league plus the NHL found the rule holds for every dark
+/// href ESPN's teams endpoints list, and found exactly one team with no dark
+/// file (Coventry City, a 404) — so callers must fall back to `path` when the
+/// dark one is missing.
+///
+/// `None` when the path has no `/500/` segment to rewrite, or when the
+/// rewritten path would not fit.
+pub fn dark_crest_path(path: &str) -> Option<CrestPath> {
+    const DEFAULT: &str = "/500/";
+    let at = path.find(DEFAULT)?;
+    let mut out = CrestPath::new();
+    out.push_str(&path[..at]).ok()?;
+    out.push_str("/500-dark/").ok()?;
+    out.push_str(&path[at + DEFAULT.len()..]).ok()?;
+    Some(out)
+}
+
 /// Both teams' crest paths, ordered by `homeAway` like every other pair in
 /// an extract — never by array position.
 ///

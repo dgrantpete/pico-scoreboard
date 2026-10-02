@@ -160,7 +160,7 @@ fn set_text_truncates_at_char_boundaries_like_the_wire() {
 
 // --------------------------------------------------------------- crest URLs
 
-use scoreboard_espn::common::{CDN_ORIGIN, CREST_PATH_BYTES, crest_path, crest_url};
+use scoreboard_espn::common::{CDN_ORIGIN, CREST_PATH_BYTES, crest_path, crest_url, dark_crest_path};
 
 /// One real href per URL shape ESPN actually serves, with the league it came
 /// from. These five are the whole reason the crest href is taken from the
@@ -210,6 +210,38 @@ fn every_corpus_shape_round_trips_to_the_href_the_backend_fetches() {
             path.len()
         );
     }
+}
+
+/// Every shape has a dark sibling one segment over, and it still fits the
+/// path bound — the longest corpus path plus `-dark` is far inside 64 bytes.
+#[test]
+fn every_corpus_shape_has_a_dark_variant_one_segment_over() {
+    for (league, href) in SHAPES {
+        let path = crest_path(href).unwrap();
+        let dark = dark_crest_path(&path).unwrap_or_else(|| panic!("{league}: no dark variant"));
+        assert_eq!(
+            dark.as_str(),
+            path.replacen("/500/", "/500-dark/", 1),
+            "{league}"
+        );
+    }
+}
+
+#[test]
+fn the_dark_rewrite_touches_only_the_first_size_segment() {
+    // A team id of 500 must not be mistaken for the size segment.
+    assert_eq!(
+        dark_crest_path("/i/teamlogos/soccer/500/500.png").unwrap().as_str(),
+        "/i/teamlogos/soccer/500-dark/500.png"
+    );
+    // No size segment, no variant: the caller keeps the default.
+    assert!(dark_crest_path("/i/teamlogos/leagues/500-dark/mlb.png").is_none());
+    assert!(dark_crest_path("/i/teamlogos/mlb/scoreboard/sf.png").is_none());
+    // Five more bytes that would overflow the bound are no variant, never a
+    // truncated path.
+    let near_full = format!("/i/teamlogos/500/{}", "x".repeat(CREST_PATH_BYTES - 20));
+    assert!(near_full.len() <= CREST_PATH_BYTES);
+    assert!(dark_crest_path(&near_full).is_none());
 }
 
 #[test]

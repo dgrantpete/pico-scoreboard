@@ -14,11 +14,14 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, Response, StatusCode},
 };
+use bytes::Bytes;
+use scoreboard_espn::common::dark_crest_path;
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::error::{AppError, ErrorResponse};
+use crate::espn::EspnClient;
 use crate::espn::league::{self, AnyLeague};
 use crate::espn::types::{RawScoreboard, parse_events};
 use crate::logo::{LogoQuery, build_logo_response};
@@ -70,6 +73,38 @@ fn resolve_team_logo(events: Vec<LogoEvent>, abbrev: &str, cdn_base: &str) -> Op
         })
 }
 
+/// The artwork the panel shows: ESPN's dark-background variant of the
+/// payload's logo, or the payload's own logo when no dark one exists.
+///
+/// The payload links artwork drawn for white pages, and on the black panel
+/// navy and black marks vanish; `dark_crest_path` has the audit behind the
+/// switch. Only a 404 on the dark file falls back — it is how the CDN says a
+/// team has none (Coventry City, today). Any other failure is an outage, and
+/// retrying the default would only hide it.
+async fn fetch_crest(
+    client: &EspnClient,
+    logo_url: &str,
+    cdn_base: &str,
+) -> Result<Bytes, AppError> {
+    if let Some(dark_url) = dark_logo_url(logo_url, cdn_base) {
+        match client.fetch_logo(&dark_url).await {
+            Err(AppError::ImageFetch(error)) if error.status() == Some(StatusCode::NOT_FOUND) => {
+                tracing::debug!(url = %dark_url, "no dark crest variant; serving the default");
+            }
+            result => return result,
+        }
+    }
+    client.fetch_logo(logo_url).await
+}
+
+/// The dark variant's URL, for a logo URL `resolve_team_logo` already
+/// confirmed is on the CDN.
+fn dark_logo_url(logo_url: &str, cdn_base: &str) -> Option<String> {
+    let base = cdn_base.trim_end_matches('/');
+    let dark = dark_crest_path(logo_url.strip_prefix(base)?)?;
+    Some(format!("{base}{}", dark.as_str()))
+}
+
 /// GET /{sport}/{league}/teams/{abbrev}/logo
 ///
 /// Resolves the team's logo from the league's scoreboard payload and returns
@@ -112,14 +147,17 @@ pub async fn get_team_logo(
     let logo_url = resolve_team_logo(events, &abbrev, &state.config.espn.logo_url)
         .ok_or_else(|| AppError::TeamNotFound(abbrev.clone()))?;
 
-    let logo_bytes = state.espn_client.fetch_logo(&logo_url).await.map_err(|e| {
-        if let AppError::ImageFetch(ref req_err) = e
-            && req_err.status() == Some(StatusCode::NOT_FOUND)
-        {
-            return AppError::TeamNotFound(abbrev.clone());
-        }
-        e
-    })?;
+    let cdn_base = &state.config.espn.logo_url;
+    let logo_bytes = fetch_crest(&state.espn_client, &logo_url, cdn_base)
+        .await
+        .map_err(|e| {
+            if let AppError::ImageFetch(ref req_err) = e
+                && req_err.status() == Some(StatusCode::NOT_FOUND)
+            {
+                return AppError::TeamNotFound(abbrev.clone());
+            }
+            e
+        })?;
 
     build_logo_response(&logo_bytes, &params, &headers)
 }
@@ -163,6 +201,93 @@ mod tests {
             ]}]}]"#,
         );
         assert!(resolve_team_logo(evs, "BOS", CDN).is_none());
+    }
+
+    #[test]
+    fn the_dark_url_rewrites_one_segment_on_the_configured_cdn() {
+        assert_eq!(
+            dark_logo_url(
+                "https://a.espncdn.com/i/teamlogos/mlb/500/scoreboard/nyy.png",
+                CDN
+            )
+            .as_deref(),
+            Some("https://a.espncdn.com/i/teamlogos/mlb/500-dark/scoreboard/nyy.png")
+        );
+        // A trailing slash on the configured base changes nothing.
+        assert_eq!(
+            dark_logo_url(
+                "https://a.espncdn.com/i/teamlogos/countries/500/por.png",
+                "https://a.espncdn.com/"
+            )
+            .as_deref(),
+            Some("https://a.espncdn.com/i/teamlogos/countries/500-dark/por.png")
+        );
+        // No size segment: no variant, and the caller keeps the default.
+        assert_eq!(
+            dark_logo_url("https://a.espncdn.com/i/teamlogos/mlb/sf.png", CDN),
+            None
+        );
+    }
+
+    /// A local stand-in for the CDN: the Yankees have a dark crest, Coventry
+    /// (the one team the audit found without one) 404s on it, and a third
+    /// path fails the way an outage does.
+    async fn fake_cdn() -> String {
+        use axum::{Router, http::StatusCode, routing::get};
+        let app = Router::new()
+            .route(
+                "/i/teamlogos/mlb/500/scoreboard/nyy.png",
+                get(|| async { "nyy-default" }),
+            )
+            .route(
+                "/i/teamlogos/mlb/500-dark/scoreboard/nyy.png",
+                get(|| async { "nyy-dark" }),
+            )
+            .route(
+                "/i/teamlogos/soccer/500/388.png",
+                get(|| async { "cov-default" }),
+            )
+            .route(
+                "/i/teamlogos/nba/500/scoreboard/bos.png",
+                get(|| async { "bos-default" }),
+            )
+            .route(
+                "/i/teamlogos/nba/500-dark/scoreboard/bos.png",
+                get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        base
+    }
+
+    #[tokio::test]
+    async fn the_dark_crest_is_served_where_it_exists_and_the_default_where_it_404s() {
+        let cdn = fake_cdn().await;
+        let client = EspnClient::new(&crate::config::EspnConfig::default());
+
+        let nyy = format!("{cdn}/i/teamlogos/mlb/500/scoreboard/nyy.png");
+        assert_eq!(
+            &fetch_crest(&client, &nyy, &cdn).await.unwrap()[..],
+            b"nyy-dark"
+        );
+
+        let coventry = format!("{cdn}/i/teamlogos/soccer/500/388.png");
+        assert_eq!(
+            &fetch_crest(&client, &coventry, &cdn).await.unwrap()[..],
+            b"cov-default"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_outage_on_the_dark_crest_is_an_error_not_a_quiet_fallback() {
+        let cdn = fake_cdn().await;
+        let client = EspnClient::new(&crate::config::EspnConfig::default());
+        let celtics = format!("{cdn}/i/teamlogos/nba/500/scoreboard/bos.png");
+        assert!(matches!(
+            fetch_crest(&client, &celtics, &cdn).await,
+            Err(AppError::ImageFetch(_))
+        ));
     }
 
     #[test]
