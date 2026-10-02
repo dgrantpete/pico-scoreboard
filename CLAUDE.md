@@ -15,6 +15,9 @@ See `.claude/ARCHITECTURE.md` for full component details.
   sync with Rust. The Rust renderer is the visual source of truth; its golden
   frames are its own (`crates/scoreboard-render/tests/golden_frames.rs`,
   re-bless with `SCOREBOARD_BLESS_FRAMES=1`)
+- Data path: the backend is the only supported mode. Phase S's direct-to-ESPN
+  (no-backend) code on main and the `phase-s` branch are legacy — unmaintained,
+  never adapted to new work, slated for deletion (BACKLOG 100)
 - Frontend: Svelte + Vite, compiled to single-file HTML, gzipped, served from the
   device — by both firmwares
 - Backend: Rust + Axum, deployed on Fly.io, proxies ESPN API; the Docker build

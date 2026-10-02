@@ -1099,3 +1099,14 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     bench before any fielded device takes it. Targeting a single friend's
     unit wants `X-Device-Id` on the events request (today only `/fw/*` sends
     it).
+100. **Delete the Phase S direct-to-ESPN code from main (owner, 2026-10-01:
+    "the version with the explicit backend won out").** Backend mode is the
+    only supported mode; nothing maintains direct mode any more. Remove the
+    `scoreboard-direct` crate, the app's `direct` feature and everything gated
+    on it (SNTP fetch swap, direct crest fetch), and the direct-only surface of
+    `scoreboard-espn` (`crest_url`/combiner, `DirectExtract` plumbing) — keep
+    what the backend uses (the extractors, `crest_path`, `dark_crest_path`).
+    Then archive the `phase-s` branch and mark PHASE-S*.md / S3-DESIGN.md as
+    history. `png-stream` and the picojson/embedded-tls forks go if nothing
+    else needs them. Until then, treat that code as frozen: no adaptation work
+    (e.g. dark crests stay backend-only).
