@@ -39,7 +39,7 @@
 use crate::font::{self, Scroll};
 use crate::generated::{SPLEEN_5X8, UNSCII_16};
 use crate::geometry::{
-    PLAY_SCROLL_PAUSE_MS, PLAY_TEXT, PREGAME, PREGAME_INFO_DWELL_MS, PREGAME_SCROLL, RenderSettings,
+    PLAY_SCROLL_PAUSE_MS, PREGAME, PREGAME_INFO_DWELL_MS, PREGAME_SCROLL, RenderSettings,
 };
 use crate::qr::{self, QrBitmap};
 use scoreboard_model::snapshot::SSID;
@@ -98,7 +98,11 @@ impl PreparedView {
             self.qr.encode(&qr::wifi_payload(ssid));
         }
 
-        self.play_window_ms = play_window_ms(&snapshot.play.text, settings);
+        self.play_window_ms = play_window_ms(
+            &snapshot.play.text,
+            settings.bottom_strip(snapshot.mode).width,
+            settings,
+        );
         self.pregame = PregameCycle::build(
             &snapshot.pregame.info_primary,
             &snapshot.pregame.info_secondary,
@@ -131,9 +135,10 @@ impl PreparedView {
     /// `sync` keys on the commit sequence alone, which is right for the only
     /// thing that normally changes — core 0 publishing new state. It is not
     /// enough when the *settings* change: `play_window_ms` is measured against
-    /// the configured scroll speed, so a `PUT /api/config` that halves the
-    /// speed leaves a window sized for the old one, and no new commit is coming
-    /// to correct it. Core 1 calls this when it takes a settings update.
+    /// the configured scroll speed and the selected soccer variant's strip, so
+    /// a `PUT /api/config` that halves the speed or switches soccer A to C
+    /// leaves a window sized for the old one, and no new commit is coming to
+    /// correct it. Core 1 calls this when it takes a settings update.
     pub fn invalidate(&mut self) {
         self.commit_seq = None;
     }
@@ -150,10 +155,17 @@ impl PreparedView {
 /// Depends on the configured scroll speed, so a speed change mid-flash leaves
 /// the current window alone and self-corrects on the next play — the behavior
 /// `set_scroll_speed`'s docstring describes.
-pub fn play_window_ms(text: &str, settings: &RenderSettings) -> Millis {
+///
+/// `window` is the width of the strip the flash scrolls through, which differs
+/// per screen ([`RenderSettings::bottom_strip`]). Measuring against any other
+/// width leaves the flash parked at its end, or cut off before it, for the
+/// difference. Because the rebuild keys on the commit and a rotation to another
+/// screen is a commit, a flash carried across a mode change is re-sized to the
+/// strip it lands in.
+pub fn play_window_ms(text: &str, window: i32, settings: &RenderSettings) -> Millis {
     scroll_cycle_ms(
         font::measure(text, &UNSCII_16),
-        PLAY_TEXT.width,
+        window,
         settings.game_scroll(PLAY_SCROLL_PAUSE_MS),
     )
 }

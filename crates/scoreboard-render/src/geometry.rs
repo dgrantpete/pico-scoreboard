@@ -21,7 +21,7 @@
 
 use crate::blit::Slice;
 use crate::font::Scroll;
-use scoreboard_model::Sport;
+use scoreboard_model::{Mode, Sport};
 
 /// Panel width in pixels.
 pub const WIDTH: i32 = 128;
@@ -32,6 +32,18 @@ pub const HEIGHT: i32 = 64;
 // `tests/geometry.rs`. It lives there so the shipping graph of this crate does
 // not pull in a crate that touches a PAC (SPEC §2's crate boundary rule), while
 // the build still fails the moment the two disagree.
+
+/// The panel's outermost ring of pixels is unreliable — garbage-colored LEDs
+/// have surfaced there — so nothing draws in row 0, row 63, column 0 or
+/// column 127 (the owner's edge rule, BACKLOG 56). Rules that would span the
+/// panel stop this far short of each edge; the slot tables below respect it.
+///
+/// A glyph *cell* may still overhang onto the ring when its ink provably does
+/// not: every digit leaves its last column blank (the eighth of an `unscii_16`
+/// cell, the fifth of a `spleen_5x8` one), so a three-digit total centered in
+/// a two-digit slot can put its last cell on column 127 and light nothing
+/// there.
+pub const EDGE_INSET: i32 = 1;
 
 // =============================================================================
 // Scroll speeds
@@ -158,9 +170,16 @@ pub const SOCCER_SCROLL_PAUSE_MS: u64 = 1500;
 /// Dwell at each end of the play flash's scroll.
 pub const PLAY_SCROLL_PAUSE_MS: u64 = 1000;
 
-/// The bottom-strip flash window, shared by all four live screens. Fixed, not a
-/// variant slot: the strip is the same rectangle on every one of them.
-pub const PLAY_TEXT: Slice = Slice {
+/// The bottom strip of the column-frame live screens — MLB, NBA, soccer A and
+/// B: the data column under its rule, from the column's text margin to the
+/// last legal column. The play flash draws here.
+///
+/// It is not every live screen's strip. The bottom strip is whatever the screen
+/// gives up while the flash shows, so it is a per-screen slot (`strip` on each
+/// live table): the column screens keep their identity column drawn and give
+/// up only this, while football and soccer C have no column and give up the
+/// full width. [`RenderSettings::bottom_strip`] selects one by mode.
+pub const COLUMN_STRIP: Slice = Slice {
     x: 51,
     y: 43,
     width: 76,
@@ -218,6 +237,12 @@ pub struct PregameGeometry {
     pub divider_x: i32,
     /// First-pitch time, alternating with the date. 80 px is exactly ten
     /// `unscii_16` glyphs — the width of "WED JUL 16".
+    ///
+    /// Every right-column slot is 80 px wide and starts after a 1 px gutter
+    /// beside the divider, so the column ends at 126 rather than on the
+    /// panel's edge ring. Keeping a 2 px gutter would mean a 79 px column,
+    /// which scrolls every 16-character `spleen_5x8` line — "crypto.com
+    /// Arena" is one — by a single pixel.
     pub info_time: Slice,
     /// The cycling venue ↔ weather line.
     pub info_cycle: Slice,
@@ -229,18 +254,18 @@ pub struct PregameGeometry {
 }
 
 pub const PREGAME: PregameGeometry = PregameGeometry {
-    logo_away: rect(0, 4, 24, 24),
-    logo_home: rect(0, 36, 24, 24),
+    logo_away: rect(1, 4, 24, 24),
+    logo_home: rect(1, 36, 24, 24),
     record_away_wins: rect(26, 8, 19, 8),
     record_away_losses: rect(26, 17, 19, 8),
     record_home_wins: rect(26, 40, 19, 8),
     record_home_losses: rect(26, 49, 19, 8),
     divider_x: 45,
-    info_time: rect(48, 2, 80, 16),
-    info_cycle: rect(48, 24, 80, 8),
+    info_time: rect(47, 2, 80, 16),
+    info_cycle: rect(47, 24, 80, 8),
     separator_y: 41,
-    team_line_away: rect(48, 45, 80, 8),
-    team_line_home: rect(48, 54, 80, 8),
+    team_line_away: rect(47, 45, 80, 8),
+    team_line_home: rect(47, 54, 80, 8),
 };
 
 // =============================================================================
@@ -263,6 +288,10 @@ pub struct FinalGeometry {
     pub divider_x: i32,
     /// Full-width rule under the top band. Only A has one.
     pub separator_y: Option<i32>,
+    /// The pinned totals column. Sized for two digits; a basketball total
+    /// overhangs it evenly, so every variant leaves the room a three-digit
+    /// total needs between the rule and column 126 — that is what places the
+    /// rule. Three `spleen_5x8` digits ink 14 px, three `unscii_16` digits 23.
     pub total_header: Slice,
     pub total_away: Slice,
     pub total_home: Slice,
@@ -270,57 +299,66 @@ pub struct FinalGeometry {
 
 /// A "Marquee + boxscore": logos in the top corners, scores inboard, a
 /// full-width bottom band of three lockstep-scrolling line-score rows.
+///
+/// The line-score window is 107 px: seven periods (105 px) fit, nine innings
+/// scroll either way, and no real row measures 106–108.
 pub const FINAL_A: FinalGeometry = FinalGeometry {
-    logo_away: rect(0, 2, 24, 24),
-    logo_home: rect(104, 2, 24, 24),
+    logo_away: rect(1, 2, 24, 24),
+    logo_home: rect(103, 2, 24, 24),
     score_away: Some(rect(26, 4, 34, 16)),
     score_home: Some(rect(68, 4, 34, 16)),
     final_label: rect(44, 20, 40, 8),
-    linescore_header: rect(2, 32, 108, 8),
-    linescore_away: rect(2, 42, 108, 8),
-    linescore_home: rect(2, 52, 108, 8),
-    divider_x: 112,
+    linescore_header: rect(2, 32, 107, 8),
+    linescore_away: rect(2, 42, 107, 8),
+    linescore_home: rect(2, 52, 107, 8),
+    divider_x: 111,
     separator_y: Some(30),
-    total_header: rect(115, 32, 13, 8),
-    total_away: rect(115, 42, 13, 8),
-    total_home: rect(115, 52, 13, 8),
+    total_header: rect(114, 32, 13, 8),
+    total_away: rect(114, 42, 13, 8),
+    total_home: rect(114, 52, 13, 8),
 };
 
 /// B "Stacked ledger": the live-game silhouette — logos stacked left, big
 /// scores beside — with the line score in a narrower window on the right.
 pub const FINAL_B: FinalGeometry = FinalGeometry {
-    logo_away: rect(0, 0, 24, 24),
-    logo_home: rect(0, 40, 24, 24),
-    score_away: Some(rect(26, 4, 30, 16)),
-    score_home: Some(rect(26, 44, 30, 16)),
+    logo_away: rect(1, 1, 24, 24),
+    logo_home: rect(1, 39, 24, 24),
+    score_away: Some(rect(26, 5, 30, 16)),
+    score_home: Some(rect(26, 43, 30, 16)),
     final_label: rect(2, 26, 54, 8),
-    linescore_header: rect(58, 0, 54, 8),
-    linescore_away: rect(58, 10, 54, 8),
-    linescore_home: rect(58, 50, 54, 8),
-    divider_x: 112,
+    linescore_header: rect(56, 1, 54, 8),
+    linescore_away: rect(56, 11, 54, 8),
+    linescore_home: rect(56, 49, 54, 8),
+    divider_x: 111,
     separator_y: None,
-    total_header: rect(115, 0, 13, 8),
-    total_away: rect(115, 10, 13, 8),
-    total_home: rect(115, 50, 13, 8),
+    total_header: rect(114, 1, 13, 8),
+    total_away: rect(114, 11, 13, 8),
+    total_home: rect(114, 49, 13, 8),
 };
 
 /// C "Line-score forward": the line score is the hero, rows aligned to the
 /// stacked logos, totals in `unscii_16` pinned right. The default since the
 /// 2026-07-07 gallery review.
+///
+/// Horizontally this is packed to the pixel: crest 1..=24, a 2 px gutter, the
+/// 75 px line-score window (five periods, trailing space included) at
+/// 27..=101, the rule at 102, a 1 px gutter, and a three-digit total inked at
+/// 104..=126. The window may meet the rule because a row at rest always ends
+/// in its trailing space; only a scroll in progress carries ink past column 95.
 pub const FINAL_C: FinalGeometry = FinalGeometry {
-    logo_away: rect(0, 2, 24, 24),
-    logo_home: rect(0, 36, 24, 24),
+    logo_away: rect(1, 2, 24, 24),
+    logo_home: rect(1, 36, 24, 24),
     score_away: None,
     score_home: None,
-    final_label: rect(28, 30, 75, 8),
-    linescore_header: rect(28, 2, 75, 8),
-    linescore_away: rect(28, 14, 75, 8),
-    linescore_home: rect(28, 48, 75, 8),
-    divider_x: 105,
+    final_label: rect(27, 30, 75, 8),
+    linescore_header: rect(27, 2, 75, 8),
+    linescore_away: rect(27, 14, 75, 8),
+    linescore_home: rect(27, 48, 75, 8),
+    divider_x: 102,
     separator_y: None,
-    total_header: rect(108, 2, 20, 8),
-    total_away: rect(108, 10, 20, 16),
-    total_home: rect(108, 44, 20, 16),
+    total_header: rect(105, 2, 22, 8),
+    total_away: rect(105, 10, 22, 16),
+    total_home: rect(105, 44, 22, 16),
 };
 
 /// Which final-screen design a sport shows.
@@ -375,57 +413,73 @@ pub struct SoccerLiveGeometry {
     /// Where the "no events yet" line goes — one line, vertically centered
     /// between the two event rows.
     pub event_empty: Slice,
+    /// The bottom strip the play flash takes over: the area
+    /// the two event rows give up.
+    pub strip: Slice,
 }
 
 /// A "Phase ledger": the exact MLB-live silhouette, with the big clock alone in
 /// the data column. The default.
 pub const SOCCER_LIVE_A: SoccerLiveGeometry = SoccerLiveGeometry {
-    logo_away: rect(0, 0, 24, 24),
+    logo_away: rect(1, 1, 24, 24),
     score_away: rect(24, 7, 22, 16),
     phase: Some(rect(2, 29, 42, 8)),
     phase_long: None,
-    logo_home: rect(0, 40, 24, 24),
+    logo_home: rect(1, 39, 24, 24),
     score_home: rect(24, 47, 22, 16),
     divider_x: Some(45),
     separator_y: 36,
-    clock: rect(46, 10, 82, 16),
+    clock: rect(46, 10, 81, 16),
     event_top: rect(51, 41, 76, 8),
     event_name: rect(51, 53, 76, 8),
     event_empty: rect(51, 47, 76, 8),
+    strip: COLUMN_STRIP,
 };
 
 /// B "Clock + phase stacked": no chip in the identity column; the data column
 /// carries the clock over the spelled-out period.
 pub const SOCCER_LIVE_B: SoccerLiveGeometry = SoccerLiveGeometry {
-    logo_away: rect(0, 0, 24, 24),
+    logo_away: rect(1, 1, 24, 24),
     score_away: rect(24, 7, 22, 16),
     phase: None,
-    phase_long: Some(rect(46, 25, 82, 8)),
-    logo_home: rect(0, 40, 24, 24),
+    phase_long: Some(rect(46, 25, 81, 8)),
+    logo_home: rect(1, 39, 24, 24),
     score_home: rect(24, 47, 22, 16),
     divider_x: Some(45),
     separator_y: 36,
-    clock: rect(46, 5, 82, 16),
+    clock: rect(46, 5, 81, 16),
     event_top: rect(51, 41, 76, 8),
     event_name: rect(51, 53, 76, 8),
     event_empty: rect(51, 47, 76, 8),
+    strip: COLUMN_STRIP,
 };
 
 /// C "Broadcast corners": logos in the top corners with scores inboard, period
 /// chip between them, full-width clock beneath.
+///
+/// Inset to the 1 px edge rule (BACKLOG 56): the logos sit in football's
+/// corners, the scores and chip move down with them, and the two event rows
+/// moved up so the name line's descenders stop at row 62. The rule under the
+/// clock still runs edge to edge — it is [`crate::game::column_dividers`]'s,
+/// shared with the column screens.
+///
+/// No column frame means nothing survives beside the bottom strip, so the flash
+/// and toast get every legal column, in the band under the rule: row 45 is left
+/// clear, and `unscii_16`'s descenders (glyph row 15) land on row 61.
 pub const SOCCER_LIVE_C: SoccerLiveGeometry = SoccerLiveGeometry {
-    logo_away: rect(0, 0, 24, 24),
-    score_away: rect(26, 4, 22, 16),
-    phase: Some(rect(48, 8, 32, 8)),
+    logo_away: rect(1, 1, 24, 24),
+    score_away: rect(26, 5, 22, 16),
+    phase: Some(rect(48, 9, 32, 8)),
     phase_long: None,
-    score_home: rect(80, 4, 22, 16),
-    logo_home: rect(104, 0, 24, 24),
+    score_home: rect(80, 5, 22, 16),
+    logo_home: rect(103, 1, 24, 24),
     divider_x: None,
-    clock: rect(0, 26, 128, 16),
+    clock: rect(1, 26, 126, 16),
     separator_y: 44,
-    event_top: rect(2, 47, 124, 8),
-    event_name: rect(2, 56, 124, 8),
-    event_empty: rect(2, 51, 124, 8),
+    event_top: rect(2, 46, 124, 8),
+    event_name: rect(2, 55, 124, 8),
+    event_empty: rect(2, 50, 124, 8),
+    strip: rect(1, 46, 126, 16),
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -484,13 +538,16 @@ pub struct MlbLiveGeometry {
     pub pitcher_name: Slice,
     pub batter_label: Slice,
     pub batter_name: Slice,
+    /// The bottom strip the play flash takes over: the
+    /// pitcher/batter rows.
+    pub strip: Slice,
 }
 
 pub const MLB_LIVE: MlbLiveGeometry = MlbLiveGeometry {
-    logo_away: rect(0, 0, 24, 24),
+    logo_away: rect(1, 1, 24, 24),
     score_away: rect(24, 7, 22, 11),
     inning: rect(11, 30, 32, 7),
-    logo_home: rect(0, 40, 24, 24),
+    logo_home: rect(1, 39, 24, 24),
     score_home: rect(24, 47, 22, 11),
     divider_x: 45,
     separator_y: 36,
@@ -504,6 +561,7 @@ pub const MLB_LIVE: MlbLiveGeometry = MlbLiveGeometry {
     pitcher_name: rect(77, 41, 50, 8),
     batter_label: rect(51, 54, 24, 7),
     batter_name: rect(77, 54, 50, 8),
+    strip: COLUMN_STRIP,
 };
 
 /// NBA live, "quarter + clock ledger" — the soccer-A silhouette, with the
@@ -518,17 +576,21 @@ pub struct NbaLiveGeometry {
     pub divider_x: i32,
     pub separator_y: i32,
     pub clock: Slice,
+    /// The bottom strip the play flash takes over. NBA has no
+    /// persistent content there, so between flashes it is empty.
+    pub strip: Slice,
 }
 
 pub const NBA_LIVE: NbaLiveGeometry = NbaLiveGeometry {
-    logo_away: rect(0, 0, 24, 24),
+    logo_away: rect(1, 1, 24, 24),
     score_away: rect(24, 7, 25, 16),
     phase: rect(2, 29, 46, 8),
-    logo_home: rect(0, 40, 24, 24),
+    logo_home: rect(1, 39, 24, 24),
     score_home: rect(24, 47, 25, 16),
     divider_x: 49,
     separator_y: 36,
-    clock: rect(50, 10, 78, 16),
+    clock: rect(50, 10, 77, 16),
+    strip: COLUMN_STRIP,
 };
 
 /// Soccer full time, "FT + scorers" — the final-C silhouette with the line
@@ -545,15 +607,17 @@ pub struct SoccerFinalGeometry {
     pub full_time_label: Slice,
 }
 
+/// The scorer windows end at column 126; they scroll on almost every real
+/// match, and a scrolling line carries ink through every column of its window.
 pub const SOCCER_FINAL: SoccerFinalGeometry = SoccerFinalGeometry {
-    logo_away: rect(0, 2, 24, 24),
+    logo_away: rect(1, 2, 24, 24),
     score_away: rect(26, 6, 20, 16),
-    logo_home: rect(0, 36, 24, 24),
+    logo_home: rect(1, 36, 24, 24),
     score_home: rect(26, 40, 20, 16),
     divider_x: 48,
-    scorers_away: rect(52, 10, 76, 8),
-    full_time_label: rect(52, 28, 76, 8),
-    scorers_home: rect(52, 44, 76, 8),
+    scorers_away: rect(51, 10, 76, 8),
+    full_time_label: rect(51, 28, 76, 8),
+    scorers_home: rect(51, 44, 76, 8),
 };
 
 /// Football live, "broadcast corners + field strip". The first game screen born
@@ -572,6 +636,12 @@ pub struct FootballLiveGeometry {
     pub clock: Slice,
     /// "3RD & 7", centered; the possession arrow sits beside it.
     pub situation: Slice,
+    /// The bottom strip the play flash takes over. The field strip (and the
+    /// ball riding it) is skipped while the flash shows, and there
+    /// is no identity column, so it is every legal column of the band under
+    /// the score digits' ink (rows 41..=62), with the 16 px line centered in
+    /// it.
+    pub strip: Slice,
 }
 
 pub const FOOTBALL_LIVE: FootballLiveGeometry = FootballLiveGeometry {
@@ -585,6 +655,7 @@ pub const FOOTBALL_LIVE: FootballLiveGeometry = FootballLiveGeometry {
     phase: rect(26, 3, 26, 8),
     clock: rect(52, 2, 50, 16),
     situation: rect(26, 30, 77, 8),
+    strip: rect(1, 44, 126, 16),
 };
 
 // =============================================================================
@@ -688,6 +759,22 @@ impl RenderSettings {
 
     pub const fn soccer_live_table(&self) -> SoccerLiveGeometry {
         self.soccer_live.table()
+    }
+
+    /// The bottom strip the play flash draws into under `mode`: the live
+    /// screen's own `strip`. The other screens draw no flash; they get
+    /// [`COLUMN_STRIP`] so the prepared view always has a width to size by.
+    ///
+    /// One selector so the renderer and the prepared view's flash window
+    /// cannot disagree about how wide the strip is.
+    pub const fn bottom_strip(&self, mode: Mode) -> Slice {
+        match mode {
+            Mode::MlbLive => MLB_LIVE.strip,
+            Mode::NbaLive => NBA_LIVE.strip,
+            Mode::FootballLive => FOOTBALL_LIVE.strip,
+            Mode::SoccerLive => self.soccer_live.table().strip,
+            _ => COLUMN_STRIP,
+        }
     }
 }
 

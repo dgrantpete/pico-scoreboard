@@ -7,7 +7,7 @@
 use super::{Scene, Strip};
 use crate::blit::{Canvas, Slice};
 use crate::font::{self, Align, Style};
-use crate::geometry::{SOCCER_FINAL, SOCCER_SCROLL_PAUSE_MS};
+use crate::geometry::{EDGE_INSET, SOCCER_FINAL, SOCCER_SCROLL_PAUSE_MS};
 use crate::time::WallMs;
 use crate::{BLACK, DIM_GRAY, WHITE, generated, pack, toast};
 use scoreboard_model::UiColors;
@@ -179,7 +179,12 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     };
 
     if scene.settings.show_dividers {
-        canvas.vline(table.divider_x, 0, crate::geometry::HEIGHT, DIM_GRAY);
+        canvas.vline(
+            table.divider_x,
+            EDGE_INSET,
+            crate::geometry::HEIGHT - 2 * EDGE_INSET,
+            DIM_GRAY,
+        );
     }
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
@@ -211,6 +216,5 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         );
     }
 
-    toast::strip(canvas, snapshot, scene.now);
     toast::overlay(canvas, snapshot, scene.now);
 }

@@ -327,7 +327,9 @@ last-goal top line + scorer + color, shootout state, lamp side + anchor);
 `game/hockey.rs` (live A and B, final, shootout inside each live layout);
 `geometry.rs` tables `HOCKEY_LIVE_A`, `HOCKEY_LIVE_B`, `HOCKEY_FINAL`,
 `HockeyLiveVariant` + `RenderSettings.hockey_live` + `apply_variant`
-keys `hockey_live` (A|B) and `hockey_final` (A only today); the pregame
+keys `hockey_live` (A|B) and `hockey_final` (A only today); each hockey
+live table carries its own `strip` (the Rink layout frees the full width,
+like football), wired into `RenderSettings::bottom_strip`; the pregame
 record stack's third row (sport-gated); frame dispatch; `prepared.rs`
 untouched unless the stars line scrolls (it does — fixed-rail like the
 pregame lines). Art: new `firmware/assets/layout/hockey_layout.aseprite`

@@ -1052,3 +1052,33 @@ they are; at 96 Liverpool, Arsenal and the Cardinals start turning pink.
 MicroPython firmware, which keeps step 1 alone. 100 of the 180 golden frames
 moved — every team-colored element and nothing else — and were re-blessed.
 
+## Layout: every screen's text fits its space, and the border stays dark, 2026-10-01
+
+From two audits of every screen's text slots, rendered through the simulator.
+
+**Was:** the play flash and a text toast drew into one fixed 76 px box at
+x 51 on every live screen — right beside the identity column on MLB, NBA and
+soccer A/B, but leaving two thirds of the strip black on football and soccer
+C, where the field or the event rows are skipped and no column is left. The
+default line-score final put a three-digit total (every NBA final) partly off
+the panel. Crests, rules and scrolling lines lit the unreliable 1 px border
+on 120 of the 176 golden frames (BACKLOG 56). A play line outlived its game:
+rotating to a game with none of its own kept the previous game's scrolling.
+The soccer event label was capped at 12 characters ("RED CARD 90'").
+
+**Is:** each live table has its own `strip`, chosen by
+`RenderSettings::bottom_strip(mode)` for both the drawing and the flash's
+visibility window — football and soccer C get every legal column (1..126,
++66 % visible text); the column screens keep x 51. Final C's rule moves to
+x 102 and its totals column to 105..126; A and B are inset too. Every crest,
+rule and slot clears the border, and the golden test now fails any frame
+that lights it. The text toast is deleted — nothing had raised one since the
+lock and skip feedback became icons. A new game clears the play line. The
+event label holds 20 characters.
+
+**Unchanged:** the toast-free bottom-strip priority (flash over sport
+content), every font, every color, and the pregame and final designs
+themselves — slots moved by a pixel or two, nothing was redesigned. 132 of
+the 176 golden frames moved (the four `toast_text` frames are gone) and were
+re-blessed after review.
+

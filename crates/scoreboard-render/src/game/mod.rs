@@ -7,11 +7,15 @@
 //!
 //! # Bottom-strip priority
 //!
-//! **toast > play flash > sport content**, on every live screen. The toast is
-//! button feedback and outranks everything; the play flash is the most recent
-//! play-by-play line and outranks the persistent content underneath (MLB's
-//! pitcher/batter, soccer's last goal, football's field strip; NBA has none, so
-//! its strip goes empty between flashes).
+//! **play flash > sport content**, on every live screen. The play flash is the
+//! most recent play-by-play line and outranks the persistent content underneath
+//! (MLB's pitcher/batter, soccer's last goal, football's field strip; NBA has
+//! none, so its strip goes empty between flashes). Toasts are icons composed
+//! over the finished frame ([`crate::toast`]) and never claim the strip.
+//!
+//! The strip's rectangle is each live table's `strip`: the data column under
+//! its rule on the column screens, the full legal width on the corner screens
+//! (football, soccer C), where nothing is left beside the flash.
 //!
 //! # Rails
 //!
@@ -30,10 +34,10 @@ pub mod soccer;
 
 use crate::blit::{Canvas, PixelFormat, Slice, Source};
 use crate::font::{self, Align, Scroll, Style};
-use crate::geometry::{PLAY_SCROLL_PAUSE_MS, PLAY_TEXT, RenderSettings};
+use crate::geometry::{PLAY_SCROLL_PAUSE_MS, RenderSettings};
 use crate::prepared::PreparedView;
 use crate::time::{FrameElapsed, WallMs};
-use crate::{DIM_GRAY, WHITE, generated, geometry, toast};
+use crate::{DIM_GRAY, WHITE, generated, geometry};
 use scoreboard_model::ScoreboardSnapshot;
 use scoreboard_model::snapshot::LogoRef;
 
@@ -109,20 +113,22 @@ impl Scene<'_> {
 /// Who owns the bottom strip this frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strip {
-    /// A toast drew there; the screen skips its own content.
-    Toast,
-    /// The play flash drew there.
+    /// The play flash drew there; the screen skips its own content.
     Play,
     /// Nothing claimed it — the screen draws its own content.
     Free,
 }
 
-/// Resolve the bottom strip's owner and draw whichever of the two shared
-/// claimants wins.
+/// Resolve the bottom strip's owner, drawing the play flash into the screen's
+/// own strip when it is up.
+///
+/// The rectangle is per screen because what the strip may cover is: a column
+/// screen keeps its identity column beside the flash, a corner screen has
+/// nothing left beside it. It comes from [`RenderSettings::bottom_strip`] —
+/// the same selector the prepared view sizes the flash window with, so the
+/// window and the strip the text scrolls through cannot disagree.
 pub fn bottom_strip(canvas: &mut Canvas<'_>, scene: &Scene<'_>) -> Strip {
-    if toast::strip(canvas, scene.snapshot, scene.now) {
-        return Strip::Toast;
-    }
+    let slot = scene.settings.bottom_strip(scene.snapshot.mode);
     let play = &scene.snapshot.play;
     // The visibility window is a duration, so it rides the wall rail: a stalled
     // frame really did spend that time and the flash must not outstay it.
@@ -132,7 +138,7 @@ pub fn bottom_strip(canvas: &mut Canvas<'_>, scene: &Scene<'_>) -> Strip {
     if !visible {
         return Strip::Free;
     }
-    let mut region = canvas.slice(PLAY_TEXT);
+    let mut region = canvas.slice(slot);
     font::draw(
         &mut region,
         &play.text,
@@ -207,12 +213,14 @@ pub fn column_dividers(
     if !settings.show_dividers {
         return;
     }
+    // Both rules stop at the 1 px border (BACKLOG 56).
+    let inset = geometry::EDGE_INSET;
     if let Some(x) = divider_x {
-        canvas.vline(x, 0, geometry::HEIGHT, DIM_GRAY);
+        canvas.vline(x, inset, geometry::HEIGHT - 2 * inset, DIM_GRAY);
     }
     if let Some(y) = separator_y {
-        let start = divider_x.map_or(0, |x| x + 1);
-        canvas.hline(start, y, geometry::WIDTH - start, DIM_GRAY);
+        let start = divider_x.map_or(inset, |x| x + 1);
+        canvas.hline(start, y, geometry::WIDTH - inset - start, DIM_GRAY);
     }
 }
 

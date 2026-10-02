@@ -117,6 +117,5 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         );
     }
 
-    toast::strip(canvas, snapshot, scene.now);
     toast::overlay(canvas, snapshot, scene.now);
 }

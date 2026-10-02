@@ -1,17 +1,13 @@
-//! Toasts: the bottom-strip text form, and the centered icon overlays that dim
+//! Toasts: centered icon overlays — lock, unlock, the skip spinner — that dim
 //! the whole frame behind them.
 //!
-//! # Two shapes, one lifetime
+//! An icon composes over the finished frame: the frame fades down the dim
+//! ladder to half brightness so the icon reads against a busy background, then
+//! back up after the toast expires — dim only, no icon — so the overlay eases
+//! in and out instead of snapping. It never claims a screen's bottom strip.
 //!
-//! A [`ToastKind::Text`] toast owns the bottom strip of a live screen, which is
-//! why the bottom-strip priority on every live screen is *toast > play flash >
-//! sport content*. The three icon kinds instead compose over the finished frame:
-//! the frame fades down the dim ladder to half brightness so the icon reads
-//! against a busy background, then back up after the toast expires — dim only,
-//! no icon — so the overlay eases in and out instead of snapping.
-//!
-//! Both ride the **wall rail**: a toast's life is a duration, and a stalled
-//! frame really did spend that time. See [`crate::time`].
+//! A toast rides the **wall rail**: its life is a duration, and a stalled frame
+//! really did spend that time. See [`crate::time`].
 //!
 //! # Sticky
 //!
@@ -21,11 +17,10 @@
 //! requests hard-cap at 15 s, so 20 s is only reachable through a logic error.
 
 use crate::blit::{Canvas, FADE_TERMS};
-use crate::font::{self, Align, Style};
 use crate::generated::layout;
-use crate::geometry::{HEIGHT, PLAY_TEXT, WIDTH};
+use crate::geometry::{HEIGHT, WIDTH};
 use crate::time::WallMs;
-use crate::{BLACK, WHITE, generated, pulse, rgb565};
+use crate::{WHITE, pulse, rgb565};
 use scoreboard_model::snapshot::{TOAST_DISPLAY_MS, TOAST_STICKY_MAX_MS, ToastView};
 use scoreboard_model::{Millis, ScoreboardSnapshot, ToastKind};
 
@@ -102,18 +97,9 @@ const fn spinner_order() -> [u8; SPINNER_DOTS] {
     order
 }
 
-/// Whether a toast is currently up.
-///
-/// A text toast with no text is not a toast; `updated_ms == 0` means one was
-/// never set.
+/// Whether a toast is currently up. `updated_ms == 0` means one was never set.
 pub fn is_active(toast: &ToastView, now: WallMs) -> bool {
-    if toast.updated_ms == 0 {
-        return false;
-    }
-    if toast.kind == ToastKind::Text && toast.text.is_empty() {
-        return false;
-    }
-    now.since(toast.updated_ms).0 < window(toast)
+    toast.updated_ms != 0 && now.since(toast.updated_ms).0 < window(toast)
 }
 
 /// Whether an expired icon toast's dim is still fading back out.
@@ -121,7 +107,7 @@ pub fn is_active(toast: &ToastView, now: WallMs) -> bool {
 /// The render loop must keep re-rendering static screens through this tail —
 /// there is no commit to trigger the redraw that finishes the fade.
 pub fn overlay_fading(toast: &ToastView, now: WallMs) -> bool {
-    if toast.kind == ToastKind::Text || toast.updated_ms == 0 {
+    if toast.updated_ms == 0 {
         return false;
     }
     let elapsed = now.since(toast.updated_ms).0;
@@ -157,35 +143,13 @@ fn shade(brightness: u8) -> u16 {
     }
 }
 
-/// Draw an active text toast into the bottom strip.
-///
-/// Returns whether it drew, which is the caller's signal to skip its own
-/// bottom-strip content. Icon toasts return false here and go through
-/// [`overlay`] instead — they never consume the strip.
-pub fn strip(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: WallMs) -> bool {
-    let toast = &snapshot.toast;
-    if toast.kind != ToastKind::Text || !is_active(toast, now) {
-        return false;
-    }
-    let color = shade(brightness(toast, now));
-    let mut strip = canvas.slice(PLAY_TEXT);
-    strip.fill(BLACK);
-    font::draw_unscrolled(
-        &mut strip,
-        &toast.text,
-        Align::Center,
-        Style::new(&generated::UNSCII_16, color),
-    );
-    true
-}
-
 /// Draw an active icon toast over the finished frame.
 ///
 /// Called last in each game-facing render so nothing paints over it. `canvas`
 /// must be the whole frame: the dim works on pixel pairs across the buffer.
 pub fn overlay(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: WallMs) {
     let toast = &snapshot.toast;
-    if toast.kind == ToastKind::Text || toast.updated_ms == 0 {
+    if toast.updated_ms == 0 {
         return;
     }
     let elapsed = now.since(toast.updated_ms).0;
@@ -207,7 +171,7 @@ pub fn overlay(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: Wall
     match toast.kind {
         ToastKind::Spinner => spinner(canvas, elapsed, brightness),
         ToastKind::Unlock => lock(canvas, shade(brightness), true),
-        _ => lock(canvas, shade(brightness), false),
+        ToastKind::Lock => lock(canvas, shade(brightness), false),
     }
 }
 

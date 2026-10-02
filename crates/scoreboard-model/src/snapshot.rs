@@ -76,8 +76,9 @@ pub const LINE: usize = 64;
 pub const TITLE: usize = 16;
 /// Short chip text: "Q3", "1ST HALF", "F/10", "PENALTIES".
 pub const SHORT: usize = 12;
-/// Toast body ("LOCKED", "SKIPPING").
-pub const TOAST: usize = 32;
+/// The soccer event label over the player's name. "RED CARD 120'+12'" is 17;
+/// at [`SHORT`] the stoppage minutes were cut ("RED CARD 90'").
+pub const EVENT_LABEL: usize = 20;
 /// League display name in the menu ("PREMIER LEAGUE", "NCAA FOOTBALL").
 pub const MENU_LABEL: usize = 32;
 /// Network identifiers shown on the setup screen.
@@ -490,7 +491,7 @@ pub struct SoccerLiveView {
     /// The spelled-out form for the wider variant: "1ST HALF".
     pub phase_long: Text<SHORT>,
     /// "GOAL 90'+3'" over the scorer's name, in the scoring side's color.
-    pub event_top: Text<SHORT>,
+    pub event_top: Text<EVENT_LABEL>,
     pub event_name: Text<PLAYER>,
     pub event_color: Rgb888,
     pub has_event: bool,
@@ -630,13 +631,13 @@ impl FootballLiveView {
     }
 }
 
-/// How a toast presents itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Which icon a toast shows, centered over the dimmed frame.
+///
+/// There was a fourth kind, a text toast in the live screens' bottom strip;
+/// nothing raised one after the lock and skip feedback became icons, and it
+/// was deleted with its strip geometry on 2026-10-01.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastKind {
-    /// Text in the bottom strip.
-    #[default]
-    Text,
-    /// Centered icon overlays; text is ignored.
     Lock,
     Unlock,
     Spinner,
@@ -651,7 +652,7 @@ pub const TOAST_STICKY_MAX_MS: Millis = 20_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToastView {
-    pub text: Text<TOAST>,
+    /// Meaningless until [`ToastView::updated_ms`] is set.
     pub kind: ToastKind,
     /// When the toast was set; 0 = never.
     pub updated_ms: Millis,
@@ -665,8 +666,7 @@ pub struct ToastView {
 impl ToastView {
     pub const fn new() -> Self {
         Self {
-            text: Text::new(),
-            kind: ToastKind::Text,
+            kind: ToastKind::Lock,
             updated_ms: 0,
             sticky: false,
             pulse_ms: 0,

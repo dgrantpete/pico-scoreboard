@@ -54,14 +54,6 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     ever grates: draw the ~60 accented glyphs into a patched BDF (lowercase
     accents fit 5x8; caps are the hard part) — the build picks up real
     bitmaps automatically, no code change.
-56. **1px edge-gap migration for the game screens** — owner rule (2026-07-15):
-    nothing draws in row 0, row 63, col 0, or col 127 (the panel has
-    unreliable edge pixels — garbage-colored LEDs surfaced at one edge).
-    The league menu complies; the game/pregame/final layouts still touch
-    the edges (e.g. logos at x=0, pregame INFO_TIME ends at col 127, final
-    line-score bands). Inset the geometry tables + Regions when touching
-    each screen next.
-
 55. **CONDITIONAL — time-sync one-shot failure** (only act if it recurs):
     all displayed times/dates vanished once (2026-07-15) for a full uptime
     after a webapp-triggered restart, then cleared on the next reboot.

@@ -13,7 +13,7 @@
 use super::Scene;
 use crate::blit::Canvas;
 use crate::font::{self, Align, Style};
-use crate::geometry::FINAL_LINESCORE_SCROLL;
+use crate::geometry::{EDGE_INSET, FINAL_LINESCORE_SCROLL, HEIGHT, WIDTH};
 use crate::{BLACK, DIM_GRAY, generated, pack, toast};
 use scoreboard_model::Sport;
 
@@ -30,17 +30,13 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
 
     // The vertical rule separates the line score from the pinned totals; it
     // starts at the top-band separator when there is one, so it does not cut
-    // through a logo sitting in a top corner.
+    // through a logo sitting in a top corner. Both rules stop short of the
+    // panel's edge ring.
     if scene.settings.show_dividers {
-        let top = table.separator_y.unwrap_or(0);
-        canvas.vline(
-            table.divider_x,
-            top,
-            crate::geometry::HEIGHT - top,
-            DIM_GRAY,
-        );
+        let top = table.separator_y.unwrap_or(EDGE_INSET);
+        canvas.vline(table.divider_x, top, HEIGHT - EDGE_INSET - top, DIM_GRAY);
         if let Some(y) = table.separator_y {
-            canvas.hline(0, y, crate::geometry::WIDTH, DIM_GRAY);
+            canvas.hline(EDGE_INSET, y, WIDTH - 2 * EDGE_INSET, DIM_GRAY);
         }
     }
 
@@ -104,7 +100,6 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         );
     }
 
-    toast::strip(canvas, snapshot, scene.now);
     toast::overlay(canvas, snapshot, scene.now);
 }
 

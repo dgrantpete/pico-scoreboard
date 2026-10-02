@@ -14,7 +14,7 @@ use scoreboard_model::{Mode, Rgb888, ScoreboardSnapshot, Sport, Text, ToastKind}
 use scoreboard_render::blit::Canvas;
 use scoreboard_render::game::football::Field;
 use scoreboard_render::game::{LOGO_BYTES, LogoSlot, Logos, Scene};
-use scoreboard_render::geometry::{self, RenderSettings};
+use scoreboard_render::geometry::{self, FinalVariant, RenderSettings};
 use scoreboard_render::prepared::{PregameLine, PreparedView};
 use scoreboard_render::time::{FrameElapsed, WallMs};
 use scoreboard_render::{BLACK, DIM_GRAY, SkipMemo, frame, pack};
@@ -161,8 +161,9 @@ fn the_mlb_screen_draws_its_frame_sprites_and_crests() {
         DIM_GRAY,
         "the rule under the data column"
     );
-    assert_eq!(frame.pixel(0, 0), CREST, "the away crest");
-    assert_eq!(frame.pixel(0, 40), CREST, "the home crest");
+    let (away, home) = (table.logo_away, table.logo_home);
+    assert_eq!(frame.pixel(away.x, away.y), CREST, "the away crest");
+    assert_eq!(frame.pixel(home.x, home.y), CREST, "the home crest");
     assert!(
         frame.lit_in(46..128, 0..36) > 0,
         "the diamond and count block"
@@ -285,7 +286,7 @@ fn the_pulse_tint_matches_the_native_packer() {
 // -- Bottom strip ------------------------------------------------------------
 
 #[test]
-fn the_play_flash_outranks_sport_content_and_a_toast_outranks_both() {
+fn the_play_flash_outranks_sport_content() {
     let mut harness = mlb();
 
     let quiet = harness.draw();
@@ -300,20 +301,6 @@ fn the_play_flash_outranks_sport_content_and_a_toast_outranks_both() {
     let flashing = harness.draw();
     assert_eq!(sport_content(&flashing), 0, "the flash takes the strip");
     assert!(flashing.lit_in(51..127, 43..59) > 0);
-
-    harness.snapshot.toast = ToastView {
-        text: text("LOCKED"),
-        kind: ToastKind::Text,
-        updated_ms: 10_000,
-        sticky: false,
-        pulse_ms: 0,
-    };
-    harness.snapshot.commit_seq += 1;
-    let toasted = harness.draw();
-    assert_ne!(
-        toasted.0, flashing.0,
-        "a toast should displace the play flash"
-    );
 }
 
 #[test]
@@ -348,8 +335,42 @@ fn sport_content(frame: &Frame) -> usize {
     let label = geometry::MLB_LIVE.pitcher_label;
     frame.lit_in(
         label.x..label.x + label.width,
-        label.y..geometry::PLAY_TEXT.y,
+        label.y..geometry::MLB_LIVE.strip.y,
     )
+}
+
+#[test]
+fn the_play_window_is_sized_to_the_strip_the_flash_scrolls_in() {
+    // 112 px of text: it overflows the column screens' 76 px strip but fits the
+    // corner screens' full-width one, so only the first scrolls at all.
+    let play = "SINGLE TO LEFT";
+    let speed = RenderSettings::new().scroll_px_per_second as u64;
+    for (mode, window) in [
+        (Mode::MlbLive, 1_000 + 36 * 1_000 / speed + 1_000),
+        (Mode::NbaLive, 1_000 + 36 * 1_000 / speed + 1_000),
+        (Mode::FootballLive, 2_000),
+    ] {
+        let mut harness = Harness::new(mode);
+        harness.snapshot.play.text = text(play);
+        harness.snapshot.play.updated_ms = 10_000;
+        harness.prepared.sync(&harness.snapshot, &harness.settings);
+        assert_eq!(harness.prepared.play_window_ms(), window, "{mode:?}");
+    }
+
+    // Soccer's strip is the variant's, and a variant switch re-sizes the window
+    // once the prepared view is invalidated, as core 1 does on a settings update.
+    let mut harness = Harness::new(Mode::SoccerLive);
+    harness.snapshot.play.text = text(play);
+    harness.snapshot.play.updated_ms = 10_000;
+    harness.prepared.sync(&harness.snapshot, &harness.settings);
+    assert_eq!(
+        harness.prepared.play_window_ms(),
+        1_000 + 36 * 1_000 / speed + 1_000
+    );
+    harness.settings.apply_variant("soccer_live", "C");
+    harness.prepared.invalidate();
+    harness.prepared.sync(&harness.snapshot, &harness.settings);
+    assert_eq!(harness.prepared.play_window_ms(), 2_000);
 }
 
 // -- Pregame -----------------------------------------------------------------
@@ -592,6 +613,87 @@ fn a_soccer_draw_colors_both_sides() {
         0,
         "a draw has no loser"
     );
+}
+
+// -- The edge ring -----------------------------------------------------------
+
+/// Lit pixels on the panel's unreliable outer ring — row 0, row 63, column 0
+/// and column 127 — which nothing may draw on (BACKLOG 56).
+fn edge_ring(frame: &Frame) -> usize {
+    let (width, height) = (WIDTH as i32, HEIGHT as i32);
+    frame.lit_in(0..width, 0..1)
+        + frame.lit_in(0..width, height - 1..height)
+        + frame.lit_in(0..1, 1..height - 1)
+        + frame.lit_in(width - 1..width, 1..height - 1)
+}
+
+/// Frames across a scroll: the opening dwell, mid-scroll, and the far end.
+const SCROLL_SAMPLES: [u64; 5] = [0, 2_000, 4_000, 7_000, 12_000];
+
+#[test]
+fn every_final_variant_keeps_a_basketball_total_whole_and_off_the_edge_ring() {
+    // Three-digit totals are every NBA final. Variant C carried them in a
+    // 20 px slot that ran the third digit off the panel; A and B inked
+    // column 127. The crest pool's crests are solid, so a crest on the ring
+    // shows up here too.
+    for variant in [FinalVariant::A, FinalVariant::B, FinalVariant::C] {
+        let mut harness = linescore_final(Sport::Nba);
+        harness.settings.nba_final = variant;
+        let view = &mut harness.snapshot.linescore_final;
+        view.away_score = 130;
+        view.home_score = 128;
+        view.header_row = text(" 1  2  3  4  5  6  7 ");
+        view.away_row = text("28 31 25 24 10 12  0 ");
+        view.home_row = text("30 27 22 29 10 10  0 ");
+        let table = variant.table();
+
+        for at in SCROLL_SAMPLES {
+            harness.view = FrameElapsed(at);
+            let frame = harness.draw();
+            assert_eq!(edge_ring(&frame), 0, "{variant:?} at {at} ms");
+            // A dark column between the rule and the widest total.
+            let gutter = table.divider_x + 1;
+            for slot in [table.total_away, table.total_home] {
+                assert_eq!(
+                    frame.lit_in(gutter..gutter + 1, slot.y..slot.y + slot.height),
+                    0,
+                    "{variant:?}: a three-digit total touches the rule"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn full_time_scorer_lists_scroll_without_touching_the_edge_ring() {
+    let mut harness = Harness::new(Mode::SoccerFinal);
+    let view = &mut harness.snapshot.soccer_final;
+    view.away_score = 3;
+    view.home_score = 1;
+    view.ft_text = text("AET");
+    view.scorers_away = text("J. Quintero 12', J. Campaz 58', L. Diaz 120'+1'");
+    view.scorers_home = text("G. Xhaka 33'");
+    for at in SCROLL_SAMPLES {
+        harness.view = FrameElapsed(at);
+        assert_eq!(edge_ring(&harness.draw()), 0, "at {at} ms");
+    }
+}
+
+#[test]
+fn pregame_crests_and_text_stay_off_the_edge_ring() {
+    // Dividers off: the pregame's rules come from `column_dividers`, which it
+    // shares with the live screens. This pins the pregame's own table.
+    let mut harness = pregame();
+    harness.settings.show_dividers = false;
+    let view = &mut harness.snapshot.pregame;
+    view.info_primary = text("Oriole Park at Camden Yards");
+    view.info_secondary = text("58F MOSTLY CLOUDY");
+    view.away.line = text("#25 MIDDLE TENNESSEE");
+    view.date_text = text("WED SEP 30");
+    for at in SCROLL_SAMPLES {
+        harness.view = FrameElapsed(at);
+        assert_eq!(edge_ring(&harness.draw()), 0, "at {at} ms");
+    }
 }
 
 // -- Soccer live -------------------------------------------------------------
@@ -949,25 +1051,51 @@ fn the_red_zone_warns_on_the_situation_and_its_arrow() {
 fn the_play_flash_replaces_the_field_strip() {
     let mut harness = football();
     let field = scoreboard_render::generated::layout::football_field::POSITION;
-    // The part of the field that lies left of the shared flash strip: only the
-    // field itself can light it, so it says whether the field was drawn at all.
-    let strip = |frame: &Frame| {
+    let flash = geometry::FOOTBALL_LIVE.strip;
+    // The field's rows below the flash strip: no glyph reaches them, so only
+    // the field itself can light them, and they say whether it drew at all.
+    let below = |frame: &Frame| {
         frame.lit_in(
-            field.x..geometry::PLAY_TEXT.x,
-            field.y..field.y + field.height,
+            field.x..field.x + field.width,
+            flash.y + flash.height..field.y + field.height,
         )
     };
-    assert!(strip(&harness.draw()) > 0);
+    assert!(below(&harness.draw()) > 0);
 
     harness.snapshot.play.text = text("MAHOMES PASS COMPLETE TO KELCE FOR 12 YARDS");
     harness.snapshot.play.updated_ms = 10_000;
     harness.snapshot.commit_seq += 1;
     let flashing = harness.draw();
     assert_eq!(
-        strip(&flashing),
+        below(&flashing),
         0,
         "the field is not drawn under the flash"
     );
+}
+
+/// The corner screens keep nothing beside the flash, so it starts at the first
+/// legal column rather than at the column screens' data margin.
+#[test]
+fn the_corner_screens_flash_across_the_full_width() {
+    let column = geometry::COLUMN_STRIP;
+    let mut football = football();
+    let mut soccer = soccer_live();
+    soccer.settings.apply_variant("soccer_live", "C");
+    for (name, harness, strip) in [
+        ("football", &mut football, geometry::FOOTBALL_LIVE.strip),
+        ("soccer C", &mut soccer, geometry::SOCCER_LIVE_C.strip),
+    ] {
+        assert_eq!(strip.x, 1, "{name}");
+        assert_eq!(strip.x + strip.width, geometry::WIDTH - 1, "{name}");
+        harness.snapshot.play.text = text("MAHOMES PASS COMPLETE TO KELCE FOR 12 YARDS");
+        harness.snapshot.play.updated_ms = 10_000;
+        harness.snapshot.commit_seq += 1;
+        let frame = harness.draw();
+        assert!(
+            frame.lit_in(1..column.x, strip.y..strip.y + strip.height) > 0,
+            "{name}: the flash should start left of the column screens' margin"
+        );
+    }
 }
 
 // -- Dispatch ----------------------------------------------------------------
@@ -1059,7 +1187,6 @@ fn a_toast_keeps_a_static_screen_alive_through_its_fade() {
     let mut snapshot = ScoreboardSnapshot::new();
     snapshot.mode = Mode::NoGames;
     snapshot.toast = ToastView {
-        text: Text::new(),
         kind: ToastKind::Lock,
         updated_ms: 1_000,
         sticky: false,

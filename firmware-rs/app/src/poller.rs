@@ -951,7 +951,6 @@ impl Poller {
                 // Non-sticky, deliberately: a lock toast fired mid-skip has to
                 // survive the skip tick's `clear_toast_if_sticky` teardown.
                 self.store.set_toast(
-                    "",
                     if locked {
                         scoreboard_model::ToastKind::Lock
                     } else {
@@ -999,7 +998,7 @@ impl Poller {
             // torn down on every path out of it.
             SkipVerdict::Armed => {
                 self.store
-                    .set_toast("", scoreboard_model::ToastKind::Spinner, true, now)
+                    .set_toast(scoreboard_model::ToastKind::Spinner, true, now)
             }
             // Rejected, not queued: dim the visible toast one cycle so the
             // press is acknowledged without advancing the rotation twice.

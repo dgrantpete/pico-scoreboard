@@ -263,9 +263,8 @@ fn the_qr_follows_the_ssid_and_survives_an_unrelated_commit() {
 
 // -- Toasts ------------------------------------------------------------------
 
-fn toast_view(kind: ToastKind, body: &str, at: Millis) -> ToastView {
+fn toast_view(kind: ToastKind, at: Millis) -> ToastView {
     ToastView {
-        text: text(body),
         kind,
         updated_ms: at,
         sticky: false,
@@ -274,21 +273,8 @@ fn toast_view(kind: ToastKind, body: &str, at: Millis) -> ToastView {
 }
 
 #[test]
-fn a_text_toast_owns_the_bottom_strip() {
-    let mut snapshot = snapshot();
-    snapshot.toast = toast_view(ToastKind::Text, "LOCKED", 1_000);
-    let now = WallMs(1_100);
-    assert!(toast::is_active(&snapshot.toast, now));
-
-    let frame = render(|canvas| {
-        screens::no_games(canvas, &snapshot, now);
-    });
-    assert!(frame.lit_in(51..127, 43..59) > 0, "the flash strip");
-}
-
-#[test]
 fn a_toast_expires_on_the_wall_rail() {
-    let toast = toast_view(ToastKind::Text, "LOCKED", 1_000);
+    let toast = toast_view(ToastKind::Lock, 1_000);
     assert!(toast::is_active(&toast, WallMs(1_000)));
     assert!(toast::is_active(&toast, WallMs(2_499)));
     assert!(!toast::is_active(&toast, WallMs(2_500)));
@@ -306,21 +292,11 @@ fn a_toast_expires_on_the_wall_rail() {
 }
 
 #[test]
-fn an_empty_text_toast_is_not_a_toast() {
-    let toast = toast_view(ToastKind::Text, "", 1_000);
-    assert!(!toast::is_active(&toast, WallMs(1_100)));
-
-    // An icon toast has no text to be empty.
-    let icon = toast_view(ToastKind::Lock, "", 1_000);
-    assert!(toast::is_active(&icon, WallMs(1_100)));
-}
-
-#[test]
 fn an_icon_toast_dims_the_frame_and_draws_its_icon() {
     let mut snapshot = snapshot();
     let plain = render(|canvas| screens::idle(canvas, &snapshot));
 
-    snapshot.toast = toast_view(ToastKind::Lock, "", 1_000);
+    snapshot.toast = toast_view(ToastKind::Lock, 1_000);
     // 200 ms in: past the four fade-in steps, so the frame is at the held level.
     let now = WallMs(1_200);
     let dimmed = render(|canvas| {
@@ -351,7 +327,7 @@ fn the_toast_fade_takes_the_same_time_at_any_frame_rate() {
     // gains rungs. Asserted rather than reasoned about, because the coincidence
     // is exactly the kind that gets "fixed" during a frame-rate change.
     let mut snapshot = snapshot();
-    snapshot.toast = toast_view(ToastKind::Lock, "", 1_000);
+    snapshot.toast = toast_view(ToastKind::Lock, 1_000);
 
     let sample = |now: Millis| {
         let frame = render(|canvas| {
@@ -386,7 +362,7 @@ fn the_toast_fade_takes_the_same_time_at_any_frame_rate() {
 
 #[test]
 fn the_overlay_fades_out_after_the_toast_expires() {
-    let toast = toast_view(ToastKind::Lock, "", 1_000);
+    let toast = toast_view(ToastKind::Lock, 1_000);
     assert!(!toast::overlay_fading(&toast, WallMs(2_499)), "still up");
     assert!(
         toast::overlay_fading(&toast, WallMs(2_500)),
@@ -397,11 +373,6 @@ fn the_overlay_fades_out_after_the_toast_expires() {
         "last tail step"
     );
     assert!(!toast::overlay_fading(&toast, WallMs(2_650)), "clean again");
-
-    // A text toast has no dim to fade.
-    let mut text_toast = toast.clone();
-    text_toast.kind = ToastKind::Text;
-    assert!(!toast::overlay_fading(&text_toast, WallMs(2_500)));
 }
 
 /// Where the fully-bright head dot sits, as an average of its pixels.
@@ -430,7 +401,7 @@ fn the_spinner_head_walks_the_ring_in_angular_order() {
     // just lights them in a scrambled sequence. So: half a revolution apart, the
     // head must be diametrically opposite.
     let mut snapshot = snapshot();
-    snapshot.toast = toast_view(ToastKind::Spinner, "", 1_000);
+    snapshot.toast = toast_view(ToastKind::Spinner, 1_000);
 
     let start = render(|canvas| toast::overlay(canvas, &snapshot, WallMs(1_000)));
     let half = render(|canvas| toast::overlay(canvas, &snapshot, WallMs(1_500)));
@@ -452,7 +423,7 @@ fn the_spinner_leaves_a_gap_behind_its_tail() {
     // The trail covers 10 of 12 dots; the other two get the key as their color,
     // so the blit skips them and whatever is underneath shows through.
     let mut snapshot = snapshot();
-    snapshot.toast = toast_view(ToastKind::Spinner, "", 1_000);
+    snapshot.toast = toast_view(ToastKind::Spinner, 1_000);
     let frame = render(|canvas| {
         canvas.fill(0xFFFF);
         toast::overlay(canvas, &snapshot, WallMs(1_000));

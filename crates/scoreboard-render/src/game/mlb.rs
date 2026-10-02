@@ -30,7 +30,6 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         // No game latched yet: the idle card, still carrying toasts so button
         // feedback is not swallowed by the gap.
         screens::idle(canvas, snapshot);
-        toast::strip(canvas, snapshot, scene.now);
         toast::overlay(canvas, snapshot, scene.now);
         return;
     }

@@ -186,7 +186,6 @@ pub fn no_games(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: Wal
         Align::Center,
         pack(colors.secondary),
     );
-    toast::strip(canvas, snapshot, now);
     toast::overlay(canvas, snapshot, now);
 }
 

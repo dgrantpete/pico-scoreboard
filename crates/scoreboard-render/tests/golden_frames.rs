@@ -272,9 +272,8 @@ fn publish_screen(store: &mut Store, name: &str, now_ms: Millis) {
         "setup_bad_auth" => store.set_setup_mode(SetupReason::BadAuth, "", "", "HOME-NET-5G"),
         // The overlays draw over whatever the manifest names as their base,
         // which the caller has already committed.
-        "toast_text" => store.set_toast("ROTATION LOCKED", ToastKind::Text, false, now_ms),
-        "toast_lock" => store.set_toast("", ToastKind::Lock, true, now_ms),
-        "toast_spinner" => store.set_toast("", ToastKind::Spinner, true, now_ms),
+        "toast_lock" => store.set_toast(ToastKind::Lock, true, now_ms),
+        "toast_spinner" => store.set_toast(ToastKind::Spinner, true, now_ms),
         "menu" => {
             store.set_mode(Mode::Idle);
             let rows: Vec<MenuRowInput<'_>> = MENU_LABELS
@@ -449,6 +448,19 @@ fn expand(value: u16) -> [u8; 3] {
 
 // -- The tests ----------------------------------------------------------------
 
+/// Pixels lit on the panel's outer ring — row 0, row 63, column 0, column 127.
+///
+/// The owner's edge rule (BACKLOG 56): those LEDs are unreliable, so nothing
+/// draws there. Checked on every frame of the corpus, so a new screen cannot
+/// quietly put a crest, a rule or a scrolling line on the ring.
+fn border_lit(frame: &[u8]) -> Vec<(usize, usize)> {
+    (0..PIXELS)
+        .map(|index| (index % WIDTH, index / WIDTH))
+        .filter(|&(x, y)| x == 0 || y == 0 || x == WIDTH - 1 || y == HEIGHT - 1)
+        .filter(|&(x, y)| pixel(frame, y * WIDTH + x) != 0)
+        .collect()
+}
+
 // -- The test -----------------------------------------------------------------
 
 /// Set to re-bless: every frame is written instead of compared.
@@ -467,6 +479,7 @@ fn every_case_renders_its_golden_frame() {
 
     let mut report = String::new();
     let mut failures = Vec::new();
+    let mut border = Vec::new();
     let (mut matched, mut blessed) = (0usize, 0usize);
 
     // Every case as `(name, published state)`: the wire fixtures first, then
@@ -510,6 +523,14 @@ fn every_case_renders_its_golden_frame() {
             let label = format!("{name}__t{offset}");
             let golden = goldens.join("frames").join(format!("{label}.bin"));
             let actual = render_frame(&manifest, store, &prepared, &pool, offset);
+            let lit = border_lit(&actual);
+            if !lit.is_empty() {
+                border.push(format!(
+                    "{label}: {} px, e.g. {:?}",
+                    lit.len(),
+                    &lit[..lit.len().min(4)]
+                ));
+            }
             match &rendered_first {
                 None => rendered_first = Some(actual.clone()),
                 Some(first) => varies |= *first != actual,
@@ -580,6 +601,18 @@ fn every_case_renders_its_golden_frame() {
         animated > 0,
         "no case looked different at any two time points — the time pinning has \
          collapsed and every scroll, cycle and pulse is going unchecked"
+    );
+    assert!(
+        border.is_empty(),
+        "
+{} frame(s) light the panel's 1 px border (BACKLOG 56):
+  {}
+",
+        border.len(),
+        border.join(
+            "
+  "
+        )
     );
     assert!(
         failures.is_empty(),

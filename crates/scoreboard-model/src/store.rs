@@ -3,8 +3,8 @@
 
 use crate::color::UiColors;
 use crate::snapshot::{
-    ERROR_LINES, LogoRef, MenuRow, Millis, Mode, ScoreboardSnapshot, SetupReason, TOAST_DISPLAY_MS,
-    ToastKind,
+    ERROR_LINES, LogoRef, MenuRow, Millis, Mode, PlayView, ScoreboardSnapshot, SetupReason,
+    TOAST_DISPLAY_MS, ToastKind,
 };
 use crate::text::{Text, set_capped, set_folded, set_line, set_plain, write_text};
 
@@ -102,11 +102,18 @@ impl Store {
     /// `state.py` spelled this out at seven setters, one of which could have
     /// drifted from the others without anything noticing.
     fn enter_game_view(&mut self, mode: Mode, game_id: &str, logos: Logos, now_ms: Millis) {
-        let changed = self.snapshot.mode != mode || self.snapshot.game_id != game_id;
-        self.snapshot.mode = mode;
-        if changed {
+        let new_game = self.snapshot.game_id != game_id;
+        if self.snapshot.mode != mode || new_game {
             self.snapshot.animation_start_ms = now_ms;
         }
+        // A play line belongs to its game. Without this, a game rotated in
+        // with no line of its own — a pregame, soccer before any commentary —
+        // kept scrolling the previous game's last play under its own scores.
+        // The same game changing screens (live to final) keeps its line.
+        if new_game {
+            self.snapshot.play = PlayView::new();
+        }
+        self.snapshot.mode = mode;
         set_folded(&mut self.snapshot.game_id, game_id);
         self.snapshot.away_logo = logos.away;
         self.snapshot.home_logo = logos.home;
@@ -280,14 +287,13 @@ impl Store {
 
     // -- Toasts ------------------------------------------------------------
 
-    /// Show a transient overlay: bottom-strip text, or a centered icon.
+    /// Show a transient icon over the frame.
     ///
     /// A sticky toast — the in-flight skip spinner — persists until
     /// [`Store::clear_toast_if_sticky`]; everything else expires on its own
     /// after [`TOAST_DISPLAY_MS`].
-    pub fn set_toast(&mut self, text: &str, kind: ToastKind, sticky: bool, now_ms: Millis) {
+    pub fn set_toast(&mut self, kind: ToastKind, sticky: bool, now_ms: Millis) {
         let toast = &mut self.snapshot.toast;
-        set_folded(&mut toast.text, text);
         toast.kind = kind;
         toast.updated_ms = now_ms;
         toast.sticky = sticky;
@@ -306,7 +312,6 @@ impl Store {
             return;
         }
         let toast = &mut self.snapshot.toast;
-        toast.text.clear();
         toast.updated_ms = now_ms.saturating_sub(TOAST_DISPLAY_MS);
         toast.sticky = false;
         toast.pulse_ms = 0;

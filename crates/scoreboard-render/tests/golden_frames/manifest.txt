@@ -67,7 +67,6 @@ screen updating_progress -
 screen updating_countdown -
 screen setup_no_config -
 screen setup_bad_auth -
-screen toast_text mlb__live_inning
 screen toast_lock mlb__live_inning
 screen toast_spinner mlb__live_inning
 screen menu -

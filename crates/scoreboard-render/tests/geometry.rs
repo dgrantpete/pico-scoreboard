@@ -219,7 +219,15 @@ fn every_slot_fits_on_the_panel() {
         soccer_final.scorers_home,
         soccer_final.full_time_label,
     ]);
-    slots.push(geometry::PLAY_TEXT);
+    slots.extend([
+        geometry::COLUMN_STRIP,
+        mlb.strip,
+        nba.strip,
+        football.strip,
+        geometry::SOCCER_LIVE_A.strip,
+        geometry::SOCCER_LIVE_B.strip,
+        geometry::SOCCER_LIVE_C.strip,
+    ]);
 
     for slot in slots {
         assert!(slot.x >= 0 && slot.y >= 0, "{slot:?} starts off-panel");
@@ -233,6 +241,80 @@ fn every_slot_fits_on_the_panel() {
         );
     }
     assert!(settings.show_dividers);
+}
+
+/// Whether `slot` keeps off the unreliable outer ring: row 0, row 63, column 0
+/// and column 127 (BACKLOG 56).
+fn inside_the_edge_ring(slot: scoreboard_render::Slice) -> bool {
+    // Exclusive right/bottom ends, so "ends before the last column/row".
+    slot.x > 0
+        && slot.y > 0
+        && slot.x + slot.width < geometry::WIDTH
+        && slot.y + slot.height < geometry::HEIGHT
+}
+
+/// The two corner screens are the edge-rule-compliant ones; this keeps them so.
+/// The column screens are not yet (BACKLOG 56), so they are not listed.
+#[test]
+fn the_corner_screens_keep_off_the_edge_ring() {
+    let football = geometry::FOOTBALL_LIVE;
+    let soccer = geometry::SOCCER_LIVE_C;
+    let mut slots = vec![
+        football.logo_away,
+        football.logo_home,
+        football.score_away,
+        football.score_home,
+        football.phase,
+        football.clock,
+        football.situation,
+        football.strip,
+        scoreboard_render::generated::layout::football_field::POSITION,
+        soccer.logo_away,
+        soccer.logo_home,
+        soccer.score_away,
+        soccer.score_home,
+        soccer.clock,
+        soccer.event_top,
+        soccer.event_name,
+        soccer.event_empty,
+        soccer.strip,
+    ];
+    slots.extend(soccer.phase);
+    for slot in slots {
+        assert!(inside_the_edge_ring(slot), "{slot:?} touches the edge ring");
+    }
+}
+
+/// Both claimants of the bottom strip draw into the slot the selector names,
+/// and every live screen's strip sits in the bottom band of the panel.
+#[test]
+fn every_live_screen_has_its_own_bottom_strip() {
+    use scoreboard_model::Mode;
+    let mut settings = RenderSettings::new();
+    assert_eq!(
+        settings.bottom_strip(Mode::MlbLive),
+        geometry::MLB_LIVE.strip
+    );
+    assert_eq!(
+        settings.bottom_strip(Mode::NbaLive),
+        geometry::NBA_LIVE.strip
+    );
+    assert_eq!(
+        settings.bottom_strip(Mode::FootballLive),
+        geometry::FOOTBALL_LIVE.strip
+    );
+    for (letter, table) in [
+        ("A", geometry::SOCCER_LIVE_A),
+        ("B", geometry::SOCCER_LIVE_B),
+        ("C", geometry::SOCCER_LIVE_C),
+    ] {
+        assert!(settings.apply_variant("soccer_live", letter));
+        assert_eq!(settings.bottom_strip(Mode::SoccerLive), table.strip);
+        // The strip holds one `unscii_16` line, below the rule.
+        assert_eq!(table.strip.height, 16);
+        assert!(table.strip.y > table.separator_y, "soccer {letter}");
+    }
+    assert_eq!(settings.bottom_strip(Mode::Final), geometry::COLUMN_STRIP);
 }
 
 #[test]

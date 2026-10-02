@@ -354,6 +354,28 @@ fn mlb_free_pregame<'a>(game_id: &'a str, start_time: u32) -> PregameInput<'a> {
 // The play flash
 // =========================================================================
 
+/// The audit's reproduction: an NBA play still scrolling on the soccer game the
+/// rotation moved to.
+#[test]
+fn rotating_to_another_game_drops_the_last_games_play() {
+    let mut store = committed("nba/in_progress");
+    assert!(!store.snapshot().play.text.is_empty(), "the NBA play is up");
+
+    let (league, bytes) = fixture("soccer/fifa.world/pregame");
+    let detail = WireFeed.detail(league.sport, &bytes).unwrap();
+    store.commit_detail(&league, &detail, Logos::default(), 2_000, clock());
+    assert!(store.snapshot().play.text.is_empty());
+    assert!(store.snapshot().play.id.is_empty());
+
+    // Rotating back is a fresh view: its latest play flashes again, the
+    // catch-up `flash_play` documents.
+    let (league, bytes) = fixture("nba/in_progress");
+    let detail = WireFeed.detail(league.sport, &bytes).unwrap();
+    store.commit_detail(&league, &detail, Logos::default(), 3_000, clock());
+    assert!(!store.snapshot().play.text.is_empty());
+    assert_eq!(store.snapshot().play.updated_ms, 3_000);
+}
+
 #[test]
 fn the_play_flash_fires_once_per_new_id() {
     let mut store = Store::new();
@@ -586,6 +608,19 @@ fn a_red_card_labels_itself_and_an_unattributed_event_stays_white() {
     });
     store.commit_soccer_live(&live, Logos::default(), 0);
     assert_eq!(store.snapshot().soccer_live.event_top.as_str(), "RED CARD");
+
+    // The longest label a match can produce keeps its stoppage minutes.
+    live.last_event = Some(soccer::Event {
+        kind: soccer::EventKind::RedCard,
+        side: None,
+        clock: "120'+12'",
+        athlete: "",
+    });
+    store.commit_soccer_live(&live, Logos::default(), 0);
+    assert_eq!(
+        store.snapshot().soccer_live.event_top.as_str(),
+        "RED CARD 120'+12'"
+    );
 }
 
 // =========================================================================
@@ -929,7 +964,7 @@ fn the_error_screen_caps_its_title_and_lines() {
 #[test]
 fn a_sticky_toast_is_torn_down_to_just_expired() {
     let mut store = Store::new();
-    store.set_toast("", ToastKind::Spinner, true, 5_000);
+    store.set_toast(ToastKind::Spinner, true, 5_000);
     assert!(store.snapshot().toast.sticky);
 
     store.clear_toast_if_sticky(6_000);
@@ -942,17 +977,17 @@ fn a_sticky_toast_is_torn_down_to_just_expired() {
     );
     assert_eq!(toast.updated_ms, 6_000 - snapshot::TOAST_DISPLAY_MS);
 
-    // A LOCKED toast fired mid-skip must survive the teardown.
-    store.set_toast("LOCKED", ToastKind::Lock, false, 7_000);
+    // A lock toast fired mid-skip must survive the teardown.
+    store.set_toast(ToastKind::Lock, false, 7_000);
     store.clear_toast_if_sticky(7_100);
-    assert_eq!(store.snapshot().toast.text.as_str(), "LOCKED");
+    assert_eq!(store.snapshot().toast.kind, ToastKind::Lock);
     assert_eq!(store.snapshot().toast.updated_ms, 7_000);
 }
 
 #[test]
 fn a_rejected_press_pulses_without_replacing_the_toast() {
     let mut store = Store::new();
-    store.set_toast("SKIPPING", ToastKind::Spinner, true, 1_000);
+    store.set_toast(ToastKind::Spinner, true, 1_000);
     store.pulse_toast(1_400);
     assert_eq!(store.snapshot().toast.pulse_ms, 1_400);
     assert!(store.snapshot().toast.sticky);
@@ -1842,8 +1877,8 @@ impl Maxima {
 /// shows up as a failing test rather than as silent RAM.
 #[test]
 fn the_snapshot_stays_inside_its_budget_line() {
-    assert_eq!(ScoreboardSnapshot::SIZE, 2_848);
-    assert_eq!(crate::SnapshotChannel::SIZE, 8_552);
+    assert_eq!(ScoreboardSnapshot::SIZE, 2_824);
+    assert_eq!(crate::SnapshotChannel::SIZE, 8_480);
     assert_eq!(Slate::SIZE, 4_596);
 }
 
