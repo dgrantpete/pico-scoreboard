@@ -850,12 +850,10 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     6-bit green channel survives, so the frame would tint as it faded.
 
     Eight rungs over eight frames is 133 ms against today's 150, which is the
-    natural landing spot. **The cost is a deliberate pixel divergence from the
-    MicroPython baseline**: `toast_lock` and `toast_spinner` are in the parity
-    corpus at `t0`, where rung 0 would go from 7/8 to 15/16, and the goldens
-    come from a firmware that will never grow the rung. So this needs an
-    accepted-divergence class in `parity_frames.rs` and a PARITY.md verdict
-    entry, which is why it is not a drive-by.
+    natural landing spot. `toast_lock` and `toast_spinner` are in the golden
+    corpus at `t0`, where rung 0 would go from 7/8 to 15/16 — since the goldens
+    became Rust-owned (2026-10-01) that is a re-bless and a PARITY.md
+    divergence entry, no longer an accepted-diff class.
 
 84. **60 FPS narrowed the flip/load tearing window, and nobody has looked at
     the panel while it was narrow** — found by task #17's audit, 2026-08-08,

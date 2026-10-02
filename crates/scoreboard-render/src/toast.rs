@@ -39,9 +39,7 @@ use scoreboard_model::{Millis, ScoreboardSnapshot, ToastKind};
 /// `tests/screens.rs` pins that.
 ///
 /// Which also means a finer ladder is now *available* and was not before — 60
-/// FPS can show three times as many rungs in the same 150 ms. It would cost a
-/// deliberate pixel divergence from the MicroPython baseline the parity harness
-/// compares against, so it is BACKLOG 83 rather than part of this change.
+/// FPS can show three times as many rungs in the same 150 ms — BACKLOG 83.
 const FADE_STEP_MS: Millis = 50;
 /// Fade-out walks 5/8 → 3/4 → 7/8, then the frame is clean.
 const FADE_OUT_MS: Millis = FADE_STEP_MS * 3;

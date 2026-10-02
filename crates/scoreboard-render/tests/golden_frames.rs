@@ -1,31 +1,35 @@
-//! Pixel parity against the shipping MicroPython firmware.
-//!
-//! Phase 2's acceptance test. Every committed wire fixture is pushed through
-//! *both* stacks and the two RGB565 frames are compared byte for byte:
+//! Golden frames: every committed wire fixture and every static screen, rendered
+//! through the whole Rust stack and compared byte for byte against a committed
+//! frame.
 //!
 //! ```text
 //! backend/testdata/wire/**.bin
-//!   ├─ scoreboard-wire → scoreboard-model Store → scoreboard-render → hub75 sim
-//!   └─ scoreboard/{mlb,nba,football,soccer}.py → state.py → display.render_frame
+//!   └─ scoreboard-wire → scoreboard-model Store → scoreboard-render → hub75 sim
 //! ```
 //!
-//! The MicroPython side is not re-run here — `tests/gen_parity.py` runs it under
-//! `tools/preview`'s shims and commits the frames it produced. That script's
-//! docstring is the normative description of what is pinned; this file consumes
-//! the manifest it emits, so neither side can drift without the other noticing.
+//! # Where the goldens came from
 //!
-//! # Reading a failure
+//! Phase 2's acceptance test pinned these frames to the MicroPython firmware:
+//! the original goldens were MicroPython's own output, and the Rust stack
+//! matched all 180 byte for byte (`firmware-rs/PARITY.md` keeps that verdict).
+//! The port proven, the baseline moved: since 2026-10-01 the goldens are the
+//! Rust renderer's own, the MicroPython firmware is frozen on the gift fleet,
+//! and a deliberate visual change is made in Rust alone and re-blessed here.
+//!
+//! # Reading a failure, and re-blessing
 //!
 //! A mismatch writes `expected | actual | diff` panels to
-//! `target/parity-diffs/<case>__t<ms>.png` and reports the differing-pixel
-//! count and their bounding box. The MicroPython output is the baseline: work
-//! out which side is right against `display.py` before touching the renderer.
+//! `target/frame-diffs/<case>__t<ms>.png` and reports the differing-pixel
+//! count and bounding box. If the change is not intended, it is a bug. If it
+//! is, look at every panel, then re-bless and commit the frames with the
+//! change that moved them:
 //!
-//! One diff class is known and accepted rather than chased — the team-color
-//! brightening split on [`Rgb888::brightened`]. [`classify`] recognises it by
-//! shape alone, never by fixture name, so a genuine bug cannot hide inside it.
-//! It does not occur anywhere in the current corpus; `firmware-rs/PARITY.md`
-//! has the verdict table and why.
+//! ```text
+//! SCOREBOARD_BLESS_FRAMES=1 cargo test -p scoreboard-render --test golden_frames
+//! ```
+//!
+//! The manifest beside the frames — fixtures, crest slots, time points, palette,
+//! variants — is hand-maintained input; the frames are the only output.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -60,7 +64,7 @@ fn repo_root() -> PathBuf {
 
 // -- The manifest -------------------------------------------------------------
 
-/// One fixture, as `gen_parity.py` recorded it.
+/// One fixture, as the manifest names it.
 struct GameCase {
     name: String,
     sport: Sport,
@@ -243,20 +247,19 @@ fn commit_case(store: &mut Store, manifest: &Manifest, case: &GameCase) {
     );
 }
 
-/// The league menu's published window, mirroring `gen_parity.py`'s constants —
-/// including the over-long highlighted label that forces the marquee to move.
+/// The league menu's published window, including the over-long highlighted
+/// label that forces the marquee to move.
 const MENU_LABELS: [&str; 5] = ["MLB", "NBA", "NFL", "ENG.CHAMPIONSHIP", "LIGA MX"];
 const MENU_CHECKED: [bool; 5] = [true, true, false, true, false];
 const MENU_HIGHLIGHT: i8 = 3;
 const MENU_THUMB_Y: i8 = 1;
 const MENU_THUMB_H: u8 = 25;
 
-/// Publish the screen `name` stands for, with the arguments `gen_parity.py`'s
-/// `static_screens` used.
+/// Publish the screen `name` stands for.
 ///
-/// The two tables are the parity subject for screens no wire payload reaches,
-/// so their literals must agree — which is why the manifest names every case
-/// and this function panics on one it does not know, rather than skipping it.
+/// These are the cases no wire payload reaches. The manifest names every one,
+/// and this panics on a name it does not know rather than skip it, so a case
+/// cannot silently drop out of the run.
 fn publish_screen(store: &mut Store, name: &str, now_ms: Millis) {
     match name {
         "idle" => store.set_mode(Mode::Idle),
@@ -288,7 +291,7 @@ fn publish_screen(store: &mut Store, name: &str, now_ms: Millis) {
         }
         other => panic!(
             "the manifest names the static screen {other:?}, which this test \
-             does not know how to publish — add it beside gen_parity.py's entry"
+             does not know how to publish — add it here"
         ),
     }
 }
@@ -337,7 +340,7 @@ struct Diff {
     indices: Vec<usize>,
     /// `(x0, y0, x1, y1)`, inclusive.
     bounds: (usize, usize, usize, usize),
-    /// Each distinct `(micropython, rust)` pair and how often it occurs.
+    /// Each distinct `(golden, actual)` pair and how often it occurs.
     pairs: BTreeMap<(u16, u16), usize>,
 }
 
@@ -376,49 +379,6 @@ fn channels(value: u16) -> (i32, i32, i32) {
         ((value >> 5) & 0x3F) as i32,
         (value & 0x1F) as i32,
     )
-}
-
-/// How a case's diff is accounted for.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Verdict {
-    Match,
-    /// Every differing pixel is one channel code apart. That is the signature
-    /// of the team-color brightening split documented on
-    /// [`Rgb888::brightened`]: `state.py` computed the scale in floating point
-    /// and truncated `127.999…`, the port computes `channel * 128 / max` in
-    /// integers, and the two land one unit apart exactly on the channels where
-    /// that product is integral. The port is the correct arm — the float form
-    /// undershoots the `_TEAM_COLOR_MIN_CHANNEL` floor it exists to enforce.
-    Brightening,
-    Fail,
-}
-
-impl Verdict {
-    fn label(self) -> &'static str {
-        match self {
-            Verdict::Match => "MATCH",
-            Verdict::Brightening => "ACCEPTED-DIFF (brightening)",
-            Verdict::Fail => "FAIL",
-        }
-    }
-}
-
-/// Decide what a diff is, from its pixels alone.
-///
-/// The brightening class is recognised structurally — every differing pixel is
-/// within one channel code on all three channels — so no fixture is exempted
-/// by name and a genuine bug cannot ride along inside an accepted one.
-fn classify(diff: &Diff) -> Verdict {
-    let one_unit = diff.pairs.keys().all(|&(want, got)| {
-        let (wr, wg, wb) = channels(want);
-        let (gr, gg, gb) = channels(got);
-        (wr - gr).abs() <= 1 && (wg - gg).abs() <= 1 && (wb - gb).abs() <= 1
-    });
-    if one_unit {
-        Verdict::Brightening
-    } else {
-        Verdict::Fail
-    }
 }
 
 // -- Diff artifacts -----------------------------------------------------------
@@ -489,59 +449,25 @@ fn expand(value: u16) -> [u8; 3] {
 
 // -- The tests ----------------------------------------------------------------
 
-/// The brightening class does not occur anywhere in the committed corpus (see
-/// PARITY.md), so without this its recogniser would be code nobody ever runs —
-/// and a broken guard that never fires reads exactly like a passing one.
-#[test]
-fn the_accepted_diff_class_is_recognised_by_shape_and_nothing_else_is() {
-    let mut expected = vec![0u8; RGB565_FRAME_BYTES];
-    let mut actual = expected.clone();
+// -- The test -----------------------------------------------------------------
 
-    // The real thing: `Rgb888::brightened`'s float and integer forms on a
-    // primary whose brightest channel is 98 — one of only four maxima where
-    // they disagree at all. Float truncates 127.999… to 127, the port keeps
-    // 128, and RGB565 carries the gap as one code on each channel.
-    let float_form = scoreboard_render::rgb565(127, 63, 0);
-    let integer_form = scoreboard_render::rgb565(128, 64, 0);
-    for index in [0, 1, 200, 4000] {
-        expected[index * 2..index * 2 + 2].copy_from_slice(&float_form.to_le_bytes());
-        actual[index * 2..index * 2 + 2].copy_from_slice(&integer_form.to_le_bytes());
-    }
-    let diff = compare(&expected, &actual).expect("the frames differ");
-    assert_eq!(diff.indices.len(), 4);
-    assert!(matches!(classify(&diff), Verdict::Brightening));
-
-    // One pixel two codes apart is enough to disqualify the whole frame: the
-    // class is "every difference is one unit", not "most of them are".
-    let index = 4000;
-    actual[index * 2..index * 2 + 2]
-        .copy_from_slice(&scoreboard_render::rgb565(255, 64, 0).to_le_bytes());
-    let diff = compare(&expected, &actual).expect("the frames differ");
-    assert!(matches!(classify(&diff), Verdict::Fail));
-
-    // And a frame that agrees everywhere has no diff to classify.
-    assert!(compare(&expected, &expected).is_none());
-}
-
-// -- The parity test ----------------------------------------------------------
+/// Set to re-bless: every frame is written instead of compared.
+const BLESS_VAR: &str = "SCOREBOARD_BLESS_FRAMES";
 
 #[test]
-fn every_wire_fixture_renders_the_pixels_the_micropython_firmware_renders() {
-    let parity = crate_dir().join("tests").join("parity");
-    let manifest_path = parity.join("manifest.txt");
-    let text = std::fs::read_to_string(&manifest_path).unwrap_or_else(|error| {
-        panic!(
-            "{}: {error}\nRegenerate with `py crates/scoreboard-render/tests/gen_parity.py`",
-            manifest_path.display()
-        )
-    });
+fn every_case_renders_its_golden_frame() {
+    let goldens = crate_dir().join("tests").join("golden_frames");
+    let manifest_path = goldens.join("manifest.txt");
+    let text = std::fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|error| panic!("{}: {error}", manifest_path.display()));
     let manifest = parse_manifest(&text);
-    let pool = load_logo_pool(&parity.join("logos.rgb565"), manifest.logo_slots);
-    let diff_dir = repo_root().join("target").join("parity-diffs");
+    let pool = load_logo_pool(&goldens.join("logos.rgb565"), manifest.logo_slots);
+    let diff_dir = repo_root().join("target").join("frame-diffs");
+    let bless = std::env::var_os(BLESS_VAR).is_some();
 
     let mut report = String::new();
     let mut failures = Vec::new();
-    let mut counts = [0usize; 3];
+    let (mut matched, mut blessed) = (0usize, 0usize);
 
     // Every case as `(name, published state)`: the wire fixtures first, then
     // the hand-published screens, so both walk the same comparison.
@@ -570,8 +496,8 @@ fn every_wire_fixture_renders_the_pixels_the_micropython_firmware_renders() {
     // How many cases actually look different at different time points. Printed
     // rather than asserted case by case, because which screens animate is a
     // property of the fixtures; a corpus where *nothing* moved would mean the
-    // time pinning had collapsed, and every scroll, cycle and pulse in the port
-    // was going unchecked while the run still read as green.
+    // time pinning had collapsed, and every scroll, cycle and pulse was going
+    // unchecked while the run still read as green.
     let mut animated = 0usize;
 
     for (name, store) in &published {
@@ -582,11 +508,23 @@ fn every_wire_fixture_renders_the_pixels_the_micropython_firmware_renders() {
 
         for &offset in &manifest.time_points {
             let label = format!("{name}__t{offset}");
-            let golden = parity.join("frames").join(format!("{label}.bin"));
+            let golden = goldens.join("frames").join(format!("{label}.bin"));
+            let actual = render_frame(&manifest, store, &prepared, &pool, offset);
+            match &rendered_first {
+                None => rendered_first = Some(actual.clone()),
+                Some(first) => varies |= *first != actual,
+            }
+
+            if bless {
+                std::fs::write(&golden, &actual)
+                    .unwrap_or_else(|error| panic!("{}: {error}", golden.display()));
+                blessed += 1;
+                continue;
+            }
+
             let expected = std::fs::read(&golden).unwrap_or_else(|error| {
                 panic!(
-                    "{}: {error}\nRegenerate with \
-                     `py crates/scoreboard-render/tests/gen_parity.py`",
+                    "{}: {error}\nA new case needs its frames blessed: {BLESS_VAR}=1",
                     golden.display()
                 )
             });
@@ -595,64 +533,47 @@ fn every_wire_fixture_renders_the_pixels_the_micropython_firmware_renders() {
                 RGB565_FRAME_BYTES,
                 "{label}: golden is not a frame"
             );
-
-            let actual = render_frame(&manifest, store, &prepared, &pool, offset);
-            match &rendered_first {
-                None => rendered_first = Some(actual.clone()),
-                Some(first) => varies |= *first != actual,
-            }
             let Some(diff) = compare(&expected, &actual) else {
-                counts[0] += 1;
-                let _ = writeln!(report, "  {:<52} {}", label, Verdict::Match.label());
+                matched += 1;
+                let _ = writeln!(report, "  {label:<52} MATCH");
                 continue;
             };
 
-            let verdict = classify(&diff);
             let (x0, y0, x1, y1) = diff.bounds;
             let artifact = diff_dir.join(format!("{label}.png"));
             write_panels(&artifact, &expected, &actual, &diff);
             let _ = writeln!(
                 report,
-                "  {:<52} {:<28} {} px, box ({x0},{y0})-({x1},{y1}), {} value pair(s)",
+                "  {:<52} FAIL  {} px, box ({x0},{y0})-({x1},{y1}), {} value pair(s)",
                 label,
-                verdict.label(),
                 diff.indices.len(),
                 diff.pairs.len()
             );
-            match verdict {
-                Verdict::Match => unreachable!("compare() returned a diff"),
-                Verdict::Brightening => counts[1] += 1,
-                Verdict::Fail => {
-                    counts[2] += 1;
-                    let pairs = diff
-                        .pairs
-                        .iter()
-                        .take(8)
-                        .map(|(&(want, got), n)| format!("{want:#06x}->{got:#06x} x{n}"))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    failures.push(format!(
-                        "{label}: {} px differ, box ({x0},{y0})-({x1},{y1})\n    \
-                         micropython->rust: {pairs}\n    artifact: {}",
-                        diff.indices.len(),
-                        artifact.display()
-                    ));
-                }
-            }
+            let pairs = diff
+                .pairs
+                .iter()
+                .take(8)
+                .map(|(&(want, got), n)| format!("{want:#06x}->{got:#06x} x{n}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            failures.push(format!(
+                "{label}: {} px differ, box ({x0},{y0})-({x1},{y1})\n    \
+                 golden->actual: {pairs}\n    artifact: {}",
+                diff.indices.len(),
+                artifact.display()
+            ));
         }
         animated += usize::from(varies);
     }
 
     println!(
-        "\nparity over {} wire fixtures + {} static screens x {} time points\n{report}\n\
-         {} MATCH, {} ACCEPTED-DIFF, {} FAIL \
+        "\n{} wire fixtures + {} static screens x {} time points\n{report}\n\
+         {matched} MATCH, {} FAIL, {blessed} BLESSED \
          ({animated} of {} cases move between time points)\n",
         manifest.games.len(),
         manifest.screens.len(),
         manifest.time_points.len(),
-        counts[0],
-        counts[1],
-        counts[2],
+        failures.len(),
         published.len(),
     );
     assert!(
@@ -662,9 +583,10 @@ fn every_wire_fixture_renders_the_pixels_the_micropython_firmware_renders() {
     );
     assert!(
         failures.is_empty(),
-        "\n{} frame(s) differ beyond the accepted classes:\n\n{}\n\n\
-         The MicroPython frame is the baseline. Diagnose which side is right \
-         against display.py before changing the renderer.\n",
+        "\n{} frame(s) differ from their goldens:\n\n{}\n\n\
+         If the change is unintended, it is a bug. If it is intended, review \
+         every panel above, then re-bless with {BLESS_VAR}=1 and commit the \
+         frames with the change.\n",
         failures.len(),
         failures.join("\n\n")
     );

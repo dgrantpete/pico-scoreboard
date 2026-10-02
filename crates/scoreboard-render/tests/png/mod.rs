@@ -1,4 +1,4 @@
-//! A minimal PNG writer for the parity harness's diff artifacts.
+//! A minimal PNG writer for the golden-frame test's diff artifacts.
 //!
 //! Truecolor, 8 bits per channel, no filtering, and a zlib stream built from
 //! *stored* (uncompressed) deflate blocks — a valid PNG that any viewer opens,

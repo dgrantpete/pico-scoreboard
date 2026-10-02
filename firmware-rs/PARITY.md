@@ -9,6 +9,14 @@
 > the change is noted inline rather than folded in. The one section written for
 > the present is **Post-parity divergences** at the end, which is the register
 > of places the firmware now deliberately behaves differently.
+>
+> **Update, 2026-10-01: the pixel harness is no longer a parity harness.** The
+> MicroPython firmware is frozen on the gift fleet — no feature or visual work
+> lands there — and the 180 golden frames are now the Rust renderer's own:
+> `crates/scoreboard-render/tests/golden_frames.rs` over
+> `tests/golden_frames/`, re-blessed with `SCOREBOARD_BLESS_FRAMES=1` when a
+> change is deliberate. `gen_parity.py` and the one accepted-diff class it
+> needed are deleted. The tables below describe the harness as it was.
 
 Phase 2's exit criterion, and its evidence. Every committed wire fixture is
 rendered by both stacks and compared byte for byte:
@@ -236,6 +244,9 @@ The harness has been shown to fail, not just to pass:
   points: a first-frame-only harness would have passed that mutation.
 
 ## Regenerating
+
+*Superseded 2026-10-01 — the goldens are re-blessed from the Rust stack now;
+see the note at the top. As it was:*
 
 The goldens are committed. Re-run the generator after any change to the
 MicroPython render path, the fixtures, the fonts or the sprites, and review what

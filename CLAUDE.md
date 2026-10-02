@@ -10,7 +10,11 @@ See `.claude/ARCHITECTURE.md` for full component details.
   a Pi Pico 2 W (RP2350) with HUB75 LED matrix driver, boot-integrated behind
   embassy-boot and OTA-updated from the backend. Spec: `firmware-rs/SPEC.md`
 - Firmware (legacy): MicroPython in `firmware/`, still deployed on the gift-fleet
-  units and still served by the backend's `/app/*` OTA surface
+  units and still served by the backend's `/app/*` OTA surface. **Frozen since
+  2026-10-01:** no feature or visual work lands there and it is not kept in
+  sync with Rust. The Rust renderer is the visual source of truth; its golden
+  frames are its own (`crates/scoreboard-render/tests/golden_frames.rs`,
+  re-bless with `SCOREBOARD_BLESS_FRAMES=1`)
 - Frontend: Svelte + Vite, compiled to single-file HTML, gzipped, served from the
   device — by both firmwares
 - Backend: Rust + Axum, deployed on Fly.io, proxies ESPN API; the Docker build

@@ -50,10 +50,10 @@ fn the_quantiser_tracks_true_time_and_never_lags_it() {
 }
 
 #[test]
-fn the_parity_harness_offsets_are_positions_the_rail_actually_visits() {
-    // `tests/gen_parity.py` pins its frames at 0, 1500, 4500 and 11000 ms on the
-    // frame rail, and both stacks render at those numbers rather than at a frame
-    // index. That is only an honest comparison if a loop running at this rate
+fn the_golden_frame_offsets_are_positions_the_rail_actually_visits() {
+    // `tests/golden_frames/manifest.txt` pins its frames at 0, 1500, 4500 and
+    // 11000 ms on the frame rail, rendered at those numbers rather than at a
+    // frame index. That is only an honest golden if a loop running at this rate
     // passes through each of them exactly — an offset that fell between two
     // frames would be a picture the panel never shows.
     for offset in [0u64, 1_500, 4_500, 11_000] {

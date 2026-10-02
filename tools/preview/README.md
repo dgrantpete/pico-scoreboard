@@ -6,11 +6,10 @@ be iterated without flashing a Pico. It installs MicroPython shims, drives named
 scenarios through the actual `scoreboard.state` mailbox, intercepts the RGB565
 framebuffer, and renders it to PNGs/GIFs plus a click-to-zoom HTML gallery.
 
-It outlives the MicroPython firmware it was built for: the Rust firmware's
-pixel-parity harness (`crates/scoreboard-render/tests/gen_parity.py`) generates
-its golden frames by running the MicroPython stack through these shims, so the
-Rust renderer has a byte-for-byte baseline to reproduce. Changing anything here
-moves that baseline.
+It previews the MicroPython firmware only, which is frozen on the gift fleet.
+It once generated the Rust renderer's parity goldens too; since 2026-10-01
+those are the Rust stack's own (`crates/scoreboard-render/tests/golden_frames.rs`),
+and nothing here feeds them.
 
 ## Usage
 
