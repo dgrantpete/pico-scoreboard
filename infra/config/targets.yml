@@ -7,8 +7,10 @@ defaults:
   idle_interval: 300
 targets:
   # follow_summaries policy: enable where a consumer exists — soccer (the
-  # backend's live commentary fetch) and mlb (replay-grade bundle richness).
-  # Flipping it for any league is a reviewed diff here, nothing else.
+  # backend's live commentary fetch), mlb (replay-grade bundle richness), and
+  # nhl (the hockey screens' design corpus: goals, penalties and shots on goal
+  # live only in the summary). Flipping it for any league is a reviewed diff
+  # here, nothing else.
   - name: mlb
     kind: scoreboard
     sport: baseball
@@ -39,6 +41,7 @@ targets:
     kind: scoreboard
     sport: hockey
     league: nhl
+    follow_summaries: true
   - name: world-cup
     kind: scoreboard
     sport: soccer
