@@ -14,11 +14,7 @@ const SURFACE: usize = 128 * 64 * 2;
 
 /// Every clip the firmware embeds, with the per-frame hashes its encoder wrote.
 /// A clip added to `firmware-rs/app/src/event.rs` belongs here too.
-const SHIPPED: &[(&str, &[u8], &str)] = &[(
-    "colin-birthday-2026",
-    include_bytes!("../../../firmware-rs/app/assets/events/colin-birthday-2026.sbev"),
-    include_str!("../../../firmware-rs/app/assets/events/colin-birthday-2026.sbev.frames"),
-)];
+const SHIPPED: &[(&str, &[u8], &str)] = &[];
 
 fn fnv1a64(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xCBF2_9CE4_8422_2325, |hash, &byte| {
@@ -206,13 +202,15 @@ fn malformed_frames_fail_without_panicking() {
 
 #[test]
 fn arbitrary_bytes_never_panic() {
-    // A cheap deterministic fuzz over the shipped clip: flip bytes all over it
-    // and decode every frame. Errors are fine; panics are not.
-    let (_, original, _) = SHIPPED[0];
+    // A cheap deterministic fuzz: flip a few bytes anywhere in a well-formed
+    // clip — header, palette, offsets, ops — and decode every frame. Errors
+    // are fine; panics are not. Built here rather than taken from `SHIPPED`,
+    // so the decoder stays fuzzed in releases that ship no clip.
+    let original = good();
     let mut state = 0x2545_F491_4F6C_DD1Du64;
-    for _ in 0..64 {
-        let mut bytes = original.to_vec();
-        for _ in 0..8 {
+    for round in 0..2048 {
+        let mut bytes = original.clone();
+        for _ in 0..=round % 4 {
             state ^= state << 13;
             state ^= state >> 7;
             state ^= state << 17;

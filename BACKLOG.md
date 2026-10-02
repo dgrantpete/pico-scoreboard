@@ -1081,13 +1081,6 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     stacked PRs as stacked; file the issue before the PR when the change is
     a judgment call rather than a defect.
 
-98. **Remove the `colin-birthday-2026` event after its window (closes
-    2026-10-02).** Its clip is 324 KB of the image — 71 % → 92 % of the active
-    partition, 127 KB left. In the first release after 2026-10-02 delete its
-    `EVENTS` entry (`firmware-rs/app/src/event.rs`), the `.sbev` and
-    `.sbev.frames` in `firmware-rs/app/assets/events/`, its `SHIPPED` row in
-    `crates/scoreboard-render/tests/event.rs`, and its provenance row. Keep
-    `tools/events/colin_birthday_2026.py` — it is the art's source.
 99. **Events as content: download a clip once, play it from flash (owner
     direction, 2026-09-30).** Today every event is a firmware release, because
     clips are embedded. The shape agreed on: the backend publishes events

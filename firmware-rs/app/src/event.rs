@@ -48,11 +48,7 @@ pub struct Event {
 /// Adding one: render and encode the clip (`tools/events/`), add it here and to
 /// `SHIPPED` in `crates/scoreboard-render/tests/event.rs`, and check the image
 /// still fits — `publish-fw` refuses one that does not.
-pub static EVENTS: [Event; 1] = [Event {
-    name: "colin-birthday-2026",
-    window: Window::new((2026, 9, 30), (2026, 10, 2)),
-    clip: include_bytes!("../assets/events/colin-birthday-2026.sbev"),
-}];
+pub static EVENTS: [Event; 0] = [];
 
 /// No event is live.
 const NONE: u8 = u8::MAX;

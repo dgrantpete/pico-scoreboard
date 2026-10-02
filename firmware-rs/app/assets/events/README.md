@@ -17,12 +17,13 @@ needs only cargo.
 ## Regenerating a clip
 
 ```sh
-uv run --with numpy --with pillow tools/events/colin_birthday_2026.py <frames_dir>
+uv run --with numpy --with pillow tools/events/<art_script>.py <frames_dir>
 uv run --with numpy --with pillow tools/events/encode_clip.py <frames_dir> \
-    firmware-rs/app/assets/events/colin-birthday-2026.sbev --fps 30
+    firmware-rs/app/assets/events/<event-name>.sbev --fps 30
 ```
 
-The art script is the editable source. Both steps are deterministic (seeded
+The art script is the editable source, and it stays in `tools/events/` after
+its clip is retired (`colin_birthday_2026.py` is the first). Both steps are deterministic (seeded
 RNGs, no timestamps), so rerunning them on unchanged sources reproduces the
 same bytes. **Commit a clip in the same commit as the source change that
 produced it.**
@@ -36,6 +37,7 @@ row in the test's `SHIPPED` table, in the next release.
 
 ## Provenance
 
+No clip ships today. Each one that does gets a row here:
+
 | clip | window | frames | size | SHA-1 | built from |
 |---|---|---|---|---|---|
-| `colin-birthday-2026.sbev` | 2026-09-30 – 2026-10-02 | 390 @ 30 fps (13 s), 256 colours | 324,301 B | `6234e365…` | `tools/events/colin_birthday_2026.py` on `events`, 2026-09-30 |
