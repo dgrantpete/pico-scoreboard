@@ -189,20 +189,76 @@ fn a_line_caps_at_25_glyphs_with_a_truncation_dot() {
 // Team color brightening
 // =========================================================================
 
-#[test]
-fn brightening_preserves_hue_and_lifts_only_dark_colors() {
-    // Yankees navy: brightest channel 0x40, scaled until it reaches 128.
-    let navy = Rgb888(0x0C_2340).brightened();
-    assert_eq!(navy.blue(), 128);
-    assert_eq!(navy.red(), 0x0C * 2);
-    assert_eq!(navy.green(), 0x23 * 2);
+use crate::color::{TEAM_COLOR_MIN_CHANNEL, TEAM_COLOR_MIN_LUMA};
 
-    // Already bright: untouched.
+fn brightest(color: Rgb888) -> u8 {
+    color.red().max(color.green()).max(color.blue())
+}
+
+/// Both floors hold for every color, and neither one ever lands a unit
+/// short — the weighted-sum arithmetic in `brightened` exists to make this
+/// exact. A stride of 3 per channel walks 614,125 colors, every channel's
+/// extremes included.
+#[test]
+fn every_brightened_color_reaches_both_floors() {
+    for red in (0..=255u32).step_by(3) {
+        for green in (0..=255u32).step_by(3) {
+            for blue in (0..=255u32).step_by(3) {
+                let input = Rgb888(red << 16 | green << 8 | blue);
+                let out = input.brightened();
+                assert!(out.luma() >= TEAM_COLOR_MIN_LUMA, "{input:?} -> {out:?}");
+                assert!(brightest(out) as u32 >= TEAM_COLOR_MIN_CHANNEL, "{input:?} -> {out:?}");
+                // Never darker, channel by channel.
+                assert!(out.red() >= input.red(), "{input:?} -> {out:?}");
+                assert!(out.green() >= input.green(), "{input:?} -> {out:?}");
+                assert!(out.blue() >= input.blue(), "{input:?} -> {out:?}");
+                // A legible color is a fixed point.
+                assert_eq!(out.brightened(), out, "{input:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn colors_above_both_floors_are_untouched() {
+    // Cardinals red: luma 91.
     let red = Rgb888(0xBD_3039);
     assert_eq!(red.brightened(), red);
-    // Exactly at the threshold counts as bright enough.
-    let edge = Rgb888(0x00_0080);
+    // Exactly at the luma floor counts as bright enough; one step under does
+    // not.
+    let edge = Rgb888::new(128, 70, 0);
+    assert_eq!(edge.luma(), TEAM_COLOR_MIN_LUMA);
     assert_eq!(edge.brightened(), edge);
+    assert_ne!(Rgb888::new(128, 69, 0).brightened(), Rgb888::new(128, 69, 0));
+}
+
+/// Real primaries, pinned, one per path through the two steps.
+#[test]
+fn real_team_colors_lift_to_readable_shades() {
+    let cases = [
+        // Yankees navy: the max-channel step leaves it at luma 63, hue intact.
+        (0x0C_2340, (31, 89, 163)),
+        // Oilers navy: blue saturates at the floor's edge but stays short of 255.
+        (0x00_205B, (0, 88, 250)),
+        // Ipswich blue, already at full blue: the luma floor blends it toward
+        // white, the only way left to brighten it.
+        (0x00_00FA, (58, 58, 255)),
+        // Liverpool red sits just under the floor and is lifted only slightly.
+        (0xD1_1317, (217, 20, 24)),
+    ];
+    for (input, (red, green, blue)) in cases {
+        let out = Rgb888(input).brightened();
+        assert_eq!((out.red(), out.green(), out.blue()), (red, green, blue), "{input:06x}");
+    }
+}
+
+#[test]
+fn brightening_keeps_the_hue_until_a_channel_saturates() {
+    // Yankees navy (0x0C, 0x23, 0x40): channel ratios survive both steps.
+    let out = Rgb888(0x0C_2340).brightened();
+    let ratio = |a: u8, b: u8| a as f32 / b as f32;
+    assert!((ratio(out.green(), out.blue()) - ratio(0x23, 0x40)).abs() < 0.02);
+    assert!((ratio(out.red(), out.blue()) - ratio(0x0C, 0x40)).abs() < 0.02);
 }
 
 #[test]
@@ -210,23 +266,13 @@ fn brightening_turns_pure_black_into_gray() {
     assert_eq!(Rgb888(0).brightened(), Rgb888::new(128, 128, 128));
 }
 
-/// The MicroPython pair disagreed here: `state._team_color_to_rgb565`
-/// multiplied by a float `128 / max`, which lands on 127.999… and truncates,
-/// while `display._base_marker_colors` used the integer form. One color, one
-/// answer.
-#[test]
-fn brightening_is_exact_where_the_float_form_lost_a_bit() {
-    assert_eq!(Rgb888::new(3, 0, 0).brightened().red(), 128);
-    assert_eq!(Rgb888::new(2, 1, 0).brightened().red(), 128);
-}
-
 #[test]
 fn a_team_color_reaches_the_view_already_brightened() {
     let store = committed("mlb/live_inning");
     let view = &store.snapshot().mlb_live;
     for color in [view.bat_color, view.pitch_color].into_iter().flatten() {
-        let brightest = color.red().max(color.green()).max(color.blue());
-        assert!(brightest >= 128, "{color:?} is too dark to read");
+        assert!(brightest(color) >= 128, "{color:?} is too dark to read");
+        assert!(color.luma() >= TEAM_COLOR_MIN_LUMA, "{color:?} is too dark to read");
     }
 }
 
@@ -492,7 +538,7 @@ fn a_red_card_reads_as_its_own_label_over_the_carded_player() {
     assert_eq!(view.event_top.as_str(), "RED CARD 72'");
     assert_eq!(view.event_name.as_str(), "B. Embolo");
     // The carded side's colour, not the scoring one: SUI, who went down to ten.
-    assert_eq!(view.event_color, Rgb888(0xFF_0000));
+    assert_eq!(view.event_color, Rgb888(0xFF_0000).brightened());
 }
 
 /// The corpus covers an *attributed* red card (above); what it cannot reach is

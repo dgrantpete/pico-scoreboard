@@ -1030,3 +1030,25 @@ reference grid computed from these formulas in CPython, the ambient-independence
 property at both the function and settled-chain level, endpoint semantics from
 five ambients, monotonicity in both preference and lux, and the ramp rates in
 ticks.
+
+## Team colors — a luminance floor, 2026-10-01
+
+**Was:** a team primary whose brightest channel sat under 128 was scaled up
+until it reached 128, hue preserved; black became 128 gray. Navies and purples
+passed that rule at a perceived brightness (BT.601 luma) of 30–60 — the Mets,
+the Rockies, the Kraken and the Oilers were barely readable as text.
+
+**Is:** that step, then a second floor: luma ≥ 80, reached by scaling again
+(hue preserved) and, only where a channel saturates first, blending toward
+white by the remaining amount. Integer arithmetic on the weighted sum with
+every step rounded up, so no color lands one short of the floor
+(`Rgb888::brightened`; a 614k-color property test pins both floors,
+monotonicity and idempotence). 80 was chosen against every MLB, NBA, NFL, NHL,
+MLS, EPL and Liga MX primary: it lifts every navy and purple to a readable
+blue and leaves saturated reds — luma 70–80, already vivid on an LED — where
+they are; at 96 Liverpool, Arsenal and the Cardinals start turning pink.
+
+**Unchanged:** the first step, so no color is ever darker than before, and the
+MicroPython firmware, which keeps step 1 alone. 100 of the 180 golden frames
+moved — every team-colored element and nothing else — and were re-blessed.
+
