@@ -1,8 +1,9 @@
 # NHL — end-to-end spec
 
-Status: **draft for owner review** (2026-10-01). Nothing here is implemented
-yet except the collector change in §9.1. Visual decisions reference the
-mockup gallery (published Artifact "NHL Panel Mockups"); every mockup was
+Status: **decided** (owner, 2026-10-12; drafted 2026-10-01). Nothing here is
+implemented yet except the collector change in §9.1. Visual decisions
+reference the mockup gallery (published Artifact "NHL Panel Mockups") and the
+goal-mark study (Artifact "Rink Goal Dots"); every mockup was
 drawn by a scratch program linking the real `scoreboard-render` crate over
 real ESPN captures, so the geometry below is pixel-proven, not sketched.
 
@@ -26,11 +27,11 @@ leaves room), and the MicroPython gift fleet (§1 D7).
 
 ## 1. Decisions
 
-Recommendations are marked; the owner's answers replace this table's last
-column when given.
+The owner accepted every recommendation on 2026-10-12, and added D9–D10
+from the goal-mark study. The last column keeps what was turned down.
 
-| # | Decision | Recommendation | Alternatives |
-|---|----------|----------------|--------------|
+| # | Decision | Decided | Not chosen |
+|---|----------|---------|------------|
 | D1 | Live layout | **B "Rink" default**, **A "Period ledger" as the `hockey_live` variant** | C "Center ice" (dropped: small clock); A-only |
 | D2 | Final screen | **"Three stars"** (own screen, soccer-final silhouette) | Shared line-score final with hockey columns; line score + cycling stars line |
 | D3 | Fetch the per-game summary for live/final hockey | **Yes** — on the backend, like soccer's commentary; the device still receives one small wire payload | Scoreboard-only: no strength, no tags, no shootout tracker, no stars |
@@ -38,7 +39,9 @@ column when given.
 | D5 | Sport identity | **`Sport::Hockey`, league slug `nhl`, endpoint `hockey/nhl`, config `sports.nhl: {enabled}`** (single-league toggle, like NBA) | Multi-league `sports.hockey.leagues[]` — only if a second hockey league is wanted soon |
 | D6 | Rotation / menu order | **MLB, NBA, NHL, football…, soccer…** | Append after soccer |
 | D7 | MicroPython | **No hockey.** The SPA hides the NHL toggle unless `GET /api/config` returns a `sports.nhl` key (MicroPython's defaults never will) — capability by presence, zero legacy change | Ship hockey parsers to the fleet (not worth it) |
-| D8 | Cross-sport fixes found here (§7 C1, C2) | **Separate reviewed changes**, not in the NHL diff | Fold in |
+| D8 | Cross-sport fixes found here (§7 C1, C2) | **Separate reviewed changes**, not in the NHL diff (both shipped 2026-10-02) | Fold in |
+| D9 | Rink goal marks | **Translucent**: each 2×2 mark composited at 141/256 over what is lit, so stacked goals climb 55% → 80% → 91% toward the team color — a heat map (§6.5) | Solid (stacks fuse into blobs); separated (each goal nudged to the nearest free spot: countable, but reads homogeneous); recency fade (neighbors in time get indistinguishable shades) |
+| D10 | Rink faceoff dots | **None** — single red pixels read as a red team's goals | Drawn |
 
 ## 2. Data facts (evidence-backed)
 
@@ -272,7 +275,8 @@ series summary.
 ## 6. Phases (each ends green: `cargo test --workspace`, clippy, thumbv8m builds)
 
 ### 6.0 Corpus and fixtures
-- Collector: §9.1 (done in config; deploy pending).
+- Collector: §9.1 (deployed 2026-10-02; every NHL game since is captured
+  with its summaries).
 - Seed `backend/testdata/hockey/nhl/` now from the 2026-10-01 captures:
   `pregame`, `in_progress`, `end_of_period`, `power_play` (scoreboard +
   summary pairs), plus finals `final`, `final_ot`, `final_so`, `final_2ot`,
@@ -328,13 +332,22 @@ last-goal top line + scorer + color, shootout state, lamp side + anchor);
 `geometry.rs` tables `HOCKEY_LIVE_A`, `HOCKEY_LIVE_B`, `HOCKEY_FINAL`,
 `HockeyLiveVariant` + `RenderSettings.hockey_live` + `apply_variant`
 keys `hockey_live` (A|B) and `hockey_final` (A only today); each hockey
-live table carries its own `strip` (the Rink layout frees the full width,
-like football), wired into `RenderSettings::bottom_strip`; the pregame
+live table carries its own `strip`, wired into
+`RenderSettings::bottom_strip`: A uses `COLUMN_STRIP`; B, whose rink frees
+the full width like football's field, uses `rect(1, 47, 126, 16)`.
+unscii_16 inks rows 1–12 of its cell, so at y 47 the play text sits four
+dark rows below the shots bar and the scores' ink (both end at row 43) and
+four above the panel's bottom, the dark edge row included: centered in the
+space, never touching (owner, 2026-10-12). The rink's goal marks (D9): a
+2×2 at the §3.5 projected point, each pixel `mix(under, team, 141)` read
+back through `Canvas::pixel_at`, drawn in play order; the newest blinks
+opaque white for the lamp window, as in the mockups. The pregame
 record stack's third row (sport-gated); frame dispatch; `prepared.rs`
 untouched unless the stars line scrolls (it does — fixed-rail like the
 pregame lines). Art: new `firmware/assets/layout/hockey_layout.aseprite`
 with `rink__absolute` (placeholder end colors found by value and tinted
-per team — football's endzone mechanism) and `star` — compiled by
+per team — football's endzone mechanism; boards, goal and blue lines,
+center line and creases, no faceoff dots per D10) and `star` — compiled by
 `tools/compile_layout.py` like the others. All new screens obey the 1 px
 edge rule. Tests: per-screen pixel tests in `tests/game.rs`, and the hockey
 wire fixtures added to the golden-frame corpus (`tests/golden_frames/manifest.txt`
@@ -417,14 +430,14 @@ Rust-owned golden frames (PARITY.md, "Team colors — a luminance floor").
 
 ## 9. Ops
 
-### 9.1 Collector (done in config, 2026-10-01)
+### 9.1 Collector (deployed 2026-10-02)
 `infra/config/targets.yml`: the `nhl` scoreboard target existed since July;
 `follow_summaries: true` added so live NHL summaries are captured (the
 consumer is this design + §6.2's tables). Validated with
-`tools.espn.targets.load_targets`. **Deploy** when the NUC is reachable
-(it was not on 2026-10-01 — no ARP response at its address):
-`ansible-playbook deploy.yml --tags targets` from WSL (see the deploy
-memory/README for the `wsl -e` invocation).
+`tools.espn.targets.load_targets`. Deployed 2026-10-02 01:41 UTC
+(`ansible-playbook deploy.yml --tags targets` from WSL). By 2026-10-12 the
+collector held 78 regular-season games (62 regulation, 11 OT, 5 shootout),
+73 of them replay-grade (`python -m tools.espn coverage --league nhl`).
 
 ### 9.2 Delegation plan
 Orchestrator owns §3 semantics, reviews every diff, runs every test, commits
