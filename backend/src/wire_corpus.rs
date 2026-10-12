@@ -138,7 +138,11 @@ pub(crate) fn soccer_games() -> Vec<(String, SoccerGame)> {
         .collect()
 }
 
-/// Every corpus fixture, encoded, keyed by `{sport}/{fixture}`.
+/// Golden-name suffix for a payload encoded with the `ext=1` extension.
+const EXT_SUFFIX: &str = ".ext1";
+
+/// Every corpus fixture, encoded, keyed by `{sport}/{fixture}` (plus
+/// `{fixture}.ext1` where the sport defines an extension).
 pub(crate) fn encoded_corpus() -> Vec<Encoded> {
     let mut out = Vec::new();
     let mut push = |sport: &str, name: String, bytes: Vec<u8>| {
@@ -151,6 +155,14 @@ pub(crate) fn encoded_corpus() -> Vec<Encoded> {
         push("mlb", name, crate::mlb::wire::encode_game(&game));
     }
     for (name, game) in nba_games() {
+        // A pregame also pins its `ext=1` form beside the frozen v2 bytes.
+        if matches!(game, NbaGame::Pregame(_)) {
+            push(
+                "nba",
+                format!("{name}{EXT_SUFFIX}"),
+                crate::nba::wire::encode_game_ext(&game),
+            );
+        }
         push("nba", name, crate::nba::wire::encode_game(&game));
     }
     for (name, game) in football_games() {
@@ -229,7 +241,8 @@ fn corpus_string_maxima() -> Vec<(&'static str, usize)> {
     }
 
     for (name, game) in nba_games() {
-        let bytes = crate::nba::wire::encode_game(&game);
+        // The extended form: it carries every string the plain one does.
+        let bytes = crate::nba::wire::encode_game_ext(&game);
         match wire::nba::decode(&bytes).unwrap_or_else(|e| panic!("nba/{name}: {e}")) {
             wire::nba::Game::Live(live) => {
                 max.note("game id", live.game_id);
@@ -246,6 +259,9 @@ fn corpus_string_maxima() -> Vec<(&'static str, usize)> {
                 max.note("venue", pregame.venue);
                 max.note("abbreviation", pregame.away.abbreviation);
                 max.note("abbreviation", pregame.home.abbreviation);
+                for line in [pregame.away.line, pregame.home.line].into_iter().flatten() {
+                    max.note("team line", line);
+                }
             }
             wire::nba::Game::Final(game) => {
                 max.note("game id", game.game_id);
@@ -273,11 +289,8 @@ fn corpus_string_maxima() -> Vec<(&'static str, usize)> {
                 max.note("venue", pregame.venue);
                 max.note("abbreviation", pregame.away.abbreviation);
                 max.note("abbreviation", pregame.home.abbreviation);
-                for rank in [pregame.away.rank_line, pregame.home.rank_line]
-                    .into_iter()
-                    .flatten()
-                {
-                    max.note("rank line", rank);
+                for line in [pregame.away.line, pregame.home.line].into_iter().flatten() {
+                    max.note("team line", line);
                 }
             }
             wire::football::Game::Final(game) => {
@@ -392,6 +405,9 @@ mod tests {
             let sport = entry.name.split('/').next().expect("sport-prefixed name");
             let decoded = match sport {
                 "mlb" => wire::mlb::decode(bytes).map(|g| wire::mlb::encode(&g, &mut out)),
+                "nba" if entry.name.ends_with(EXT_SUFFIX) => {
+                    wire::nba::decode(bytes).map(|g| wire::nba::encode_ext(&g, &mut out))
+                }
                 "nba" => wire::nba::decode(bytes).map(|g| wire::nba::encode(&g, &mut out)),
                 "football" => {
                     wire::football::decode(bytes).map(|g| wire::football::encode(&g, &mut out))
@@ -427,8 +443,8 @@ mod tests {
             ("play id", 24),
             ("play text", 128),
             ("player name", 32),
-            ("rank line", 32),
             ("scorers", 128),
+            ("team line", 32),
             ("venue", 48),
             ("weather condition", 24),
         ];

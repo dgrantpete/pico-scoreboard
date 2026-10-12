@@ -107,8 +107,9 @@ impl<'a> PregameInput<'a> {
         }
     }
 
-    /// NBA: real stadium and records; no weather, no per-team line. The two
-    /// empty slots are simply absent, which the screen already handles.
+    /// NBA: real stadium and records; no weather. The per-team line is the
+    /// betting line ("+3.5  +140"), which only the wire's `ext=1` carries; an
+    /// absent line is an empty slot, which the screen already handles.
     pub fn nba(game: &nba::Pregame<'a>) -> Self {
         Self {
             sport: Sport::Nba,
@@ -120,13 +121,13 @@ impl<'a> PregameInput<'a> {
             away: PregameSideInput {
                 abbreviation: game.away.abbreviation,
                 record: record(game.away.record),
-                line: "",
+                line: game.away.line.unwrap_or(""),
                 color: game.away.colors.into(),
             },
             home: PregameSideInput {
                 abbreviation: game.home.abbreviation,
                 record: record(game.home.record),
-                line: "",
+                line: game.home.line.unwrap_or(""),
                 color: game.home.colors.into(),
             },
         }
@@ -134,8 +135,8 @@ impl<'a> PregameInput<'a> {
 
     /// Football: the league leads the info cycle (the wire does not carry it —
     /// the device knows which endpoint it polled), the stadium follows, and
-    /// the per-team line is the college rank ("#3 OHIO STATE") when there is
-    /// one.
+    /// the per-team line is a ranked college team's "#3 OHIO STATE", else the
+    /// betting line ("+7  -305").
     pub fn football(game: &football::Pregame<'a>, league_name: &'a str) -> Self {
         Self {
             sport: Sport::Football,
@@ -147,13 +148,13 @@ impl<'a> PregameInput<'a> {
             away: PregameSideInput {
                 abbreviation: game.away.abbreviation,
                 record: record(game.away.record),
-                line: game.away.rank_line.unwrap_or(""),
+                line: game.away.line.unwrap_or(""),
                 color: game.away.colors.into(),
             },
             home: PregameSideInput {
                 abbreviation: game.home.abbreviation,
                 record: record(game.home.record),
-                line: game.home.rank_line.unwrap_or(""),
+                line: game.home.line.unwrap_or(""),
                 color: game.home.colors.into(),
             },
         }

@@ -59,7 +59,7 @@ use embassy_time::{Duration, Instant, with_timeout};
 use reqwless::client::HttpClient;
 use reqwless::request::{Method, RequestBuilder as _};
 use scoreboard_model::poll::{self, MAX_HEADER_BLOCK, PollError, Transport};
-use scoreboard_wire::STRUCT_CONTENT_TYPE;
+use scoreboard_wire::{STRUCT_CONTENT_TYPE, STRUCT_CONTENT_TYPE_EXT};
 use static_cell::ConstStaticCell;
 
 /// The crest format the panel blits directly (`display.py`'s `LogoPool`).
@@ -196,8 +196,10 @@ impl ApiClient {
         url: &str,
         buf: &'buf mut [u8],
     ) -> Result<Option<&'buf [u8]>, PollError> {
+        // `ext=1`: the per-sport extensions (today the NBA pregame's betting
+        // lines). A backend that predates them serves plain v2, which decodes.
         let fetched = self
-            .get(url, &[("Accept", STRUCT_CONTENT_TYPE)], buf)
+            .get(url, &[("Accept", STRUCT_CONTENT_TYPE_EXT)], buf)
             .await?;
         if fetched.status == 404 {
             return Ok(None);

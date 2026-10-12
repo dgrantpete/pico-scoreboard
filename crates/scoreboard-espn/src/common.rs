@@ -502,3 +502,96 @@ impl WireText {
         self.text.as_str()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Betting lines: the pregame team line for leagues with nothing else to put
+// there (the NBA, the NFL, unranked college football).
+//
+// Each team's closing point spread and moneyline, from the first sportsbook
+// ESPN lists (`competitions[0].odds[0]`), keyed by side in the payload itself
+// (`pointSpread.away`, `moneyline.home`, …) rather than by competitor index.
+// The collector's 2026-09/10 captures: every NFL and college pregame and 93%
+// of NBA preseason pregames carry them; they are gone once a game starts.
+//
+// Unlike every other field here, odds have no serde-era predecessor and only
+// decorate the screen, so nothing about them can fail an event: a wrong type,
+// an empty or overlong string, or a missing side just leaves the lines out.
+
+use crate::path::Value;
+
+/// One sportsbook number as ESPN formats it: "+3.5", "-118", "EVEN". Every
+/// value in the corpus is at most 5 bytes ("+21.5", "-1650"); a longer one is
+/// refused rather than truncated into a different number.
+pub const ODDS_BYTES: usize = 8;
+
+/// A team line: spread, two spaces, moneyline ("+21.5  -1650" is 12 bytes).
+pub const TEAM_ODDS_BYTES: usize = 2 * ODDS_BYTES + 2;
+
+pub type TeamOdds = heapless::String<TEAM_ODDS_BYTES>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Market {
+    /// `pointSpread.{side}.close.line`.
+    Spread,
+    /// `moneyline.{side}.close.odds`.
+    Moneyline,
+}
+
+/// The first sportsbook's closing numbers, `[away, home]` per market.
+#[derive(Debug, Clone, Default)]
+pub struct OddsScratch {
+    spread: [Exact<ODDS_BYTES>; 2],
+    moneyline: [Exact<ODDS_BYTES>; 2],
+}
+
+impl OddsScratch {
+    /// Store one closing number; anything that is not one is ignored.
+    pub fn set(&mut self, market: Market, side: HomeAway, value: Value<'_>) {
+        let Value::Str(text) = value else {
+            return;
+        };
+        if !is_odds_number(text) {
+            return;
+        }
+        let slots = match market {
+            Market::Spread => &mut self.spread,
+            Market::Moneyline => &mut self.moneyline,
+        };
+        let k = match side {
+            HomeAway::Away => 0,
+            HomeAway::Home => 1,
+        };
+        slots[k].set(text);
+    }
+
+    /// The `[away, home]` team lines, "+3.5  +140". Both sides need a spread
+    /// or there are no lines at all; the moneylines join only when both
+    /// sides have one, so the two rows always say the same kind of thing.
+    pub fn team_lines(&self) -> Option<[TeamOdds; 2]> {
+        let spreads = [self.spread[0].valid()?, self.spread[1].valid()?];
+        let moneylines = match (self.moneyline[0].valid(), self.moneyline[1].valid()) {
+            (Some(away), Some(home)) => Some([away, home]),
+            _ => None,
+        };
+        let mut lines = [TeamOdds::new(), TeamOdds::new()];
+        for (k, line) in lines.iter_mut().enumerate() {
+            // Two numbers of at most ODDS_BYTES and the gap: these fit.
+            let _ = line.push_str(spreads[k]);
+            if let Some(moneylines) = moneylines {
+                let _ = line.push_str("  ");
+                let _ = line.push_str(moneylines[k]);
+            }
+        }
+        Some(lines)
+    }
+}
+
+/// A sportsbook number: 1–8 bytes of digits, signs, a decimal point or ASCII
+/// letters ("EVEN", "PK"). Nothing else belongs on the wall.
+fn is_odds_number(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= ODDS_BYTES
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+}

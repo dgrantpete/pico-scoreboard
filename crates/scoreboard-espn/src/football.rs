@@ -40,9 +40,9 @@
 use core::fmt::Write as _;
 
 use crate::common::{
-    CrestPath, Crests, EText, Exact, HomeAway, Quirk, Quirks, crest_path, linescore_byte, num_i16,
-    num_u8, num_u16, order_home_away, parse_hex_rgb, parse_live_phase, parse_record,
-    parse_start_time, saturate_score, set_text, stable_sort_by_key, wire_phase,
+    CrestPath, Crests, EText, Exact, HomeAway, Market, OddsScratch, Quirk, Quirks, crest_path,
+    linescore_byte, num_i16, num_u8, num_u16, order_home_away, parse_hex_rgb, parse_live_phase,
+    parse_record, parse_start_time, saturate_score, set_text, stable_sort_by_key, wire_phase,
 };
 use crate::path::{self, ContainerKind, Directive, Pattern, Seg, Sink, StreamMatcher, Value};
 use scoreboard_wire::football as wire;
@@ -125,7 +125,13 @@ const EVENTS: usize = 45;
 /// device. Appended rather than filed with the other `TEAM_*` patterns so
 /// the indices above keep matching the inventory they were derived from.
 const TEAM_LOGO: usize = 46;
-const PATTERN_COUNT: usize = 47;
+/// The first sportsbook's closing lines (`common::OddsScratch`), appended for
+/// the same reason: the pregame team line when neither team is ranked.
+const ODDS_SPREAD_AWAY: usize = 47;
+const ODDS_SPREAD_HOME: usize = 48;
+const ODDS_MONEYLINE_AWAY: usize = 49;
+const ODDS_MONEYLINE_HOME: usize = 50;
+const PATTERN_COUNT: usize = 51;
 
 static PATHS: [Pattern; PATTERN_COUNT] = [
     /* 00 EVENT            */ &[Key("events"), AnyIndex],
@@ -212,6 +218,14 @@ static PATHS: [Pattern; PATTERN_COUNT] = [
     /* 45 EVENTS           */ &[Key("events")],
     /* 46 TEAM_LOGO        */
     &[Key("events"), AnyIndex, Key("competitions"), AnyIndex, Key("competitors"), AnyIndex, Key("team"), Key("logo")],
+    /* 47 ODDS_SPREAD_AWAY */
+    &[Key("events"), AnyIndex, Key("competitions"), AnyIndex, Key("odds"), AnyIndex, Key("pointSpread"), Key("away"), Key("close"), Key("line")],
+    /* 48 ODDS_SPREAD_HOME */
+    &[Key("events"), AnyIndex, Key("competitions"), AnyIndex, Key("odds"), AnyIndex, Key("pointSpread"), Key("home"), Key("close"), Key("line")],
+    /* 49 ODDS_MONEYLINE_AWAY */
+    &[Key("events"), AnyIndex, Key("competitions"), AnyIndex, Key("odds"), AnyIndex, Key("moneyline"), Key("away"), Key("close"), Key("odds")],
+    /* 50 ODDS_MONEYLINE_HOME */
+    &[Key("events"), AnyIndex, Key("competitions"), AnyIndex, Key("odds"), AnyIndex, Key("moneyline"), Key("home"), Key("close"), Key("odds")],
 ];
 
 // ----------------------------------------------------------- public types
@@ -355,8 +369,9 @@ struct TeamExtract {
     primary: u32,
     alternate: u32,
     record: Option<Record>,
-    rank: bool,
-    rank_line: EText,
+    /// The pregame team line: a college rank, else the betting line.
+    line: bool,
+    line_text: EText,
     /// Sorted line-score bytes; bound = the wire's `u8`-length cap.
     line_score: heapless::Vec<u8, MAX_LINE_SCORE>,
 }
@@ -374,7 +389,7 @@ impl TeamExtract {
             abbreviation: &self.abbreviation,
             colors: self.colors(),
             record: self.record,
-            rank_line: self.rank.then_some(self.rank_line.as_str()),
+            line: self.line.then_some(self.line_text.as_str()),
         }
     }
 
@@ -547,6 +562,7 @@ struct Comp0Data {
     last_play_id: EText,
     last_play_text: EText,
     competitors: [Comp0Competitor; 2],
+    odds: OddsScratch,
 }
 
 impl Default for Comp0Data {
@@ -569,6 +585,7 @@ impl Default for Comp0Data {
             last_play_id: EText::new(),
             last_play_text: EText::new(),
             competitors: [Comp0Competitor::default(), Comp0Competitor::default()],
+            odds: OddsScratch::default(),
         }
     }
 }
@@ -870,6 +887,18 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
             },
             // No `invalid()` arm: the field is invisible to the backend's
             // parse, so a malformed one must cost the event nothing.
+            // Odds never invalidate an event (common.rs): store or ignore.
+            ODDS_SPREAD_AWAY | ODDS_SPREAD_HOME | ODDS_MONEYLINE_AWAY | ODDS_MONEYLINE_HOME => {
+                if Self::comp0(idx) && idx[2] == 0 {
+                    let (market, side) = match pattern {
+                        ODDS_SPREAD_AWAY => (Market::Spread, HomeAway::Away),
+                        ODDS_SPREAD_HOME => (Market::Spread, HomeAway::Home),
+                        ODDS_MONEYLINE_AWAY => (Market::Moneyline, HomeAway::Away),
+                        _ => (Market::Moneyline, HomeAway::Home),
+                    };
+                    self.ev.comp0.odds.set(market, side, v);
+                }
+            }
             TEAM_LOGO => {
                 if let Value::Str(href) = v {
                     if let Some(k) = Self::slot(idx) {
@@ -1203,6 +1232,16 @@ fn transform(
             set_text(&mut g.venue, &d.venue);
             fill_pregame_team(&mut g.home, &d.competitors[home_k], is_college, quirks)?;
             fill_pregame_team(&mut g.away, &d.competitors[away_k], is_college, quirks)?;
+            // Ranks or betting lines, never one of each: an unranked game
+            // (every NFL game) gets the lines when both sides have a spread.
+            if !g.home.line && !g.away.line {
+                if let Some([away, home]) = d.odds.team_lines() {
+                    for (team, text) in [(&mut g.away, away), (&mut g.home, home)] {
+                        team.line = true;
+                        set_text(&mut team.line_text, &text);
+                    }
+                }
+            }
         }
         St::In => {
             set_text(&mut g.clock, &d.clock);
@@ -1257,8 +1296,8 @@ fn fill_pregame_team(
     if is_college {
         if let Some(rank) = c.rank {
             if rank != 99 && c.short_display_name && !c.short_display_name_text.is_empty() {
-                team.rank = true;
-                build_rank_line(&mut team.rank_line, rank, &c.short_display_name_text);
+                team.line = true;
+                build_rank_line(&mut team.line_text, rank, &c.short_display_name_text);
             }
         }
     }

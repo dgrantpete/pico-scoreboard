@@ -467,6 +467,7 @@ fn nba_pregame() -> nba::Game<'static> {
                 wins: 40,
                 losses: 42,
             }),
+            line: None,
         },
         home: nba::PregameTeam {
             abbreviation: "LAL",
@@ -478,6 +479,7 @@ fn nba_pregame() -> nba::Game<'static> {
                 wins: 50,
                 losses: 32,
             }),
+            line: None,
         },
     })
 }
@@ -510,6 +512,102 @@ fn nba_pregame_without_records() {
     assert_eq!(
         nba::decode(&unhex(GOLDEN_NBA_PRE_NO_RECORDS)).unwrap(),
         game
+    );
+}
+
+fn nba_pregame_with_lines() -> nba::Game<'static> {
+    let nba::Game::Pregame(mut pregame) = nba_pregame() else {
+        unreachable!()
+    };
+    pregame.away.line = Some("+1.5  -102");
+    pregame.home.line = Some("-1.5  -118");
+    nba::Game::Pregame(pregame)
+}
+
+/// The v2 pregame, then the `ext=1` block: flags 0x03 and both lines.
+const GOLDEN_NBA_PRE_EXT: &str = "02000328002a003200200028b2d9697a1229002060e5008325550027b9fd000934303138313130343003504858034c414c1063727970746f2e636f6d204172656e61030a2b312e3520202d3130320a2d312e3520202d313138";
+
+#[test]
+fn nba_plain_encode_never_carries_the_team_lines() {
+    // A device that did not ask for extensions decodes the frozen bytes.
+    assert_eq!(
+        encoded(|out| nba::encode(&nba_pregame_with_lines(), out)),
+        GOLDEN_NBA_PRE
+    );
+}
+
+#[test]
+fn nba_ext_pregame_appends_the_team_lines() {
+    assert_eq!(
+        encoded(|out| nba::encode_ext(&nba_pregame_with_lines(), out)),
+        GOLDEN_NBA_PRE_EXT
+    );
+    assert_eq!(
+        nba::decode(&unhex(GOLDEN_NBA_PRE_EXT)).unwrap(),
+        nba_pregame_with_lines()
+    );
+}
+
+#[test]
+fn nba_ext_pregame_without_lines_is_one_zero_flags_byte() {
+    let golden = format!("{GOLDEN_NBA_PRE}00");
+    assert_eq!(encoded(|out| nba::encode_ext(&nba_pregame(), out)), golden);
+    assert_eq!(nba::decode(&unhex(&golden)).unwrap(), nba_pregame());
+}
+
+#[test]
+fn nba_ext_pregame_carries_one_side_alone() {
+    let nba::Game::Pregame(mut pregame) = nba_pregame() else {
+        unreachable!()
+    };
+    pregame.away.line = Some("+1.5  -102");
+    let game = nba::Game::Pregame(pregame);
+    let golden = format!("{GOLDEN_NBA_PRE}010a2b312e3520202d313032");
+    assert_eq!(encoded(|out| nba::encode_ext(&game, out)), golden);
+    assert_eq!(nba::decode(&unhex(&golden)).unwrap(), game);
+}
+
+#[test]
+fn nba_plain_v2_pregame_still_decodes_without_lines() {
+    // What an `ext=1` device receives from a backend that predates extensions.
+    assert_eq!(nba::decode(&unhex(GOLDEN_NBA_PRE)).unwrap(), nba_pregame());
+}
+
+#[test]
+fn nba_ext_has_nothing_for_live_or_final() {
+    let (live_bytes, final_bytes) = (unhex(GOLDEN_NBA_LIVE), unhex(GOLDEN_NBA_FINAL));
+    let live = nba::decode(&live_bytes).unwrap();
+    assert_eq!(encoded(|out| nba::encode_ext(&live, out)), GOLDEN_NBA_LIVE);
+    let final_game = nba::decode(&final_bytes).unwrap();
+    assert_eq!(
+        encoded(|out| nba::encode_ext(&final_game, out)),
+        GOLDEN_NBA_FINAL
+    );
+}
+
+#[test]
+fn nba_ext_rejects_unknown_flag_bits_and_bytes_past_the_lines() {
+    let unknown = unhex(&format!("{GOLDEN_NBA_PRE}04"));
+    assert_eq!(
+        nba::decode(&unknown).unwrap_err(),
+        DecodeError {
+            offset: unknown.len() - 1,
+            kind: DecodeErrorKind::InvalidCode {
+                field: "pregame extension flags",
+                code: 4,
+            },
+        }
+    );
+    let trailing = unhex(&format!("{GOLDEN_NBA_PRE_EXT}00"));
+    assert_eq!(
+        nba::decode(&trailing).unwrap_err().kind,
+        DecodeErrorKind::Trailing(1)
+    );
+    // A live game defines no extension: anything after it is still trailing.
+    let live = unhex(&format!("{GOLDEN_NBA_LIVE}00"));
+    assert_eq!(
+        nba::decode(&live).unwrap_err().kind,
+        DecodeErrorKind::Trailing(1)
     );
 }
 
@@ -630,7 +728,7 @@ fn football_pregame() -> football::Game<'static> {
                 wins: 11,
                 losses: 3,
             }),
-            rank_line: None,
+            line: None,
         },
         home: football::PregameTeam {
             abbreviation: "KC",
@@ -642,7 +740,7 @@ fn football_pregame() -> football::Game<'static> {
                 wins: 13,
                 losses: 1,
             }),
-            rank_line: None,
+            line: None,
         },
     })
 }
@@ -674,7 +772,7 @@ fn football_pregame_ncaaf_home_ranked() {
     pregame.away.abbreviation = "MICH";
     pregame.home.abbreviation = "OSU";
     pregame.venue = "Ohio Stadium";
-    pregame.home.rank_line = Some("#3 OHIO STATE");
+    pregame.home.line = Some("#3 OHIO STATE");
     let game = football::Game::Pregame(pregame);
     assert_eq!(
         encoded(|out| football::encode(&game, out)),
@@ -682,6 +780,28 @@ fn football_pregame_ncaaf_home_ranked() {
     );
     assert_eq!(
         football::decode(&unhex(GOLDEN_FOOTBALL_PRE_RANKED)).unwrap(),
+        game
+    );
+}
+
+const GOLDEN_FOOTBALL_PRE_LINES: &str = "02000f0b0003000d000100704d506a8d330000300cc6003718e3001cb8ff000934303137373235313203425546024b43114172726f7768656164205374616469756d082b3720202b323435082d3720202d333035";
+
+#[test]
+fn football_pregame_betting_lines_ride_the_rank_bits() {
+    // An unranked game's betting lines use the slot and flag bits a rank
+    // line uses, so every device in the field decodes them unchanged.
+    let football::Game::Pregame(mut pregame) = football_pregame() else {
+        unreachable!()
+    };
+    pregame.away.line = Some("+7  +245");
+    pregame.home.line = Some("-7  -305");
+    let game = football::Game::Pregame(pregame);
+    assert_eq!(
+        encoded(|out| football::encode(&game, out)),
+        GOLDEN_FOOTBALL_PRE_LINES
+    );
+    assert_eq!(
+        football::decode(&unhex(GOLDEN_FOOTBALL_PRE_LINES)).unwrap(),
         game
     );
 }

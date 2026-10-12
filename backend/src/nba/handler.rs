@@ -2,7 +2,7 @@ use axum::{http::HeaderMap, response::Response};
 
 use super::adapter;
 use super::types::NbaGame;
-use super::wire::encode_game;
+use super::wire::{encode_game, encode_game_ext};
 use crate::AppState;
 use crate::error::{AppError, ErrorResponse};
 use crate::espn::league::{self, Nba};
@@ -37,7 +37,7 @@ pub async fn list_games(state: &AppState, headers: &HeaderMap) -> Result<Respons
     path = "/basketball/nba/games/{game_id}",
     params(("game_id" = String, Path, description = "ESPN event ID")),
     responses(
-        (status = 200, description = "Game state (pregame/live/final). Binary encoding available via `Accept: application/x-scoreboard-struct` (see crates/scoreboard-wire)", body = NbaGame),
+        (status = 200, description = "Game state (pregame/live/final). Binary encoding available via `Accept: application/x-scoreboard-struct`; add `; ext=1` for the pregame betting lines (see crates/scoreboard-wire)", body = NbaGame),
         (status = 404, description = "Game not on today's scoreboard", body = ErrorResponse),
         (status = 502, description = "ESPN upstream error", body = ErrorResponse),
     ),
@@ -51,5 +51,10 @@ pub async fn get_game(
     let url = scoreboard_url(state);
     let bytes = state.espn_client.fetch_bytes_cached(&url).await?;
     let game = adapter::detail_game(&bytes, game_id, &url)?;
-    Ok(handler::game_response(headers, &game, encode_game))
+    Ok(handler::game_response_ext(
+        headers,
+        &game,
+        encode_game,
+        encode_game_ext,
+    ))
 }

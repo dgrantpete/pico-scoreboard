@@ -69,7 +69,7 @@ impl<'a> From<&'a FootballPregameTeam> for wire::football::PregameTeam<'a> {
             abbreviation: &team.abbreviation,
             colors: (&team.colors).into(),
             record: team.record.as_ref().map(Into::into),
-            rank_line: team.rank_line.as_deref(),
+            line: team.line.as_deref(),
         }
     }
 }

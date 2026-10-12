@@ -37,9 +37,12 @@ impl ListEntries for Entries {
 /// Games list: every clean event with a competition, in event order.
 pub(crate) fn list_entries(bytes: &[u8], url: &str) -> Result<Vec<GameListEntry>, AppError> {
     let mut scratch = vec![0u8; SCRATCH_LEN];
-    let mut extractor =
-        football::ListExtractor::new(Entries::default(), TracingQuirks::new("football"), &mut scratch)
-            .map_err(|e| stream_error(url, e))?;
+    let mut extractor = football::ListExtractor::new(
+        Entries::default(),
+        TracingQuirks::new("football"),
+        &mut scratch,
+    )
+    .map_err(|e| stream_error(url, e))?;
     extractor.write(bytes).map_err(|e| stream_error(url, e))?;
     let report = extractor.finish().map_err(|e| match e {
         FootballError::Stream(e) => stream_error(url, e),
@@ -147,7 +150,7 @@ fn pregame_team(team: &wire::football::PregameTeam<'_>) -> FootballPregameTeam {
         abbreviation: team.abbreviation.to_owned(),
         colors: domain_colors(team.colors),
         record: team.record.map(domain_record),
-        rank_line: team.rank_line.map(str::to_owned),
+        line: team.line.map(str::to_owned),
     }
 }
 

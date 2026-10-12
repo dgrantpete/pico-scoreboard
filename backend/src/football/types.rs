@@ -32,7 +32,7 @@ pub struct FootballPregameGame {
     pub away: FootballPregameTeam,
 }
 
-/// Pre-game team: identity, colors, season record, and the college rank line.
+/// Pre-game team: identity, colors, season record, and the team line.
 #[derive(Serialize, ToSchema)]
 pub struct FootballPregameTeam {
     /// Team abbreviation, e.g. "KC" — firmware uses this to fetch the logo.
@@ -40,9 +40,11 @@ pub struct FootballPregameTeam {
     pub colors: TeamColors,
     /// Overall season record; absent when ESPN omits or malforms it.
     pub record: Option<Record>,
-    /// Display-shaped poll line ("#3 OHIO STATE"); college only and only when
-    /// ranked. Rides the wire's pitcher slot (the record travels numerically).
-    pub rank_line: Option<String>,
+    /// Display-shaped team line: a ranked college team's poll line
+    /// ("#3 OHIO STATE"), else the betting line, spread then moneyline
+    /// ("+7  -305"). A game carries ranks or betting lines, never one of each.
+    /// Rides the wire's pitcher slot (the record travels numerically).
+    pub line: Option<String>,
 }
 
 /// Live state snapshot for one football game, tailored for the Pico firmware.

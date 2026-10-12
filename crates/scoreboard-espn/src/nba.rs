@@ -34,9 +34,9 @@
 //!   (ruling 14), so a missing target always comes with exact counts.
 
 use crate::common::{
-    CrestPath, Crests, EText, HomeAway, LivePhase, Quirk, Quirks, crest_path, linescore_byte,
-    num_i16, num_u8, order_home_away, parse_hex_rgb, parse_live_phase, parse_record,
-    parse_start_time, saturate_score, set_text, stable_sort_by_key, wire_phase,
+    CrestPath, Crests, EText, HomeAway, LivePhase, Market, OddsScratch, Quirk, Quirks, crest_path,
+    linescore_byte, num_i16, num_u8, order_home_away, parse_hex_rgb, parse_live_phase,
+    parse_record, parse_start_time, saturate_score, set_text, stable_sort_by_key, wire_phase,
 };
 use crate::path::{ContainerKind, Directive, Pattern, Seg, Sink, Value};
 use scoreboard_wire::{self as wire, GameState, MAX_LINE_SCORE, Record, TeamColors};
@@ -87,6 +87,12 @@ const P_LINESCORE_PERIOD: usize = 35;
 /// device. Appended rather than filed with the other `team.*` patterns so
 /// the indices above keep matching the inventory they were derived from.
 const P_TEAM_LOGO: usize = 36;
+/// The first sportsbook's closing lines (`common::OddsScratch`), appended for
+/// the same reason: the pregame team lines, served as the wire's `ext=1`.
+const P_ODDS_SPREAD_AWAY: usize = 37;
+const P_ODDS_SPREAD_HOME: usize = 38;
+const P_ODDS_MONEYLINE_AWAY: usize = 39;
+const P_ODDS_MONEYLINE_HOME: usize = 40;
 
 /// The NBA scoreboard path table. 18 wire-relevant leaves plus the
 /// parse-gating-only fields (`team.id`, `weather.*`, `shortDisplayName`) the
@@ -137,6 +143,10 @@ pub static PATHS: &[Pattern] = &[
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("linescores"), AnyIndex, Key("value")],
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("linescores"), AnyIndex, Key("period")],
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("team"), Key("logo")],
+    &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("odds"), Index(0), Key("pointSpread"), Key("away"), Key("close"), Key("line")],
+    &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("odds"), Index(0), Key("pointSpread"), Key("home"), Key("close"), Key("line")],
+    &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("odds"), Index(0), Key("moneyline"), Key("away"), Key("close"), Key("odds")],
+    &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("odds"), Index(0), Key("moneyline"), Key("home"), Key("close"), Key("odds")],
 ];
 
 // ------------------------------------------------------------- the extract
@@ -155,10 +165,6 @@ pub struct Extract {
     pub kind: Kind,
 }
 
-#[expect(
-    clippy::large_enum_variant,
-    reason = "bounded owned variants are the design; boxing needs alloc"
-)]
 #[derive(Debug, Clone)]
 pub enum Kind {
     Pregame(Pregame),
@@ -182,6 +188,9 @@ pub struct PregameTeam {
     /// `None` when ESPN omits or malforms the `type == "total"` record —
     /// a cleared flag bit on the wire, not a zero record.
     pub record: Option<Record>,
+    /// The betting line, "+3.5  +140" — both teams or neither
+    /// (`OddsScratch::team_lines`). Carried by the wire's `ext=1` only.
+    pub line: Option<EText>,
 }
 
 #[derive(Debug, Clone)]
@@ -269,6 +278,7 @@ fn wire_pregame_team(team: &PregameTeam) -> wire::nba::PregameTeam<'_> {
         abbreviation: team.abbreviation.as_str(),
         colors: team.colors,
         record: team.record,
+        line: team.line.as_deref(),
     }
 }
 
@@ -410,6 +420,7 @@ struct EventScratch {
     competitor_scalar: bool,
     competitors: [CompetitorScratch; 2],
     entry: EntryScratch,
+    odds: OddsScratch,
 }
 
 #[derive(Default)]
@@ -849,6 +860,11 @@ impl<Q: Quirks> Sink for Extractor<'_, Q> {
                     }
                 }
             }
+            // Odds never fail an event (common.rs): store or ignore.
+            P_ODDS_SPREAD_AWAY => s.odds.set(Market::Spread, HomeAway::Away, value),
+            P_ODDS_SPREAD_HOME => s.odds.set(Market::Spread, HomeAway::Home, value),
+            P_ODDS_MONEYLINE_AWAY => s.odds.set(Market::Moneyline, HomeAway::Away, value),
+            P_ODDS_MONEYLINE_HOME => s.odds.set(Market::Moneyline, HomeAway::Home, value),
             P_TEAM_LOGO => {
                 if let Some(competitor) = self.competitor(indices) {
                     if let Value::Str(href) = value {
@@ -1056,8 +1072,12 @@ fn transform<Q: Quirks>(
             let start_time = s.start_time.ok_or(TransformError::StartTime)?;
             // Home before away: the backend builds its struct in that
             // order, which fixes the malformed-record quirk order.
-            let home = pregame_team(home, quirks)?;
-            let away = pregame_team(away, quirks)?;
+            let mut home = pregame_team(home, quirks)?;
+            let mut away = pregame_team(away, quirks)?;
+            if let Some([away_line, home_line]) = s.odds.team_lines() {
+                away.line = Some(text_of(&away_line));
+                home.line = Some(text_of(&home_line));
+            }
             Kind::Pregame(Pregame {
                 start_time,
                 venue: s.venue_name.clone(),
@@ -1130,7 +1150,14 @@ fn pregame_team<Q: Quirks>(
         abbreviation: competitor.abbreviation.clone(),
         colors: colors(competitor)?,
         record,
+        line: None,
     })
+}
+
+fn text_of(text: &str) -> EText {
+    let mut out = EText::new();
+    set_text(&mut out, text);
+    out
 }
 
 fn live_team(competitor: &CompetitorScratch) -> Result<LiveTeam, TransformError> {

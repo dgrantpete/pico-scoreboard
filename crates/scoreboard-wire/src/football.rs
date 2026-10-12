@@ -35,15 +35,19 @@
 //!
 //! Byte-identical to the [NBA pregame](crate::nba) (`<BHHHHIIIII`, 29 bytes at
 //! offset 2: flags, away wins/losses, home wins/losses, start_time, then the
-//! four colors) plus two rank flag bits. Flags: bit0 = away record, bit1 = home
-//! record, bit2 = away rank line present, bit3 = home rank line present.
-//! Numeric record fields whose flag is unset are zero.
+//! four colors) plus two team-line flag bits. Flags: bit0 = away record, bit1 =
+//! home record, bit2 = away line present, bit3 = home line present. Numeric
+//! record fields whose flag is unset are zero.
 //!
 //! Strings from offset 31, in order: `game_id`, `away.abbreviation`,
-//! `home.abbreviation`, `venue`, then `away.rank_line` **iff** bit2 and
-//! `home.rank_line` **iff** bit3 (display-shaped "#3 OHIO STATE" — college only,
-//! present only when ranked). Mirrors MLB's probable-pitcher flag/string
-//! pattern: the rank line rides the pitcher slot.
+//! `home.abbreviation`, `venue`, then `away.line` **iff** bit2 and `home.line`
+//! **iff** bit3. A team line is display-shaped: a ranked college team's
+//! "#3 OHIO STATE", or, when neither team is ranked, the betting line
+//! "+3.5  +140" (spread, then moneyline). Mirrors MLB's probable-pitcher
+//! flag/string pattern: the team line rides the pitcher slot.
+//!
+//! Until 2026-10-12 the slot carried rank lines only (`rank_line`). The bytes
+//! are unchanged: a device decodes a betting line exactly as it decodes a rank.
 //!
 //! # Final (state = 2)
 //!
@@ -70,8 +74,8 @@ const FLAG_TIMEOUTS: u8 = 0x10;
 
 const PRE_FLAG_AWAY_RECORD: u8 = 0x01;
 const PRE_FLAG_HOME_RECORD: u8 = 0x02;
-const PRE_FLAG_AWAY_RANK: u8 = 0x04;
-const PRE_FLAG_HOME_RANK: u8 = 0x08;
+const PRE_FLAG_AWAY_LINE: u8 = 0x04;
+const PRE_FLAG_HOME_LINE: u8 = 0x08;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Game<'a> {
@@ -141,8 +145,10 @@ pub struct PregameTeam<'a> {
     pub abbreviation: &'a str,
     pub colors: TeamColors,
     pub record: Option<Record>,
-    /// "#3 OHIO STATE" — college only, and only when ranked.
-    pub rank_line: Option<&'a str>,
+    /// The per-team line under the info cycle: "#3 OHIO STATE" for a ranked
+    /// college team, else the betting line "+3.5  +140" (spread, moneyline).
+    /// A game carries ranks or betting lines, never one of each.
+    pub line: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -314,11 +320,11 @@ fn write_pregame<S: Sink + ?Sized>(out: &mut S, game: &Pregame<'_>) -> Result<()
     if game.home.record.is_some() {
         flags |= PRE_FLAG_HOME_RECORD;
     }
-    if game.away.rank_line.is_some() {
-        flags |= PRE_FLAG_AWAY_RANK;
+    if game.away.line.is_some() {
+        flags |= PRE_FLAG_AWAY_LINE;
     }
-    if game.home.rank_line.is_some() {
-        flags |= PRE_FLAG_HOME_RANK;
+    if game.home.line.is_some() {
+        flags |= PRE_FLAG_HOME_LINE;
     }
     let away_record = game.away.record.unwrap_or(Record { wins: 0, losses: 0 });
     let home_record = game.home.record.unwrap_or(Record { wins: 0, losses: 0 });
@@ -335,11 +341,11 @@ fn write_pregame<S: Sink + ?Sized>(out: &mut S, game: &Pregame<'_>) -> Result<()
     out.string(game.away.abbreviation)?;
     out.string(game.home.abbreviation)?;
     out.string(game.venue)?;
-    if let Some(rank) = game.away.rank_line {
-        out.string(rank)?;
+    if let Some(line) = game.away.line {
+        out.string(line)?;
     }
-    if let Some(rank) = game.home.rank_line {
-        out.string(rank)?;
+    if let Some(line) = game.home.line {
+        out.string(line)?;
     }
     Ok(())
 }
@@ -354,13 +360,13 @@ fn read_pregame(buf: &[u8]) -> Result<Pregame<'_>, DecodeError> {
     let away_abbreviation = reader.string("away abbreviation")?;
     let home_abbreviation = reader.string("home abbreviation")?;
     let venue = reader.string("venue")?;
-    let away_rank = if flags & PRE_FLAG_AWAY_RANK != 0 {
-        Some(reader.string("away rank line")?)
+    let away_line = if flags & PRE_FLAG_AWAY_LINE != 0 {
+        Some(reader.string("away line")?)
     } else {
         None
     };
-    let home_rank = if flags & PRE_FLAG_HOME_RANK != 0 {
-        Some(reader.string("home rank line")?)
+    let home_line = if flags & PRE_FLAG_HOME_LINE != 0 {
+        Some(reader.string("home line")?)
     } else {
         None
     };
@@ -377,7 +383,7 @@ fn read_pregame(buf: &[u8]) -> Result<Pregame<'_>, DecodeError> {
                 wins: le_u16(fixed, 1),
                 losses: le_u16(fixed, 3),
             }),
-            rank_line: away_rank,
+            line: away_line,
         },
         home: PregameTeam {
             abbreviation: home_abbreviation,
@@ -386,7 +392,7 @@ fn read_pregame(buf: &[u8]) -> Result<Pregame<'_>, DecodeError> {
                 wins: le_u16(fixed, 5),
                 losses: le_u16(fixed, 7),
             }),
-            rank_line: home_rank,
+            line: home_line,
         },
     })
 }

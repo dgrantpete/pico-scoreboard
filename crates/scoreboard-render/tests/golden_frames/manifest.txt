@@ -35,6 +35,7 @@ game football__nfl__in_progress football nfl backend/testdata/wire/football/nfl/
 game football__nfl__in_progress_empty_situation football nfl backend/testdata/wire/football/nfl/in_progress_empty_situation.bin 2 3
 game football__nfl__in_progress_redzone football nfl backend/testdata/wire/football/nfl/in_progress_redzone.bin 2 3
 game football__nfl__pregame football nfl backend/testdata/wire/football/nfl/pregame.bin 2 3
+game football__nfl__pregame_odds football nfl backend/testdata/wire/football/nfl/pregame_odds.bin 2 3
 game mlb__final mlb mlb backend/testdata/wire/mlb/final.bin 4 5
 game mlb__live_inning mlb mlb backend/testdata/wire/mlb/live_inning.bin 6 7
 game mlb__pregame mlb mlb backend/testdata/wire/mlb/pregame.bin 8 9
@@ -46,6 +47,7 @@ game nba__in_progress nba nba backend/testdata/wire/nba/in_progress.bin 18 19
 game nba__in_progress_no_last_play nba nba backend/testdata/wire/nba/in_progress_no_last_play.bin 20 21
 game nba__in_progress_subminute nba nba backend/testdata/wire/nba/in_progress_subminute.bin 16 17
 game nba__pregame nba nba backend/testdata/wire/nba/pregame.bin 22 23
+game nba__pregame_ext nba nba backend/testdata/wire/nba/pregame.ext1.bin 22 23
 game soccer__fifa.world__end_of_regulation soccer fifa.world backend/testdata/wire/soccer/fifa.world/end_of_regulation.bin 24 25
 game soccer__fifa.world__extra_time_halftime soccer fifa.world backend/testdata/wire/soccer/fifa.world/extra_time_halftime.bin 24 25
 game soccer__fifa.world__final_after_extra_time soccer fifa.world backend/testdata/wire/soccer/fifa.world/final_after_extra_time.bin 26 27

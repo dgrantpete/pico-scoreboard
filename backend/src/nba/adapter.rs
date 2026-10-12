@@ -122,6 +122,7 @@ fn pregame_team(team: &nba::PregameTeam) -> NbaPregameTeam {
         abbreviation: team.abbreviation.as_str().to_owned(),
         colors: domain_colors(team.colors),
         record: team.record.map(domain_record),
+        line: team.line.as_ref().map(|line| line.as_str().to_owned()),
     }
 }
 

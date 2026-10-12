@@ -11,6 +11,11 @@ pub(crate) fn encode_game(game: &NbaGame) -> Vec<u8> {
     encoded(128, |out| wire::nba::encode(&game.into(), out))
 }
 
+/// [`encode_game`] plus the `ext=1` extension (the pregame team lines).
+pub(crate) fn encode_game_ext(game: &NbaGame) -> Vec<u8> {
+    encoded(160, |out| wire::nba::encode_ext(&game.into(), out))
+}
+
 impl<'a> From<&'a NbaGame> for wire::nba::Game<'a> {
     fn from(game: &'a NbaGame) -> Self {
         match game {
@@ -53,6 +58,7 @@ impl<'a> From<&'a NbaPregameTeam> for wire::nba::PregameTeam<'a> {
             abbreviation: &team.abbreviation,
             colors: (&team.colors).into(),
             record: team.record.as_ref().map(Into::into),
+            line: team.line.as_deref(),
         }
     }
 }

@@ -200,11 +200,11 @@ fn rank_line_uppercase_matches_std() {
         };
         // Home (#3) carries the line; away is ESPN's 99 unranked sentinel.
         assert_eq!(
-            pregame.home.rank_line,
+            pregame.home.line,
             Some(format!("#3 {}", name.to_uppercase()).as_str()),
             "uppercase diverged for {name:?}"
         );
-        assert_eq!(pregame.away.rank_line, None);
+        assert_eq!(pregame.away.line, None);
     }
 }
 
@@ -221,8 +221,8 @@ fn college_fixture_polled_as_nfl_has_no_rank_line() {
     let wire::Game::Pregame(pregame) = wire::decode(&bytes).unwrap() else {
         panic!("pregame payload");
     };
-    assert_eq!(pregame.home.rank_line, None);
-    assert_eq!(pregame.away.rank_line, None);
+    assert_eq!(pregame.home.line, None);
+    assert_eq!(pregame.away.line, None);
     assert!(pregame.home.record.is_some());
 }
 
@@ -668,4 +668,106 @@ fn a_malformed_crest_never_costs_the_event() {
             "{junk}: the wire bytes are untouched"
         );
     }
+}
+
+// ---------------------------------------------------------- betting lines
+
+/// ESPN's `odds[0]` shape, trimmed to what the table reads, plus an `open`
+/// line that must be ignored.
+fn odds_block(
+    away_spread: &str,
+    home_spread: &str,
+    away_ml: &str,
+    home_ml: &str,
+) -> serde_json::Value {
+    serde_json::json!([{
+        "provider": {"id": "100", "name": "Draft Kings"},
+        "details": "KC -7",
+        "overUnder": 50.5,
+        "pointSpread": {
+            "away": {"open": {"line": "+6.5"}, "close": {"line": away_spread}},
+            "home": {"open": {"line": "-6.5"}, "close": {"line": home_spread}}
+        },
+        "moneyline": {
+            "away": {"open": {"odds": "+230"}, "close": {"odds": away_ml}},
+            "home": {"open": {"odds": "-280"}, "close": {"odds": home_ml}}
+        }
+    }])
+}
+
+fn with_odds(name: &str, odds: serde_json::Value) -> String {
+    let mut value: serde_json::Value = serde_json::from_str(&fixture_json(name)).unwrap();
+    value["competitions"][0]["odds"] = odds;
+    serde_json::to_string(&value).unwrap()
+}
+
+fn pregame_lines(event: &str, college: bool, chunk: usize) -> (Option<String>, Option<String>) {
+    let extract = found(&wrap(event), &event_id(event), college, chunk);
+    let bytes = encode(&extract.as_game());
+    let wire::Game::Pregame(pregame) = wire::decode(&bytes).unwrap() else {
+        panic!("pregame payload");
+    };
+    (
+        pregame.away.line.map(str::to_string),
+        pregame.home.line.map(str::to_string),
+    )
+}
+
+#[test]
+fn an_unranked_pregame_carries_the_betting_lines_at_every_chunk_size() {
+    let event = with_odds("nfl/pregame", odds_block("+7", "-7", "+245", "-305"));
+    for chunk in [usize::MAX, 1, 7, 64] {
+        assert_eq!(
+            pregame_lines(&event, false, chunk),
+            (Some("+7  +245".into()), Some("-7  -305".into())),
+            "chunk {chunk}"
+        );
+    }
+    // They ride the rank-line flag bits every deployed device decodes.
+    let extract = found(&wrap(&event), &event_id(&event), false, usize::MAX);
+    assert_eq!(encode(&extract.as_game())[2], 0x0f);
+}
+
+#[test]
+fn ranks_win_over_betting_lines() {
+    let event = with_odds(
+        "college-football/pregame_ranked",
+        odds_block("+3.5", "-3.5", "+140", "-166"),
+    );
+    // A ranked home team: rank lines only, never one rank and one line.
+    assert_eq!(
+        pregame_lines(&event, true, usize::MAX),
+        (None, Some("#3 OHIO STATE".into()))
+    );
+    // The same game polled as NFL has no ranks, so the lines take over.
+    assert_eq!(
+        pregame_lines(&event, false, usize::MAX),
+        (Some("+3.5  +140".into()), Some("-3.5  -166".into()))
+    );
+}
+
+#[test]
+fn football_odds_anomalies_leave_the_lines_out_and_the_event_whole() {
+    for odds in [
+        odds_block("+7", "", "+245", "-305"),
+        odds_block("+7", "-7 points", "+245", "-305"),
+        serde_json::json!([{
+            "pointSpread": {"away": {"close": {"line": 7}}, "home": {"close": {"line": -7}}}
+        }]),
+        serde_json::json!("odds"),
+        serde_json::json!({}),
+    ] {
+        let event = with_odds("nfl/pregame", odds.clone());
+        assert_eq!(
+            pregame_lines(&event, false, usize::MAX),
+            (None, None),
+            "{odds}"
+        );
+    }
+    // A moneyline on one side only: spreads alone.
+    let event = with_odds("nfl/pregame", odds_block("+7", "-7", "+245", ""));
+    assert_eq!(
+        pregame_lines(&event, false, usize::MAX),
+        (Some("+7".into()), Some("-7".into()))
+    );
 }

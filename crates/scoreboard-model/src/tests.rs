@@ -1767,7 +1767,12 @@ fn every_string_bound_clears_the_corpus() {
                     max.note("play text", play.text);
                 }
             }
-            GameDetail::Nba(nba::Game::Pregame(game)) => max.note("info primary", game.venue),
+            GameDetail::Nba(nba::Game::Pregame(game)) => {
+                max.note("info primary", game.venue);
+                for line in [game.away.line, game.home.line].into_iter().flatten() {
+                    max.note("team line", line);
+                }
+            }
             GameDetail::Football(football::Game::Live(game)) => {
                 max.note("clock", game.clock);
                 if let Some(play) = game.last_play {
@@ -1778,11 +1783,8 @@ fn every_string_bound_clears_the_corpus() {
             GameDetail::Football(football::Game::Pregame(game)) => {
                 max.note("info primary", league.display_name.as_str());
                 max.note("info secondary", game.venue);
-                for rank in [game.away.rank_line, game.home.rank_line]
-                    .into_iter()
-                    .flatten()
-                {
-                    max.note("team line", rank);
+                for line in [game.away.line, game.home.line].into_iter().flatten() {
+                    max.note("team line", line);
                 }
             }
             GameDetail::Soccer(soccer::Game::Live(game)) => {

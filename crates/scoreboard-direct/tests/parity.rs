@@ -158,8 +158,17 @@ fn every_golden_decodes_to_the_view_the_direct_path_extracts() {
         let extract = found(feed_for(sport, name), &id, body.as_bytes(), CHUNK);
         let direct = extract.detail();
 
-        let golden = std::fs::read(golden_path(sport, name))
-            .unwrap_or_else(|e| panic!("read golden for {sport}/{name}: {e}"));
+        // Direct mode reads everything ESPN sends, so it matches the richest
+        // wire form: the `ext=1` golden where the sport defines one (the NBA
+        // pregame's betting lines), else plain v2.
+        let ext = golden_path(sport, &format!("{name}.ext1"));
+        let path = if ext.exists() {
+            ext
+        } else {
+            golden_path(sport, name)
+        };
+        let golden =
+            std::fs::read(&path).unwrap_or_else(|e| panic!("read golden for {sport}/{name}: {e}"));
         let wire = WireFeed
             .detail(sport_for(sport), &golden)
             .unwrap_or_else(|e| panic!("decode golden for {sport}/{name}: {e:?}"));
@@ -182,7 +191,11 @@ fn the_gate_covers_every_committed_golden() {
             if entry.file_type().expect("file type").is_dir() {
                 walk(&entry.path(), &format!("{prefix}{name}/"), out);
             } else if let Some(stem) = name.strip_suffix(".bin") {
-                out.insert(format!("{prefix}{stem}"));
+                // An `.ext1` golden is a second encoding of a fixture the
+                // gate already walks, not a fixture of its own.
+                if !stem.ends_with(".ext1") {
+                    out.insert(format!("{prefix}{stem}"));
+                }
             }
         }
     }
@@ -200,7 +213,7 @@ fn the_gate_covers_every_committed_golden() {
         "the parity gate and the committed goldens disagree about the corpus"
     );
     // Guards the arithmetic in the per-sport report, not the sets above.
-    assert_eq!(exercised.len(), 33, "corpus size changed");
+    assert_eq!(exercised.len(), 34, "corpus size changed");
 }
 
 /// Per-sport counts, so a sport silently dropping out of the walk is loud.
@@ -216,7 +229,7 @@ fn every_sport_is_represented() {
     }
     assert_eq!(
         counts,
-        [("mlb", 4), ("nba", 7), ("football", 9), ("soccer", 13)],
+        [("mlb", 4), ("nba", 7), ("football", 10), ("soccer", 13)],
         "per-sport golden counts changed"
     );
 }

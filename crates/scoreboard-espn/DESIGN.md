@@ -169,7 +169,7 @@ a set of cross-sport questions. Answered here once so no lane relitigates:
    gaps (no OT, no non-ASCII play text, synthetic-only football) are
    surfaced to the owner as a capture/synthesis request — the gate extends
    automatically as fixtures land.
-10. **Unicode uppercasing** (`rank_line`) uses `core`'s
+10. **Unicode uppercasing** (the college rank line) uses `core`'s
     `char::to_uppercase`; a std dev-test property-checks byte-identity
     against `str::to_uppercase` over the corpus plus targeted non-ASCII
     names.
@@ -219,6 +219,14 @@ Added as the sport lanes landed:
     positive is wrong data and a false negative is safe degradation —
     `Exact` wins. Applies to detail-target ids, `team.id`, possession
     ids, and any future key whose equality gates a byte.
+17. **Betting lines never fail an event** (2026-10-12). Odds are the first
+    field with no serde-era predecessor and they only decorate the pregame,
+    so ruling 1's rejection parity has nothing to match: a wrong type, an
+    empty, overlong or non-numeric string, or a missing side leaves the
+    lines out and the event whole (`common::OddsScratch`). Only
+    `odds[0]`'s `close` numbers are read; a second sportsbook never stands
+    in for the first. Football shows them only when neither team is ranked
+    (ranks or lines, never one of each); the NBA's ride the wire's `ext=1`.
 
 ## Lanes and validation
 

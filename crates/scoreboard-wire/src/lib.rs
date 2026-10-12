@@ -14,6 +14,19 @@
 //! `WIRE_VERSION = 2` and is **frozen**: devices in the field decode this
 //! layout, so a byte-level change is a breaking change, not a refactor.
 //!
+//! # Extensions
+//!
+//! New data reaches new devices without touching the frozen layout. A client
+//! that can decode extensions asks for them with
+//! `Accept: application/x-scoreboard-struct; ext=1`
+//! ([`STRUCT_CONTENT_TYPE_EXT`]); the server then appends, after a payload's
+//! last v2 field, the extension that payload's module defines, and answers with
+//! the plain [`STRUCT_CONTENT_TYPE`] either way. Without the parameter the bytes
+//! are exactly v2 — the gift fleet and every firmware before 2026-10-12 never
+//! send it. Each module's `encode` writes v2 and `encode_ext` adds the
+//! extension; `decode` accepts both. Defined today: the [`nba`] pregame's team
+//! lines.
+//!
 //! # Header
 //!
 //! Every game detail opens with the same 2 bytes: `u8 version = 2`, `u8 state`
@@ -60,6 +73,14 @@ pub use error::{BufferFull, DecodeError, DecodeErrorKind};
 
 /// The `Accept` / `Content-Type` value that selects this format over JSON.
 pub const STRUCT_CONTENT_TYPE: &str = "application/x-scoreboard-struct";
+
+/// The `Accept` value that selects this format *with* the per-module
+/// extensions (see the crate docs). It contains [`STRUCT_CONTENT_TYPE`], so a
+/// server that predates extensions still serves plain v2 to it.
+pub const STRUCT_CONTENT_TYPE_EXT: &str = "application/x-scoreboard-struct; ext=1";
+
+/// The media-type parameter that asks for extensions.
+pub const EXT_PARAM: &str = "ext=1";
 
 pub const WIRE_VERSION: u8 = 2;
 

@@ -42,6 +42,19 @@
 //! Strings from offset 31, in order: `game_id`, `away.abbreviation`,
 //! `home.abbreviation`, `venue`.
 //!
+//! ## The team-lines extension (`ext=1`)
+//!
+//! Only for a client that negotiated extensions ([`crate::STRUCT_CONTENT_TYPE_EXT`];
+//! see the crate docs), and only on a pregame: after `venue`, `u8 flags` (bit0 =
+//! away line present, bit1 = home line present; every other bit zero), then
+//! `away.line` **iff** bit0 and `home.line` **iff** bit1. A line is the team's
+//! display-shaped betting line, "+3.5  +140" (spread, then moneyline) — the
+//! slot football's pregame fills with the same text.
+//!
+//! [`encode`] never writes these bytes, so every device that did not ask keeps
+//! decoding the frozen layout above. [`decode`] accepts the pregame with or
+//! without them; anything else after `venue` is still a trailing-bytes error.
+//!
 //! # Final (state = 2)
 //!
 //! The shared final layout (see [`crate::common`]) with per-quarter points in
@@ -61,6 +74,10 @@ const FLAG_LAST_PLAY: u8 = 0x01;
 
 const PRE_FLAG_AWAY_RECORD: u8 = 0x01;
 const PRE_FLAG_HOME_RECORD: u8 = 0x02;
+
+const EXT_FLAG_AWAY_LINE: u8 = 0x01;
+const EXT_FLAG_HOME_LINE: u8 = 0x02;
+const EXT_FLAGS: u8 = EXT_FLAG_AWAY_LINE | EXT_FLAG_HOME_LINE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Game<'a> {
@@ -108,6 +125,9 @@ pub struct PregameTeam<'a> {
     pub abbreviation: &'a str,
     pub colors: TeamColors,
     pub record: Option<Record>,
+    /// The betting line, "+3.5  +140". Carried only by the `ext=1` extension:
+    /// [`encode`] drops it, and a plain v2 payload decodes it as `None`.
+    pub line: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +151,17 @@ pub fn encode<S: Sink + ?Sized>(game: &Game<'_>, out: &mut S) -> Result<(), Buff
             &game.away,
             &game.home,
         ),
+    }
+}
+
+/// [`encode`], plus the extension a client that sent
+/// [`crate::STRUCT_CONTENT_TYPE_EXT`] decodes: the pregame team lines. A live or
+/// final game has no extension and encodes exactly as [`encode`] does.
+pub fn encode_ext<S: Sink + ?Sized>(game: &Game<'_>, out: &mut S) -> Result<(), BufferFull> {
+    encode(game, out)?;
+    match game {
+        Game::Pregame(pregame) => write_pregame_ext(out, pregame),
+        Game::Live(_) | Game::Final(_) => Ok(()),
     }
 }
 
@@ -251,6 +282,24 @@ fn write_pregame<S: Sink + ?Sized>(out: &mut S, game: &Pregame<'_>) -> Result<()
     out.string(game.venue)
 }
 
+fn write_pregame_ext<S: Sink + ?Sized>(out: &mut S, game: &Pregame<'_>) -> Result<(), BufferFull> {
+    let mut flags = 0u8;
+    if game.away.line.is_some() {
+        flags |= EXT_FLAG_AWAY_LINE;
+    }
+    if game.home.line.is_some() {
+        flags |= EXT_FLAG_HOME_LINE;
+    }
+    out.u8(flags)?;
+    if let Some(line) = game.away.line {
+        out.string(line)?;
+    }
+    if let Some(line) = game.home.line {
+        out.string(line)?;
+    }
+    Ok(())
+}
+
 fn read_pregame(buf: &[u8]) -> Result<Pregame<'_>, DecodeError> {
     let mut reader = payload_reader(buf);
     let fixed = reader.fixed::<PRE_LEN>()?;
@@ -261,6 +310,27 @@ fn read_pregame(buf: &[u8]) -> Result<Pregame<'_>, DecodeError> {
     let away_abbreviation = reader.string("away abbreviation")?;
     let home_abbreviation = reader.string("home abbreviation")?;
     let venue = reader.string("venue")?;
+    // The `ext=1` team lines, when the server appended them.
+    let (mut away_line, mut home_line) = (None, None);
+    if reader.remaining() > 0 {
+        let at = reader.offset();
+        let ext = reader.u8("pregame extension flags")?;
+        if ext & !EXT_FLAGS != 0 {
+            return Err(DecodeError::at(
+                at,
+                DecodeErrorKind::InvalidCode {
+                    field: "pregame extension flags",
+                    code: ext,
+                },
+            ));
+        }
+        if ext & EXT_FLAG_AWAY_LINE != 0 {
+            away_line = Some(reader.string("away line")?);
+        }
+        if ext & EXT_FLAG_HOME_LINE != 0 {
+            home_line = Some(reader.string("home line")?);
+        }
+    }
     reader.finish()?;
 
     Ok(Pregame {
@@ -274,6 +344,7 @@ fn read_pregame(buf: &[u8]) -> Result<Pregame<'_>, DecodeError> {
                 wins: le_u16(fixed, 1),
                 losses: le_u16(fixed, 3),
             }),
+            line: away_line,
         },
         home: PregameTeam {
             abbreviation: home_abbreviation,
@@ -282,6 +353,7 @@ fn read_pregame(buf: &[u8]) -> Result<Pregame<'_>, DecodeError> {
                 wins: le_u16(fixed, 5),
                 losses: le_u16(fixed, 7),
             }),
+            line: home_line,
         },
     })
 }

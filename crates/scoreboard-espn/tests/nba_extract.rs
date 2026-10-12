@@ -79,7 +79,11 @@ fn run_list(body: &str, sizes: &[usize]) -> (Vec<(String, GameState)>, ScanStats
     let mut entries: Vec<(String, GameState)> = Vec::new();
     let mut on_game = |id: &str, state: GameState| entries.push((id.to_string(), state));
     let mut quirks = IgnoreQuirks;
-    let extractor = feed(body, Extractor::games_list(&mut on_game, &mut quirks), sizes);
+    let extractor = feed(
+        body,
+        Extractor::games_list(&mut on_game, &mut quirks),
+        sizes,
+    );
     let stats = extractor.stats();
     drop(extractor);
     (entries, stats)
@@ -381,7 +385,11 @@ fn events_shell_must_be_an_array() {
         assert!(extractor.stats().events_malformed, "{body}");
     }
     let mut quirks = scoreboard_espn::common::IgnoreQuirks;
-    let extractor = feed("{\"events\":[]}", Extractor::game_detail("77", &mut quirks), &[usize::MAX]);
+    let extractor = feed(
+        "{\"events\":[]}",
+        Extractor::game_detail("77", &mut quirks),
+        &[usize::MAX],
+    );
     assert!(!extractor.stats().events_malformed, "legal empty slate");
 }
 
@@ -632,4 +640,118 @@ fn a_malformed_crest_never_costs_the_event() {
             "{junk}: the wire bytes are untouched"
         );
     }
+}
+
+// ---------------------------------------------------------- betting lines
+
+fn pregame_lines(body: &str, id: &str, sizes: &[usize]) -> (Option<String>, Option<String>) {
+    let (outcome, stats) = run_detail(body, id, sizes);
+    assert_eq!((stats.ok, stats.failed), (1, 0), "odds never fail an event");
+    let extract = found(outcome);
+    let scoreboard_wire::nba::Game::Pregame(pregame) = extract.as_game() else {
+        panic!("pregame fixture");
+    };
+    (
+        pregame.away.line.map(str::to_string),
+        pregame.home.line.map(str::to_string),
+    )
+}
+
+fn lines_of(value: &serde_json::Value) -> (Option<String>, Option<String>) {
+    let event = serde_json::to_string(value).expect("serializes");
+    let body = wrap(&[&event]);
+    pregame_lines(&body, &event_id(&event), &[body.len()])
+}
+
+fn some(away: &str, home: &str) -> (Option<String>, Option<String>) {
+    (Some(away.to_string()), Some(home.to_string()))
+}
+
+#[test]
+fn the_pregame_fixture_carries_its_closing_lines_at_every_chunk_size() {
+    // PHX at LAL: away -2.5 / -130, home +2.5 / +110 (`close`, not `open`).
+    let event = fixture("pregame");
+    let body = wrap(&[&event]);
+    let id = event_id(&event);
+    for sizes in [&[body.len()][..], &[1], &[3, 7], &[64]] {
+        assert_eq!(
+            pregame_lines(&body, &id, sizes),
+            some("-2.5  -130", "+2.5  +110"),
+            "chunk sizes {sizes:?}"
+        );
+    }
+}
+
+#[test]
+fn the_lines_ride_only_the_ext_encoding() {
+    let event = fixture("pregame");
+    let body = wrap(&[&event]);
+    let extract = found(run_detail(&body, &event_id(&event), &[body.len()]).0);
+    // Plain v2 is the committed golden: the lines are dropped.
+    assert_eq!(hex(&encode(&extract)), hex(&golden("pregame")));
+    let mut buf = [0u8; 4096];
+    let mut sink = SliceSink::new(&mut buf);
+    scoreboard_wire::nba::encode_ext(&extract.as_game(), &mut sink).expect("payload fits");
+    let bytes = sink.written().to_vec();
+    let scoreboard_wire::nba::Game::Pregame(pregame) =
+        scoreboard_wire::nba::decode(&bytes).expect("ext payload decodes")
+    else {
+        panic!("pregame payload");
+    };
+    assert_eq!(pregame.away.line, Some("-2.5  -130"));
+    assert_eq!(pregame.home.line, Some("+2.5  +110"));
+}
+
+#[test]
+fn moneylines_join_only_in_pairs() {
+    let mut value = fixture_value("pregame");
+    value["competitions"][0]["odds"][0]["moneyline"]["home"]["close"]["odds"] =
+        serde_json::Value::Null;
+    assert_eq!(lines_of(&value), some("-2.5", "+2.5"));
+}
+
+#[test]
+fn a_missing_spread_leaves_both_lines_out() {
+    let mut value = fixture_value("pregame");
+    value["competitions"][0]["odds"][0]["pointSpread"]["away"] = serde_json::json!({});
+    assert_eq!(lines_of(&value), (None, None));
+}
+
+#[test]
+fn malformed_odds_never_fail_the_event() {
+    for bad in [
+        serde_json::json!(-2.5),
+        serde_json::json!(""),
+        serde_json::json!("-2.5555555"),
+        serde_json::json!("-2.5 pts"),
+        serde_json::json!({"line": "-2.5"}),
+        serde_json::json!([]),
+    ] {
+        let mut value = fixture_value("pregame");
+        value["competitions"][0]["odds"][0]["pointSpread"]["away"]["close"]["line"] = bad.clone();
+        assert_eq!(lines_of(&value), (None, None), "{bad}");
+    }
+    // The whole odds block the wrong shape: still a clean pregame.
+    for bad in [
+        serde_json::json!("odds"),
+        serde_json::json!({}),
+        serde_json::json!(null),
+    ] {
+        let mut value = fixture_value("pregame");
+        value["competitions"][0]["odds"] = bad.clone();
+        assert_eq!(lines_of(&value), (None, None), "{bad}");
+    }
+}
+
+#[test]
+fn only_the_first_sportsbook_counts() {
+    // A second book with complete lines never stands in for the first.
+    let mut value = fixture_value("pregame");
+    let complete = value["competitions"][0]["odds"][0].clone();
+    value["competitions"][0]["odds"][0]["pointSpread"] = serde_json::json!({});
+    value["competitions"][0]["odds"]
+        .as_array_mut()
+        .expect("odds is an array")
+        .push(complete);
+    assert_eq!(lines_of(&value), (None, None));
 }

@@ -21,6 +21,23 @@ pub(crate) fn compute_games_etag(tokens: &[String]) -> String {
     hex::encode(&digest[..8])
 }
 
+/// True when the client asked for the binary format *with* the per-module
+/// extensions: an `application/x-scoreboard-struct` media range carrying the
+/// `ext=1` parameter ([`wire::STRUCT_CONTENT_TYPE_EXT`]). Firmware from
+/// 2026-10-12 sends it; the gift fleet and older firmware never do, and get
+/// plain v2.
+pub(crate) fn wants_ext(headers: &HeaderMap) -> bool {
+    headers.get_all(header::ACCEPT).iter().any(|v| {
+        v.to_str().is_ok_and(|s| {
+            s.split(',').any(|range| {
+                let mut parts = range.split(';').map(str::trim);
+                parts.next() == Some(wire::STRUCT_CONTENT_TYPE)
+                    && parts.any(|param| param.eq_ignore_ascii_case(wire::EXT_PARAM))
+            })
+        })
+    })
+}
+
 /// True when the client asked for the packed binary format (see `wire.rs`).
 pub(crate) fn wants_struct(headers: &HeaderMap) -> bool {
     headers.get_all(header::ACCEPT).iter().any(|v| {

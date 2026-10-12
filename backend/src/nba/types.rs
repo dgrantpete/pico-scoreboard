@@ -41,6 +41,10 @@ pub struct NbaPregameTeam {
     pub colors: TeamColors,
     /// Overall season record; absent when ESPN omits or malforms it.
     pub record: Option<Record>,
+    /// Display-shaped betting line, spread then moneyline ("+3.5  +140"),
+    /// from ESPN's first sportsbook. Both teams or neither. In the binary
+    /// format it rides the `ext=1` extension only.
+    pub line: Option<String>,
 }
 
 /// Live state snapshot for one NBA game, tailored for the Pico firmware.
