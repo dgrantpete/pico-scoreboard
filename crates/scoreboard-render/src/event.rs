@@ -244,16 +244,16 @@ impl<'a> Clip<'a> {
                         .colour(*stream.get(at).ok_or(corrupt)?)
                         .ok_or(corrupt)?;
                     at += 1;
-                    for pixel in surface[cursor * 2..end * 2].chunks_exact_mut(2) {
-                        pixel.copy_from_slice(&colour);
+                    for pixel in surface[cursor * 2..end * 2].as_chunks_mut::<2>().0 {
+                        *pixel = colour;
                     }
                 }
                 OP_LITERAL => {
                     let indices = stream.get(at..at + run).ok_or(corrupt)?;
                     at += run;
-                    let pixels = surface[cursor * 2..end * 2].chunks_exact_mut(2);
-                    for (pixel, &index) in pixels.zip(indices) {
-                        pixel.copy_from_slice(&self.colour(index).ok_or(corrupt)?);
+                    let pixels = surface[cursor * 2..end * 2].as_chunks_mut::<2>().0;
+                    for (pixel, &index) in pixels.iter_mut().zip(indices) {
+                        *pixel = self.colour(index).ok_or(corrupt)?;
                     }
                 }
                 _ => return Err(corrupt),

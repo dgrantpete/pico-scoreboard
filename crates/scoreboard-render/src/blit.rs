@@ -309,8 +309,8 @@ impl<'pixels> Canvas<'pixels> {
         for row in y0..y1 {
             let start = self.index(x0, row);
             let end = self.index(x1, row);
-            for pixel in self.pixels[start..end].chunks_exact_mut(2) {
-                pixel.copy_from_slice(&bytes);
+            for pixel in self.pixels[start..end].as_chunks_mut::<2>().0 {
+                *pixel = bytes;
             }
         }
     }
@@ -425,8 +425,8 @@ impl<'pixels> Canvas<'pixels> {
         assert_eq!(self.stride, self.width, "dim() needs a contiguous canvas");
         let words = (self.width * self.height / 2) as usize;
         assert_eq!(self.width * self.height % 2, 0, "dim() needs even pixels");
-        for word in self.pixels[..words * 4].chunks_exact_mut(4) {
-            let raw = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
+        for word in self.pixels[..words * 4].as_chunks_mut::<4>().0 {
+            let raw = u32::from_le_bytes(*word);
             let mut value = (raw >> 1) & 0x7BEF_7BEF;
             if terms.half_step {
                 value += (raw >> 2) & 0x39E7_39E7;
@@ -434,7 +434,7 @@ impl<'pixels> Canvas<'pixels> {
             if terms.quarter_step {
                 value += (raw >> 3) & 0x18E3_18E3;
             }
-            word.copy_from_slice(&value.to_le_bytes());
+            *word = value.to_le_bytes();
         }
     }
 

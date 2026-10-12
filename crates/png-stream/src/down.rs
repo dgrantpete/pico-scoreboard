@@ -85,24 +85,24 @@ impl RowSink for Down<'_> {
     fn row(&mut self, y: u32, px: &[u8]) {
         let base = (y * SPRITE_DIM as u32 / self.height) as usize * SPRITE_DIM;
         if self.channels == 4 {
-            for (x, p) in px.chunks_exact(4).enumerate() {
-                let a = p[3] as u32;
+            for (x, &[r, g, b, a]) in px.as_chunks::<4>().0.iter().enumerate() {
+                let a = a as u32;
                 if a == 0 {
                     continue; // fully transparent adds nothing
                 }
                 let cell = (base + self.col_map[x] as usize) * 4;
-                self.acc[cell] += a * p[0] as u32;
-                self.acc[cell + 1] += a * p[1] as u32;
-                self.acc[cell + 2] += a * p[2] as u32;
+                self.acc[cell] += a * r as u32;
+                self.acc[cell + 1] += a * g as u32;
+                self.acc[cell + 2] += a * b as u32;
                 self.acc[cell + 3] += a;
             }
         } else {
             // RGB: opaque, a = 255.
-            for (x, p) in px.chunks_exact(3).enumerate() {
+            for (x, &[r, g, b]) in px.as_chunks::<3>().0.iter().enumerate() {
                 let cell = (base + self.col_map[x] as usize) * 4;
-                self.acc[cell] += 255 * p[0] as u32;
-                self.acc[cell + 1] += 255 * p[1] as u32;
-                self.acc[cell + 2] += 255 * p[2] as u32;
+                self.acc[cell] += 255 * r as u32;
+                self.acc[cell + 1] += 255 * g as u32;
+                self.acc[cell + 2] += 255 * b as u32;
                 self.acc[cell + 3] += 255;
             }
         }

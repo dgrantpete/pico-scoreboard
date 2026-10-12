@@ -192,9 +192,9 @@ fn unhex(text: &str, out: &mut [u8]) -> Result<(), ManifestError> {
     if digits.len() != out.len() * 2 {
         return Err(ManifestError::BadHex);
     }
-    for (byte, pair) in out.iter_mut().zip(digits.chunks_exact(2)) {
-        let high = nibble(pair[0]).ok_or(ManifestError::BadHex)?;
-        let low = nibble(pair[1]).ok_or(ManifestError::BadHex)?;
+    for (byte, &[high, low]) in out.iter_mut().zip(digits.as_chunks::<2>().0) {
+        let high = nibble(high).ok_or(ManifestError::BadHex)?;
+        let low = nibble(low).ok_or(ManifestError::BadHex)?;
         *byte = (high << 4) | low;
     }
     Ok(())

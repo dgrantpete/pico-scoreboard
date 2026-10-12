@@ -48,10 +48,9 @@ impl<'buffer, S: FrameSink> Hub75Display<'buffer, S> {
 
     /// Fill the whole back buffer with one color.
     pub fn fill(&mut self, color: u16) {
-        let [lo, hi] = color.to_le_bytes();
-        for pixel in self.buffer.chunks_exact_mut(2) {
-            pixel[0] = lo;
-            pixel[1] = hi;
+        let bytes = color.to_le_bytes();
+        for pixel in self.buffer.as_chunks_mut::<2>().0 {
+            *pixel = bytes;
         }
     }
 

@@ -208,13 +208,7 @@ fn load_logo_pool(path: &Path, expected: usize) -> Vec<LogoSlot> {
         "crest pool is {} bytes, expected {expected} slots of {LOGO_BYTES}",
         blob.len()
     );
-    blob.chunks_exact(LOGO_BYTES)
-        .map(|chunk| {
-            let mut slot: LogoSlot = [0; LOGO_BYTES];
-            slot.copy_from_slice(chunk);
-            slot
-        })
-        .collect()
+    blob.as_chunks::<LOGO_BYTES>().0.to_vec()
 }
 
 /// Read one fixture's payload off disk.

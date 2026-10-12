@@ -53,8 +53,8 @@ impl Frame {
 /// One crest slot, filled with a single flat color.
 fn crest_pool() -> [LogoSlot; 1] {
     let mut slot: LogoSlot = [0; LOGO_BYTES];
-    for pixel in slot.chunks_exact_mut(2) {
-        pixel.copy_from_slice(&CREST.to_le_bytes());
+    for pixel in slot.as_chunks_mut::<2>().0 {
+        *pixel = CREST.to_le_bytes();
     }
     [slot]
 }
