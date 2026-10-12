@@ -320,15 +320,20 @@ pub const FINAL_A: FinalGeometry = FinalGeometry {
 
 /// B "Stacked ledger": the live-game silhouette — logos stacked left, big
 /// scores beside — with the line score in a narrower window on the right.
+///
+/// The window is 55 px: four periods without the last column's trailing
+/// space, so a basketball or football final holds still. Its right edge stays
+/// at 109, leaving a dark column before the rule at 111; the score slots end
+/// at 54 so the two never share a column.
 pub const FINAL_B: FinalGeometry = FinalGeometry {
     logo_away: rect(1, 1, 24, 24),
     logo_home: rect(1, 39, 24, 24),
-    score_away: Some(rect(26, 5, 30, 16)),
-    score_home: Some(rect(26, 43, 30, 16)),
+    score_away: Some(rect(26, 5, 29, 16)),
+    score_home: Some(rect(26, 43, 29, 16)),
     final_label: rect(2, 26, 54, 8),
-    linescore_header: rect(56, 1, 54, 8),
-    linescore_away: rect(56, 11, 54, 8),
-    linescore_home: rect(56, 49, 54, 8),
+    linescore_header: rect(55, 1, 55, 8),
+    linescore_away: rect(55, 11, 55, 8),
+    linescore_home: rect(55, 49, 55, 8),
     divider_x: 111,
     separator_y: None,
     total_header: rect(114, 1, 13, 8),
@@ -343,8 +348,9 @@ pub const FINAL_B: FinalGeometry = FinalGeometry {
 /// Horizontally this is packed to the pixel: crest 1..=24, a 2 px gutter, the
 /// 75 px line-score window (five periods, trailing space included) at
 /// 27..=101, the rule at 102, a 1 px gutter, and a three-digit total inked at
-/// 104..=126. The window may meet the rule because a row at rest always ends
-/// in its trailing space; only a scroll in progress carries ink past column 95.
+/// 104..=126. The window may meet the rule because a row that scrolls keeps
+/// its trailing space (only a row that fits is drawn without it), so its ink
+/// passes column 95 only while the scroll is in progress.
 pub const FINAL_C: FinalGeometry = FinalGeometry {
     logo_away: rect(1, 2, 24, 24),
     logo_home: rect(1, 36, 24, 24),

@@ -665,6 +665,49 @@ fn every_final_variant_keeps_a_basketball_total_whole_and_off_the_edge_ring() {
 }
 
 #[test]
+fn a_four_quarter_line_score_holds_still_in_every_variant() {
+    // The rows end in a trailing space (the model's three-char columns). B's
+    // 54 px window once scrolled a 60 px row 6 px for nothing, sliding that
+    // blank into view and cutting the first quarter's tens digit off.
+    for variant in [FinalVariant::A, FinalVariant::B, FinalVariant::C] {
+        let mut harness = linescore_final(Sport::Nba);
+        harness.settings.nba_final = variant;
+        let view = &mut harness.snapshot.linescore_final;
+        view.away_score = 118;
+        view.home_score = 100;
+        view.header_row = text(" 1  2  3  4 ");
+        view.away_row = text("36 32 25 25 ");
+        view.home_row = text("30 35 25 10 ");
+        let slot = variant.table().linescore_away;
+
+        let rest = harness.draw();
+        // The first column's tens digit is inked at the window's left edge.
+        assert!(
+            rest.lit_in(slot.x..slot.x + 4, slot.y..slot.y + slot.height) > 0,
+            "{variant:?}: the first quarter's tens digit is missing"
+        );
+        for at in SCROLL_SAMPLES {
+            harness.view = FrameElapsed(at);
+            assert!(harness.draw().0 == rest.0, "{variant:?} moved at {at} ms");
+        }
+    }
+}
+
+#[test]
+fn a_row_too_long_even_without_its_trailing_space_still_scrolls() {
+    // Nine innings never fit, so the fit rule must not freeze them.
+    let mut harness = linescore_final(Sport::Mlb);
+    harness.settings.mlb_final = FinalVariant::B;
+    let view = &mut harness.snapshot.linescore_final;
+    view.header_row = text(" 1  2  3  4  5  6  7  8  9 ");
+    view.away_row = text(" 0  1  0  2  0  0  1  0  0 ");
+    view.home_row = text(" 3  0  0  0  4  0  0  0  X ");
+    let rest = harness.draw();
+    harness.view = FrameElapsed(7_000);
+    assert!(harness.draw().0 != rest.0, "a nine-inning row stopped scrolling");
+}
+
+#[test]
 fn full_time_scorer_lists_scroll_without_touching_the_edge_ring() {
     let mut harness = Harness::new(Mode::SoccerFinal);
     let view = &mut harness.snapshot.soccer_final;

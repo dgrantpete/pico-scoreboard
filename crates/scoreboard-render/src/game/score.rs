@@ -60,6 +60,16 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         (table.linescore_away, &view.away_row, away_color),
         (table.linescore_home, &view.home_row, home_color),
     ] {
+        // Every row ends in its last column's trailing space. A row that fits
+        // without it holds still: scrolling would only slide that blank into
+        // view and push the first column's digits out. The three rows are
+        // the same length in slots of the same width, so they decide alike.
+        let trimmed = row.trim_end();
+        let row = if font::measure(trimmed, &generated::SPLEEN_5X8) <= slot.width {
+            trimmed
+        } else {
+            row.as_str()
+        };
         let mut region = canvas.slice(slot);
         font::draw(
             &mut region,
