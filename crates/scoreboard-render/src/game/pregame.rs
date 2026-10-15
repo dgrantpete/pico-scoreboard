@@ -15,7 +15,12 @@ use crate::blit::Canvas;
 use crate::font::{self, Align, Style};
 use crate::geometry::{PREGAME, PREGAME_INFO_DWELL_MS, PREGAME_SCROLL};
 use crate::prepared::PregameLine;
-use crate::{BLACK, DIM_GRAY, WHITE, generated, pack, toast};
+use crate::{BLACK, DIM_GRAY, WHITE, generated, pack, rgb565, toast};
+use scoreboard_model::Sport;
+
+/// Overtime losses, a step dimmer than the losses above them: the third
+/// column matters least, and the stack reads top-down by weight.
+const OT_LOSSES: u16 = rgb565(60, 60, 60);
 
 pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     canvas.fill(BLACK);
@@ -33,29 +38,47 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     );
 
     // Records stack wins over losses. A side with no record advertised leaves
-    // both slots blank rather than rendering a fake 0-0.
-    for (side, wins_slot, losses_slot) in [
-        (&view.away, table.record_away_wins, table.record_away_losses),
-        (&view.home, table.record_home_wins, table.record_home_losses),
+    // both slots blank rather than rendering a fake 0-0. Hockey's records
+    // have a third column, overtime losses, and its stack grows a third row
+    // to fill the crest (NHL.md §3.9).
+    let hockey = view.sport == Sport::Hockey;
+    for (side, two_rows, three_rows) in [
+        (
+            &view.away,
+            [table.record_away_wins, table.record_away_losses],
+            table.hockey_record_away,
+        ),
+        (
+            &view.home,
+            [table.record_home_wins, table.record_home_losses],
+            table.hockey_record_home,
+        ),
     ] {
-        if let Some(record) = side.record {
+        let Some(record) = side.record else {
+            continue;
+        };
+        let [wins_slot, losses_slot] = if hockey {
+            [three_rows[0], three_rows[1]]
+        } else {
+            two_rows
+        };
+        let ot_losses = record.ot_losses.filter(|_| hockey);
+        for (slot, value, color) in [
+            (wins_slot, Some(record.wins), WHITE),
+            (losses_slot, Some(record.losses), DIM_GRAY),
+            (three_rows[2], ot_losses, OT_LOSSES),
+        ] {
+            let Some(value) = value else {
+                continue;
+            };
             font::integer(
                 canvas,
-                record.wins,
-                wins_slot.x,
-                wins_slot.y,
-                wins_slot.width,
+                value,
+                slot.x,
+                slot.y,
+                slot.width,
                 Align::Center,
-                Style::new(&generated::SPLEEN_5X8, WHITE),
-            );
-            font::integer(
-                canvas,
-                record.losses,
-                losses_slot.x,
-                losses_slot.y,
-                losses_slot.width,
-                Align::Center,
-                Style::new(&generated::SPLEEN_5X8, DIM_GRAY),
+                Style::new(&generated::SPLEEN_5X8, color),
             );
         }
     }

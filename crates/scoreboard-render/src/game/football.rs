@@ -243,8 +243,9 @@ fn timeout_bars(canvas: &mut Canvas<'_>, x: i32, y: i32, remaining: u8, color: u
     }
 }
 
-/// A 3×5 solid triangle, top-left corner at `(x, y)`.
-fn arrow(canvas: &mut Canvas<'_>, x: i32, y: i32, points_right: bool, color: u16) {
+/// A 3×5 solid triangle, top-left corner at `(x, y)`. Hockey's rink layout
+/// points its strength banner with the same one.
+pub(super) fn arrow(canvas: &mut Canvas<'_>, x: i32, y: i32, points_right: bool, color: u16) {
     for step in 0..3 {
         let column = if points_right { x + step } else { x + 2 - step };
         canvas.vline(column, y + step, 5 - 2 * step, color);

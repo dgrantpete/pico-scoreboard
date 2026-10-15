@@ -51,6 +51,8 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         Mode::SoccerFinal => game::soccer::render_final(canvas, scene),
         Mode::NbaLive => game::nba::render(canvas, scene),
         Mode::FootballLive => game::football::render(canvas, scene),
+        Mode::HockeyLive => game::hockey::render_live(canvas, scene),
+        Mode::HockeyFinal => game::hockey::render_final(canvas, scene),
     }
 }
 

@@ -20,7 +20,8 @@
 //! Concretely, the renderer derives: text strips, the play flash's display
 //! window, the pregame info cycle's per-phase dwell, the football field's
 //! yardline→pixel map and perspective endpoints, the possession arrow's x, the
-//! setup QR, menu row strips, and every RGB565 conversion.
+//! rink's feet→pixel map, the setup QR, menu row strips, and every RGB565
+//! conversion.
 
 use crate::color::{Rgb888, UiColors};
 use crate::text::Text;
@@ -29,6 +30,7 @@ use crate::text::Text;
 /// `Copy` data with no borrow, and both crates are in every consumer's tree
 /// already. A parallel set here would be conversion boilerplate that can drift.
 pub use scoreboard_wire::Side;
+pub use scoreboard_wire::hockey::Shots;
 pub use scoreboard_wire::mlb::InningHalf;
 
 /// Milliseconds from an arbitrary boot-relative origin — `embassy_time`'s
@@ -61,8 +63,11 @@ pub const PLAY_TEXT: usize = scoreboard_wire::MAX_STRING_BYTES;
 pub const PLAYER: usize = 40;
 /// The pregame info line — stadium or league display name.
 pub const INFO: usize = 56;
-/// "72F PARTLY CLOUDY", or a bare stadium name on the sports with no weather.
-pub const WEATHER: usize = 48;
+/// "72F PARTLY CLOUDY", a bare stadium name on the sports with no weather, or
+/// hockey's playoff line — "Stanley Cup Final - Game 6 - BUF leads series 3-2"
+/// is 49, the longest the 2026 playoffs produced, which is what took this from
+/// 48.
+pub const WEATHER: usize = 56;
 /// Pre-formatted goal-scorer list.
 pub const SCORERS: usize = 160;
 /// The per-team pregame line: probable pitcher, rank line, or abbreviation.
@@ -79,6 +84,12 @@ pub const SHORT: usize = 12;
 /// The soccer event label over the player's name. "RED CARD 120'+12'" is 17;
 /// at [`SHORT`] the stoppage minutes were cut ("RED CARD 90'").
 pub const EVENT_LABEL: usize = 20;
+/// The rink screen's last-goal line, "PPG 17:58 M. Zibanejad": a goal label
+/// without its period ("GOAL 20:00 " at most), then the scorer's name.
+pub const GOAL_LINE: usize = SHORT + PLAYER;
+/// A playoff series, "VGK LEADS SERIES 2-1". ESPN's longest reads 20 bytes;
+/// UTAH's four-letter abbreviation makes it 21.
+pub const SERIES: usize = 32;
 /// League display name in the menu ("PREMIER LEAGUE", "NCAA FOOTBALL").
 pub const MENU_LABEL: usize = 32;
 /// Network identifiers shown on the setup screen.
@@ -110,6 +121,9 @@ default_from_new!(
     SoccerLiveView,
     SoccerFinalView,
     NbaLiveView,
+    HockeyLiveView,
+    ShootoutRow,
+    HockeyFinalView,
     FootballLiveView,
     ToastView,
     MenuRow,
@@ -124,7 +138,7 @@ pub const ERROR_LINES: usize = 4;
 
 /// Which screen the renderer draws. `Final` is shared by MLB, NBA and
 /// football — one line-score screen distinguished by [`FinalView::sport`];
-/// soccer's full-time screen is its own shape.
+/// soccer's full-time screen and hockey's three stars are their own shapes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
     #[default]
@@ -141,6 +155,8 @@ pub enum Mode {
     SoccerFinal,
     NbaLive,
     FootballLive,
+    HockeyLive,
+    HockeyFinal,
 }
 
 impl Mode {
@@ -163,6 +179,7 @@ pub enum Sport {
     #[default]
     Mlb,
     Nba,
+    Hockey,
     Football,
     Soccer,
 }
@@ -389,6 +406,9 @@ impl PregameSide {
 pub struct Record {
     pub wins: u16,
     pub losses: u16,
+    /// Hockey's third column, W-L-OTL (NHL.md §3.9). `None` on every other
+    /// sport, whose records have two.
+    pub ot_losses: Option<u16>,
 }
 
 /// The upcoming-game screen: a big first-pitch time over one cycling info
@@ -429,6 +449,11 @@ impl PregameView {
 }
 
 /// The line-score final screen, shared by MLB, NBA and football.
+///
+/// A hockey final commits here too (NHL.md §3.10): its stars screen draws the
+/// scores, colors and result label from this view, and the rows — hockey's own
+/// "OT" and "SO" columns — stand in for the stars while ESPN has not named
+/// them yet.
 ///
 /// The three rows are equal-length strings, 3 chars per period, so they
 /// measure identically in the fixed-width font and scroll in lockstep with no
@@ -575,6 +600,198 @@ impl NbaLiveView {
             clock_low: false,
         }
     }
+}
+
+/// Live hockey: both layouts, and the shootout inside each (NHL.md §6.4).
+///
+/// The clock is NBA's — the poll-time string, never extrapolated — because the
+/// feed only moves it when a play is logged (§3.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HockeyLiveView {
+    /// The game score: tied throughout a shootout, whose tally is
+    /// [`ShootoutRow::tally`].
+    pub away_score: u16,
+    pub home_score: u16,
+    pub away_color: Rgb888,
+    pub home_color: Rgb888,
+    /// "1ST" / "OT" / "SO" / "2OT" — during an intermission, the period that
+    /// just ended.
+    pub period_text: Text<SHORT>,
+    /// "13:38"; between periods "INT", or "END" once no period can follow.
+    /// The shootout layouts show the tally here instead (§3.2).
+    pub clock_text: Text<CLOCK>,
+    /// Between periods: draw the clock in the accent color.
+    pub clock_accent: bool,
+    /// Sub-minute from the third period on: draw it in the warning color.
+    pub clock_low: bool,
+    /// `None` until ESPN has the stats shots are derived from, and the screens
+    /// hide the row rather than show 0-0 (§3.3).
+    pub shots: Option<Shots>,
+    /// Skaters on the ice, goalies excluded. 0 is unknown — no summary, or an
+    /// on-ice list the backend could not trust — and draws no dots.
+    pub away_skaters: u8,
+    pub home_skaters: u8,
+    pub banner: Option<Banner>,
+    /// The rink's marks, oldest first: every goal ESPN logged a coordinate
+    /// for.
+    pub marks: heapless::Vec<GoalMark, { scoreboard_wire::hockey::MAX_GOALS }, u8>,
+    /// Whether the last mark is the newest goal's, which the lamp blinks. A
+    /// goal logged without a coordinate has no mark to blink.
+    pub newest_marked: bool,
+    /// Who scored the newest goal. `None` before the first one, and whenever
+    /// the backend could not fetch the summary the goals come from.
+    pub last_goal: Option<Side>,
+    /// "PPG 17:58 1ST": the period ledger's line over the scorer.
+    pub goal_label: Text<EVENT_LABEL>,
+    /// "PPG 17:58 M. Knies": the rink's one line, whose tail from
+    /// `scorer_at` is the ledger's scorer line — one copy of the name rather
+    /// than two in every snapshot.
+    pub goal_line: Text<GOAL_LINE>,
+    pub scorer_at: u8,
+    /// Present only in a regular-season shootout, which is what switches
+    /// either layout to its shootout form.
+    pub shootout: Option<ShootoutView>,
+    /// The goal lamp (§3.7): whose score pulses, and the anchor its window
+    /// counts from on the wall rail — `play.updated_ms`'s arrangement. The
+    /// window's length is the renderer's.
+    pub lamp_side: Option<Side>,
+    pub lamp_ms: Millis,
+}
+
+impl HockeyLiveView {
+    pub const fn new() -> Self {
+        Self {
+            away_score: 0,
+            home_score: 0,
+            away_color: Rgb888::WHITE,
+            home_color: Rgb888::WHITE,
+            period_text: Text::new(),
+            clock_text: Text::new(),
+            clock_accent: false,
+            clock_low: false,
+            shots: None,
+            away_skaters: 0,
+            home_skaters: 0,
+            banner: None,
+            marks: heapless::Vec::new(),
+            newest_marked: false,
+            last_goal: None,
+            goal_label: Text::new(),
+            goal_line: Text::new(),
+            scorer_at: 0,
+            shootout: None,
+            lamp_side: None,
+            lamp_ms: 0,
+        }
+    }
+
+    /// The newest goal's scorer, "M. Knies"; empty when ESPN named none.
+    pub fn scorer(&self) -> &str {
+        self.goal_line.get(self.scorer_at as usize..).unwrap_or("")
+    }
+}
+
+/// The announcement a skater imbalance earns (NHL.md §3.4). Even strength
+/// has none, and neither does the 3-on-3 regular-season overtime is played at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Banner {
+    pub kind: BannerKind,
+    /// "{attackers} ON {defenders}", the advantaged side's skaters first. A
+    /// count of 0 means the feed could not count them, and the screens leave
+    /// that line out.
+    pub attackers: u8,
+    pub defenders: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BannerKind {
+    /// "POWER PLAY", for the side with more skaters.
+    PowerPlay(Side),
+    /// "EMPTY NET", for the side that pulled its goalie. Wins over a power
+    /// play.
+    EmptyNet(Side),
+    /// Equal and short-handed: 4 on 4.
+    Matched,
+}
+
+/// One goal's mark on the rink: where it was scored from, in feet from center
+/// ice with the away side attacking +x (§3.5). The renderer projects it onto
+/// the rink art, the way football's renderer projects a yardline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GoalMark {
+    pub side: Side,
+    pub x: i8,
+    pub y: i8,
+}
+
+/// The most attempts a shootout row shows: the newest seven, once sudden death
+/// runs long (§3.8).
+pub const SHOOTOUT_SLOTS: usize = 7;
+
+/// One slot of a shootout row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShotMark {
+    Scored,
+    Missed,
+    /// This side shoots next.
+    Next,
+    /// A round of the best-of-three still to come.
+    Pending,
+}
+
+/// Both sides of a shootout, ready to draw.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShootoutView {
+    pub away: ShootoutRow,
+    pub home: ShootoutRow,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShootoutRow {
+    /// The side's shootout goals: the big number, where the game score stays
+    /// tied.
+    pub tally: u8,
+    /// Oldest first. Column `i` of both rows is the same round.
+    pub marks: heapless::Vec<ShotMark, SHOOTOUT_SLOTS, u8>,
+}
+
+impl ShootoutRow {
+    pub const fn new() -> Self {
+        Self {
+            tally: 0,
+            marks: heapless::Vec::new(),
+        }
+    }
+}
+
+/// The three-stars final (D2): what hockey adds to the shared final in
+/// [`FinalView`], which carries the scores, colors and result label this
+/// screen draws.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HockeyFinalView {
+    /// First, second and third, or none: ESPN names them a few minutes after
+    /// the final horn.
+    pub stars: Option<[StarLine; 3]>,
+    /// "CAR WINS SERIES 4-2"; empty outside the playoffs.
+    pub series: Text<SERIES>,
+    pub shots: Option<Shots>,
+}
+
+impl HockeyFinalView {
+    pub const fn new() -> Self {
+        Self {
+            stars: None,
+            series: Text::new(),
+            shots: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StarLine {
+    pub name: Text<PLAYER>,
+    /// Whose player, for the name's color; `None` when ESPN did not say.
+    pub side: Option<Side>,
 }
 
 /// The drive situation, as semantics. The renderer turns this into the field
@@ -766,6 +983,8 @@ pub struct ScoreboardSnapshot {
     pub soccer_live: SoccerLiveView,
     pub soccer_final: SoccerFinalView,
     pub nba_live: NbaLiveView,
+    pub hockey_live: HockeyLiveView,
+    pub hockey_final: HockeyFinalView,
     pub football_live: FootballLiveView,
     pub toast: ToastView,
     pub menu: MenuView,
@@ -794,6 +1013,8 @@ impl ScoreboardSnapshot {
             soccer_live: SoccerLiveView::new(),
             soccer_final: SoccerFinalView::new(),
             nba_live: NbaLiveView::new(),
+            hockey_live: HockeyLiveView::new(),
+            hockey_final: HockeyFinalView::new(),
             football_live: FootballLiveView::new(),
             toast: ToastView::new(),
             menu: MenuView::new(),

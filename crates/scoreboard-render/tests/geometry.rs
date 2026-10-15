@@ -2,8 +2,9 @@
 
 use scoreboard_model::Sport;
 use scoreboard_render::geometry::{
-    self, DEFAULT_SCROLL_SPEED, FINAL_A, FINAL_B, FINAL_C, FinalVariant, RenderSettings,
-    SCROLL_SPEEDS, SoccerLiveVariant, is_smooth,
+    self, DEFAULT_SCROLL_SPEED, FINAL_A, FINAL_B, FINAL_C, FinalVariant, HOCKEY_FINAL,
+    HOCKEY_LIVE_A, HOCKEY_LIVE_B, HockeyLiveVariant, RenderSettings, SCROLL_SPEEDS,
+    SHOOTOUT_ROW_WIDTH, SoccerLiveVariant, is_smooth,
 };
 use scoreboard_render::menu::thumb;
 
@@ -52,6 +53,22 @@ fn single_design_screens_accept_only_their_one_letter() {
     assert!(!settings.apply_variant("mlb_pregame", "A"));
     assert!(settings.apply_variant("nba_live", "A"));
     assert!(!settings.apply_variant("nba_live", "C"));
+    assert!(settings.apply_variant("hockey_final", "A"));
+    assert!(!settings.apply_variant("hockey_final", "B"));
+}
+
+/// D1: the rink is the default, the period ledger the variant.
+#[test]
+fn hockey_live_defaults_to_the_rink_and_can_move_to_the_ledger() {
+    let mut settings = RenderSettings::new();
+    assert_eq!(settings.hockey_live, HockeyLiveVariant::B);
+    assert_eq!(HockeyLiveVariant::default(), HockeyLiveVariant::B);
+    assert!(settings.apply_variant("hockey_live", "A"));
+    assert_eq!(settings.hockey_live, HockeyLiveVariant::A);
+    assert!(!settings.apply_variant("hockey_live", "C"));
+    assert_eq!(settings.hockey_live, HockeyLiveVariant::A);
+    assert!(settings.apply_variant("hockey_live", "B"));
+    assert_eq!(settings.hockey_live, HockeyLiveVariant::B);
 }
 
 #[test]
@@ -213,6 +230,49 @@ fn every_slot_fits_on_the_panel() {
         football.clock,
         football.situation,
     ]);
+    let (a, b, fin) = (HOCKEY_LIVE_A, HOCKEY_LIVE_B, HOCKEY_FINAL);
+    slots.extend([
+        a.logo_away,
+        a.logo_home,
+        a.score_away,
+        a.score_home,
+        a.period,
+        a.clock,
+        a.shots,
+        a.strip_top,
+        a.strip_bottom,
+        a.strip_empty,
+        a.shootout_away,
+        a.shootout_home,
+        a.shootout_label,
+        a.shootout_tally,
+        b.logo_away,
+        b.logo_home,
+        b.score_away,
+        b.score_home,
+        b.period,
+        b.clock,
+        b.situation,
+        b.shots,
+        b.shootout_away,
+        b.shootout_home,
+        b.strip,
+        fin.logo_away,
+        fin.logo_home,
+        fin.score_away,
+        fin.score_home,
+        fin.final_label,
+        fin.series,
+        fin.shots,
+        fin.single_line,
+    ]);
+    slots.extend(fin.star_rows);
+    slots.extend(fin.linescore_rows);
+    let pregame_rows = [
+        geometry::PREGAME.hockey_record_away,
+        geometry::PREGAME.hockey_record_home,
+    ];
+    slots.extend(pregame_rows.into_iter().flatten());
     let soccer_final = geometry::SOCCER_FINAL;
     slots.extend([
         soccer_final.scorers_away,
@@ -285,6 +345,62 @@ fn the_corner_screens_keep_off_the_edge_ring() {
     }
 }
 
+/// Every hockey screen was born under the edge rule, column screen included
+/// (NHL.md §6.5).
+#[test]
+fn the_hockey_screens_keep_off_the_edge_ring() {
+    let (a, b, fin) = (HOCKEY_LIVE_A, HOCKEY_LIVE_B, HOCKEY_FINAL);
+    let mut slots = vec![
+        a.logo_away,
+        a.logo_home,
+        a.score_away,
+        a.score_home,
+        a.period,
+        a.clock,
+        a.shots,
+        a.strip_top,
+        a.strip_bottom,
+        a.strip_empty,
+        a.shootout_away,
+        a.shootout_home,
+        a.shootout_label,
+        a.shootout_tally,
+        a.strip,
+        b.logo_away,
+        b.logo_home,
+        b.score_away,
+        b.score_home,
+        b.period,
+        b.clock,
+        b.situation,
+        b.shots,
+        b.shootout_away,
+        b.shootout_home,
+        b.strip,
+        scoreboard_render::generated::layout::rink::POSITION,
+        fin.logo_away,
+        fin.logo_home,
+        fin.score_away,
+        fin.score_home,
+        fin.final_label,
+        fin.series,
+        fin.shots,
+        fin.single_line,
+    ];
+    slots.extend(fin.star_rows);
+    slots.extend(fin.linescore_rows);
+    for slot in slots {
+        assert!(inside_the_edge_ring(slot), "{slot:?} touches the edge ring");
+    }
+    // The skater rows end at the last legal column, and the shootout's short
+    // rink stops above the bottom row.
+    assert_eq!(b.skaters_home_end, geometry::WIDTH - 2);
+    assert!(b.shootout_rink_y + 9 < geometry::HEIGHT - 1);
+    // Seven attempts fit beside the crests in both layouts.
+    assert!(a.shootout_away.x + SHOOTOUT_ROW_WIDTH < geometry::WIDTH - 1);
+    assert!(b.shootout_away.x + SHOOTOUT_ROW_WIDTH < b.logo_home.x);
+}
+
 /// Both claimants of the bottom strip draw into the slot the selector names,
 /// and every live screen's strip sits in the bottom band of the panel.
 #[test]
@@ -314,6 +430,20 @@ fn every_live_screen_has_its_own_bottom_strip() {
         assert_eq!(table.strip.height, 16);
         assert!(table.strip.y > table.separator_y, "soccer {letter}");
     }
+    // Hockey's ledger keeps its column; the rink gives up the full width
+    // under the shots bar. `unscii_16` inks from its cell's second row, so
+    // four dark rows separate the bar's last row from the text.
+    assert!(settings.apply_variant("hockey_live", "A"));
+    assert_eq!(
+        settings.bottom_strip(Mode::HockeyLive),
+        geometry::COLUMN_STRIP
+    );
+    assert!(settings.apply_variant("hockey_live", "B"));
+    let strip = settings.bottom_strip(Mode::HockeyLive);
+    assert_eq!(strip, HOCKEY_LIVE_B.strip);
+    assert_eq!((strip.x, strip.width), (1, geometry::WIDTH - 2));
+    let (bar_bottom, ink_top) = (HOCKEY_LIVE_B.shots_bar_y + 1, strip.y + 1);
+    assert_eq!(ink_top - bar_bottom - 1, 4);
     assert_eq!(settings.bottom_strip(Mode::Final), geometry::COLUMN_STRIP);
 }
 

@@ -19,3 +19,6 @@ qrcodegen-no-heap = "=1.8.1"
 # boundary rule). `geometry` pins its constants against hub75's under `cfg(test)`
 # so the two cannot drift.
 hub75 = { path = "../hub75", features = ["simulator"] }
+# The hockey screens' pixel tests commit hand-built wire games through the
+# real model, until the backend's hockey goldens exist.
+scoreboard-wire = { path = "../scoreboard-wire" }

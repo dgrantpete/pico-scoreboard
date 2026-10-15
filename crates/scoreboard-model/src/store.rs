@@ -56,6 +56,9 @@ pub struct Store {
     /// stale-feed guard. `poller.py` carried this beside the poll loop and
     /// passed it back in; it belongs with the state it guards.
     prev_soccer_clock: Option<(Text<{ crate::snapshot::GAME_ID }>, u16)>,
+    /// The goal lamp's per-side high-water marks for the hockey game on
+    /// screen (NHL.md §3.7) — the same kind of guard, for the same reason.
+    lamp: crate::sports::LampWatch,
 }
 
 impl Default for Store {
@@ -70,6 +73,7 @@ impl Store {
             snapshot: ScoreboardSnapshot::new(),
             startup_phase: true,
             prev_soccer_clock: None,
+            lamp: crate::sports::LampWatch::new(),
         }
     }
 
@@ -426,6 +430,10 @@ impl Store {
 
     pub(crate) fn finish_game(&mut self) {
         self.commit();
+    }
+
+    pub(crate) fn lamp_watch(&mut self) -> &mut crate::sports::LampWatch {
+        &mut self.lamp
     }
 
     /// The soccer stale-clock guard: the previous poll's clock for this game,

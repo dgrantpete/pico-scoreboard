@@ -125,20 +125,22 @@ pub enum Feed {
 }
 
 impl Feed {
-    /// The feed a polled league selects.
+    /// The feed a polled league selects, or `None` for hockey: it arrived
+    /// after direct mode went legacy (BACKLOG 100), so it has no feed here.
     ///
     /// `LeagueId.key` is ESPN's own path segment, so the college test is the
     /// backend's `FootballLeague::from_path` test on the same slug — one
     /// string compare, no second registry to drift (S3-DESIGN decision 2).
-    pub fn from_league(league: &LeagueId) -> Self {
-        match league.sport {
+    pub fn from_league(league: &LeagueId) -> Option<Self> {
+        Some(match league.sport {
             Sport::Mlb => Feed::Mlb,
             Sport::Nba => Feed::Nba,
             Sport::Football => Feed::Football {
                 college: league.key.as_str() == "football/college-football",
             },
             Sport::Soccer => Feed::Soccer,
-        }
+            Sport::Hockey => return None,
+        })
     }
 
     pub fn sport(self) -> Sport {

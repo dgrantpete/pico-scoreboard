@@ -170,15 +170,31 @@ pub const SOCCER_SCROLL_PAUSE_MS: u64 = 1500;
 /// Dwell at each end of the play flash's scroll.
 pub const PLAY_SCROLL_PAUSE_MS: u64 = 1000;
 
+/// Pause feel for hockey's last-goal lines; the speed is the user-configurable
+/// one, as for soccer's event line.
+pub const HOCKEY_SCROLL_PAUSE_MS: u64 = 1500;
+
+/// The three-stars final's names and series line: a fixed feel, like the
+/// pregame lines, slow enough to read a name off.
+pub const HOCKEY_STARS_SCROLL: Scroll = Scroll {
+    pause_ms: 1500,
+    pixels_per_second: 20,
+};
+
+const _: () = assert!(
+    is_smooth(HOCKEY_STARS_SCROLL.pixels_per_second),
+    "the three stars scroll at a speed that stutters at this frame rate"
+);
+
 /// The bottom strip of the column-frame live screens — MLB, NBA, soccer A and
-/// B: the data column under its rule, from the column's text margin to the
-/// last legal column. The play flash draws here.
+/// B, hockey A: the data column under its rule, from the column's text margin
+/// to the last legal column. The play flash draws here.
 ///
 /// It is not every live screen's strip. The bottom strip is whatever the screen
 /// gives up while the flash shows, so it is a per-screen slot (`strip` on each
 /// live table): the column screens keep their identity column drawn and give
-/// up only this, while football and soccer C have no column and give up the
-/// full width. [`RenderSettings::bottom_strip`] selects one by mode.
+/// up only this, while football, soccer C and hockey B have no column and give
+/// up the full width. [`RenderSettings::bottom_strip`] selects one by mode.
 pub const COLUMN_STRIP: Slice = Slice {
     x: 51,
     y: 43,
@@ -234,6 +250,11 @@ pub struct PregameGeometry {
     pub record_away_losses: Slice,
     pub record_home_wins: Slice,
     pub record_home_losses: Slice,
+    /// Hockey's W-L-OTL stack (NHL.md §3.9), wins down to overtime losses:
+    /// three `spleen_5x8` rows filling the crest's 24 px exactly, where the
+    /// two-row stack above is centered on it.
+    pub hockey_record_away: [Slice; 3],
+    pub hockey_record_home: [Slice; 3],
     pub divider_x: i32,
     /// First-pitch time, alternating with the date. 80 px is exactly ten
     /// `unscii_16` glyphs — the width of "WED JUL 16".
@@ -260,6 +281,12 @@ pub const PREGAME: PregameGeometry = PregameGeometry {
     record_away_losses: rect(26, 17, 19, 8),
     record_home_wins: rect(26, 40, 19, 8),
     record_home_losses: rect(26, 49, 19, 8),
+    hockey_record_away: [rect(26, 4, 19, 8), rect(26, 12, 19, 8), rect(26, 20, 19, 8)],
+    hockey_record_home: [
+        rect(26, 36, 19, 8),
+        rect(26, 44, 19, 8),
+        rect(26, 52, 19, 8),
+    ],
     divider_x: 45,
     info_time: rect(47, 2, 80, 16),
     info_cycle: rect(47, 24, 80, 8),
@@ -665,6 +692,216 @@ pub const FOOTBALL_LIVE: FootballLiveGeometry = FootballLiveGeometry {
 };
 
 // =============================================================================
+// Hockey (NHL.md §6.5)
+// =============================================================================
+//
+// Ported from the decided mockups (data/nhl-design, D1/D2), whose geometry
+// was drawn by this crate over real ESPN captures. The two live layouts share
+// almost nothing past the crests, so each is its own type rather than one
+// table with half its fields optional.
+
+/// Hockey live A, "Period ledger": the MLB/NBA/soccer-A silhouette. Crests,
+/// scores and the period chip in the identity column; the clock over the
+/// shots ledger in the data column; the strength banner, else the last goal,
+/// in the bottom strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HockeyLedgerGeometry {
+    pub logo_away: Slice,
+    pub logo_home: Slice,
+    pub score_away: Slice,
+    pub score_home: Slice,
+    pub period: Slice,
+    pub divider_x: i32,
+    pub separator_y: i32,
+    pub clock: Slice,
+    /// The shots ledger: each side's count at its end, "SHOTS" centered, and
+    /// a 2 px share bar from `shots_bar_y`.
+    pub shots: Slice,
+    pub shots_bar_y: i32,
+    /// The strip's two lines: a banner's title or the goal label, over the
+    /// skater count or the scorer.
+    pub strip_top: Slice,
+    pub strip_bottom: Slice,
+    /// "NO GOALS", one line centered between the two.
+    pub strip_empty: Slice,
+    /// The arrows flanking a banner's count, pointing at the side it is
+    /// about: up to the away crest, down to the home one.
+    pub banner_arrows_x: [i32; 2],
+    pub banner_arrows_y: i32,
+    /// The shootout: each side's attempt row level with its crest, and the
+    /// label over the tally in the data column.
+    pub shootout_away: Slice,
+    pub shootout_home: Slice,
+    pub shootout_label: Slice,
+    pub shootout_tally: Slice,
+    /// The bottom strip the play flash takes over: the strip's two lines.
+    pub strip: Slice,
+}
+
+pub const HOCKEY_LIVE_A: HockeyLedgerGeometry = HockeyLedgerGeometry {
+    logo_away: rect(1, 1, 24, 24),
+    score_away: rect(26, 5, 20, 16),
+    period: rect(1, 28, 46, 8),
+    logo_home: rect(1, 39, 24, 24),
+    score_home: rect(26, 43, 20, 16),
+    divider_x: 47,
+    separator_y: 36,
+    clock: rect(48, 3, 79, 16),
+    shots: rect(51, 22, 74, 8),
+    shots_bar_y: 31,
+    strip_top: rect(51, 41, 76, 8),
+    strip_bottom: rect(51, 52, 76, 8),
+    strip_empty: rect(51, 46, 76, 8),
+    banner_arrows_x: [55, 118],
+    banner_arrows_y: 54,
+    shootout_away: rect(53, 9, SHOOTOUT_ROW_WIDTH, SHOOTOUT_MARK),
+    shootout_home: rect(53, 47, SHOOTOUT_ROW_WIDTH, SHOOTOUT_MARK),
+    shootout_label: rect(48, 24, 79, 8),
+    shootout_tally: rect(48, 33, 79, 8),
+    strip: COLUMN_STRIP,
+};
+
+/// Hockey live B, "Rink" — the default (D1): football's broadcast corners
+/// with a top-down rink where the field was. Skater dots under each crest
+/// carry the strength; one line over the shots ledger carries the banner or
+/// the last goal; the rink carries every goal where it was scored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HockeyRinkGeometry {
+    pub logo_away: Slice,
+    pub logo_home: Slice,
+    /// The skater dots' row, under the crests: the away row runs right from
+    /// `skaters_away_x`, the home row left from `skaters_home_end` (its last
+    /// column), so an extra attacker's sixth dot grows inward on both sides.
+    pub skaters_y: i32,
+    pub skaters_away_x: i32,
+    pub skaters_home_end: i32,
+    pub score_away: Slice,
+    pub score_home: Slice,
+    pub period: Slice,
+    pub clock: Slice,
+    /// The banner or the last goal; during the shootout, its label.
+    pub situation: Slice,
+    pub shots: Slice,
+    pub shots_bar_y: i32,
+    /// The shootout's attempt rows across the middle, each level with its
+    /// side's score. The tally takes the clock's slot (§3.2).
+    pub shootout_away: Slice,
+    pub shootout_home: Slice,
+    /// The shootout's rink, under the rows: the art squashed to nine rows by
+    /// dropping six from its middle, which its rounded corners survive.
+    pub shootout_rink_y: i32,
+    /// The bottom strip the play flash takes over: every legal column under
+    /// the shots bar. `unscii_16` inks rows 1-12 of its cell, so at y 47 the
+    /// text sits four dark rows below the bar and the scores' ink (both end
+    /// at row 43) and four above the panel's bottom, the dark edge row
+    /// included (owner, 2026-10-12).
+    pub strip: Slice,
+}
+
+pub const HOCKEY_LIVE_B: HockeyRinkGeometry = HockeyRinkGeometry {
+    logo_away: rect(1, 1, 24, 24),
+    logo_home: rect(103, 1, 24, 24),
+    skaters_y: 26,
+    skaters_away_x: 1,
+    skaters_home_end: 126,
+    score_away: rect(1, 31, 24, 16),
+    score_home: rect(103, 31, 24, 16),
+    period: rect(26, 3, 26, 8),
+    clock: rect(52, 2, 50, 16),
+    situation: rect(28, 21, 73, 8),
+    shots: rect(28, 33, 73, 8),
+    shots_bar_y: 42,
+    shootout_away: rect(34, 31, SHOOTOUT_ROW_WIDTH, SHOOTOUT_MARK),
+    shootout_home: rect(34, 41, SHOOTOUT_ROW_WIDTH, SHOOTOUT_MARK),
+    shootout_rink_y: 53,
+    strip: rect(1, 47, 126, 16),
+};
+
+/// A shootout attempt marker's edge, and the row pitch: 7 px marks, 3 px gaps.
+pub const SHOOTOUT_MARK: i32 = 7;
+pub const SHOOTOUT_PITCH: i32 = 10;
+/// A full row: [`scoreboard_model::snapshot::SHOOTOUT_SLOTS`] marks.
+pub const SHOOTOUT_ROW_WIDTH: i32 =
+    (scoreboard_model::snapshot::SHOOTOUT_SLOTS as i32 - 1) * SHOOTOUT_PITCH + SHOOTOUT_MARK;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HockeyLiveVariant {
+    A,
+    #[default]
+    B,
+}
+
+impl HockeyLiveVariant {
+    /// The bottom strip the play flash takes over under this design.
+    pub const fn strip(self) -> Slice {
+        match self {
+            HockeyLiveVariant::A => HOCKEY_LIVE_A.strip,
+            HockeyLiveVariant::B => HOCKEY_LIVE_B.strip,
+        }
+    }
+
+    fn from_letter(letter: &str) -> Option<Self> {
+        match letter {
+            "A" => Some(HockeyLiveVariant::A),
+            "B" => Some(HockeyLiveVariant::B),
+            _ => None,
+        }
+    }
+}
+
+/// Hockey's final, "Three stars" (D2): soccer's full-time silhouette, with the
+/// stars where soccer lists its scorers, and a rule over the series and shots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HockeyFinalGeometry {
+    pub logo_away: Slice,
+    pub logo_home: Slice,
+    pub score_away: Slice,
+    pub score_home: Slice,
+    pub divider_x: i32,
+    pub final_label: Slice,
+    /// First, second and third star: the rank's star icons from `star_x` at
+    /// `star_pitch`, a row down from the row's top, then the name.
+    pub star_rows: [Slice; 3],
+    pub star_x: i32,
+    pub star_pitch: i32,
+    /// While ESPN has not named the stars, their band carries the line score
+    /// instead: header, away, home.
+    pub linescore_rows: [Slice; 3],
+    /// The rule under the band, from the divider to the last legal column.
+    pub rule_y: i32,
+    /// The series over the shots when both are known; whichever one is,
+    /// alone, in `single_line`.
+    pub series: Slice,
+    pub shots: Slice,
+    pub single_line: Slice,
+}
+
+pub const HOCKEY_FINAL: HockeyFinalGeometry = HockeyFinalGeometry {
+    logo_away: rect(1, 2, 24, 24),
+    score_away: rect(26, 6, 20, 16),
+    logo_home: rect(1, 38, 24, 24),
+    score_home: rect(26, 42, 20, 16),
+    divider_x: 48,
+    final_label: rect(50, 2, 77, 8),
+    star_rows: [
+        rect(71, 14, 56, 8),
+        rect(71, 24, 56, 8),
+        rect(71, 34, 56, 8),
+    ],
+    star_x: 52,
+    star_pitch: 6,
+    linescore_rows: [
+        rect(50, 14, 77, 8),
+        rect(50, 24, 77, 8),
+        rect(50, 34, 77, 8),
+    ],
+    rule_y: 43,
+    series: rect(50, 46, 77, 8),
+    shots: rect(50, 54, 77, 8),
+    single_line: rect(50, 51, 77, 8),
+};
+
+// =============================================================================
 // Selection
 // =============================================================================
 
@@ -681,6 +918,7 @@ pub struct RenderSettings {
     pub nba_final: FinalVariant,
     pub football_final: FinalVariant,
     pub soccer_live: SoccerLiveVariant,
+    pub hockey_live: HockeyLiveVariant,
     /// Draw the dividers on every game-facing screen. All-or-nothing, not
     /// per-variant: the screens have to read consistently.
     pub show_dividers: bool,
@@ -695,6 +933,7 @@ impl RenderSettings {
             nba_final: FinalVariant::C,
             football_final: FinalVariant::C,
             soccer_live: SoccerLiveVariant::A,
+            hockey_live: HockeyLiveVariant::B,
             show_dividers: true,
             scroll_px_per_second: DEFAULT_SCROLL_SPEED,
         }
@@ -705,7 +944,7 @@ impl RenderSettings {
     /// Unknown keys and unknown letters are ignored, leaving the current
     /// selection, so a hand-edited or pre-rename config cannot select a table
     /// that does not exist. Returns whether the entry named something real —
-    /// the four pregame keys and the three single-design live keys count as
+    /// the four pregame keys and the single-design screens' keys count as
     /// real and select the only design they have.
     pub fn apply_variant(&mut self, key: &str, letter: &str) -> bool {
         match key {
@@ -727,10 +966,19 @@ impl RenderSettings {
                 }
                 None => false,
             },
+            "hockey_live" => match HockeyLiveVariant::from_letter(letter) {
+                Some(variant) => {
+                    self.hockey_live = variant;
+                    true
+                }
+                None => false,
+            },
             // Single-design screens: registered so a config naming them is
             // honored rather than silently dropped, with nothing to store.
             "mlb_pregame" | "nba_pregame" | "football_pregame" | "soccer_pregame" => letter == "C",
-            "soccer_final" | "mlb_live" | "nba_live" | "football_live" => letter == "A",
+            "soccer_final" | "mlb_live" | "nba_live" | "football_live" | "hockey_final" => {
+                letter == "A"
+            }
             _ => false,
         }
     }
@@ -752,14 +1000,15 @@ impl RenderSettings {
 
     /// The line-score final table for one sport.
     ///
-    /// Soccer's full-time screen is its own shape ([`SOCCER_FINAL`]) and never
-    /// reaches here; the arm exists because [`Sport`] has four values.
+    /// Soccer's full-time screen and hockey's three stars are their own shapes
+    /// ([`SOCCER_FINAL`], [`HOCKEY_FINAL`]) and never reach here; the arms
+    /// exist because [`Sport`] has five values.
     pub const fn final_table(&self, sport: Sport) -> FinalGeometry {
         match sport {
             Sport::Mlb => self.mlb_final.table(),
             Sport::Nba => self.nba_final.table(),
             Sport::Football => self.football_final.table(),
-            Sport::Soccer => FINAL_C,
+            Sport::Soccer | Sport::Hockey => FINAL_C,
         }
     }
 
@@ -779,6 +1028,7 @@ impl RenderSettings {
             Mode::NbaLive => NBA_LIVE.strip,
             Mode::FootballLive => FOOTBALL_LIVE.strip,
             Mode::SoccerLive => self.soccer_live.table().strip,
+            Mode::HockeyLive => self.hockey_live.strip(),
             _ => COLUMN_STRIP,
         }
     }

@@ -3,12 +3,13 @@
 //! Each one is the Rust body of a `state.py` setter, minus the parts that
 //! turned out to be pixels (see [`crate::snapshot`] for where the line is).
 
-use scoreboard_wire::{FinalTeam, LivePhase, Side, football, mlb, nba, soccer};
+use scoreboard_wire::{FinalTeam, LivePhase, Side, football, hockey, mlb, nba, soccer};
 
 use crate::color::Rgb888;
 use crate::feed::{GameDetail, LeagueId};
 use crate::snapshot::{
-    Bases, CLOCK, FieldSituation, LINESCORE, Millis, Mode, Record, SHORT, Sport,
+    Banner, BannerKind, Bases, CLOCK, FieldSituation, GoalMark, LINESCORE, Millis, Mode, Record,
+    SHOOTOUT_SLOTS, SHORT, ShootoutRow, ShootoutView, ShotMark, Sport, StarLine,
 };
 use crate::store::{Logos, Store};
 use crate::text::{Text, push_folded, push_folded_upper, set_folded, set_plain, write_text};
@@ -75,6 +76,7 @@ fn record(record: Option<scoreboard_wire::Record>) -> Option<Record> {
     record.map(|r| Record {
         wins: r.wins,
         losses: r.losses,
+        ot_losses: None,
     })
 }
 
@@ -128,6 +130,40 @@ impl<'a> PregameInput<'a> {
                 abbreviation: game.home.abbreviation,
                 record: record(game.home.record),
                 line: game.home.line.unwrap_or(""),
+                color: game.home.colors.into(),
+            },
+        }
+    }
+
+    /// Hockey: NBA's shape with two deltas (NHL.md §3.9) — records are W-L-OTL,
+    /// and the per-team line is the probable starting goalie. The second info
+    /// phase is the playoff round and series the wire already joined ("Stanley
+    /// Cup Final - Game 6 - CAR leads series 3-2"), empty in the regular season.
+    pub fn hockey(game: &hockey::Pregame<'a>) -> Self {
+        let record = |record: Option<hockey::Record>| {
+            record.map(|r| Record {
+                wins: r.wins,
+                losses: r.losses,
+                ot_losses: Some(r.ot_losses),
+            })
+        };
+        Self {
+            sport: Sport::Hockey,
+            game_id: game.game_id,
+            start_time: game.start_time,
+            info_primary: game.venue,
+            info_secondary: game.info_secondary,
+            temperature: None,
+            away: PregameSideInput {
+                abbreviation: game.away.abbreviation,
+                record: record(game.away.record),
+                line: game.away.goalie.unwrap_or(""),
+                color: game.away.colors.into(),
+            },
+            home: PregameSideInput {
+                abbreviation: game.home.abbreviation,
+                record: record(game.home.record),
+                line: game.home.goalie.unwrap_or(""),
                 color: game.home.colors.into(),
             },
         }
@@ -226,6 +262,18 @@ impl Store {
                 self.commit_pregame(&PregameInput::nba(game), logos, now_ms, clock);
             }
             GameDetail::Nba(nba::Game::Final(game)) => self.commit_nba_final(game, logos, now_ms),
+            GameDetail::Hockey(hockey::Game::Live(game)) => {
+                self.commit_hockey_live(game, logos, now_ms);
+                if let Some(play) = game.last_play {
+                    self.flash_play(play.id, play.text, now_ms);
+                }
+            }
+            GameDetail::Hockey(hockey::Game::Pregame(game)) => {
+                self.commit_pregame(&PregameInput::hockey(game), logos, now_ms, clock);
+            }
+            GameDetail::Hockey(hockey::Game::Final(game)) => {
+                self.commit_hockey_final(game, logos, now_ms);
+            }
             GameDetail::Football(football::Game::Live(game)) => {
                 self.commit_football_live(game, logos, now_ms);
                 if let Some(play) = game.last_play {
@@ -368,6 +416,184 @@ impl Store {
             logos,
             now_ms,
         );
+    }
+
+    // -- Hockey ------------------------------------------------------------
+
+    pub fn commit_hockey_live(&mut self, game: &hockey::Live<'_>, logos: Logos, now_ms: Millis) {
+        // The lamp compares against this device's previous commit only when
+        // that commit was this game, live. Anything else — another game, this
+        // game's pregame, an error screen — makes this the first look, and a
+        // goal already on the board at a first look is old news (NHL.md §3.7).
+        let first_look = self.mode() != Mode::HockeyLive || self.snapshot().game_id != game.game_id;
+        self.begin_game(
+            Mode::HockeyLive,
+            game.game_id,
+            game.away.abbreviation,
+            game.home.abbreviation,
+            logos,
+            now_ms,
+        );
+        let newest = game.goals.last();
+        // A regular-season period 5 is the shootout, whose scores say nothing
+        // new: the extractor holds them at the tie (§3.8).
+        let shootout_period = !game.playoffs && game.period >= 5;
+        let lit = if shootout_period && !first_look {
+            None
+        } else {
+            self.lamp_watch().observe(
+                first_look,
+                [game.away.score, game.home.score],
+                newest.map(|goal| goal.side),
+                now_ms,
+            )
+        };
+
+        let away_color = Rgb888::from(game.away.colors);
+        let home_color = Rgb888::from(game.home.colors);
+        let view = &mut self.snapshot_mut().hockey_live;
+        if first_look {
+            view.lamp_side = None;
+            view.lamp_ms = 0;
+        }
+        if let Some(side) = lit {
+            view.lamp_side = Some(side);
+            view.lamp_ms = now_ms;
+        }
+        view.away_score = game.away.score;
+        view.home_score = game.home.score;
+        view.away_color = away_color;
+        view.home_color = home_color;
+
+        set_hockey_period(&mut view.period_text, game.period, game.playoffs);
+        match game.phase {
+            LivePhase::InProgress => {
+                set_folded(&mut view.clock_text, game.clock);
+                view.clock_accent = false;
+            }
+            // ESPN's end-of-period status, with the chip keeping the period
+            // that just ended (§3.2). It is the intermission when another
+            // period follows, and the end when none can: after the shootout,
+            // or a third period or overtime that ended with the scores
+            // unequal — the half minute ESPN spends there before FINAL.
+            // Halftime is never sent for hockey, but the shared code set
+            // decodes it, and it is a break all the same.
+            LivePhase::EndOfPeriod | LivePhase::Halftime => {
+                let decided = game.period >= 3 && game.away.score != game.home.score;
+                let over = shootout_period || decided;
+                set_plain(&mut view.clock_text, if over { "END" } else { "INT" });
+                view.clock_accent = true;
+            }
+        }
+        // Crunch time from the third period on. The colon-less form is NBA's
+        // sub-minute shape, kept as a belt in case ESPN ever emits it here.
+        // The shootout has no clock to run out — ESPN leaves it at 0:00.
+        let sub_minute =
+            game.clock.starts_with("0:") || (!game.clock.is_empty() && !game.clock.contains(':'));
+        view.clock_low = game.phase == LivePhase::InProgress
+            && game.period >= 3
+            && !shootout_period
+            && sub_minute;
+
+        view.shots = game.shots;
+        (view.away_skaters, view.home_skaters) = game.strength.map_or((0, 0), |strength| {
+            (strength.away_skaters, strength.home_skaters)
+        });
+        view.banner = game
+            .strength
+            .and_then(|strength| banner(strength, game.period, game.playoffs));
+
+        view.marks.clear();
+        for goal in game.goals.iter() {
+            if let Some(at) = goal.coordinate {
+                // The wire carries at most the capacity's sixteen goals.
+                let _ = view.marks.push(GoalMark {
+                    side: goal.side,
+                    x: at.x,
+                    y: at.y,
+                });
+            }
+        }
+        view.newest_marked = newest.is_some_and(|goal| goal.coordinate.is_some());
+        view.last_goal = newest.map(|goal| goal.side);
+        view.goal_label.clear();
+        view.goal_line.clear();
+        view.scorer_at = 0;
+        if let Some(goal) = newest {
+            let mut period = Text::<SHORT>::new();
+            set_hockey_period(&mut period, goal.period, game.playoffs);
+            let period = period.as_str();
+            let tag = goal_tag(goal.tag);
+            let (minutes, seconds) = (goal.elapsed / 60, goal.elapsed % 60);
+            write_text!(
+                &mut view.goal_label,
+                "{tag} {minutes}:{seconds:02} {period}"
+            );
+            write_text!(&mut view.goal_line, "{tag} {minutes}:{seconds:02}");
+            if !game.last_scorer.is_empty() {
+                let _ = view.goal_line.push(' ');
+            }
+            // The line is GOAL_LINE bytes at most, so its length fits.
+            view.scorer_at = view.goal_line.len() as u8;
+            push_folded(&mut view.goal_line, game.last_scorer);
+        }
+
+        // The shootout layouts take over only in the shootout itself (§3.1):
+        // a group sent with any other period would be a backend bug, and the
+        // regular layout is the safe thing to draw for it.
+        view.shootout = game.shootout.filter(|_| shootout_period).map(shootout_view);
+        self.finish_game();
+    }
+
+    /// The three-stars final (D2). What every final has — scores, colors, the
+    /// result label, and the line score in hockey's own columns — goes to the
+    /// shared final view, which this screen draws it from; the hockey view
+    /// holds only what hockey adds (NHL.md §3.10).
+    pub fn commit_hockey_final(&mut self, game: &hockey::Final<'_>, logos: Logos, now_ms: Millis) {
+        let (away, home) = (&game.away, &game.home);
+        self.begin_game(
+            Mode::HockeyFinal,
+            game.game_id,
+            away.abbreviation,
+            home.abbreviation,
+            logos,
+            now_ms,
+        );
+        let view = &mut self.snapshot_mut().linescore_final;
+        view.sport = Sport::Hockey;
+        view.away_score = away.score;
+        view.home_score = home.score;
+        view.home_won = home.score > away.score;
+        view.away_color = Rgb888::from(away.colors);
+        view.home_color = Rgb888::from(home.colors);
+        set_hockey_final_text(&mut view.final_text, game.periods_played, game.playoffs);
+        build_hockey_linescore(
+            &mut view.header_row,
+            &mut view.away_row,
+            &mut view.home_row,
+            game.periods_played,
+            game.playoffs,
+            away.line_score,
+            home.line_score,
+        );
+
+        let view = &mut self.snapshot_mut().hockey_final;
+        view.stars = game.stars.map(|stars| {
+            stars.map(|star| {
+                let mut line = StarLine {
+                    name: Text::new(),
+                    side: star.side,
+                };
+                set_folded(&mut line.name, star.name);
+                line
+            })
+        });
+        view.series.clear();
+        if let Some(series) = game.series {
+            push_folded_upper(&mut view.series, series);
+        }
+        view.shots = game.shots;
+        self.finish_game();
     }
 
     // -- Football ----------------------------------------------------------
@@ -805,6 +1031,252 @@ fn build_linescore(
                     crate::text::write_args(row, format_args!("{score:>2} "));
                 }
                 None => crate::text::write_args(row, format_args!(" X ")),
+            }
+        }
+    }
+    debug_assert_eq!(header.len(), away_row.len());
+    debug_assert_eq!(header.len(), home_row.len());
+}
+
+// -- Hockey helpers ----------------------------------------------------------
+
+/// How long a side's score must stay below its high-water mark before the lamp
+/// believes the drop (NHL.md §3.7).
+///
+/// Measured over two weeks of real NHL polls: a score went down 33 times in 26
+/// of 99 games. Sixteen were CDN flickers, every one restored within 90 s;
+/// seventeen were disallowed goals that stayed down. Until a drop has stood
+/// this long the side's old high stands, so a flicker's restore is not a goal
+/// — DET at MTL went 0-0, 0-1, 0-0, 0-1, 0-0 in overtime, and lights once.
+///
+/// The cost: a real goal within 120 s of a disallowed one does not light.
+/// Accepted, because a missed lamp is benign and a false one is not.
+pub const LAMP_SETTLE_MS: Millis = 120_000;
+
+/// The goal lamp's memory of the hockey game on screen: per side, the highest
+/// score this look has accepted, and since when the score has sat below it.
+/// Core-0 model state, kept in the [`Store`] beside the snapshot it decides,
+/// as the soccer stale-clock guard is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LampWatch {
+    /// Away, then home.
+    high: [u16; 2],
+    below_since: [Option<Millis>; 2],
+}
+
+impl LampWatch {
+    pub(crate) const fn new() -> Self {
+        Self {
+            high: [0; 2],
+            below_since: [None; 2],
+        }
+    }
+
+    /// Fold in one commit's scores, away then home, and say which side's
+    /// score to light, if any.
+    ///
+    /// A first look adopts the scores as they stand and lights nothing. After
+    /// that a score above its high lights and becomes the high; one below it
+    /// is believed only once it has stayed below for [`LAMP_SETTLE_MS`], when
+    /// the high comes down to meet it; one back at its high was a flicker.
+    /// Both sides rising in one poll lights the newest goal's side — home when
+    /// the goals are missing too.
+    pub(crate) fn observe(
+        &mut self,
+        first_look: bool,
+        scores: [u16; 2],
+        newest_goal: Option<Side>,
+        now_ms: Millis,
+    ) -> Option<Side> {
+        if first_look {
+            *self = Self {
+                high: scores,
+                below_since: [None; 2],
+            };
+            return None;
+        }
+        let mut rose = [false; 2];
+        for (index, score) in scores.into_iter().enumerate() {
+            let high = &mut self.high[index];
+            let below_since = &mut self.below_since[index];
+            if score > *high {
+                *high = score;
+                *below_since = None;
+                rose[index] = true;
+            } else if score < *high {
+                let since = *below_since.get_or_insert(now_ms);
+                if now_ms.saturating_sub(since) >= LAMP_SETTLE_MS {
+                    *high = score;
+                    *below_since = None;
+                }
+            } else {
+                *below_since = None;
+            }
+        }
+        match rose {
+            [true, true] => Some(newest_goal.unwrap_or(Side::Home)),
+            [true, false] => Some(Side::Away),
+            [false, true] => Some(Side::Home),
+            [false, false] => None,
+        }
+    }
+}
+
+/// Hockey's period ordinals; past the third, the chip reads overtime.
+const HOCKEY_PERIODS: [&str; 4] = ["", "1ST", "2ND", "3RD"];
+
+/// The period chip (NHL.md §3.1): 1ST to 3RD, then OT. ESPN's period 5 is the
+/// shootout in the regular season and the second overtime in the playoffs,
+/// which count on — 2OT, 3OT — and only the season type tells them apart.
+fn set_hockey_period(dst: &mut Text<SHORT>, period: u8, playoffs: bool) {
+    match period {
+        0..=3 => set_plain(dst, HOCKEY_PERIODS[period as usize]),
+        4 => set_plain(dst, "OT"),
+        _ if !playoffs => set_plain(dst, "SO"),
+        _ => {
+            let overtimes = period - 3;
+            write_text!(dst, "{overtimes}OT");
+        }
+    }
+}
+
+/// The result label (NHL.md §3.1): FINAL, FINAL/OT, FINAL/SO, and from the
+/// playoffs' second overtime the short form, F/2OT.
+fn set_hockey_final_text(dst: &mut Text<SHORT>, periods: u8, playoffs: bool) {
+    match periods {
+        0..=3 => set_plain(dst, "FINAL"),
+        4 => set_plain(dst, "FINAL/OT"),
+        _ if !playoffs => set_plain(dst, "FINAL/SO"),
+        _ => {
+            let overtimes = periods - 3;
+            write_text!(dst, "F/{overtimes}OT");
+        }
+    }
+}
+
+const fn goal_tag(tag: hockey::GoalTag) -> &'static str {
+    match tag {
+        hockey::GoalTag::Goal => "GOAL",
+        hockey::GoalTag::PowerPlay => "PPG",
+        hockey::GoalTag::ShortHanded => "SHG",
+        hockey::GoalTag::EmptyNet => "ENG",
+    }
+}
+
+/// The banner a strength earns (NHL.md §3.4, step 5), the advantaged side's
+/// skaters counted first.
+fn banner(strength: hockey::Strength, period: u8, playoffs: bool) -> Option<Banner> {
+    let (away, home) = (strength.away_skaters, strength.home_skaters);
+    let counts = |side| match side {
+        Side::Away => (away, home),
+        Side::Home => (home, away),
+    };
+    let (kind, (attackers, defenders)) = match strength.kind {
+        hockey::StrengthKind::Even => return None,
+        // 3-on-3 is how regular-season overtime is played, not news.
+        hockey::StrengthKind::Matched if !playoffs && period == 4 && away == 3 && home == 3 => {
+            return None;
+        }
+        hockey::StrengthKind::Matched => (BannerKind::Matched, (away, home)),
+        hockey::StrengthKind::PowerPlay(side) => (BannerKind::PowerPlay(side), counts(side)),
+        hockey::StrengthKind::EmptyNet(side) => (BannerKind::EmptyNet(side), counts(side)),
+    };
+    Some(Banner {
+        kind,
+        attackers,
+        defenders,
+    })
+}
+
+/// A shootout row shows at least the best-of-three's three rounds.
+const SHOOTOUT_ROUNDS: usize = 3;
+
+/// The shootout as the screens draw it (NHL.md §3.8): each side's attempts in
+/// order, then a marker on whoever shoots next, padded to three rounds and
+/// windowed to the newest [`SHOOTOUT_SLOTS`]. One window serves both rows, so
+/// a column is the same round on both sides however long sudden death runs.
+///
+/// The wire keeps a side's first sixteen attempts, so a shootout longer than
+/// that — the record is twenty rounds — freezes its markers at round sixteen.
+fn shootout_view(shootout: hockey::Shootout) -> ShootoutView {
+    let away_next = shootout.next_shooter == Some(Side::Away);
+    let home_next = shootout.next_shooter == Some(Side::Home);
+    let rounds =
+        shootout_columns(shootout.away, away_next).max(shootout_columns(shootout.home, home_next));
+    let skip = rounds.saturating_sub(SHOOTOUT_SLOTS);
+    ShootoutView {
+        away: shootout_row(shootout.away, away_next, skip),
+        home: shootout_row(shootout.home, home_next, skip),
+    }
+}
+
+fn shootout_columns(attempts: hockey::ShootoutAttempts, next: bool) -> usize {
+    (attempts.taken as usize + usize::from(next)).max(SHOOTOUT_ROUNDS)
+}
+
+fn shootout_row(attempts: hockey::ShootoutAttempts, next: bool, skip: usize) -> ShootoutRow {
+    let mut row = ShootoutRow::new();
+    // The tally is the attempts', never ESPN's running score, which flips to
+    // the tally mid-shootout (§3.8).
+    row.tally = attempts.scored.count_ones() as u8;
+    let marks = (0..attempts.taken)
+        .map(|attempt| {
+            if attempts.scored >> attempt & 1 != 0 {
+                ShotMark::Scored
+            } else {
+                ShotMark::Missed
+            }
+        })
+        .chain(next.then_some(ShotMark::Next))
+        .chain(core::iter::repeat(ShotMark::Pending))
+        .take(shootout_columns(attempts, next))
+        .skip(skip);
+    for mark in marks {
+        // `skip` leaves at most SHOOTOUT_SLOTS of the widest row.
+        let _ = row.marks.push(mark);
+    }
+    row
+}
+
+/// The regulation columns' headers.
+const HOCKEY_COLUMNS: [&str; 3] = ["1", "2", "3"];
+
+/// The hockey final's line score (NHL.md §3.10): the three periods, one "OT"
+/// column however many overtimes were played — sudden death means only the
+/// last of them can hold a goal, so the column is that goal — and an "SO"
+/// column for a regular-season shootout, ESPN's fifth period of 1/0. The
+/// columns are [`build_linescore`]'s three chars, so the rows still measure
+/// alike and scroll in lockstep.
+fn build_hockey_linescore(
+    header: &mut Text<LINESCORE>,
+    away_row: &mut Text<LINESCORE>,
+    home_row: &mut Text<LINESCORE>,
+    periods: u8,
+    playoffs: bool,
+    away_line: &[u8],
+    home_line: &[u8],
+) {
+    header.clear();
+    away_row.clear();
+    home_row.clear();
+    let periods = periods as usize;
+    let shootout = !playoffs && periods >= 5;
+    let regulation = (0..periods.min(3)).map(|period| (HOCKEY_COLUMNS[period], period..period + 1));
+    let overtime = (periods > 3).then_some(("OT", 3..if shootout { 4 } else { periods }));
+    let shootout = shootout.then_some(("SO", 4..periods));
+    for (label, range) in regulation.chain(overtime).chain(shootout) {
+        crate::text::write_args(header, format_args!("{label:>2} "));
+        for (row, line) in [(&mut *away_row, away_line), (&mut *home_row, home_line)] {
+            match line.get(range.start..range.end.min(line.len())) {
+                Some(goals) if !goals.is_empty() => {
+                    let total = goals
+                        .iter()
+                        .map(|&goals| goals as u16)
+                        .sum::<u16>()
+                        .min(MAX_PERIOD_SCORE as u16);
+                    crate::text::write_args(row, format_args!("{total:>2} "));
+                }
+                _ => crate::text::write_args(row, format_args!(" X ")),
             }
         }
     }

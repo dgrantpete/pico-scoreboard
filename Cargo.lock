@@ -2224,6 +2224,7 @@ dependencies = [
  "hub75",
  "qrcodegen-no-heap",
  "scoreboard-model",
+ "scoreboard-wire",
 ]
 
 [[package]]

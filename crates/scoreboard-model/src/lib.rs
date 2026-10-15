@@ -1,5 +1,5 @@
 #![no_std]
-//! The scoreboard's display state: what the four sports mean, what the panel
+//! The scoreboard's display state: what the five sports mean, what the panel
 //! shows, and the rules for getting from one to the other.
 //!
 //! This is the port of `firmware/src/scoreboard/state.py` (plus the semantic

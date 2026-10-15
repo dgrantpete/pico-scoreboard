@@ -121,8 +121,8 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
 const fn total_label(sport: Sport) -> &'static str {
     match sport {
         Sport::Mlb => "R",
-        // Soccer never reaches this screen — its full-time card is its own
-        // shape — but the enum has four values.
-        Sport::Nba | Sport::Football | Sport::Soccer => "T",
+        // Soccer and hockey never reach this screen — their finals are their
+        // own shapes — but the enum has five values.
+        Sport::Nba | Sport::Hockey | Sport::Football | Sport::Soccer => "T",
     }
 }

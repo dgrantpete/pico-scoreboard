@@ -529,10 +529,12 @@ fn the_feed_a_league_selects_matches_its_espn_slug() {
         (Sport::Soccer, "eng.1", Feed::Soccer),
     ] {
         let league = LeagueId::from_slug(sport, slug);
-        let feed = Feed::from_league(&league);
+        let feed = Feed::from_league(&league).expect("a direct-mode sport");
         assert_eq!(feed, expected, "{slug}");
         assert_eq!(feed.sport(), sport, "{slug}");
     }
+    let nhl = LeagueId::from_slug(Sport::Hockey, "nhl");
+    assert_eq!(Feed::from_league(&nhl), None);
 }
 
 /// Crest paths must reach the poller through the one accessor, for every

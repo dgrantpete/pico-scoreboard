@@ -9,13 +9,14 @@
 //!
 //! **play flash > sport content**, on every live screen. The play flash is the
 //! most recent play-by-play line and outranks the persistent content underneath
-//! (MLB's pitcher/batter, soccer's last goal, football's field strip; NBA has
-//! none, so its strip goes empty between flashes). Toasts are icons composed
-//! over the finished frame ([`crate::toast`]) and never claim the strip.
+//! (MLB's pitcher/batter, soccer's last goal, football's field strip, hockey's
+//! banner or last goal and its rink; NBA has none, so its strip goes empty
+//! between flashes). Toasts are icons composed over the finished frame
+//! ([`crate::toast`]) and never claim the strip.
 //!
 //! The strip's rectangle is each live table's `strip`: the data column under
 //! its rule on the column screens, the full legal width on the corner screens
-//! (football, soccer C), where nothing is left beside the flash.
+//! (football, soccer C, hockey's rink), where nothing is left beside the flash.
 //!
 //! # Rails
 //!
@@ -26,6 +27,7 @@
 //! two rails exist.
 
 pub mod football;
+pub mod hockey;
 pub mod mlb;
 pub mod nba;
 pub mod pregame;

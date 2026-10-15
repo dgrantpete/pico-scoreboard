@@ -7,7 +7,7 @@
 //! deliberately about *decoding bytes into games*, not about fetching: URLs,
 //! ETags, sockets and retry policy stay in the app, where the I/O is.
 
-use scoreboard_wire::{DecodeError, GameState, football, list, mlb, nba, soccer};
+use scoreboard_wire::{DecodeError, GameState, football, hockey, list, mlb, nba, soccer};
 
 pub use crate::snapshot::Sport;
 
@@ -41,11 +41,12 @@ impl LeagueId {
         let (prefix, name) = match sport {
             Sport::Mlb => ("baseball/mlb", Some("MLB")),
             Sport::Nba => ("basketball/nba", Some("NBA")),
+            Sport::Hockey => ("hockey", hockey_league_name(slug)),
             Sport::Football => ("football", football_league_name(slug)),
             Sport::Soccer => ("soccer", soccer_league_name(slug)),
         };
         crate::text::set_plain(&mut id.key, prefix);
-        if matches!(sport, Sport::Football | Sport::Soccer) {
+        if matches!(sport, Sport::Hockey | Sport::Football | Sport::Soccer) {
             let _ = id.key.push('/');
             crate::text::set_plain_append(&mut id.key, slug);
         }
@@ -54,6 +55,15 @@ impl LeagueId {
             None => crate::text::push_folded_upper(&mut id.display_name, slug),
         }
         id
+    }
+}
+
+/// Mirrors the backend's NHL registration (`backend/src/espn/league.rs`). One
+/// league today; another is a row here (NHL.md §6.4).
+fn hockey_league_name(slug: &str) -> Option<&'static str> {
+    match slug {
+        "nhl" => Some("NHL"),
+        _ => None,
     }
 }
 
@@ -87,6 +97,7 @@ fn soccer_league_name(slug: &str) -> Option<&'static str> {
 pub enum GameDetail<'a> {
     Mlb(mlb::Game<'a>),
     Nba(nba::Game<'a>),
+    Hockey(hockey::Game<'a>),
     Football(football::Game<'a>),
     Soccer(soccer::Game<'a>),
 }
@@ -96,6 +107,7 @@ impl GameDetail<'_> {
         match self {
             GameDetail::Mlb(_) => Sport::Mlb,
             GameDetail::Nba(_) => Sport::Nba,
+            GameDetail::Hockey(_) => Sport::Hockey,
             GameDetail::Football(_) => Sport::Football,
             GameDetail::Soccer(_) => Sport::Soccer,
         }
@@ -105,6 +117,7 @@ impl GameDetail<'_> {
         match self {
             GameDetail::Mlb(game) => game.state(),
             GameDetail::Nba(game) => game.state(),
+            GameDetail::Hockey(game) => game.state(),
             GameDetail::Football(game) => game.state(),
             GameDetail::Soccer(game) => game.state(),
         }
@@ -118,6 +131,9 @@ impl GameDetail<'_> {
             GameDetail::Nba(nba::Game::Pregame(game)) => game.game_id,
             GameDetail::Nba(nba::Game::Live(game)) => game.game_id,
             GameDetail::Nba(nba::Game::Final(game)) => game.game_id,
+            GameDetail::Hockey(hockey::Game::Pregame(game)) => game.game_id,
+            GameDetail::Hockey(hockey::Game::Live(game)) => game.game_id,
+            GameDetail::Hockey(hockey::Game::Final(game)) => game.game_id,
             GameDetail::Football(football::Game::Pregame(game)) => game.game_id,
             GameDetail::Football(football::Game::Live(game)) => game.game_id,
             GameDetail::Football(football::Game::Final(game)) => game.game_id,
@@ -148,6 +164,15 @@ impl GameDetail<'_> {
                 (game.away.abbreviation, game.home.abbreviation)
             }
             GameDetail::Nba(nba::Game::Final(game)) => {
+                (game.away.abbreviation, game.home.abbreviation)
+            }
+            GameDetail::Hockey(hockey::Game::Pregame(game)) => {
+                (game.away.abbreviation, game.home.abbreviation)
+            }
+            GameDetail::Hockey(hockey::Game::Live(game)) => {
+                (game.away.abbreviation, game.home.abbreviation)
+            }
+            GameDetail::Hockey(hockey::Game::Final(game)) => {
                 (game.away.abbreviation, game.home.abbreviation)
             }
             GameDetail::Football(football::Game::Pregame(game)) => {
@@ -205,6 +230,7 @@ impl GameFeed for WireFeed {
         Ok(match sport {
             Sport::Mlb => GameDetail::Mlb(mlb::decode(payload)?),
             Sport::Nba => GameDetail::Nba(nba::decode(payload)?),
+            Sport::Hockey => GameDetail::Hockey(hockey::decode(payload)?),
             Sport::Football => GameDetail::Football(football::decode(payload)?),
             Sport::Soccer => GameDetail::Soccer(soccer::decode(payload)?),
         })

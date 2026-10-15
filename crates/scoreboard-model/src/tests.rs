@@ -59,6 +59,7 @@ fn league_of(name: &str) -> LeagueId {
     match parts.next().expect("sport-prefixed fixture name") {
         "mlb" => LeagueId::from_slug(Sport::Mlb, "mlb"),
         "nba" => LeagueId::from_slug(Sport::Nba, "nba"),
+        "hockey" => LeagueId::from_slug(Sport::Hockey, "nhl"),
         "football" => LeagueId::from_slug(Sport::Football, parts.next().expect("league slug")),
         "soccer" => LeagueId::from_slug(Sport::Soccer, parts.next().expect("league slug")),
         other => panic!("unknown sport {other}"),
@@ -1619,6 +1620,825 @@ fn a_channel_hands_out_one_publisher() {
 }
 
 // =========================================================================
+// Hockey (NHL.md §3)
+// =========================================================================
+//
+// Hand-built wire values until the backend produces hockey goldens: each test
+// states the ESPN moment it stands for.
+
+use scoreboard_wire::hockey;
+use scoreboard_wire::{LivePhase, Side};
+
+use crate::snapshot::{BannerKind, GoalMark, Millis, ShotMark};
+use crate::sports::LAMP_SETTLE_MS;
+
+fn nhl() -> LeagueId {
+    LeagueId::from_slug(Sport::Hockey, "nhl")
+}
+
+fn nhl_team(abbreviation: &str, score: u16) -> scoreboard_wire::TeamState<'_> {
+    scoreboard_wire::TeamState {
+        abbreviation,
+        score,
+        colors: scoreboard_wire::TeamColors {
+            primary: 0x00_3E_7E,
+            alternate: 0x00_FF_FF_FF,
+        },
+    }
+}
+
+/// TB at NYR, 2nd period, even strength, no goals yet.
+fn nhl_live<'a>(goals: &'a [hockey::Goal]) -> hockey::Live<'a> {
+    hockey::Live {
+        game_id: "401891781",
+        period: 2,
+        phase: LivePhase::InProgress,
+        clock: "16:41",
+        playoffs: false,
+        away: nhl_team("TB", 0),
+        home: nhl_team("NYR", 0),
+        shots: Some(hockey::Shots { away: 14, home: 8 }),
+        strength: Some(hockey::Strength {
+            kind: hockey::StrengthKind::Even,
+            away_skaters: 5,
+            home_skaters: 5,
+        }),
+        goals: hockey::Goals::new(goals),
+        last_scorer: "",
+        shootout: None,
+        last_play: None,
+    }
+}
+
+fn goal(side: Side, tag: hockey::GoalTag, period: u8, elapsed: u16) -> hockey::Goal {
+    hockey::Goal {
+        side,
+        tag,
+        period,
+        elapsed,
+        coordinate: Some(hockey::Coordinate { x: 70, y: -4 }),
+    }
+}
+
+fn commit_live(store: &mut Store, live: hockey::Live<'_>, now_ms: Millis) {
+    let detail = GameDetail::Hockey(hockey::Game::Live(live));
+    store.commit_detail(&nhl(), &detail, Logos::default(), now_ms, clock());
+}
+
+/// One poll of a game at a given score, as the lamp tests drive it.
+fn poll_score(store: &mut Store, away: u16, home: u16, now_ms: Millis) {
+    let live = hockey::Live {
+        away: nhl_team("DET", away),
+        home: nhl_team("MTL", home),
+        ..nhl_live(&[])
+    };
+    commit_live(store, live, now_ms);
+}
+
+fn lamp(store: &Store) -> (Option<Side>, Millis) {
+    let view = &store.snapshot().hockey_live;
+    (view.lamp_side, view.lamp_ms)
+}
+
+#[test]
+fn the_nhl_is_hockey_slash_nhl_and_another_league_is_a_table_row() {
+    let league = nhl();
+    assert_eq!(league.key.as_str(), "hockey/nhl");
+    assert_eq!(league.display_name.as_str(), "NHL");
+    assert_eq!(league.sport, Sport::Hockey);
+
+    // An unregistered slug falls back the way football's and soccer's do.
+    let other = LeagueId::from_slug(Sport::Hockey, "ahl");
+    assert_eq!(other.key.as_str(), "hockey/ahl");
+    assert_eq!(other.display_name.as_str(), "AHL");
+}
+
+#[test]
+fn a_hockey_payload_decodes_through_the_wire_feed() {
+    let goals = [goal(Side::Home, hockey::GoalTag::PowerPlay, 1, 334)];
+    let live = hockey::Live {
+        last_scorer: "M. Zibanejad",
+        home: nhl_team("NYR", 1),
+        ..nhl_live(&goals)
+    };
+    let mut bytes = [0u8; 512];
+    let mut sink = scoreboard_wire::SliceSink::new(&mut bytes);
+    hockey::encode(&hockey::Game::Live(live), &mut sink).unwrap();
+    let written = sink.written();
+    let len = written.len();
+    let detail = WireFeed.detail(Sport::Hockey, &bytes[..len]).unwrap();
+    assert_eq!(detail.sport(), Sport::Hockey);
+    assert_eq!(detail.game_id(), "401891781");
+    assert_eq!(detail.abbreviations(), ("TB", "NYR"));
+
+    let mut store = Store::new();
+    store.commit_detail(&nhl(), &detail, Logos::default(), 1_000, clock());
+    assert_eq!(store.snapshot().mode, Mode::HockeyLive);
+    assert_eq!(store.snapshot().hockey_live.scorer(), "M. Zibanejad");
+}
+
+/// §3.1's period labels: the season type decides what period 5 is.
+#[test]
+fn the_period_chip_reads_the_season_type_at_period_five() {
+    let cases = [
+        (1, false, "1ST"),
+        (2, false, "2ND"),
+        (3, false, "3RD"),
+        (4, false, "OT"),
+        (5, false, "SO"),
+        (4, true, "OT"),
+        (5, true, "2OT"),
+        (6, true, "3OT"),
+        (9, true, "6OT"),
+    ];
+    for (period, playoffs, label) in cases {
+        let mut store = Store::new();
+        let live = hockey::Live {
+            period,
+            playoffs,
+            ..nhl_live(&[])
+        };
+        commit_live(&mut store, live, 0);
+        assert_eq!(
+            store.snapshot().hockey_live.period_text.as_str(),
+            label,
+            "period {period}, playoffs {playoffs}"
+        );
+    }
+}
+
+fn nhl_final<'a>(
+    periods: u8,
+    playoffs: bool,
+    away_line: &'a [u8],
+    home_line: &'a [u8],
+) -> hockey::Final<'a> {
+    let team = |abbreviation, line: &'a [u8]| scoreboard_wire::FinalTeam {
+        abbreviation,
+        score: line.iter().map(|&goals| goals as u16).sum(),
+        colors: scoreboard_wire::TeamColors {
+            primary: 0x00_C8_10_2E,
+            alternate: 0,
+        },
+        line_score: line,
+    };
+    hockey::Final {
+        game_id: "401874173",
+        periods_played: periods,
+        playoffs,
+        away: team("CAR", away_line),
+        home: team("VGK", home_line),
+        shots: Some(hockey::Shots { away: 33, home: 35 }),
+        stars: None,
+        series: None,
+    }
+}
+
+fn committed_final(game: &hockey::Final<'_>) -> Store {
+    let mut store = Store::new();
+    let detail = GameDetail::Hockey(hockey::Game::Final(*game));
+    store.commit_detail(&nhl(), &detail, Logos::default(), 0, clock());
+    store
+}
+
+/// §3.1's final labels.
+#[test]
+fn the_result_label_counts_overtimes_only_in_the_playoffs() {
+    let cases = [
+        (3, false, "FINAL"),
+        (4, false, "FINAL/OT"),
+        (5, false, "FINAL/SO"),
+        (4, true, "FINAL/OT"),
+        (5, true, "F/2OT"),
+        (7, true, "F/4OT"),
+    ];
+    // The label reads the period count and the season type, nothing else.
+    let line = [0u8; 7];
+    for (periods, playoffs, label) in cases {
+        let line = &line[..periods as usize];
+        let store = committed_final(&nhl_final(periods, playoffs, line, line));
+        let view = &store.snapshot().linescore_final;
+        assert_eq!(view.final_text.as_str(), label, "{periods} {playoffs}");
+        assert_eq!(view.sport, Sport::Hockey);
+        assert_eq!(store.snapshot().mode, Mode::HockeyFinal);
+    }
+}
+
+/// §3.10: every overtime collapses into one OT column, and a shootout is its
+/// own SO column.
+#[test]
+fn the_final_line_score_collapses_overtimes_and_keeps_the_shootout_apart() {
+    // DAL at FLA, 2025-11-01: a regular-season shootout.
+    let store = committed_final(&nhl_final(5, false, &[0, 2, 1, 0, 0], &[0, 2, 1, 0, 1]));
+    let view = &store.snapshot().linescore_final;
+    assert_eq!(view.header_row.as_str(), " 1  2  3 OT SO ");
+    assert_eq!(view.away_row.as_str(), " 0  2  1  0  0 ");
+    assert_eq!(view.home_row.as_str(), " 0  2  1  0  1 ");
+    assert!(view.home_won);
+
+    // CAR at VGK, Cup Final game 3: the second overtime is no SO.
+    let store = committed_final(&nhl_final(5, true, &[0, 0, 4, 0, 0], &[0, 4, 0, 0, 1]));
+    let view = &store.snapshot().linescore_final;
+    assert_eq!(view.header_row.as_str(), " 1  2  3 OT ");
+    assert_eq!(view.home_row.as_str(), " 0  4  0  1 ");
+    assert_eq!(view.away_row.as_str(), " 0  0  4  0 ");
+
+    // Regulation: three columns and nothing after them.
+    let store = committed_final(&nhl_final(3, true, &[1, 1, 1], &[0, 0, 0]));
+    let view = &store.snapshot().linescore_final;
+    assert_eq!(view.header_row.as_str(), " 1  2  3 ");
+    assert!(!view.home_won);
+}
+
+#[test]
+fn the_stars_final_folds_its_names_and_uppercases_the_series() {
+    let mut game = nhl_final(3, true, &[1, 1, 1], &[0, 0, 0]);
+    game.stars = Some([
+        hockey::Star {
+            name: "B. Bussi",
+            side: Some(Side::Away),
+        },
+        hockey::Star {
+            name: "T. Hall",
+            side: Some(Side::Away),
+        },
+        hockey::Star {
+            name: "J. Blake",
+            side: None,
+        },
+    ]);
+    game.series = Some("CAR wins series 4-2");
+    let store = committed_final(&game);
+    let view = &store.snapshot().hockey_final;
+    let stars = view.stars.as_ref().expect("all three stars");
+    assert_eq!(stars[0].name.as_str(), "B. Bussi");
+    assert_eq!(stars[2].side, None);
+    assert_eq!(view.series.as_str(), "CAR WINS SERIES 4-2");
+    assert_eq!(view.shots, Some(hockey::Shots { away: 33, home: 35 }));
+
+    // Minutes after the horn the stars are not named yet: none, not blanks.
+    let store = committed_final(&nhl_final(3, false, &[1, 1, 1], &[0, 0, 0]));
+    assert!(store.snapshot().hockey_final.stars.is_none());
+    assert!(store.snapshot().hockey_final.series.is_empty());
+}
+
+/// §3.2: the clock slot between periods.
+#[test]
+fn a_break_reads_int_while_a_period_can_follow_and_end_once_none_can() {
+    let cases = [
+        // (period, playoffs, away, home, clock slot)
+        (1, false, 1, 3, "INT"),
+        (2, true, 0, 0, "INT"),
+        // A tied third goes to overtime; a tied regular-season overtime to
+        // the shootout; a tied playoff overtime to another overtime.
+        (3, false, 2, 2, "INT"),
+        (4, false, 3, 3, "INT"),
+        (5, true, 4, 4, "INT"),
+        // A decided third or overtime: the half minute before FINAL.
+        (3, false, 2, 1, "END"),
+        (3, true, 0, 3, "END"),
+        (6, true, 3, 2, "END"),
+        // After the shootout, whose score the extractor keeps tied.
+        (5, false, 3, 3, "END"),
+    ];
+    for (period, playoffs, away, home, slot) in cases {
+        let mut store = Store::new();
+        let live = hockey::Live {
+            period,
+            playoffs,
+            phase: LivePhase::EndOfPeriod,
+            clock: "0:00",
+            away: nhl_team("BUF", away),
+            home: nhl_team("CBJ", home),
+            ..nhl_live(&[])
+        };
+        commit_live(&mut store, live, 0);
+        let view = &store.snapshot().hockey_live;
+        assert_eq!(
+            view.clock_text.as_str(),
+            slot,
+            "{period} {playoffs} {away}-{home}"
+        );
+        assert!(view.clock_accent, "a break is always the accent color");
+        assert!(!view.clock_low);
+        assert!(!view.period_text.is_empty(), "the chip keeps its period");
+    }
+}
+
+/// §3.2: the warning color.
+#[test]
+fn the_clock_warns_under_a_minute_from_the_third_period_on() {
+    let cases = [
+        (2, "0:42", false),
+        (3, "0:42", true),
+        (3, "1:00", false),
+        (3, "42.5", true),
+        (4, "0:09", true),
+        // The shootout's clock sits at 0:00 and is not running out.
+        (5, "0:00", false),
+    ];
+    for (period, clock_text, low) in cases {
+        let mut store = Store::new();
+        let live = hockey::Live {
+            period,
+            clock: clock_text,
+            ..nhl_live(&[])
+        };
+        commit_live(&mut store, live, 0);
+        let view = &store.snapshot().hockey_live;
+        assert_eq!(view.clock_low, low, "{period} {clock_text}");
+        assert_eq!(view.clock_text.as_str(), clock_text);
+        assert!(!view.clock_accent);
+    }
+}
+
+#[test]
+fn strength_becomes_a_banner_with_the_advantaged_side_counted_first() {
+    let strength = |kind, away_skaters, home_skaters| hockey::Strength {
+        kind,
+        away_skaters,
+        home_skaters,
+    };
+    let cases = [
+        (
+            2,
+            strength(hockey::StrengthKind::PowerPlay(Side::Home), 4, 5),
+            Some((BannerKind::PowerPlay(Side::Home), 5, 4)),
+        ),
+        // A pulled goalie wins the banner over the power play underneath it.
+        (
+            3,
+            strength(hockey::StrengthKind::EmptyNet(Side::Away), 6, 4),
+            Some((BannerKind::EmptyNet(Side::Away), 6, 4)),
+        ),
+        (
+            2,
+            strength(hockey::StrengthKind::Matched, 4, 4),
+            Some((BannerKind::Matched, 4, 4)),
+        ),
+        // The play-strength fallback cannot count skaters.
+        (
+            1,
+            strength(hockey::StrengthKind::PowerPlay(Side::Away), 0, 0),
+            Some((BannerKind::PowerPlay(Side::Away), 0, 0)),
+        ),
+        // 3-on-3 is how regular-season overtime is played: no banner.
+        (4, strength(hockey::StrengthKind::Matched, 3, 3), None),
+        (2, strength(hockey::StrengthKind::Even, 5, 5), None),
+    ];
+    for (period, strength, expected) in cases {
+        let mut store = Store::new();
+        let live = hockey::Live {
+            period,
+            strength: Some(strength),
+            ..nhl_live(&[])
+        };
+        commit_live(&mut store, live, 0);
+        let view = &store.snapshot().hockey_live;
+        let banner = view
+            .banner
+            .map(|banner| (banner.kind, banner.attackers, banner.defenders));
+        assert_eq!(banner, expected, "{strength:?} in period {period}");
+        assert_eq!(
+            (view.away_skaters, view.home_skaters),
+            (strength.away_skaters, strength.home_skaters),
+            "the dots always show the true counts"
+        );
+    }
+
+    // A playoff overtime is 5-on-5, so a 3-on-3 there is news.
+    let mut store = Store::new();
+    let live = hockey::Live {
+        period: 4,
+        playoffs: true,
+        strength: Some(strength(hockey::StrengthKind::Matched, 3, 3)),
+        ..nhl_live(&[])
+    };
+    commit_live(&mut store, live, 0);
+    assert!(store.snapshot().hockey_live.banner.is_some());
+}
+
+#[test]
+fn the_newest_goal_becomes_both_layouts_lines() {
+    let goals = [
+        goal(Side::Away, hockey::GoalTag::Goal, 1, 441),
+        goal(Side::Home, hockey::GoalTag::PowerPlay, 1, 1_078),
+    ];
+    let live = hockey::Live {
+        last_scorer: "M. Knies",
+        away: nhl_team("BUF", 1),
+        home: nhl_team("CBJ", 1),
+        ..nhl_live(&goals)
+    };
+    let mut store = Store::new();
+    commit_live(&mut store, live, 0);
+    let view = &store.snapshot().hockey_live;
+    assert_eq!(view.goal_label.as_str(), "PPG 17:58 1ST");
+    assert_eq!(view.scorer(), "M. Knies");
+    assert_eq!(view.goal_line.as_str(), "PPG 17:58 M. Knies");
+    assert_eq!(view.last_goal, Some(Side::Home));
+    assert_eq!(
+        view.marks.as_slice(),
+        &[
+            GoalMark {
+                side: Side::Away,
+                x: 70,
+                y: -4
+            },
+            GoalMark {
+                side: Side::Home,
+                x: 70,
+                y: -4
+            },
+        ]
+    );
+    assert!(view.newest_marked);
+
+    // A playoff goal in ESPN's period 5 is in the second overtime, and a goal
+    // ESPN logged without a coordinate keeps its line but gets no mark.
+    let goals = [
+        goal(Side::Away, hockey::GoalTag::Goal, 2, 60),
+        hockey::Goal {
+            coordinate: None,
+            ..goal(Side::Home, hockey::GoalTag::EmptyNet, 5, 192)
+        },
+    ];
+    let live = hockey::Live {
+        period: 5,
+        playoffs: true,
+        last_scorer: "",
+        ..nhl_live(&goals)
+    };
+    commit_live(&mut store, live, 0);
+    let view = &store.snapshot().hockey_live;
+    assert_eq!(view.goal_label.as_str(), "ENG 3:12 2OT");
+    assert_eq!(
+        view.goal_line.as_str(),
+        "ENG 3:12",
+        "no scorer, no trailing space"
+    );
+    assert_eq!(view.scorer(), "");
+    assert_eq!(view.marks.len(), 1);
+    assert!(!view.newest_marked, "the newest goal has nothing to blink");
+}
+
+/// Ruling 3: the backend degrades to the scoreboard when the summary fetch
+/// fails, and every summary-derived field arrives absent.
+#[test]
+fn a_missing_summary_leaves_every_summary_field_empty() {
+    let mut store = Store::new();
+    // A goal-laden live view first, so the test proves the fields clear.
+    let goals = [goal(Side::Away, hockey::GoalTag::Goal, 1, 60)];
+    let full = hockey::Live {
+        last_scorer: "T. Hall",
+        away: nhl_team("TB", 1),
+        last_play: Some(scoreboard_wire::LastPlay {
+            id: "p1",
+            text: "GOAL! Taylor Hall (3)",
+        }),
+        ..nhl_live(&goals)
+    };
+    commit_live(&mut store, full, 0);
+
+    let bare = hockey::Live {
+        away: nhl_team("TB", 2),
+        home: nhl_team("NYR", 1),
+        shots: None,
+        strength: None,
+        ..nhl_live(&[])
+    };
+    commit_live(&mut store, bare, 5_000);
+    let view = &store.snapshot().hockey_live;
+    assert_eq!((view.away_score, view.home_score), (2, 1));
+    assert!(view.shots.is_none(), "hidden, never 0-0");
+    assert!(view.banner.is_none());
+    assert_eq!((view.away_skaters, view.home_skaters), (0, 0));
+    assert!(view.marks.is_empty());
+    assert_eq!(view.last_goal, None);
+    assert!(view.goal_label.is_empty() && view.goal_line.is_empty() && view.scorer().is_empty());
+    assert!(view.shootout.is_none());
+    // The play line stays as it was: an absent play changes nothing.
+    assert_eq!(store.snapshot().play.id.as_str(), "p1");
+}
+
+// -- The goal lamp (§3.7) --------------------------------------------------
+
+#[test]
+fn a_goal_between_two_polls_lights_the_scoring_side() {
+    let mut store = Store::new();
+    poll_score(&mut store, 0, 0, 1_000);
+    assert_eq!(lamp(&store), (None, 0));
+    poll_score(&mut store, 0, 1, 6_000);
+    assert_eq!(lamp(&store), (Some(Side::Home), 6_000));
+    // A standing re-poll keeps the anchor: the window runs from the goal.
+    poll_score(&mut store, 0, 1, 11_000);
+    assert_eq!(lamp(&store), (Some(Side::Home), 6_000));
+    poll_score(&mut store, 1, 1, 16_000);
+    assert_eq!(lamp(&store), (Some(Side::Away), 16_000));
+}
+
+/// DET at MTL in overtime, from the corpus: 0-0 → 0-1 → 0-0 → 0-1 → 0-0,
+/// a CDN flicker restored inside 90 s.
+#[test]
+fn a_flickering_score_lights_once() {
+    let mut store = Store::new();
+    poll_score(&mut store, 0, 0, 0);
+    poll_score(&mut store, 0, 1, 10_000);
+    assert_eq!(lamp(&store), (Some(Side::Home), 10_000));
+    for (at, home) in [
+        (20_000, 0),
+        (30_000, 1),
+        (40_000, 0),
+        (50_000, 0),
+        (60_000, 1),
+    ] {
+        poll_score(&mut store, 0, home, at);
+        assert_eq!(
+            lamp(&store),
+            (Some(Side::Home), 10_000),
+            "the flicker at {at} ms relit the old goal"
+        );
+    }
+}
+
+#[test]
+fn a_disallowed_goal_settles_and_the_next_real_goal_lights() {
+    let mut store = Store::new();
+    poll_score(&mut store, 2, 2, 0);
+    poll_score(&mut store, 3, 2, 10_000);
+    assert_eq!(lamp(&store), (Some(Side::Away), 10_000));
+    // Overturned on review: the score stays down.
+    let mut at = 20_000;
+    while at <= 20_000 + LAMP_SETTLE_MS {
+        poll_score(&mut store, 2, 2, at);
+        at += 10_000;
+    }
+    // Past the settle window, the next goal is new.
+    poll_score(&mut store, 3, 2, at);
+    assert_eq!(lamp(&store), (Some(Side::Away), at));
+}
+
+#[test]
+fn a_real_goal_inside_the_settle_window_does_not_light() {
+    // The accepted cost of the flicker rule: indistinguishable from a
+    // restore, so it stays dark.
+    let mut store = Store::new();
+    poll_score(&mut store, 0, 0, 0);
+    poll_score(&mut store, 1, 0, 10_000);
+    poll_score(&mut store, 0, 0, 20_000);
+    poll_score(&mut store, 1, 0, 20_000 + LAMP_SETTLE_MS - 1);
+    assert_eq!(lamp(&store), (Some(Side::Away), 10_000));
+}
+
+#[test]
+fn the_first_commit_of_a_game_never_lights_its_goals() {
+    let mut store = Store::new();
+    poll_score(&mut store, 3, 2, 1_000);
+    assert_eq!(lamp(&store), (None, 0));
+}
+
+#[test]
+fn rotating_away_and_back_is_a_first_look_again() {
+    let mut store = Store::new();
+    poll_score(&mut store, 1, 0, 0);
+    poll_score(&mut store, 2, 0, 5_000);
+    assert_eq!(lamp(&store), (Some(Side::Away), 5_000));
+
+    // Another game on screen, and a goal here meanwhile.
+    let (league, bytes) = fixture("nba/in_progress");
+    let other = WireFeed.detail(league.sport, &bytes).unwrap();
+    store.commit_detail(&league, &other, Logos::default(), 10_000, clock());
+    poll_score(&mut store, 3, 0, 15_000);
+    assert_eq!(lamp(&store), (None, 0), "a goal on the board is old news");
+
+    // And the mark was re-taken there: the next goal is measured from it.
+    poll_score(&mut store, 4, 0, 20_000);
+    assert_eq!(lamp(&store), (Some(Side::Away), 20_000));
+}
+
+#[test]
+fn both_sides_rising_in_one_poll_light_the_newest_goal() {
+    let goals = [
+        goal(Side::Home, hockey::GoalTag::Goal, 2, 100),
+        goal(Side::Away, hockey::GoalTag::Goal, 2, 130),
+    ];
+    let mut store = Store::new();
+    poll_score(&mut store, 0, 0, 0);
+    let live = hockey::Live {
+        away: nhl_team("DET", 1),
+        home: nhl_team("MTL", 1),
+        ..nhl_live(&goals)
+    };
+    commit_live(&mut store, live, 5_000);
+    assert_eq!(lamp(&store), (Some(Side::Away), 5_000));
+
+    // No goals to ask: home.
+    poll_score(&mut store, 2, 2, 10_000);
+    assert_eq!(lamp(&store), (Some(Side::Home), 10_000));
+}
+
+#[test]
+fn shootout_scores_never_light_the_lamp() {
+    let mut store = Store::new();
+    let shootout = |away, home| hockey::Live {
+        period: 5,
+        away: nhl_team("DAL", away),
+        home: nhl_team("FLA", home),
+        ..nhl_live(&[])
+    };
+    commit_live(&mut store, shootout(3, 3), 0);
+    // ESPN's live score already carrying the winner's +1.
+    commit_live(&mut store, shootout(3, 4), 5_000);
+    assert_eq!(lamp(&store), (None, 0));
+}
+
+// -- The shootout (§3.8) ---------------------------------------------------
+
+fn attempts(taken: u8, scored: u16) -> hockey::ShootoutAttempts {
+    hockey::ShootoutAttempts { taken, scored }
+}
+
+/// DAL at FLA, 2025-11-01, tied 3-3 into a shootout FLA shot first in.
+fn shootout_view(
+    away: hockey::ShootoutAttempts,
+    home: hockey::ShootoutAttempts,
+    next_shooter: Option<Side>,
+) -> crate::snapshot::ShootoutView {
+    let mut store = Store::new();
+    let live = hockey::Live {
+        period: 5,
+        clock: "0:00",
+        away: nhl_team("DAL", 3),
+        home: nhl_team("FLA", 3),
+        strength: None,
+        shootout: Some(hockey::Shootout {
+            away,
+            home,
+            next_shooter,
+        }),
+        ..nhl_live(&[])
+    };
+    commit_live(&mut store, live, 0);
+    let view = &store.snapshot().hockey_live;
+    assert_eq!(
+        (view.away_score, view.home_score),
+        (3, 3),
+        "the game score stays the tie"
+    );
+    view.shootout.clone().expect("a shootout view")
+}
+
+use ShotMark::{Missed, Next, Pending, Scored};
+
+#[test]
+fn the_shootout_rows_mark_each_attempt_and_the_next_shooter() {
+    // Before the first attempt: three rounds to come, FLA up.
+    let view = shootout_view(attempts(0, 0), attempts(0, 0), Some(Side::Home));
+    assert_eq!(view.away.marks.as_slice(), &[Pending, Pending, Pending]);
+    assert_eq!(view.home.marks.as_slice(), &[Next, Pending, Pending]);
+    assert_eq!((view.away.tally, view.home.tally), (0, 0));
+
+    // The gallery's moment: FLA scored its third, DAL shoots to stay alive.
+    let view = shootout_view(attempts(2, 0), attempts(3, 0b100), Some(Side::Away));
+    assert_eq!(view.away.marks.as_slice(), &[Missed, Missed, Next]);
+    assert_eq!(view.home.marks.as_slice(), &[Missed, Missed, Scored]);
+    assert_eq!((view.away.tally, view.home.tally), (0, 1));
+
+    // Over: no next shooter.
+    let view = shootout_view(attempts(3, 0), attempts(3, 0b100), None);
+    assert_eq!(view.away.marks.as_slice(), &[Missed, Missed, Missed]);
+    assert_eq!(view.home.marks.as_slice(), &[Missed, Missed, Scored]);
+
+    // Decided after two rounds: the third is never shot, and still shown.
+    let view = shootout_view(attempts(2, 0b11), attempts(2, 0), None);
+    assert_eq!(view.away.marks.as_slice(), &[Scored, Scored, Pending]);
+    assert_eq!(view.home.marks.as_slice(), &[Missed, Missed, Pending]);
+    assert_eq!((view.away.tally, view.home.tally), (2, 0));
+}
+
+#[test]
+fn sudden_death_shows_the_newest_seven_rounds_in_step() {
+    // Nine rounds each, the tenth under way with DAL up. The window covers
+    // rounds 4-10 on both rows, so a column stays a round.
+    let view = shootout_view(
+        attempts(9, 0b1_0000_0001),
+        attempts(9, 0b0_0000_0001),
+        Some(Side::Away),
+    );
+    assert_eq!(
+        view.away.marks.as_slice(),
+        &[Missed, Missed, Missed, Missed, Missed, Scored, Next]
+    );
+    assert_eq!(
+        view.home.marks.as_slice(),
+        &[Missed, Missed, Missed, Missed, Missed, Missed]
+    );
+    // The tally counts every attempt, not just the visible ones.
+    assert_eq!((view.away.tally, view.home.tally), (2, 1));
+
+    // The wire's sixteen-attempt ceiling: the markers freeze, the tally holds.
+    let view = shootout_view(attempts(16, 0x8001), attempts(16, 0x0001), None);
+    assert_eq!(view.away.marks.len(), crate::snapshot::SHOOTOUT_SLOTS);
+    assert_eq!(view.away.marks.last(), Some(&Scored));
+    assert_eq!((view.away.tally, view.home.tally), (2, 1));
+}
+
+#[test]
+fn only_the_regular_season_shootout_period_draws_the_shootout() {
+    // A shootout group beside a playoff period 5 — a second overtime — is a
+    // backend bug, and the regular layout is what draws.
+    let mut store = Store::new();
+    let live = hockey::Live {
+        period: 5,
+        playoffs: true,
+        shootout: Some(hockey::Shootout {
+            away: attempts(1, 0),
+            home: attempts(1, 1),
+            next_shooter: Some(Side::Away),
+        }),
+        ..nhl_live(&[])
+    };
+    commit_live(&mut store, live, 0);
+    assert!(store.snapshot().hockey_live.shootout.is_none());
+}
+
+// -- Pregame (§3.9) --------------------------------------------------------
+
+#[test]
+fn a_hockey_pregame_stacks_three_record_columns_and_names_the_goalies() {
+    let pregame = hockey::Pregame {
+        game_id: "401874176",
+        start_time: 1_781_481_600,
+        venue: "T-Mobile Arena",
+        info_secondary: "Stanley Cup Final - Game 6 - BUF leads series 3-2",
+        playoffs: true,
+        away: hockey::PregameTeam {
+            abbreviation: "CAR",
+            colors: scoreboard_wire::TeamColors {
+                primary: 0x00_C8_10_2E,
+                alternate: 0,
+            },
+            record: Some(hockey::Record {
+                wins: 53,
+                losses: 22,
+                ot_losses: 7,
+            }),
+            goalie: Some("F. Andersen"),
+        },
+        home: hockey::PregameTeam {
+            abbreviation: "VGK",
+            colors: scoreboard_wire::TeamColors {
+                primary: 0x00_34_40_43,
+                alternate: 0,
+            },
+            record: None,
+            goalie: None,
+        },
+    };
+    let mut store = Store::new();
+    let detail = GameDetail::Hockey(hockey::Game::Pregame(pregame));
+    store.commit_detail(&nhl(), &detail, Logos::default(), 0, clock());
+    let view = &store.snapshot().pregame;
+    assert_eq!(store.snapshot().mode, Mode::Pregame);
+    assert_eq!(view.sport, Sport::Hockey);
+    assert_eq!(
+        view.away.record,
+        Some(snapshot::Record {
+            wins: 53,
+            losses: 22,
+            ot_losses: Some(7),
+        })
+    );
+    assert_eq!(view.home.record, None);
+    assert_eq!(view.away.line.as_str(), "F. Andersen");
+    assert_eq!(view.home.line.as_str(), "");
+    assert_eq!(view.info_primary.as_str(), "T-Mobile Arena");
+    // The longest playoff line ESPN produced, whole.
+    assert_eq!(
+        view.info_secondary.as_str(),
+        "STANLEY CUP FINAL - GAME 6 - BUF LEADS SERIES 3-2"
+    );
+}
+
+#[test]
+fn a_hockey_goal_or_penalty_flashes_through_the_shared_rule() {
+    let mut store = Store::new();
+    let play = scoreboard_wire::LastPlay {
+        id: "401891781-114",
+        text: "GOAL! Mika Zibanejad (2) Wrist Shot",
+    };
+    let live = hockey::Live {
+        last_play: Some(play),
+        ..nhl_live(&[])
+    };
+    commit_live(&mut store, live, 1_000);
+    commit_live(&mut store, live, 6_000);
+    let flash = &store.snapshot().play;
+    assert_eq!(flash.text.as_str(), "GOAL! Mika Zibanejad (2) Wrist Shot");
+    assert_eq!(flash.updated_ms, 1_000, "one play flashes once");
+}
+
+// =========================================================================
 // The corpus sweep
 // =========================================================================
 
@@ -1637,9 +2457,11 @@ fn every_fixture_builds_a_sane_view() {
         let expected = match (detail.state(), league.sport) {
             (GameState::Pregame, _) => Mode::Pregame,
             (GameState::Final, Sport::Soccer) => Mode::SoccerFinal,
+            (GameState::Final, Sport::Hockey) => Mode::HockeyFinal,
             (GameState::Final, _) => Mode::Final,
             (GameState::Live, Sport::Mlb) => Mode::MlbLive,
             (GameState::Live, Sport::Nba) => Mode::NbaLive,
+            (GameState::Live, Sport::Hockey) => Mode::HockeyLive,
             (GameState::Live, Sport::Football) => Mode::FootballLive,
             (GameState::Live, Sport::Soccer) => Mode::SoccerLive,
         };
@@ -1773,6 +2595,31 @@ fn every_string_bound_clears_the_corpus() {
                     max.note("team line", line);
                 }
             }
+            GameDetail::Hockey(hockey::Game::Live(game)) => {
+                max.note("clock", game.clock);
+                max.note("player name", game.last_scorer);
+                if let Some(play) = game.last_play {
+                    max.note("play id", play.id);
+                    max.note("play text", play.text);
+                }
+            }
+            GameDetail::Hockey(hockey::Game::Pregame(game)) => {
+                max.note("info primary", game.venue);
+                max.note("info secondary", game.info_secondary);
+                for goalie in [game.away.goalie, game.home.goalie].into_iter().flatten() {
+                    max.note("team line", goalie);
+                }
+            }
+            // The line score is collapsed to at most five columns (§3.10), so
+            // its raw length bounds nothing here.
+            GameDetail::Hockey(hockey::Game::Final(game)) => {
+                for star in game.stars.iter().flatten() {
+                    max.note("player name", star.name);
+                }
+                if let Some(series) = game.series {
+                    max.note("series", series);
+                }
+            }
             GameDetail::Football(football::Game::Live(game)) => {
                 max.note("clock", game.clock);
                 if let Some(play) = game.last_play {
@@ -1879,8 +2726,8 @@ impl Maxima {
 /// shows up as a failing test rather than as silent RAM.
 #[test]
 fn the_snapshot_stays_inside_its_budget_line() {
-    assert_eq!(ScoreboardSnapshot::SIZE, 2_824);
-    assert_eq!(crate::SnapshotChannel::SIZE, 8_480);
+    assert_eq!(ScoreboardSnapshot::SIZE, 3_224);
+    assert_eq!(crate::SnapshotChannel::SIZE, 9_680);
     assert_eq!(Slate::SIZE, 4_596);
 }
 
