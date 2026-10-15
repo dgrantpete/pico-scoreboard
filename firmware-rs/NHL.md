@@ -35,7 +35,7 @@ from the goal-mark study. The last column keeps what was turned down.
 |---|----------|---------|------------|
 | D1 | Live layout | **B "Rink" default**, **A "Period ledger" as the `hockey_live` variant** | C "Center ice" (dropped: small clock); A-only |
 | D2 | Final screen | **"Three stars"** (own screen, soccer-final silhouette) | Shared line-score final with hockey columns; line score + cycling stars line |
-| D3 | Fetch the per-game summary for live/final hockey | **Yes** — on the backend, like soccer's commentary; the device still receives one small wire payload | Scoreboard-only: no strength, no tags, no shootout tracker, no stars |
+| D3 | Fetch the per-game summary for live/final hockey | **Yes** — on the backend, like soccer's commentary; the device still receives one small wire payload. Live it carries strength, goals, the shootout and the flash; on finals the reliable shots (§3.3) — the stars turned out to come from the scoreboard (§2, 2026-10-14) | Scoreboard-only: no strength, no tags, no shootout tracker, unreliable final shots |
 | D4 | Goal lamp (scoring side's number pulses red) | **Yes, 20 s** | No |
 | D5 | Sport identity | **`Sport::Hockey`, league slug `nhl`, endpoint `hockey/nhl`, config `sports.nhl: {enabled}`** (single-league toggle, like NBA) | Multi-league `sports.hockey.leagues[]` — only if a second hockey league is wanted soon |
 | D6 | Rotation / menu order | **MLB, NBA, NHL, football…, soccer…** | Append after soccer |
@@ -46,85 +46,174 @@ from the goal-mark study. The last column keeps what was turned down.
 
 ## 2. Data facts (evidence-backed)
 
-Captured 2026-10-01 (four live preseason games, 13 scoreboard polls, 20 live
-summaries) plus 66 historical dates (Nov 2025, the 2026 playoffs; 242 finals).
-Raw bodies: session scratchpad `nhl-api/` → promote into
-`backend/testdata/hockey/nhl/` in Phase 0.
+Two evidence sets. Design time (2026-10-01): four live preseason games (13
+scoreboard polls, 20 live summaries) plus 66 historical dates (Nov 2025, the
+2026 playoffs; 242 finals). Phase 6.0 (2026-10-14) re-checked every claim
+against two weeks of collector captures — 2026-10-01..14, 24,053 distinct
+scoreboard bodies, 99 games, their summaries sampled 1-in-20 and scanned
+densely around every state below; counts are from that set unless dated
+otherwise. The corpus is `backend/testdata/hockey/nhl/`; its `PROVENANCE.md`
+names each pair's polls and evidence.
 
 ### Scoreboard (`/apis/site/v2/sports/hockey/nhl/scoreboard`, ~22 KB/game)
 
-- `status.type`: `STATUS_SCHEDULED` (pre), `STATUS_IN_PROGRESS` (in),
-  `STATUS_END_PERIOD` id 22 (in — **the intermission**; no
-  STATUS_INTERMISSION exists), `STATUS_FINAL` (post) with `altDetail`
-  `"OT"` / `"SO"` / `"2OT"` (absent in regulation).
-- `status.period`: **5 is ambiguous** — shootout in the regular season, 2OT in
-  the playoffs. `events[].season.type` (2 regular — preseason is also
-  labelled 2 — vs 3 postseason) resolves it live; `altDetail` confirms post.
+- `status.type.name`: exactly five occur — `STATUS_SCHEDULED` (id 1, pre),
+  `STATUS_IN_PROGRESS` (id 2, in), `STATUS_END_PERIOD` (id 22, in — **the
+  intermission**; no STATUS_INTERMISSION exists), `STATUS_FINAL` (id 3,
+  post), and `STATUS_DELAYED` (id 7, **in**: one game, ~8.5 min at period 0
+  before a late puck drop, then two polls into period 1). Live overtime and
+  the live shootout have **no status of their own**: IN_PROGRESS at period 4
+  ("0:39 - OT"), and IN_PROGRESS at period 5 ("In SO", clock 0:00).
+  END_PERIOD also follows OT ("End of OT"), the shootout ("End of SO"), and
+  a regulation 3rd for ~30 s before FINAL; an IN_PROGRESS "End of …" body at
+  0:00 precedes most END_PERIODs.
+- `altDetail` on finals: `"OT"` ↔ period 4, `"SO"` ↔ period 5, absent ↔
+  period 3 (100% in the regular season); `"2OT"` and up in the playoffs.
+- `status.period`: **5 is ambiguous** — shootout in the regular season, 2OT
+  in the playoffs. `events[].season.type` (2 regular — preseason is also
+  labelled 2 — vs 3 postseason) resolves it; it read 2 on 210,583/210,583
+  collector events.
 - `status.displayClock`: time **remaining**, moves only when a play is
-  logged (sat at 13:38 for three polls); reads "20:00 - 2nd" for minutes
-  before a puck drop. Unreliable post-game ("0:31" on one OT final).
-- `competitors[].score`: string; a shootout winner's score **includes the
-  +1**. `team.alternateColor` is **never present** (0/484). UTA's color is
-  `000000`. `team.logo` is always `…/nhl/500/scoreboard/<abbr>.png`
-  (UTA's path is `utah`).
-- `records[0].summary` is **W-L-OTL** ("53-22-7"); the first entry's `type`
-  is `"ytd"` in Nov 2025 and `"total"` later — accept both. No points.
-- `linescores[]`: per period including the current one; each OT period its
-  own entry; the shootout is period 5 with 1/0 (winner/loser).
+  logged; reads "20:00" while IN_PROGRESS before every period's puck drop.
+  Unreliable post-game (one OT final read "1:16" for 3,201 bodies) and on
+  some END_PERIOD bodies (20:00; "End of OT" at 0:45, 1:37, 2:09).
+- **Finals flap.** In 2/99 games a final went back for a few polls to
+  IN_PROGRESS or END_PERIOD, or to SCHEDULED at period 3 with a wrong score;
+  STATUS_FINAL with a tied score appeared in 2 games. The summary header
+  flaps with it.
+- **Scores flicker.** A score went *down* between consecutive polls 33 times
+  in 26/99 games: 16 were restored within 90 s (stale CDN copies), 17 stayed
+  down (disallowed goals).
+- `competitors[].score`: string. A shootout winner's score **includes the
+  +1** — and live it often already does while the status still reads "In SO"
+  (5/8 shootouts, and every "End of SO" poll), with the shootout linescore
+  sometimes lagging it.
+- `team.alternateColor`: absent through 2026-10-14 (0/484 at design time),
+  then present on **every** team from 2026-10-14 23:44 UTC (WSH `0b1f41`,
+  DAL `000000`). UTA's primary is `000000`. `team.logo` is
+  `…/nhl/500/scoreboard/<abbr>.png` — UTA's `uta` (it was `utah` in
+  2025-26). `team.logoDark` on 66–75% of events.
+- `records[0].summary` is **W-L-OTL** ("53-22-7"), always. Its `type` is
+  `"total"` pregame and live and `"ytd"` on finals — accept both. No points.
+- `linescores[]`: per period including the current one; each OT its own
+  entry; the shootout a fifth entry of 1/0 (winner/loser). Live they lag the
+  current period on ~1.8% of entries.
 - `statistics[]`: `saves`, `savePct`, `goals`, `ytdGoals`, `assists`,
-  `points` — game values live/post, season values pregame, `[]` at puck drop.
-  `goals` excludes the shootout goal.
-- **Shots on goal = opponent `saves` + own `goals`** — exact on 6/6 finals,
-  within 0–2 live.
+  `points` — game values live and post, season values pregame (plus
+  `plusMinus`); `[]` until the first game stats arrive, ~2 min after puck
+  drop. `goals` excludes the shootout goal. **Post-final bodies sometimes
+  report `saves` "0" for both teams** (259 polls in 35 games, including the
+  last post body of 2), which breaks the shots identity below.
+- **Shots on goal ≈ opponent `saves` + own `goals`.** Live it agrees with
+  the summary boxscore on 98.5% of sides (off by 1–3 otherwise, either
+  source lagging); on finals it matched the play-by-play shot count on
+  151/188 sides, against the boxscore's 185/188 (Summary, below).
 - `probables[]`: `probableStartingGoalie` with `athlete.shortName` and
-  status Confirmed/Expected (no goalie stats), present 482/484.
-- `situation` (live only): `lastPlay` only — **no strength, PP, EN, clock**.
+  status Confirmed/Expected — one per team on every pregame event
+  (53,897/53,897), and still present live and final.
+- `competitions[0].status.featuredAthletes` (finals): winningGoalie,
+  losingGoalie, firstStar, secondStar, thirdStar, each with `athlete` and
+  `team.id` — on 98.5% of post events in 99/99 games, first appearing
+  0–649 s after the first FINAL poll (median 170 s), with partial sets on
+  the way. **This is the stars source**: the summary header has them on
+  only 4/94 collector finals.
+- `situation` (live only): `lastPlay` only — **no strength, PP, EN,
+  clock**; occasionally `{}`.
 - Playoffs: `series.summary` ("CAR leads series 3-2"), `notes[0].headline`
   ("Stanley Cup Final - Game 6" — the only game-number source).
+- A DELAYED game at period 0 keeps pregame-shaped competitors (probables,
+  records, score "0", no linescores) inside the live competition shape.
 
 ### Summary (`…/summary?event=<id>`, 85 KB at puck drop → 300 KB mid-game → 400–630 KB final)
 
-- `plays[]` (~850 B each, 55–70 % of the body): `type`, `text`,
+- `plays[]` (~850 B each, 55–70 % of the body): `type{id, text}`, `text`,
   `period{number, displayValue}` ("1st", "OT", "2nd OT", "SO"),
-  `clock.displayValue` **elapsed** in the period, `team.id`, `scoringPlay`,
-  `participants[]` (`athlete.shortName`, role `scorer`/`assister`/…),
-  `coordinate{x,y}` (ft from center), `strength` (701 Even, 702 Power Play,
-  703 Shorthanded, 903 Empty Net — goals only), `shotInfo` (903 Empty Net,
-  905 Shootout), `awayScore`/`homeScore` (**the shootout tally** during the
-  shootout).
-- `strength` is **relative to the play's team** and present on every play
-  type, but a penalty play carries the strength from **before** it, and a
-  pulled goalie (6v5) still reads "Even Strength".
-- Penalties: Nov 2025 = type 509 "Penalty"; 2026 = the infraction is the
-  type, with `type.penaltyMinutes` / `type.penaltyType` (Minor, Major, Bench,
-  PS). Junk rows exist ("Penalty Shot Infraction … Minor" during a fight).
+  `clock.displayValue` **elapsed** in the period, `team.id` (missing on
+  some plays — below), `scoringPlay`, `participants[]` (`athlete{id,
+  shortName}` with **no team**; role `scorer`/`assister`/`shooter`/`saver`/…
+  or untyped), `coordinate{x,y}` (ft from center), `strength` on every play
+  (701 Even, 702 Power Play, 703 Shorthanded, 902 Penalty Shot, 903 Empty
+  Net — goals only), `shotInfo` (901 None, 902, 903 Empty Net, 905
+  Shootout), `awayScore`/`homeScore` (inconsistent during the shootout).
+- `strength` is **relative to the play's team**, but a penalty play carries
+  the strength from **before** it, a pulled goalie (6v5) still reads "Even
+  Strength", and team-less plays (Stoppage, Period Start/End, End of Game —
+  679 in 94 finals) carry "Power Play"/"Shorthanded" too. Empty-net goals
+  carry strength 903 **and** shotInfo 903 (33/33).
+- Every non-shootout goal has a team, a coordinate and a scorer participant
+  (585/585 in 94 finals).
+- Penalties (2026-27): the infraction is the type, with
+  `type.penaltyMinutes` / `type.penaltyType` (Minor, Major, Double Minor,
+  Misconduct, Bench, PS). **Every penalty is first posted as a placeholder**
+  — type id 143 (abbreviation "Closing Hand on the Puck", Minor, 2 min,
+  text "<Player> Minor[ against <Player>]"), never used for anything else —
+  and rewritten to the real infraction under the same play id one or two
+  polls (10–30 s) later: 105 of 120 placeholders; 13 vanished, 2 were never
+  rewritten. Penalty-shot calls are 133/136/137 ("… on Breakaway",
+  penaltyType PS, no minutes). 2025-26 used type 509 "Penalty".
+- `boxscore.players[].statistics[name=goalies]` gives the goalie ids — but
+  **every player group is empty for the first ~2 min after puck drop**
+  (11–313 s; median 122 s) while `onIce` already lists full units.
+  `boxscore.teams[].statistics[name=shotsTotal].displayValue` (team → side
+  via `team.id` and `header.competitions[0].competitors`) appears in the
+  same poll as the scoreboard's statistics or one later, never while those
+  are `[]`; on finals it matched the play-by-play shot count on 185/188
+  sides.
 - `onIce[]`: entries **include the goalie**; counts give strength (6v6, 6v5
-  on a PP, 4v4 in 3-on-3 OT); a pulled goalie = no goalie among the entries
-  (goalie ids from `boxscore.players[].statistics[name=goalies]`). Glitched
-  to 3 entries during a fight stoppage.
-- Finals: `header.competitions[0].status.featuredAthletes` = winningGoalie,
-  losingGoalie, firstStar, secondStar, thirdStar (6/6).
-- **Not anywhere:** a power-play clock or penalty box, an intermission clock,
-  points (scoreboard), reliable shootout box stats.
+  on a PP, 4v4 in 3-on-3 OT); a pulled goalie = no goalie among the entries.
+  Insane on 0.14% of sampled polls (a 3-entry side during a fight stoppage,
+  an empty side); `[]` at period starts and for ~40 s into OT; may still
+  show the 3rd period's unit early in OT; keeps the last unit through an
+  intermission (a carried-over power play shows through END_PERIOD); holds
+  only the goalies, or nothing, during the shootout.
+- Shootout plays (`period.displayValue` "SO"): the attempts are types 505
+  Goal, 506 Shot, 507 Missed and 2010 "failed shot attempt" (62 attempts in
+  8 shootouts; no other shootout play has a team); 518 Period Start, 521
+  Shootout End, 519 Period End and 522 End of Game frame them. An attempt
+  can arrive **without a team** (5 seen live, 2 surviving into finals) —
+  sometimes with only the `saver` among its participants, once with nothing
+  but a coordinate — and its outcome can change in place (Shot → Goal under
+  the same id).
+- `header.competitions[0].status.featuredAthletes`: as on the scoreboard,
+  but late — 4/94 collector finals.
+- **Not anywhere:** a power-play clock or penalty box, an intermission
+  clock, points (scoreboard), reliable shootout box stats.
 
 ## 3. Semantics (normative)
 
+Revised 2026-10-14 against the phase 6.0 evidence (§2). Each rule below that
+handles a quirk names it.
+
 ### 3.1 States and periods
 
-- pre → Pregame; post → Final; in → Live with `LivePhase::InProgress`, or
-  `LivePhase::EndOfPeriod` for `STATUS_END_PERIOD`. (`Halftime` is unused.)
+- Dispatch on `status.type.state`: pre → Pregame; post → Final; in → Live
+  with `LivePhase::InProgress`, or `LivePhase::EndOfPeriod` for
+  `STATUS_END_PERIOD`. (`Halftime` is unused.) **Except** `STATUS_DELAYED`
+  at period 0 → Pregame: the puck has not dropped and the competitors are
+  still pregame-shaped (§2); DELAYED at period ≥ 1 is Live `InProgress`. An
+  unknown status name is a quirk and follows its `state`.
+- Playoffs ⇔ `season.type` 3. **The shootout ⇔ regular season and period
+  ≥ 5** — never "period 5" alone, which is 2OT in the playoffs.
 - Period label: 1–3 → `1ST`/`2ND`/`3RD`. Regular season: 4 → `OT`, 5 →
   `SO`. Playoffs: 4 → `OT`, n ≥ 5 → `{n-3}OT`.
 - Final label: `FINAL`, `FINAL/OT`, `FINAL/SO`, `F/{n}OT` (n ≥ 2). Derive
   from period + season kind; `altDetail` is the cross-check (a disagreement
   is a quirk, not a rejection).
+- Flapping finals (§2) are served as ESPN states them: the backend answers
+  each request from the body it fetched, and the device follows ESPN back
+  within a poll. A FINAL with tied scores is a quirk.
 
 ### 3.2 Clock
 
 - Drawn verbatim from `displayClock` and never extrapolated (NBA rule:
   hockey's clock stops on whistles and the feed only moves on plays).
-- `EndOfPeriod` → the clock slot reads `INT` in the accent color; the
-  period chip keeps the period that just ended.
+- `EndOfPeriod` → the clock slot reads `INT` in the accent color when
+  another period follows, and `END` when none can: after the shootout, or
+  after period ≥ 3 with the scores unequal (the half minute of END_PERIOD
+  between a decided 3rd and FINAL). The period chip keeps the period that
+  just ended.
+- During a live shootout the clock slot shows the shootout tally (§3.8)
+  instead of `displayClock`, which sits at 0:00.
 - Warning color when `InProgress`, period ≥ 3, and the clock is sub-minute
   (`0:` prefix, or the colonless NBA shape as a belt).
 - Goal and penalty times on screen use **elapsed** time (`plays[].clock`),
@@ -132,23 +221,40 @@ Raw bodies: session scratchpad `nhl-api/` → promote into
 
 ### 3.3 Shots on goal
 
-`sog(side) = saves(other) + goals(side)` from the scoreboard. Absent when
-either stat is missing (puck drop's `[]`) — the screen then hides the shots
-row rather than showing 0–0. Saturates at 255.
+The first source that applies:
+
+1. The summary's `boxscore.teams[].statistics[name=shotsTotal]`, present
+   for both teams.
+2. The scoreboard identity `sog(side) = saves(other) + goals(side)`, both
+   teams' `statistics` non-empty — except on a final where both teams report
+   `saves` "0" (the post-final quirk, §2), which counts as missing.
+3. Absent: the screen hides the shots row rather than show 0–0.
+
+Saturates at 255. Live the two sources agree on 98.5% of sides and neither
+is authoritative; on finals the boxscore is (185/188 against 151/188), which
+is part of why D3 fetches the summary for finals too.
 
 ### 3.4 Strength (summary)
 
-1. Goalie ids ← `boxscore.players` goalies group.
-2. From `onIce`, per side: `skaters = entries − (goalie present ? 1 : 0)`,
-   `pulled = no goalie present`. **Sane** iff both sides have 3–6 skaters.
+1. Goalie ids ← `boxscore.players` goalies group, per team.
+2. Per side from `onIce`: `skaters = entries − (goalie present ? 1 : 0)`,
+   `pulled = no goalie present`. **Sane** iff both teams' goalie groups are
+   non-empty **and** both sides have 3–6 skaters. (Puck drop's empty goalie
+   groups would otherwise read as both nets empty.)
 3. If sane: pulled on either side → `EmptyNet(side)` (wins over PP for the
    banner; the skater dots still show the true counts); skaters differ →
    `PowerPlay(more, more_n, fewer_n)`; equal and < 5 → `Matched(n)`;
    otherwise `Even`.
-4. If not sane: the latest play that is **not** a penalty, by its
+4. If not sane: the latest play that is **not** a penalty (penaltyType
+   present, type 509, or the 143 placeholder) and **has a team**, by its
    team-relative `strength` (Power Play → that team; Shorthanded → the
-   other), skater counts unknown (0), and `Even` otherwise. Emit a quirk.
-5. Display: `Matched(3)` in the regular-season OT is normal and gets **no**
+   other; anything else `Even`), skater counts unknown (0). Team-less plays
+   are skipped: they carry strengths no side can be read from (§2). Emit a
+   quirk — except for the expected cases, the empty goalie groups after
+   puck drop and `onIce` `[]` at a period start, which are normal.
+5. During a live shootout there is no strength (the group is absent):
+   `onIce` holds only the goalies.
+6. Display: `Matched(3)` in the regular-season OT is normal and gets **no**
    banner; `Matched(4)` shows "4 ON 4"; `PowerPlay` shows "POWER PLAY" +
    "a ON d"; `EmptyNet` shows "EMPTY NET" + "6 ON 5" (or the true counts).
    **No countdown anywhere** (§2: none exists; reconstructing one is wrong
@@ -156,10 +262,12 @@ row rather than showing 0–0. Saturates at 255.
 
 ### 3.5 Goals and the last goal (summary)
 
-- Goals = `plays` with `scoringPlay` and period ≠ SO, in order. Per goal:
-  side, period, elapsed seconds, tag (`ENG` if `shotInfo` 903 or strength
-  903; else `PPG` 702; `SHG` 703; else `GOAL`), scorer = participant with
-  role `scorer` (fallback: first participant) `shortName`, coordinate.
+- Goals = `plays` with `scoringPlay` outside the shootout (§3.1), in order.
+  Per goal: side (the play's team), period, elapsed seconds, tag (`ENG` if
+  `shotInfo` 903 or strength 903; else `PPG` 702; `SHG` 703; else `GOAL` —
+  a 902 penalty-shot goal is a `GOAL`), scorer = participant with role
+  `scorer` (fallback: first participant) `shortName`, coordinate (absent
+  when ESPN logged none: §4's coordinate bit).
 - Coordinates are normalized so **away attacks +x** (football's
   convention: away moves right): away plots at `(|x|, y·sign(x))`, home at
   `(−|x|, −y·sign(x))` — a 180° rotation, which keeps handedness.
@@ -168,31 +276,63 @@ row rather than showing 0–0. Saturates at 255.
 ### 3.6 The play flash
 
 Only goals and penalties flash — hits, faceoffs and stoppages are noise on a
-wall. Source: the newest goal/penalty play in the summary (else the
-scoreboard `situation.lastPlay`, filtered the same way). Text: ESPN's play
-text, prefixed `GOAL! ` for goals. Penalty rows without `penaltyMinutes` or
-of the junk shape are dropped (quirk). The id is the play id; the shared
-`flash_play` change-detection rule applies unchanged.
+wall. Source: the newest eligible goal or penalty play in the summary (else
+the scoreboard `situation.lastPlay`, filtered the same way as far as its
+fields allow). Text: ESPN's play text, prefixed `GOAL! ` for goals.
+**Not eligible:** the placeholder penalty (type 143 — every penalty's first
+appearance, §2; its rewrite keeps the play id, which is new to `flash_play`
+because the placeholder never flashed, so the real infraction still flashes
+exactly once) and penalty rows without `penaltyMinutes` (penalty-shot
+calls). Both are expected shapes, not quirks. The id is the play id; the
+shared `flash_play` change-detection rule applies unchanged. (Cost, measured:
+one real penalty in 99 games that ESPN never rewrote does not flash.)
 
 ### 3.7 Goal lamp
 
-When this device observes the goal count of the game on screen increase
-between two of its own commits, the store stamps `lamp_side` + `lamp_ms`.
-The first commit of a game never lights the lamp — a goal already on the
-board when the game rotates in is old news. The renderer pulses that side's score
-white↔lamp-red with `pulse(now − lamp_ms, 1000)` for 20 s on the **wall
-rail** (it is a duration). No core-1 state: the anchor lives in the
-snapshot, exactly like `play.updated_ms`.
+The store keeps, for the game on screen, a per-side **high-water mark** of
+the score:
+
+- The first commit of a game sets both marks and lights nothing — a goal
+  already on the board when the game rotates in is old news. Rotating away
+  and back is a first commit again.
+- A side's score **above** its mark lights that side (`lamp_side`,
+  `lamp_ms = now`; if both rise in one commit, the newest goal's side, or
+  home when there are no goals) and raises the mark.
+- A score **below** its mark lowers the mark only once it has stayed below
+  for `LAMP_SETTLE` (120 s): ESPN's stale copies are restored within 90 s
+  and must not relight an old goal, while a disallowed goal stays down and
+  must not swallow the next real one (§2's flicker counts). A real goal
+  within 120 s of a disallowed one does not light — a missed lamp is benign,
+  a false one is not.
+
+The renderer pulses that side's score white↔lamp-red with
+`pulse(now − lamp_ms, 1000)` for 20 s on the **wall rail** (it is a
+duration). No core-1 state: the anchor lives in the snapshot, exactly like
+`play.updated_ms`. Shootout attempts never light it: the game score stays
+tied through a shootout (§3.8).
 
 ### 3.8 Shootout (summary)
 
-Period-SO plays with a team and type Goal/Shot/Missed are attempts, in
-order; `scored = Goal`. Per side keep up to 16 (bitmask + count). The next
-shooter alternates from the first shooter; none once a `Shootout End` play
-exists. The screen shows at least three slots per side and the newest seven
-in sudden death. The game score shown stays the tied score; the tally is
-derived from the attempts (never `awayScore`/`homeScore`, which flip to the
-tally mid-shootout).
+- Attempts: plays in the shootout (§3.1) of type 505 Goal, 506 Shot, 507
+  Missed or 2010 failed shot attempt, in order; `scored` = 505. Outcomes
+  change in place (Shot → Goal under one id), so every poll derives the
+  attempts afresh.
+- The shooter's side, first that applies: the play's team; else a
+  participant found in a team's goalie group (that team defended, so the
+  other shot); else alternation — shooters strictly alternate, so the side
+  opposite the previous attempt's (the next attempt's, for the first). An
+  attempt none of the three can place is dropped with a quirk.
+- Per side keep the **first** 16 attempts (bitmask + count): the tally stays
+  right through round 16; past it — beyond the longest NHL shootout on
+  record — the markers freeze.
+- Next shooter: the side opposite the last attempt's; none once a 521
+  `Shootout End` play exists.
+- The game score stays the tied score: during a live shootout both scores
+  are sent as `min(away, home)`, because ESPN's live score often already
+  carries the winner's +1 (§2). The tally is derived from the attempts —
+  never from `awayScore`/`homeScore`.
+- The screen shows at least three slots per side and the newest seven in
+  sudden death.
 
 ### 3.9 Pregame
 
@@ -201,14 +341,19 @@ third row (OTL, `rgb565(60,60,60)`), filling the crest's 24 px exactly; the
 per-team line is the probable starting goalie's `shortName`. Info cycle:
 primary = venue; secondary = `notes[0].headline` + " - " + `series.summary`
 in the playoffs, else empty (NBA's shape). Records accept `type` `total` or
-`ytd`.
+`ytd`. Team colors follow the shared rule (`alternateColor` now exists;
+nothing hockey-specific). A delayed start lands here (§3.1).
 
 ### 3.10 Final
 
 Three-stars screen (D2): crests + scores (winner color / loser gray), result
 label in accent, three rows of star icons (1/2/3 stars, gold) + `shortName`
 in the player's team color, a rule, then `series.summary` (playoffs) and
-`SHOTS a-h`. The shared line-score data is still committed (period goals with
+`SHOTS a-h` (§3.3). The stars come from the **scoreboard** event's
+`featuredAthletes` (`firstStar`/`secondStar`/`thirdStar`, side from
+`team.id`), all three or none; they arrive minutes after FINAL, so the
+screen without stars must read as complete, not as a stars screen missing
+its stars. The shared line-score data is still committed (period goals with
 every OT collapsed into one OT column — sudden death means only the last can
 hold a goal — plus an SO column) so the box-score variant stays one
 `apply_variant` away if D2 flips.
@@ -326,21 +471,21 @@ never validated (football's situation rule).
 
 ## 6. Phases (each ends green: `cargo test --workspace`, clippy, thumbv8m builds)
 
-### 6.0 Corpus and fixtures
-- Collector: §9.1 (deployed 2026-10-02; every NHL game since is captured
-  with its summaries).
-- Seed `backend/testdata/hockey/nhl/` now from the 2026-10-01 captures:
-  `pregame`, `in_progress`, `end_of_period`, `power_play` (scoreboard +
-  summary pairs), plus finals `final`, `final_ot`, `final_so`, `final_2ot`,
-  `playoff_clincher`. Shootout *live* and OT *live* were not observed:
-  synthesize them by truncating the SO/OT final summaries' `plays` and
-  rewriting the status block — mark them `synthetic_` in the filename and
-  replace them when the corpus catches the real thing.
-- After ~two weeks of collection: `python -m tools.espn discover/schema/spec
-  --league nhl`, review presence tables against §2, promote the NHL spec
-  into `backend/espn_openapi_combined.yaml` (README playbook).
-  `tools/extract_fixtures.py` is still sqlite-bound (BACKLOG 61) — either
-  port it first or pull NHL fixtures with a short SQL query.
+### 6.0 Corpus and fixtures — done 2026-10-14
+- `backend/testdata/hockey/nhl/`: twenty `<name>.json` (scoreboard event)
+  + `<name>.summary.json` (summary body) pairs from the collector's first two
+  weeks and the design-time playoff captures — pregame, puck drop, in
+  progress, intermission, power play, empty net, 4-on-4, 3-on-3 overtime, a
+  shootout in progress, an `onIce` glitch, and finals in regulation, OT, SO,
+  2OT and a Cup clincher — plus five that pin quirks (a delayed start, the
+  placeholder penalty, a team-less and a failed shootout attempt, a shootout
+  final before its stars). Every live state was observed for real; nothing
+  is synthetic. `PROVENANCE.md` records each pair and how to refresh them.
+  Harness note: a `.summary.json` is not an event fixture, so every corpus
+  walk skips it.
+- The NHL scoreboard schema is in `backend/espn_openapi_combined.yaml`
+  (validated 24,055/24,055 bodies). The re-check of §2 rewrote §2 and §3
+  (2026-10-14); the counts there are from it.
 
 ### 6.1 `scoreboard-wire` — done 2026-10-14
 `hockey.rs` per §4: `Game/Pregame/Live/Final`, `encode`/`decode`, round-trip
@@ -353,11 +498,16 @@ from real fixtures with 6.3's `wire_corpus.rs` arms.
 plays/onIce/boxscore goalies/featuredAthletes), one extractor, owned
 `Extract` with `as_game()`. All sixteen DESIGN.md rulings apply; hockey has
 no serde predecessor, so "rejection parity" becomes "required-field rules
-written down once" in the module docs. Quirks: penalty junk row, onIce
-insane, period-5/`altDetail` disagreement, unknown status name, missing
-SOG stats. Tests: corpus extraction, chunk-split invariance, field-order
-independence, the §3 rules one named test each (strength fallback,
-coordinate normalization, OT collapse, SO next-shooter, ENG detection).
+written down once" in the module docs. Quirks (§3 says which are expected
+and stay quiet): onIce insane, period-5/`altDetail` disagreement, unknown
+status name, FINAL with tied scores, an unplaceable shootout attempt.
+Tests: corpus extraction over every pair, chunk-split invariance,
+field-order independence, and each §3 rule one named test — the strength
+fallback (incl. team-less plays and puck drop's empty goalie groups),
+coordinate normalization, OT collapse, ENG/PPG/SHG/penalty-shot tags, the
+143 placeholder, shots source order (incl. post-final saves "0"), delayed
+start → pregame, the shootout's attempt types, side attribution order,
+first-16 rule, next shooter and tied score, and stars from the scoreboard.
 
 ### 6.3 Backend
 `src/hockey/{mod,handler,adapter,types,wire}.rs`; `AnyLeague::Nhl`
@@ -473,13 +623,21 @@ Rust-owned golden frames (PARITY.md, "Team colors — a luminance floor").
 - **Summary cost on the backend** (D3): 85→630 KB per live game per cache
   window. Bounded by the JSON cache (§5) and the device's poll interval; the
   device itself never sees more than the hockey wire payload.
-- Unobserved live states: OT/SO status strings, shootout in progress,
-  postponed. The extractor treats unknown status names as a quirk and
-  degrades, never rejects a live game for them.
+- Still unobserved: a postponed game, and playoff live states (the
+  collector has run only in the regular season — period 5 as 2OT live, the
+  playoff pregame's series line). The extractor treats unknown status names
+  as a quirk and degrades, never rejects a live game for them. Re-check §2
+  against the first playoff fortnight.
 - Penalty format already changed once between seasons; detect by
-  `penaltyType` presence **or** type 509.
-- `onIce` glitches during stoppages (§3.4 fallback).
-- `displayClock` reads "20:00 - 2nd" for minutes before puck drop; accepted.
+  `penaltyType` presence **or** type 509; the 143 placeholder (§2) is a
+  2026-27 shape that may change again.
+- `onIce` glitches during stoppages and goes stale at the start of OT (§3.4
+  fallback; a carried-over unit can show a power play for ~40 s).
+- ESPN's own inconsistencies the device shows as ESPN states them: finals
+  that flap back for a few polls, and scores that flicker (§2) — the lamp's
+  settle window (§3.7) is the only place that compensates.
+- `displayClock` reads "20:00" while IN_PROGRESS for minutes before each
+  puck drop; accepted.
 
 ## 9. Ops
 
