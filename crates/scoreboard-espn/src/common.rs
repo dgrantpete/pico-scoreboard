@@ -47,6 +47,26 @@ pub enum Quirk {
     /// A bounded extract buffer overflowed (scorer records, list entries…);
     /// diagnostics only — the wire bytes are unaffected by where we clip.
     BoundedOverflow,
+    /// Hockey: `onIce` gave no sane skater counts and strength came from the
+    /// play-strength fallback (NHL.md §3.4) — outside the expected quiet
+    /// cases (puck drop's empty goalie groups, `onIce` `[]` at a period
+    /// start, the shootout).
+    OnIceInsane,
+    /// Hockey: a final's `altDetail` disagrees with the label its period and
+    /// season kind derive (NHL.md §3.1). The derived label is served.
+    FinalDetailMismatch,
+    /// Hockey: a `status.type.name` outside the five ESPN sends; the event
+    /// followed its `state` anyway (NHL.md §3.1).
+    UnknownStatusName,
+    /// Hockey: a FINAL with tied scores — one of ESPN's flapping finals
+    /// (NHL.md §2), served as stated.
+    TiedFinal,
+    /// Hockey: a shootout attempt none of the three attribution rules could
+    /// place on a side was dropped (NHL.md §3.8).
+    UnplaceableAttempt,
+    /// Hockey: a goal whose team matched neither competitor was dropped; the
+    /// wire has no side for it.
+    UnplaceableGoal,
 }
 
 /// Receives quirk events. Implemented by the callers, not the tables.

@@ -76,6 +76,27 @@ impl Quirks for TracingQuirks {
                 sport,
                 "bounded extract buffer overflowed — excess dropped (wire bytes unaffected)"
             ),
+            Quirk::OnIceInsane => tracing::warn!(
+                sport,
+                "onIce gave no sane skater counts — strength from the latest play's strength"
+            ),
+            Quirk::FinalDetailMismatch => tracing::warn!(
+                sport,
+                "final altDetail disagrees with the period/season-derived label — serving the derived one"
+            ),
+            Quirk::UnknownStatusName => tracing::warn!(
+                sport,
+                "unknown status.type.name — following its state"
+            ),
+            Quirk::TiedFinal => tracing::warn!(sport, "FINAL with tied scores — served as stated"),
+            Quirk::UnplaceableAttempt => tracing::warn!(
+                sport,
+                "shootout attempt with no team, goalie participant or neighbour to place it — dropped"
+            ),
+            Quirk::UnplaceableGoal => tracing::warn!(
+                sport,
+                "goal whose team matched neither competitor — dropped"
+            ),
         }
     }
 }

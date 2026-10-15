@@ -228,6 +228,73 @@ Added as the sport lanes landed:
     in for the first. Football shows them only when neither team is ranked
     (ranks or lines, never one of each); the NBA's ride the wire's `ext=1`.
 
+## The hockey lane (2026-10-14, NHL.md phase 6.2)
+
+The fifth sport, built after the parity contract had done its work: hockey
+has no serde predecessor, so rulings 1 and 9 have nothing to compare
+against and the lane's correctness is `firmware-rs/NHL.md` §3, which is
+normative, plus the corpus under `backend/testdata/hockey/nhl/` with the
+evidence in its `PROVENANCE.md`. Everything else — field-order
+independence, chunk-split invariance, bounded memory, quirks, the ok/failed
+counts, `Exact` compare keys — applies unchanged. What is specific to the
+lane, decided here so nobody relitigates it:
+
+- **Two documents, one combiner.** The scoreboard event feeds
+  `hockey::GameExtractor` / `ListExtractor` (soccer's split); the per-event
+  summary feeds `hockey::SummaryExtractor`, for live *and* final games
+  (NHL.md D3: strength, goals, flash and shootout live; the reliable shots
+  on finals). Both produce owned extracts and
+  `Extract::as_game(&self, Option<&Summary>)` borrows the wire view from
+  them; without a summary the view is the scoreboard alone.
+- **The summary extractor takes a `SummaryContext`** built by
+  `Extract::summary_context()` from the scoreboard extract — the season
+  kind, the state, and whether a live shootout is on. It must know the
+  season kind *while streaming*: a period-5 scoring play is a goal in the
+  playoffs and a shootout attempt in the regular season, and ruling 4
+  forbids waiting for the summary header to say which. Football's
+  `is_college` precedent (ruling 8); the backend extracts the scoreboard
+  first anyway, and the context has no other constructor.
+- **Required fields, written once** (the module docs carry the full list):
+  `id`, `date`, `competitions`; with a competition `status.type.state`,
+  exactly two competitors each with `homeAway`, `team.id`,
+  `team.abbreviation`, `team.color`; live adds `status.period` and
+  `status.displayClock`; live and final add each `score`. Missing or
+  wrong-typed drops the event (counted failed). A found target is rejected
+  (`TransformError`, the 5xx tier) on an unparseable color or score, a
+  pregame date that is not a start time, or two home/two away markers.
+  `alternateColor` is optional — ESPN sent none for the NHL through
+  2026-10-14, then one for every team from 23:44 UTC that day — so absent
+  reads as the primary and a present one is parsed like every other
+  sport's. Everything else degrades; nothing in a summary fails a game.
+- **The summary table** reads `plays[*]` (`id`, `type.{id,penaltyType,
+  penaltyMinutes}`, `text`, `period.number`, `clock.displayValue`,
+  `team.id`, `scoringPlay`, `participants[*].{type,athlete.id,
+  athlete.shortName}`, `coordinate.{x,y}`, `strength.id`, `shotInfo.id`),
+  `onIce[*].{teamId,entries[*].athleteid}`,
+  `boxscore.players[*].{team.id,statistics[*].name,
+  statistics[*].athletes[*].athlete.id}` (the goalie groups),
+  `boxscore.teams[*].{team.id,statistics[*].{name,displayValue}}`
+  (`shotsTotal`) and `header.competitions[0].competitors[*].{team.id,
+  homeAway}` — the one team-id → side mapping every other summary
+  reference resolves through, at finish.
+- **Bounds** (each documented at its constant, overflow degrades): goals,
+  the newest 16 (the wire's `MAX_GOALS`); shootout attempts, the first
+  `ATTEMPT_MAX` = 40 in sequence (20 rounds, the longest NHL shootout),
+  `BoundedOverflow` past it; `ATTEMPT_ATHLETES` = 3 participant ids per
+  attempt for the goalie fallback, extras dropped silently; `ON_ICE_IDS` =
+  8 athlete ids per `onIce` side (more entries are insane whether or not a
+  goalie is among them); `GOALIES_PER_TEAM` = 4, a fifth is a quirk; a
+  third `onIce` block, player group, boxscore team or header competitor
+  is a quirk and ignored; line scores at the wire's `MAX_LINE_SCORE`; the
+  games list at `LIST_MAX` = 32 (16 games a night, 2×).
+- **Quirks** (`common::Quirk`): `OnIceInsane`, `FinalDetailMismatch`,
+  `UnknownStatusName`, `TiedFinal`, `UnplaceableAttempt`, `UnplaceableGoal`,
+  plus the shared `MalformedRecord` (W-L-OTL), `ClippedLineScore` and
+  `BoundedOverflow`. NHL.md §3 names the cases that stay quiet: puck
+  drop's empty goalie groups, `onIce` `[]` at a period start, the shootout
+  (no strength at all), the 143 placeholder and minutes-less penalty-shot
+  calls (expected shapes, not quirks).
+
 ## Lanes and validation
 
 - Engine lane: `src/path.rs` + its tests. Hard subsystem — strongest model,

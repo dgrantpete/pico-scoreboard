@@ -13,6 +13,7 @@
 
 pub mod common;
 pub mod football;
+pub mod hockey;
 pub mod mlb;
 pub mod nba;
 pub mod path;
