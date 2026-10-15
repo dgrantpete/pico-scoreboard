@@ -91,11 +91,13 @@ const SETTLE_DELAY: Duration = Duration::from_secs(120);
 )]
 const COUNTDOWN_SECONDS: u8 = 5;
 
-/// A whole download, ceiling. Generous on purpose: the watchdog's silence gate
-/// is the thing that actually catches a *stalled* transfer (this feeds the
-/// link's liveness clock per chunk, so a slow-but-moving download keeps the
-/// device alive), and this only has to stop a connection that is neither
-/// progressing nor erroring from holding the poll loop forever.
+/// A whole download, ceiling. Generous on purpose: the watchdog's health gate
+/// is the thing that actually catches a *stalled* transfer — the client treats
+/// every body read as a request of its own to the link clock, so a read that
+/// never returns starves the watchdog after `SILENCE_INTERVALS` poll intervals
+/// while a slow-but-moving download never waits long — and this only has to
+/// stop a connection that is neither progressing nor erroring from holding the
+/// poll loop forever. See `ApiClient::download`.
 #[cfg_attr(
     not(feature = "link-boot-integrated"),
     allow(dead_code, reason = "reached only through the OTA install path, which needs a bootloader")

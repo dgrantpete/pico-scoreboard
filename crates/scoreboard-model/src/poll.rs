@@ -193,13 +193,115 @@ impl PollError {
 // Supervision: what the watchdog is allowed to conclude
 // ---------------------------------------------------------------------------
 
-/// Poll intervals of silence before the link is presumed dead.
+/// Poll intervals a request may wait for an answer before the link is presumed
+/// dead.
 ///
-/// Three, so a single missed poll and its retry both pass unremarked. At the
+/// Three, so a single failed poll and its retry both pass unremarked. At the
 /// default 30 s interval that is 90 s — long enough that a Wi-Fi hiccup or a
 /// backend restart never reaches it, short enough that a scoreboard which has
-/// genuinely fallen off the network is back within two minutes.
+/// genuinely fallen off the network is back within two minutes of trying to use
+/// it.
 pub const SILENCE_INTERVALS: u32 = 3;
+
+/// The link's evidence, as the API client observes it: when something last
+/// answered, and since when the oldest request still without an answer has been
+/// waiting. Uptime seconds throughout.
+///
+/// # Waiting, not silence
+///
+/// The gate's first two versions measured *silence* — seconds since anything
+/// answered. That reads a poller that did not **ask** exactly like a link that
+/// did not **answer**, and the poller has three legitimate reasons to ask
+/// nothing for longer than the gate's patience:
+///
+/// - **An empty slate.** With no game in any enabled league the tick makes no
+///   request, and the lists refresh only once per `game_rotation_seconds` — so
+///   any rotation more than twice the poll interval read as a dead link on
+///   every day without a game, and all winter on an MLB-only unit.
+/// - **No sports enabled.** The only requests left are the daily clock sync and
+///   the daily update check.
+/// - **No usable `api.url`.** [`Transport::BadUrl`] is decided before anything
+///   touches the network.
+///
+/// None of the three could bite while the gate was opt-in. Making it
+/// unconditional on fleet builds (2026-10-14, BACKLOG 69) would have turned each
+/// into a reboot loop, so the clock now starts when a request **leaves** and
+/// stops when anything **answers**: a poller that is quiet by design is never
+/// waiting, and a link that has died is caught by the first request sent into
+/// it.
+///
+/// # Leaving, answering, and keeping the earliest
+///
+/// A request leaves when the client hands a parsed URL to DNS and TCP — which is
+/// why [`withdraw`](LinkClock::withdraw) exists: the client cannot tell a URL
+/// that will not parse from one that will until it has already announced the
+/// request, and a request that never left is not evidence of anything.
+///
+/// A request is answered when a status line and headers arrive, whatever the
+/// status: a 404 and a 500 prove the link as well as a 200 does (BACKLOG 70).
+/// A streamed body is one request per read, so a transfer that stalls part-way
+/// waits like any other request and a slow one that keeps moving never does.
+///
+/// A request that fails leaves the clock running, and the next one does **not**
+/// restart it. The gate measures the *oldest* unanswered request, so a dead
+/// link's patience runs from the first request sent into it rather than being
+/// reset by every retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LinkClock {
+    last_answer_s: Option<u32>,
+    waiting_since_s: Option<u32>,
+}
+
+impl LinkClock {
+    /// Nothing asked, nothing answered.
+    pub const fn new() -> LinkClock {
+        LinkClock {
+            last_answer_s: None,
+            waiting_since_s: None,
+        }
+    }
+
+    /// A request is about to leave. Starts the clock unless an older request
+    /// is still waiting, and returns whether this call started it — the one
+    /// fact [`withdraw`](LinkClock::withdraw) needs.
+    #[must_use = "a request that turns out never to have left must withdraw what it started"]
+    pub fn ask(&mut self, now_s: u32) -> bool {
+        if self.waiting_since_s.is_some() {
+            return false;
+        }
+        self.waiting_since_s = Some(now_s);
+        true
+    }
+
+    /// The request [`ask`](LinkClock::ask) announced never left — its URL did
+    /// not parse, which reqwless decides before it touches the network. Takes
+    /// the stamp back only if that `ask` made it: an older request that is still
+    /// waiting keeps its claim.
+    pub fn withdraw(&mut self, started: bool) {
+        if started {
+            self.waiting_since_s = None;
+        }
+    }
+
+    /// Something answered at the HTTP layer. Every waiting request has its
+    /// answer, because the only question any of them was evidence for — is the
+    /// link alive — just got one.
+    pub fn answer(&mut self, now_s: u32) {
+        self.last_answer_s = Some(now_s);
+        self.waiting_since_s = None;
+    }
+
+    /// Seconds since anything answered, or `None` if nothing ever has.
+    pub fn since_answer_s(&self, now_s: u32) -> Option<u32> {
+        self.last_answer_s.map(|at| now_s.saturating_sub(at))
+    }
+
+    /// How long the oldest unanswered request has been waiting, or `None` when
+    /// nothing is.
+    pub fn unanswered_s(&self, now_s: u32) -> Option<u32> {
+        self.waiting_since_s.map(|at| now_s.saturating_sub(at))
+    }
+}
 
 /// What the poller knows about the network, for the watchdog's health gate.
 ///
@@ -210,19 +312,23 @@ pub const SILENCE_INTERVALS: u32 = 3;
 /// its IPv4 configuration was up — so a frame counter, which is the obvious
 /// thing for a render-loop watchdog to read, proved nothing at all. The poller
 /// is the only part of the firmware that finds out, because it is the only part
-/// that talks to anything.
+/// that talks to anything. The same failure took a friend's unit off the air
+/// three times on 2026-10-12/13, each time until somebody pulled the plug.
 ///
-/// # Two clocks, and only one of them may starve a watchdog
+/// # Three clocks, and only one of them may starve a watchdog
 ///
-/// [`since_answer_s`](Health::since_answer_s) is the *link's* clock and
-/// [`since_success_s`](Health::since_success_s) is the *backend's*. Conflating
-/// them was the first version of this gate and it was wrong in a way that took
-/// a live outage to see clearly: a backend that is up and returning 500s, or a
-/// path that 404s, is a **working network**, and rebooting the device over it
-/// gives a reboot loop for as long as the outage lasts. MicroPython showed the
-/// error screen and sat there, which is the better behaviour.
+/// [`unanswered_s`](Health::unanswered_s) is the *link's* clock,
+/// [`since_success_s`](Health::since_success_s) is the *backend's*, and
+/// [`since_answer_s`](Health::since_answer_s) is a record of the last time the
+/// link was proved. Conflating the link with the backend was the gate's first
+/// version, and it was wrong in a way that took a live outage to see clearly: a
+/// backend that is up and returning 500s, or a path that 404s, is a **working
+/// network**, and rebooting the device over it gives a reboot loop for as long
+/// as the outage lasts. MicroPython showed the error screen and sat there,
+/// which is the better behaviour. Keying on time since the last answer was the
+/// second version, and it was wrong the other way — see [`LinkClock`].
 ///
-/// So the gate keys on `since_answer_s` alone. The streak still exists, still
+/// So the gate keys on `unanswered_s` alone. The streak still exists, still
 /// counts, and still puts [`ERROR_TITLE`] on the panel at [`MAX_FAILURES`] —
 /// it just never starves anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,10 +342,19 @@ pub struct Health {
     /// Seconds since the backend last **answered at the HTTP layer**, whatever
     /// it said. `None` if it never has.
     ///
-    /// "Answered" means a response reached the client: any status, including a
-    /// 404 or a 500, and including a body that arrived and then failed to
-    /// decode. All three prove DNS resolved, TCP connected and bytes crossed in
-    /// both directions — which is the whole question the watchdog is asking.
+    /// Not a gate input any more — a quiet poller lets it grow without bound,
+    /// which is [`LinkClock`]'s whole argument. What still reads it is the OTA
+    /// confirm, whose question really is "has the backend answered at all this
+    /// boot".
+    pub since_answer_s: Option<u32>,
+    /// How long the oldest request still without an answer has been waiting.
+    /// `None` when nothing is — including a poller with nothing to ask.
+    ///
+    /// "Answered" means a response reached the client: a status line and
+    /// headers, any status, including a 404 or a 500 and including a body that
+    /// then fails to decode. All of them prove DNS resolved, TCP connected and
+    /// bytes crossed in both directions — which is the whole question the
+    /// watchdog is asking.
     ///
     /// **Why the HTTP layer and not TCP.** A connection *refused* is, in
     /// principle, equally good evidence: a RST came back, so something is alive
@@ -253,10 +368,13 @@ pub struct Health {
     ///
     /// Against the deployed backend the distinction is nearly vacuous anyway: a
     /// dead app behind Fly's edge answers 502, which is an HTTP answer. The
-    /// residual is a hand-typed `api.url` pointing at a reachable-but-refusing
-    /// address, which is read as link death — a misconfiguration, visible on
-    /// the error screen, and the health gate is opt-in (`watchdog.enabled`).
-    pub since_answer_s: Option<u32>,
+    /// residual is a hand-typed `api.url` that parses and points at a
+    /// reachable-but-refusing address, which reads as link death and resets the
+    /// device every couple of minutes — a misconfiguration, explained at
+    /// `/api/logs/previous` and fixable from the settings page between resets.
+    /// An `api.url` that does not parse at all never sends anything, never
+    /// waits, and shows its error screen instead.
+    pub unanswered_s: Option<u32>,
 }
 
 impl Health {
@@ -266,6 +384,7 @@ impl Health {
             streak: 0,
             since_success_s: None,
             since_answer_s: None,
+            unanswered_s: None,
         }
     }
 }
@@ -284,8 +403,9 @@ pub enum Unhealthy {
     /// *quiet* render loop is not a stalled one — an idle screen skips every
     /// frame and still counts ticks — so this really is "the loop stopped".
     RenderLoopStalled,
-    /// Nothing has answered over the network for [`SILENCE_INTERVALS`] poll
-    /// intervals. The BACKLOG 69 failure.
+    /// A request has waited [`SILENCE_INTERVALS`] poll intervals for an answer
+    /// and nothing at all has answered meanwhile. The BACKLOG 69 failure;
+    /// `seconds` is how long the oldest request had waited.
     LinkSilent { seconds: u32 },
 }
 
@@ -306,24 +426,32 @@ impl Unhealthy {
 /// while somebody was typing a Wi-Fi password into the settings page, so only
 /// the render loop counts.
 ///
-/// `uptime_s` is what a `None` clock falls back to: a device that has just
-/// joined a network and pulled a DHCP lease has evidence the network worked a
-/// moment ago, so the silence is measured from boot rather than from forever.
-pub fn gate(
-    ticked: bool,
-    poll_interval_s: Option<u32>,
-    uptime_s: u32,
-    health: &Health,
-) -> Option<Unhealthy> {
+/// There is no fallback for a clock that has never started. A device that has
+/// sent nothing has proved nothing either way, and the first request it sends
+/// starts the count — so a unit that joins a network and finds it already dead
+/// starves [`SILENCE_INTERVALS`] intervals after its first poll, which is the
+/// same patience a running one gets.
+///
+/// # What this no longer catches, and why that is acceptable
+///
+/// Silence also caught a poller that had *stopped*: a task wedged somewhere
+/// stopped being answered because it stopped asking. Keyed on waiting
+/// requests, a poller wedged outside a request is never waiting and is fed.
+/// The loss is bounded by the shape of the poll loop rather than by anything
+/// here: every `await` in it is a request (under the client's 15 s timeout, and
+/// under this clock), a streamed download (read by read under this clock, and
+/// under its own ceiling), a timer, or a command channel raced against a timer.
+/// There is nothing left for it to wedge on that this clock does not see. A
+/// hang of the whole executor stops the feeder task with it, and the hardware
+/// watchdog needs no gate for that.
+pub fn gate(ticked: bool, poll_interval_s: Option<u32>, health: &Health) -> Option<Unhealthy> {
     if !ticked {
         return Some(Unhealthy::RenderLoopStalled);
     }
     let poll_interval_s = poll_interval_s?;
-    let silent_for = health.since_answer_s.unwrap_or(uptime_s);
-    if silent_for > SILENCE_INTERVALS * poll_interval_s {
-        return Some(Unhealthy::LinkSilent {
-            seconds: silent_for,
-        });
+    let waiting = health.unanswered_s?;
+    if waiting > SILENCE_INTERVALS.saturating_mul(poll_interval_s) {
+        return Some(Unhealthy::LinkSilent { seconds: waiting });
     }
     None
 }

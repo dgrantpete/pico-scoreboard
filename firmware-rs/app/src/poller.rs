@@ -77,9 +77,12 @@
 //!
 //! It cannot affect anything else in this file. A warm fetch happens outside
 //! [`Poller::tick`], so it cannot reach [`FailureTracker`]; a failed one is a
-//! debug line and a retry on a later window, and [`Health`] never hears about
-//! it. That is structural rather than careful: `record_failure` is only called
-//! on `tick`'s return value, and the warmer has none.
+//! debug line and a retry on a later window, and the failure streak never
+//! hears about it. That is structural rather than careful: `record_failure` is
+//! only called on `tick`'s return value, and the warmer has none. The *link*
+//! clock does hear about it, as it hears about every request the client sends —
+//! and should: a warm fetch that leaves and is answered proves the network as
+//! well as a poll does, and one sent into a dead link is the same evidence.
 //!
 //! # The OTA check is a phase of this loop, not a task of its own
 //!
@@ -197,20 +200,21 @@ pub const NEVER: u32 = u32::MAX;
 
 /// Assemble what the poller knows about the network.
 ///
-/// Two clocks from two places, and the split is the point:
-/// [`LAST_SUCCESS_S`] is the *backend's* — a tick that fetched, decoded and
-/// committed — and belongs to this loop, while the *link's* is stamped by
-/// [`api_client`](crate::net::api_client) on any HTTP answer at all. What each
-/// is allowed to conclude is [`Health`]'s documentation, and the gate that
-/// reads them is [`poll::gate`].
+/// Clocks from two places, and the split is the point: [`LAST_SUCCESS_S`] is
+/// the *backend's* — a tick that fetched, decoded and committed — and belongs
+/// to this loop, while the *link's* is kept by
+/// [`api_client`](crate::net::api_client), which sees every request leave and
+/// every answer arrive. What each is allowed to conclude is [`Health`]'s
+/// documentation, and the gate that reads them is [`poll::gate`].
 pub fn health() -> Health {
     let now = Instant::now().as_secs() as u32;
     let last_success = LAST_SUCCESS_S.load(Ordering::Relaxed);
+    let link = crate::net::api_client::link();
     Health {
         streak: FAILURE_STREAK.load(Ordering::Relaxed),
         since_success_s: (last_success != NEVER).then(|| now.saturating_sub(last_success)),
-        since_answer_s: crate::net::api_client::last_answer_uptime_s()
-            .map(|at| now.saturating_sub(at)),
+        since_answer_s: link.since_answer_s(now),
+        unanswered_s: link.unanswered_s(now),
     }
 }
 

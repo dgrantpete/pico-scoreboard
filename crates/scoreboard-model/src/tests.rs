@@ -2118,16 +2118,21 @@ fn the_logo_half_holds_a_crest_and_its_headers() {
 }
 
 // ---------------------------------------------------------------------------
-// The watchdog health gate (BACKLOG 69, refined by BACKLOG 70)
+// The watchdog health gate (BACKLOG 69, refined by BACKLOG 70 and again when
+// it stopped being optional on fleet builds)
 // ---------------------------------------------------------------------------
 
 mod health_gate {
-    use crate::poll::{Health, SILENCE_INTERVALS, Unhealthy, gate};
+    use std::vec::Vec;
+
+    use crate::poll::{Health, LinkClock, MAX_FAILURES, SILENCE_INTERVALS, Unhealthy, gate};
 
     /// The default cadence, so the numbers below read as the device's.
     const INTERVAL: u32 = 30;
-    /// The point at which silence becomes a reset: 90 s.
+    /// The point at which a waiting request becomes a reset: 90 s.
     const LIMIT: u32 = SILENCE_INTERVALS * INTERVAL;
+    /// The feeder's check cadence at the default 8 s timeout (`timeout / 4`).
+    const CHECK_EVERY: u32 = 2;
 
     /// A device that is polling happily.
     fn healthy() -> Health {
@@ -2135,32 +2140,187 @@ mod health_gate {
             streak: 0,
             since_success_s: Some(1),
             since_answer_s: Some(1),
+            unanswered_s: None,
+        }
+    }
+
+    /// One request, as the link clock sees it.
+    #[derive(Clone, Copy)]
+    enum Request {
+        /// A status line arrived `rtt` seconds later — any status at all.
+        Answered { rtt: u32 },
+        /// Nothing came back; the client's own timeout ends it.
+        Lost,
+        /// The URL did not parse, so it never left the device.
+        NeverLeft,
+    }
+
+    /// What a simulated run saw.
+    struct Run {
+        /// The first check the gate refused, and why.
+        starved: Option<(u32, Unhealthy)>,
+        /// The longest "time since anything answered" any check observed —
+        /// the number the *silence* gate keyed on, kept so the quiet-poller
+        /// tests can show they are exactly the cases that gate got wrong.
+        longest_quiet: u32,
+    }
+
+    /// Drive a [`LinkClock`] through `seconds` of a poller whose traffic is
+    /// `sends(t)`, consulting the gate every [`CHECK_EVERY`] seconds as the
+    /// feeder does. Answers that land in a second are applied before that
+    /// second's sends, which is the order a read loop produces: bytes arrive,
+    /// then the next read goes out.
+    fn run(seconds: u32, poll_interval: u32, mut sends: impl FnMut(u32) -> Option<Request>) -> Run {
+        let mut clock = LinkClock::new();
+        let mut answers_due: Vec<u32> = Vec::new();
+        let mut longest_quiet = 0;
+        for now in 0..=seconds {
+            if answers_due.contains(&now) {
+                clock.answer(now);
+                answers_due.retain(|&due| due != now);
+            }
+            match sends(now) {
+                Some(Request::Answered { rtt }) => {
+                    let _ = clock.ask(now);
+                    answers_due.push(now + rtt);
+                }
+                Some(Request::Lost) => {
+                    let _ = clock.ask(now);
+                }
+                Some(Request::NeverLeft) => {
+                    let started = clock.ask(now);
+                    clock.withdraw(started);
+                }
+                None => {}
+            }
+            if now % CHECK_EVERY == 0 {
+                let health = Health {
+                    streak: 0,
+                    since_success_s: None,
+                    since_answer_s: clock.since_answer_s(now),
+                    unanswered_s: clock.unanswered_s(now),
+                };
+                longest_quiet = longest_quiet.max(health.since_answer_s.unwrap_or(now));
+                if let Some(verdict) = gate(true, Some(poll_interval), &health) {
+                    return Run {
+                        starved: Some((now, verdict)),
+                        longest_quiet,
+                    };
+                }
+            }
+        }
+        Run {
+            starved: None,
+            longest_quiet,
         }
     }
 
     #[test]
     fn a_working_device_earns_its_feed() {
-        assert_eq!(gate(true, Some(INTERVAL), 1_000, &healthy()), None);
+        assert_eq!(gate(true, Some(INTERVAL), &healthy()), None);
+        // And over a whole day of polls that each answer within a second.
+        let day = run(86_400, INTERVAL, |t| {
+            (t % INTERVAL == 0).then_some(Request::Answered { rtt: 1 })
+        });
+        assert!(day.starved.is_none());
     }
 
     #[test]
     fn a_stalled_render_loop_starves_whatever_the_network_is_doing() {
         assert_eq!(
-            gate(false, Some(INTERVAL), 1_000, &healthy()),
+            gate(false, Some(INTERVAL), &healthy()),
             Some(Unhealthy::RenderLoopStalled)
         );
         // Including in setup mode, where the network half does not apply.
         assert_eq!(
-            gate(false, None, 1_000, &Health::new()),
+            gate(false, None, &Health::new()),
             Some(Unhealthy::RenderLoopStalled)
         );
     }
 
-    /// THE BACKLOG 70 DISTINCTION, half one: a backend that is answering and
-    /// failing must never starve the watchdog. A 404, a 500 and a body that
-    /// will not decode all reach the client as an *answer*, which proves DNS
-    /// resolved, TCP connected and bytes crossed both ways — the radio is on
-    /// the network, whatever the backend thinks of the request.
+    #[test]
+    fn setup_mode_ignores_the_network_entirely() {
+        // There is no poller in setup mode. Whatever the link clock says, it
+        // is not about anything the device is trying to do, and gating on it
+        // would reset the device while somebody typed a password into it.
+        let waiting_forever = Health {
+            unanswered_s: Some(100_000),
+            ..Health::new()
+        };
+        assert_eq!(gate(true, None, &waiting_forever), None);
+    }
+
+    /// THE BACKLOG 69 DRILL: requests keep going out, nothing comes back — the
+    /// overnight failure, and the 2026-10-12/13 field outages. Healthy for ten
+    /// minutes, then the link dies under a poller that keeps trying.
+    #[test]
+    fn requests_sent_into_a_dead_link_starve() {
+        const DIES_AT: u32 = 600;
+        let run = run(3_600, INTERVAL, |t| {
+            (t % INTERVAL == 0).then_some(if t < DIES_AT {
+                Request::Answered { rtt: 1 }
+            } else {
+                Request::Lost
+            })
+        });
+        // The first unanswered request left at 600, its retries at 630 and 660
+        // did not restart the count, and the first check past 90 s of waiting
+        // is the one at 692.
+        assert_eq!(
+            run.starved,
+            Some((DIES_AT + 92, Unhealthy::LinkSilent { seconds: 92 }))
+        );
+    }
+
+    #[test]
+    fn the_oldest_unanswered_request_sets_the_patience() {
+        let mut clock = LinkClock::new();
+        assert!(clock.ask(0), "the first request starts the clock");
+        assert!(!clock.ask(45), "a retry does not restart it");
+        assert_eq!(clock.unanswered_s(91), Some(91));
+        let health = Health {
+            unanswered_s: clock.unanswered_s(91),
+            ..Health::new()
+        };
+        assert_eq!(
+            gate(true, Some(INTERVAL), &health),
+            Some(Unhealthy::LinkSilent { seconds: 91 })
+        );
+    }
+
+    /// A request in flight is not silence, however long the quiet before it.
+    /// This is the race a "has anything been asked since the last answer"
+    /// rule would lose: the feeder checking in the few hundred milliseconds
+    /// between a request leaving and its answer arriving.
+    #[test]
+    fn a_request_in_flight_is_not_silence() {
+        let mut clock = LinkClock::new();
+        clock.answer(0);
+        // Five quiet minutes — an empty slate on a long rotation — then a
+        // request leaves.
+        assert!(clock.ask(300));
+        for now in [300, 301, 314] {
+            let health = Health {
+                since_answer_s: clock.since_answer_s(now),
+                unanswered_s: clock.unanswered_s(now),
+                ..Health::new()
+            };
+            assert_eq!(
+                gate(true, Some(INTERVAL), &health),
+                None,
+                "{now}: waiting {} s is a request, not a dead link",
+                now - 300
+            );
+        }
+        clock.answer(315);
+        assert_eq!(clock.unanswered_s(315), None);
+        assert_eq!(clock.since_answer_s(320), Some(5));
+    }
+
+    /// THE BACKLOG 70 DISTINCTION: a backend that is answering and failing
+    /// must never starve the watchdog. A 404, a 500 and a body that will not
+    /// decode all reach the client as a status line — an *answer*, which
+    /// proves DNS resolved, TCP connected and bytes crossed both ways.
     #[test]
     fn a_backend_that_answers_and_fails_never_starves() {
         let answering_but_broken = Health {
@@ -2168,97 +2328,183 @@ mod health_gate {
             streak: 500,
             // Nothing has *succeeded* for an hour.
             since_success_s: Some(3_600),
-            // But something answered a second ago.
+            // But something answered a second ago, and nothing is waiting.
             since_answer_s: Some(1),
+            unanswered_s: None,
         };
-        assert_eq!(gate(true, Some(INTERVAL), 100_000, &answering_but_broken), None);
+        assert_eq!(gate(true, Some(INTERVAL), &answering_but_broken), None);
+
+        // A day of 500s and 404s is, to the link clock, a day of answers.
+        let outage = run(86_400, INTERVAL, |t| {
+            (t % INTERVAL == 0).then_some(Request::Answered { rtt: 2 })
+        });
+        assert!(outage.starved.is_none());
     }
 
     /// The same fact stated as the regression it guards: the streak is not an
-    /// input. This is what made the first version of the gate reboot-loop
-    /// through a backend outage.
+    /// input. Keying on it is what made the first version of the gate
+    /// reboot-loop through a backend outage.
     #[test]
     fn the_failure_streak_is_not_an_input_to_the_gate() {
-        for streak in [0, 1, crate::poll::MAX_FAILURES, 10_000] {
-            let health = Health {
-                streak,
-                since_success_s: None,
-                since_answer_s: Some(0),
-            };
-            assert_eq!(
-                gate(true, Some(INTERVAL), 100_000, &health),
-                None,
-                "streak {streak} must not starve a device whose link is answering"
-            );
+        for streak in [0, 1, MAX_FAILURES, 19, 10_000] {
+            for unanswered_s in [None, Some(0), Some(LIMIT)] {
+                let health = Health {
+                    streak,
+                    since_success_s: None,
+                    since_answer_s: Some(0),
+                    unanswered_s,
+                };
+                assert_eq!(
+                    gate(true, Some(INTERVAL), &health),
+                    None,
+                    "streak {streak} must not starve a device whose link is answering"
+                );
+            }
         }
     }
 
-    /// THE BACKLOG 70 DISTINCTION, half two: silence starves. This is the
-    /// overnight failure — rendering perfectly, network gone, no link event.
     #[test]
-    fn silence_past_three_poll_intervals_starves() {
-        let silent = Health {
-            streak: 2,
-            since_success_s: Some(LIMIT + 1),
-            since_answer_s: Some(LIMIT + 1),
-        };
-        assert_eq!(
-            gate(true, Some(INTERVAL), 100_000, &silent),
-            Some(Unhealthy::LinkSilent {
-                seconds: LIMIT + 1
-            })
-        );
-    }
-
-    #[test]
-    fn silence_exactly_at_the_limit_is_still_fed() {
+    fn waiting_exactly_at_the_limit_is_still_fed() {
         // Strictly greater, so the boundary belongs to the healthy side — a
-        // poll that lands on its deadline is not late.
-        let health = Health {
-            streak: 0,
-            since_success_s: Some(LIMIT),
-            since_answer_s: Some(LIMIT),
+        // request that is answered on its deadline is not late.
+        let at_limit = Health {
+            unanswered_s: Some(LIMIT),
+            ..Health::new()
         };
-        assert_eq!(gate(true, Some(INTERVAL), 100_000, &health), None);
-    }
-
-    #[test]
-    fn a_device_that_has_never_been_answered_counts_from_boot() {
-        // Joining a network and pulling a lease is itself evidence it worked a
-        // moment ago, so the clock starts at boot rather than at negative
-        // infinity — otherwise a device would starve before its first poll.
-        let never = Health {
-            streak: 0,
-            since_success_s: None,
-            since_answer_s: None,
+        assert_eq!(gate(true, Some(INTERVAL), &at_limit), None);
+        let past_it = Health {
+            unanswered_s: Some(LIMIT + 1),
+            ..Health::new()
         };
-        assert_eq!(gate(true, Some(INTERVAL), LIMIT, &never), None, "still booting");
         assert_eq!(
-            gate(true, Some(INTERVAL), LIMIT + 1, &never),
-            Some(Unhealthy::LinkSilent { seconds: LIMIT + 1 }),
-            "but silence from boot eventually counts"
+            gate(true, Some(INTERVAL), &past_it),
+            Some(Unhealthy::LinkSilent { seconds: LIMIT + 1 })
         );
     }
 
     #[test]
-    fn setup_mode_ignores_the_network_entirely() {
-        // There is no poller in setup mode, so its health reads as "never
-        // answered" forever. Gating on it would reset the device every few
-        // seconds while somebody was typing a password into the settings page.
-        let never = Health::new();
-        assert_eq!(gate(true, None, 100_000, &never), None);
+    fn a_device_that_has_sent_nothing_has_proved_nothing() {
+        // The silence gate counted from boot for a device that had never been
+        // answered. Nothing sent is no evidence either way, so there is no
+        // fallback any more: the first request that leaves starts the count.
+        assert_eq!(gate(true, Some(INTERVAL), &Health::new()), None);
     }
 
     #[test]
     fn the_interval_scales_the_patience() {
         let health = Health {
-            streak: 0,
-            since_success_s: None,
-            since_answer_s: Some(200),
+            unanswered_s: Some(200),
+            ..Health::new()
         };
         // A 30 s poller has run out of patience by 200 s...
-        assert!(gate(true, Some(30), 100_000, &health).is_some());
+        assert!(gate(true, Some(30), &health).is_some());
         // ...and a 120 s one has not.
-        assert_eq!(gate(true, Some(120), 100_000, &health), None);
+        assert_eq!(gate(true, Some(120), &health), None);
+    }
+
+    // -- The three quiet pollers the silence gate would have rebooted ------
+
+    /// QUIET CASE 1: an empty slate. With no game in any enabled league the
+    /// tick makes no request, and the lists refresh once per rotation — here a
+    /// 10 s poll with the default 60 s rotation, a plausible "fast scores"
+    /// setting. Two hours of an off day.
+    #[test]
+    fn an_empty_slate_on_a_long_rotation_is_quiet_not_dead() {
+        const POLL: u32 = 10;
+        const ROTATION: u32 = 60;
+        let run = run(7_200, POLL, |t| {
+            (t % ROTATION == 0).then_some(Request::Answered { rtt: 1 })
+        });
+        assert!(
+            run.longest_quiet > SILENCE_INTERVALS * POLL,
+            "the scenario must be one the silence gate starved on"
+        );
+        assert!(run.starved.is_none(), "starved at {:?}", run.starved);
+    }
+
+    /// QUIET CASE 2: no sports enabled. The clock sync and the update check
+    /// are daily, so after boot nothing is asked for hours.
+    #[test]
+    fn no_sports_enabled_is_quiet_not_dead() {
+        let run = run(6 * 3_600, INTERVAL, |t| {
+            (t == 0).then_some(Request::Answered { rtt: 1 })
+        });
+        assert!(run.longest_quiet > LIMIT);
+        assert!(run.starved.is_none(), "starved at {:?}", run.starved);
+    }
+
+    /// QUIET CASE 3: an `api.url` that does not parse — empty, or typed
+    /// without a scheme. Every tick tries, and every try is refused before it
+    /// leaves the device, so the clock never starts and the error screen is
+    /// what the owner sees.
+    #[test]
+    fn an_api_url_that_does_not_parse_never_starts_the_clock() {
+        let run = run(6 * 3_600, INTERVAL, |t| {
+            (t % INTERVAL == 0).then_some(Request::NeverLeft)
+        });
+        assert!(run.longest_quiet > LIMIT, "nothing has ever answered");
+        assert!(run.starved.is_none(), "starved at {:?}", run.starved);
+    }
+
+    #[test]
+    fn withdrawing_a_request_that_never_left_keeps_an_older_claim() {
+        let mut clock = LinkClock::new();
+        assert!(clock.ask(0), "a real request, never answered");
+        // The next one's URL does not parse. It did not start the clock, so
+        // withdrawing it must not stop the clock the real one started.
+        let started = clock.ask(30);
+        assert!(!started);
+        clock.withdraw(started);
+        assert_eq!(clock.unanswered_s(30), Some(30));
+    }
+
+    /// A quiet poller still catches the failure, one request late: the link
+    /// dies in the middle of a five-minute rotation on an empty slate, and the
+    /// next refresh is the request that finds out.
+    #[test]
+    fn a_link_that_dies_while_quiet_is_caught_by_the_next_request() {
+        const ROTATION: u32 = 300;
+        const DIES_AT: u32 = 3_000;
+        let run = run(7_200, INTERVAL, |t| {
+            (t % ROTATION == 0).then_some(if t < DIES_AT {
+                Request::Answered { rtt: 1 }
+            } else {
+                Request::Lost
+            })
+        });
+        assert_eq!(
+            run.starved,
+            Some((DIES_AT + 92, Unhealthy::LinkSilent { seconds: 92 }))
+        );
+    }
+
+    // -- The OTA download: one request per read ----------------------------
+
+    /// A slow transfer that keeps moving never waits long: every read is a
+    /// request of its own and every chunk is its answer. Twenty minutes at a
+    /// chunk per five seconds is far slower than any real link.
+    #[test]
+    fn a_slow_download_that_keeps_moving_is_fed() {
+        let run = run(1_200, INTERVAL, |t| {
+            (t % 5 == 0).then_some(Request::Answered { rtt: 5 })
+        });
+        assert!(run.starved.is_none(), "starved at {:?}", run.starved);
+    }
+
+    /// A transfer that stalls part-way is a read that never returns, and the
+    /// gate catches it inside the same bound as any other unanswered request —
+    /// well before the download's own 240 s ceiling would give up on it.
+    #[test]
+    fn a_download_that_stalls_starves_like_any_unanswered_request() {
+        const STALLS_AT: u32 = 120;
+        let run = run(1_200, INTERVAL, |t| match t {
+            t if t < STALLS_AT && t % 2 == 0 => Some(Request::Answered { rtt: 2 }),
+            STALLS_AT => Some(Request::Lost),
+            _ => None,
+        });
+        assert_eq!(
+            run.starved,
+            Some((STALLS_AT + 92, Unhealthy::LinkSilent { seconds: 92 }))
+        );
     }
 }

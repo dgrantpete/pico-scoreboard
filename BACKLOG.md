@@ -648,6 +648,22 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     `MAX_FAILURES`, and were fed throughout with no reset; an unroutable address
     starved at a streak of **2**, well below it. Transcripts in PARITY.md.
 
+    **Revised 2026-10-14: the gate keys on waiting, not silence.** "Seconds
+    since anything answered" was wrong the other way, and only the gate being
+    opt-in hid it: a poller that asks nothing reads exactly like a link that
+    answers nothing, and three supported states ask nothing for longer than
+    three poll intervals — an empty slate on any rotation over twice the poll
+    interval (every day without a game), no sports enabled, and an `api.url`
+    that does not parse. Found while making the gate mandatory on fleet builds
+    (item 69's 2026-10-14 note), where each would have been a reboot loop. The gate
+    now reads `Health::unanswered_s` — how long the oldest request that
+    actually left the device has gone without any HTTP answer — from
+    `scoreboard_model::poll::LinkClock`. Everything above about *what counts as
+    an answer* stands unchanged: a 404 or a 500 still clears the clock. The
+    `since_answer_s` clock survives only for the OTA confirm. The cost, written
+    down on `gate`: a poller wedged outside a request is no longer caught, and
+    the poll loop has no such await left to wedge on.
+
 72. **`probe-rs run` reports "Exception" on a device that is running fine** —
     a bench-workflow trap that cost an hour during BACKLOG 70 and will cost the
     next person the same unless it is written down. Symptoms: `probe-rs run`

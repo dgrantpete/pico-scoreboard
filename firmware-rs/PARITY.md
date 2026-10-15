@@ -873,6 +873,35 @@ of flash. Nine host tests in `scoreboard-model`, covering both halves of the
 distinction, the boundary, the setup-mode exemption and the streak's
 irrelevance.
 
+## Revised 2026-10-14: waiting, not silence
+
+"Nothing has answered in three poll intervals" was still wrong, in the other
+direction, and only the gate being opt-in had kept it from mattering. It reads a
+poller that did not *ask* exactly like a link that did not *answer*, and three
+supported states ask nothing for longer than three intervals: an empty slate
+(lists refresh once per rotation, so any rotation over twice the poll interval
+starved on every day without a game), no sports enabled, and an `api.url` that
+does not parse (`BadUrl` never touches the network). Making the gate mandatory
+on fleet builds would have turned each into a reboot loop.
+
+So the condition is now **"a request has waited three poll intervals for an
+answer"**: the clock starts when a request leaves the device (a URL that does
+not parse withdraws it), keeps the oldest request's time across retries, and
+clears on any HTTP answer — a 404 and a 500 still count, so everything above
+about BACKLOG 70 stands. The OTA download is one request per body read, so a
+mid-transfer stall still starves inside the same bound. The rule lives on
+`scoreboard_model::poll::LinkClock`, host-tested by simulation for each quiet
+case, the dead-link drill, a request in flight and the download in both
+directions.
+
+The two drills above keep their shape under the new rule and were not re-run on
+hardware: the 404 drill answers every request, so nothing ever waits; the
+unroutable-address drill sends requests that time out, so the clock starts at
+the first one and starves about 92 s later instead of at 91 s of uptime. What
+the new rule gives up is a poller wedged *outside* a request, which silence
+would have caught; every `await` in the poll loop is a request, a timer or a
+command raced against one, so there is nowhere left for it to wedge.
+
 
 ## Phase 4: OTA, and one gap MicroPython never had to think about
 

@@ -24,22 +24,29 @@
 //!   render loop. A *quiet* loop is not a hung one — an idle screen skips every
 //!   frame and still counts ticks — which is why the counter is bumped per
 //!   iteration and not per draw.
-//! * **something on the network is still answering**, from
-//!   [`poller::health`]. Catches the overnight failure, and nothing else in the
-//!   firmware can: the poller is the only thing that talks to anything.
+//! * **no request has been left waiting**, from [`poller::health`]. Catches
+//!   the overnight failure, and nothing else in the firmware can: the poller is
+//!   the only thing that talks to anything.
 //!
 //! Both must hold to earn a feed. The second half is skipped in setup mode,
 //! where there is no poller by design and gating on it would reset the device
 //! every eight seconds while somebody was typing their Wi-Fi password into it.
 //!
-//! **"Answering" is not "succeeding", and the difference is BACKLOG 70.** The
+//! **"Answered" is not "succeeded", and the difference is BACKLOG 70.** The
 //! first version of this gate also starved on a failure streak, which meant a
 //! backend outage rebooted the device every hundred seconds for as long as the
 //! outage lasted — where MicroPython showed the error screen and sat there. A
-//! 404 or a 500 proves the radio is on the network just as well as a 200 does,
-//! so only *silence* starves now. The whole decision, including why "answer"
+//! 404 or a 500 proves the radio is on the network just as well as a 200 does.
+//!
+//! **"Waiting" is not "quiet", and the difference is why the gate could be made
+//! mandatory.** The second version starved on silence — time since anything
+//! answered — and a poller with an empty slate, no sports enabled or an
+//! `api.url` that does not parse asks nothing for minutes at a time, which
+//! silence cannot tell from a dead link. Only a request that went out and was
+//! never answered starves now. The whole decision, including why "answer"
 //! means the HTTP layer and not TCP, lives on
-//! [`Health`](scoreboard_model::poll::Health) where it can be host-tested.
+//! [`LinkClock`](scoreboard_model::poll::LinkClock) and
+//! [`Health`](scoreboard_model::poll::Health), where it is host-tested.
 //!
 //! # Where `ThreadHealth.healthy` went
 //!
@@ -598,7 +605,7 @@ pub async fn watchdog(
         // and "reboot the device" are the same statement and only the gate has
         // the standing to make it.
         let verdict = if gate_enabled {
-            gate(ticked, poll_interval_s, uptime_s, &health)
+            gate(ticked, poll_interval_s, &health)
         } else {
             None
         };
@@ -615,12 +622,12 @@ pub async fn watchdog(
                 "watchdog starved: render loop stalled (frame_seq held at {previous_frame})"
             )),
             // The failure streak rides along in the message even though it is
-            // not what starved anything: "silent for 91 s after 3 failed polls"
-            // and "silent for 91 s having never polled" are different faults
-            // and this is the only place the difference is recorded.
+            // not what starved anything: "waiting 92 s after 3 failed polls"
+            // and "waiting 92 s on the first request after boot" are different
+            // faults and this is the only place the difference is recorded.
             Unhealthy::LinkSilent { seconds } => crumb.set_message(format_args!(
-                "watchdog starved: nothing answered in {seconds} s, over {} poll intervals \
-                 (failure streak {})",
+                "watchdog starved: a request waited {seconds} s with nothing answering, over {} \
+                 poll intervals (failure streak {})",
                 scoreboard_model::poll::SILENCE_INTERVALS,
                 health.streak
             )),

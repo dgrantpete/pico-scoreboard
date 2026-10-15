@@ -49,16 +49,18 @@
 //! backend it is ~60 ms, against a tick that makes at most four requests every
 //! 30 s.
 
+use core::cell::Cell;
 use core::fmt::Write as _;
-use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_net::Stack;
 use embassy_net::dns::DnsSocket;
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
+use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Instant, with_timeout};
 use reqwless::client::HttpClient;
 use reqwless::request::{Method, RequestBuilder as _};
-use scoreboard_model::poll::{self, MAX_HEADER_BLOCK, PollError, Transport};
+use scoreboard_model::poll::{self, LinkClock, MAX_HEADER_BLOCK, PollError, Transport};
 use scoreboard_wire::{STRUCT_CONTENT_TYPE, STRUCT_CONTENT_TYPE_EXT};
 use static_cell::ConstStaticCell;
 
@@ -81,21 +83,65 @@ pub type Etag = heapless::String<48>;
 /// the watchdog guards the render loop, not the network.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Uptime seconds at the last HTTP answer; [`NEVER`] until the first one.
+/// The link's evidence: when something last answered, and since when the
+/// oldest request still without an answer has been waiting.
 ///
 /// Lives here rather than beside the poller's own counters because the client
 /// is the thing that observes it — the poller only assembles it into
-/// [`Health`](scoreboard_model::poll::Health) alongside its own clocks.
-static LAST_ANSWER_S: AtomicU32 = AtomicU32::new(NEVER);
+/// [`Health`](scoreboard_model::poll::Health) alongside its own clocks. The
+/// rules — what leaving and answering mean, and why the oldest waiting request
+/// is the one that counts — are [`LinkClock`]'s, where they are host-tested;
+/// this is the one instance, and the three places below that feed it.
+///
+/// Behind a critical section rather than in atomics because an update reads
+/// one field to decide whether to write the other, and the watchdog task must
+/// never see half of that.
+static LINK: Mutex<CriticalSectionRawMutex, Cell<LinkClock>> =
+    Mutex::new(Cell::new(LinkClock::new()));
 
-/// `LAST_ANSWER_S` before anything has answered. Not zero: zero is a real
-/// uptime, and "answered at boot" is the opposite of what this means.
-pub const NEVER: u32 = u32::MAX;
+fn uptime_s() -> u32 {
+    Instant::now().as_secs() as u32
+}
 
-/// Uptime seconds at the last HTTP answer, or `None` if nothing ever has.
-pub fn last_answer_uptime_s() -> Option<u32> {
-    let at = LAST_ANSWER_S.load(Ordering::Relaxed);
-    (at != NEVER).then_some(at)
+/// The link clock as it stands, for [`crate::poller::health`].
+pub fn link() -> LinkClock {
+    LINK.lock(Cell::get)
+}
+
+/// A request is about to leave. Returns whether it started the clock, which
+/// [`departed`] needs if it turns out not to have left after all.
+fn asking() -> bool {
+    LINK.lock(|link| {
+        let mut clock = link.get();
+        let started = clock.ask(uptime_s());
+        link.set(clock);
+        started
+    })
+}
+
+/// Settle what [`asking`] claimed, once reqwless has had the URL. It parses the
+/// URL before it touches DNS, so a refused URL is a request that never left —
+/// and a request that never left is no evidence about the link either way. An
+/// `api.url` typed without a scheme would otherwise read as a dead network and
+/// reset the device every couple of minutes, where what it deserves is its
+/// error screen.
+fn departed<T>(started: bool, opened: &Result<T, reqwless::Error>) {
+    if matches!(opened, Err(reqwless::Error::InvalidUrl(_))) {
+        LINK.lock(|link| {
+            let mut clock = link.get();
+            clock.withdraw(started);
+            link.set(clock);
+        });
+    }
+}
+
+/// Something answered at the HTTP layer: the link is alive.
+fn answered() {
+    LINK.lock(|link| {
+        let mut clock = link.get();
+        clock.answer(uptime_s());
+        link.set(clock);
+    });
 }
 
 /// Per-connection socket buffers. One connection, because
@@ -310,12 +356,16 @@ impl ApiClient {
     /// pretend otherwise. Returning `false` aborts the transfer; the caller
     /// keeps the reason, because a `bool` is all this layer needs to know.
     ///
-    /// Every chunk stamps the link's liveness clock, for the reason the field
-    /// exists: bytes arriving *are* the evidence that something on the network
-    /// is answering. Without it a download longer than
-    /// `SILENCE_INTERVALS × poll_interval` — 90 s by default — would look
-    /// exactly like a device that had fallen off the wifi, and the watchdog
-    /// would reset the device in the middle of an update that was working.
+    /// **Every read is a request of its own** to the link clock: it is asked
+    /// before the read and answered when bytes arrive. Bytes arriving *are* the
+    /// evidence that something on the network is answering, so a slow download
+    /// that keeps moving never waits long however many minutes it takes — and
+    /// one that stalls part-way is a read that never returns, which the health
+    /// gate starves on after `SILENCE_INTERVALS × poll_interval` (90 s by
+    /// default), exactly as it would for any request sent into a dead link.
+    /// Treating the response as one request answered by its headers would have
+    /// lost that: the clock would stop at the status line and a mid-body stall
+    /// would wait out `ota`'s whole `DOWNLOAD_TIMEOUT` instead.
     #[cfg_attr(
         not(feature = "link-boot-integrated"),
         allow(
@@ -344,26 +394,31 @@ impl ApiClient {
             ("X-Device-Id", crate::storage::device_id()),
             ("X-Ota-Context", "install"),
         ];
-        let mut request = client
-            .request(Method::GET, url)
-            .await
-            .map_err(transport_error)?
-            .headers(&headers);
+        let started = asking();
+        let opened = client.request(Method::GET, url).await;
+        departed(started, &opened);
+        let mut request = opened.map_err(transport_error)?.headers(&headers);
         let response = request.send(header_buf).await.map_err(transport_error)?;
+        answered();
         if response.status.0 != 200 {
             return Err(PollError::http(response.status.0, ""));
         }
 
         let mut reader = response.body().reader();
         loop {
+            // A read cannot be a URL that never left, so there is nothing to
+            // settle: whether this started the clock does not matter.
+            let _ = asking();
             let read = reader
                 .read(chunk)
                 .await
                 .map_err(|_| PollError::Transport(scoreboard_model::poll::Transport::Io))?;
+            // Zero bytes is the far end closing the stream cleanly, which is
+            // an answer too.
+            answered();
             if read == 0 {
                 return Ok(());
             }
-            LAST_ANSWER_S.store(Instant::now().as_secs() as u32, Ordering::Relaxed);
             if !sink(&chunk[..read]) {
                 return Err(PollError::Transport(scoreboard_model::poll::Transport::Io));
             }
@@ -372,8 +427,8 @@ impl ApiClient {
 
     /// The one request path. Everything above is a status-code policy over it.
     ///
-    /// It is also where the *link's* liveness clock is stamped — see the note
-    /// inside, and [`Health::since_answer_s`](scoreboard_model::poll::Health).
+    /// Its [`fetch`](ApiClient::fetch) is also where the *link's* liveness
+    /// clock is fed — see the notes there, and [`LinkClock`].
     async fn get<'buf>(
         &mut self,
         url: &str,
@@ -384,24 +439,12 @@ impl ApiClient {
         // Dropping this future on a timeout drops the connection with it, and
         // `TcpConnection::drop` closes the socket — `_with_timeout`'s
         // `session.close()`, arrived at by construction rather than by an
-        // `except` arm.
+        // `except` arm. A request dropped here was asked and never answered,
+        // so the link clock keeps waiting on it: that is the evidence.
         let fetched = with_timeout(REQUEST_TIMEOUT, self.fetch(url, headers, buf))
             .await
             .map_err(|_| PollError::Timeout)?;
         if let Ok(fetched) = &fetched {
-            // The link is alive, and this is the only place that can say so.
-            //
-            // Recorded here rather than at the six call sites because *every*
-            // request funnels through this function, so a seventh endpoint
-            // cannot forget it — and because it has to count the failures too.
-            // A 404 and a 500 both arrive here as `Ok` and become
-            // `PollError::Http` a few frames up; a body that arrives and does
-            // not decode becomes `PollError::Decode` further up still. All
-            // three prove DNS resolved, TCP connected and bytes crossed in both
-            // directions, which is the entire question
-            // `scoreboard_model::poll::Health::since_answer_s` asks.
-            LAST_ANSWER_S.store(Instant::now().as_secs() as u32, Ordering::Relaxed);
-
             // `_log_api` (`api_client.py:52-56`): every request, with its status
             // and elapsed time, at DEBUG. It goes to the ring as well as to
             // defmt because that is where it went in MicroPython, and because
@@ -432,12 +475,22 @@ impl ApiClient {
         let dns = DnsSocket::new(self.stack);
         let mut client = HttpClient::new(&tcp, &dns);
 
-        let mut request = client
-            .request(Method::GET, url)
-            .await
-            .map_err(transport_error)?
-            .headers(headers);
+        // The link clock, fed here rather than at the six call sites because
+        // *every* request funnels through this function, so a seventh endpoint
+        // cannot forget it. Asked before DNS and the connect, which is where a
+        // dead link shows itself; settled once reqwless has accepted the URL.
+        let started = asking();
+        let opened = client.request(Method::GET, url).await;
+        departed(started, &opened);
+        let mut request = opened.map_err(transport_error)?.headers(headers);
         let response = request.send(buf).await.map_err(transport_error)?;
+        // Answered: a status line and headers came back, whatever they say. A
+        // 404 and a 500 both arrive here and become `PollError::Http` a few
+        // frames up; a body that then fails to arrive whole, or to decode,
+        // fails further up still. Every one of them proves DNS resolved, TCP
+        // connected and bytes crossed in both directions, which is the entire
+        // question the health gate asks.
+        answered();
 
         let status = response.status.0;
         // Before `body()`, which moves the body over the header bytes this
