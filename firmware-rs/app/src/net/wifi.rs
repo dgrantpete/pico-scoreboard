@@ -5,6 +5,13 @@
 //! setup screen and the captive portal behind it. Every retry rule below is
 //! `main.py:628-750`'s, and the ones whose mechanism had to change say so.
 //!
+//! The three attempts are no longer the last word. With a network configured,
+//! setup mode resets the device to run this flow again after five minutes in
+//! which nobody used the portal ([`crate::supervise::setup_retry`]) — because
+//! the commonest way to exhaust three attempts is a router still booting after
+//! the power cut that rebooted this device, and that used to cost a visit to
+//! the plug.
+//!
 //! # Status codes, translated
 //!
 //! MicroPython polled `wlan.status()` every 500 ms and branched on the integer.

@@ -248,9 +248,14 @@ fn main() -> ! {
                 " with no breadcrumb — see supervise's docs"
             }
         ),
-        Some(embassy_rp::watchdog::ResetReason::Forced) => {
-            defmt::info!("boot: reset was forced (probe, or POST /api/reboot)")
-        }
+        Some(embassy_rp::watchdog::ResetReason::Forced) => defmt::info!(
+            "boot: reset was forced (probe, POST /api/reboot, an update, or a setup-mode retry{=str})",
+            if has_previous_record {
+                "; see /api/logs/previous"
+            } else {
+                ""
+            }
+        ),
         None => defmt::info!("boot: power-on or SYSRESETREQ"),
     }
 

@@ -12,6 +12,11 @@
 //!   uninitialised RAM and resets; the next boot promotes it to flash and
 //!   `GET /api/logs/previous` serves it.
 //!
+//! And one that is the same subject in setup mode: [`setup_retry`], which
+//! resets a device stuck in setup mode with a configured network back into
+//! station mode once nobody is using the portal, and leaves the same kind of
+//! breadcrumb the watchdog's deliberate resets do.
+//!
 //! # The health gate, and the failure it exists for
 //!
 //! BACKLOG 69: the bench unit fell off the Wi-Fi overnight and **kept rendering
@@ -879,6 +884,95 @@ pub async fn reboot_on_request() -> ! {
     defmt::info!("reboot requested: resetting in 1 s");
     Timer::after(Duration::from_secs(1)).await;
     force_reset()
+}
+
+// ---------------------------------------------------------------------------
+// Setup mode: trying the configured network again
+// ---------------------------------------------------------------------------
+
+/// Uptime seconds of the last sign that somebody is using the setup portal;
+/// [`NO_ACTIVITY`] until the first.
+static PORTAL_ACTIVITY_S: AtomicU32 = AtomicU32::new(NO_ACTIVITY);
+
+/// Not zero: zero is a real uptime, and "somebody was here at boot" is the
+/// opposite of what this means.
+const NO_ACTIVITY: u32 = u32::MAX;
+
+/// Somebody is using the portal: the DHCP server granted a lease, or the HTTP
+/// server took a request.
+///
+/// Those two because together they are what a person setting the device up
+/// produces — a phone joining the access point, then the page and its API
+/// calls — and neither happens on an AP nobody has joined. Called in station
+/// mode too, where nothing reads it: one relaxed store per request is cheaper
+/// than asking which mode won.
+///
+/// Never inlined: under LTO the timer read behind `Instant::now()` was folded
+/// into the HTTP router's one large dispatch function, and keeping it a call
+/// measured 544 B less `.text` on the boot-integrated image.
+#[inline(never)]
+pub fn note_portal_activity() {
+    PORTAL_ACTIVITY_S.store(Instant::now().as_secs() as u32, Ordering::Relaxed);
+}
+
+/// How often [`setup_retry`] reconsiders. Ten seconds against a five-minute
+/// wait is noise, and the task is otherwise asleep.
+const SETUP_RETRY_CHECK: Duration = Duration::from_secs(10);
+
+/// Reset into station mode again once setup mode has gone
+/// [`SETUP_RETRY_IDLE_S`](scoreboard_model::poll::SETUP_RETRY_IDLE_S) without
+/// anybody at the portal.
+///
+/// Before this, a unit whose three station attempts all failed stayed in setup
+/// mode until somebody power-cycled it — and the commonest way to fail all
+/// three is a power cut, which takes the router down with the scoreboard and
+/// brings the scoreboard back first. Whether to retry is
+/// [`scoreboard_model::poll::setup_retry`]'s decision, host-tested there: never
+/// for a device with no network configured, and never while somebody is using
+/// the portal.
+///
+/// Spawned in every setup mode, so the decision has one home; for
+/// `no_network_configured` it simply never comes due.
+///
+/// The reset is [`force_reset`] directly, not [`request_reboot`]: that path's
+/// one-second delay exists so an HTTP response can reach the browser that
+/// asked, and the condition here is that there is no browser. It leaves a
+/// breadcrumb the way the watchdog's deliberate resets do, so that the boot
+/// that comes back on the network can say at `/api/logs/previous` why it
+/// restarted. Every retry writes that record to flash at the next boot — once
+/// per six or seven minutes through a long router outage, into a storage map
+/// that spreads its writes across the whole region.
+#[embassy_executor::task]
+pub async fn setup_retry(reason: scoreboard_model::SetupReason) -> ! {
+    let entered_s = Instant::now().as_secs() as u32;
+    let mut ticker = Ticker::every(SETUP_RETRY_CHECK);
+    loop {
+        ticker.next().await;
+        let now_s = Instant::now().as_secs() as u32;
+        let last = PORTAL_ACTIVITY_S.load(Ordering::Relaxed);
+        let last_activity_s = (last != NO_ACTIVITY).then_some(last);
+        let Some(idle) = scoreboard_model::poll::setup_retry(reason, entered_s, last_activity_s, now_s)
+        else {
+            continue;
+        };
+
+        // The record first, as everywhere: after the reset it is the only
+        // thing that will say why the device came back.
+        let mut crumb = describe(Cause::SetupRetry);
+        crate::config::with(|config| {
+            crumb.set_message(format_args!(
+                "setup mode ({}): no portal activity for {idle} s; restarting to try \"{}\" again",
+                crate::net::reason_name(reason),
+                config.network.ssid.as_str()
+            ))
+        });
+        stash_breadcrumb(&crumb);
+        crate::error!(
+            "setup: no portal activity for {} s; restarting to try the configured network again",
+            idle
+        );
+        force_reset()
+    }
 }
 
 /// Report core 1's tick rate, and measure both stacks.

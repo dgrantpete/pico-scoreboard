@@ -8,7 +8,7 @@
 //! a firmware bug hides in, so they live where a desktop can run them (SPEC §2's
 //! crate-boundary rule).
 //!
-//! Three things, then:
+//! Four things, then:
 //!
 //! - [`PollError`] and [`friendly`] — `_friendly_error`'s mapping onto the four
 //!   lines the panel has room for.
@@ -18,13 +18,17 @@
 //!   for an hour should recover within one interval of the backend returning,
 //!   not within an hour.
 //! - [`SkipMachine`] — the arm/reject/in-flight rules a button press meets.
+//! - [`gate`] and [`setup_retry`] — when the device may conclude its network
+//!   is gone and reset itself to rejoin: the watchdog's verdict in station
+//!   mode, over [`LinkClock`]'s evidence, and setup mode's retry of a
+//!   configured network nobody is fixing.
 //!
 //! plus [`RESPONSE_BYTES`] and its split, which is a decision about the *wire*
 //! and belongs next to the code that reads it.
 
 use scoreboard_wire::DecodeError;
 
-use crate::snapshot::{ERROR_LINES, LINE, Millis};
+use crate::snapshot::{ERROR_LINES, LINE, Millis, SetupReason};
 use crate::store::Store;
 use crate::text::{Text, set_capped, set_line, set_plain, write_args};
 
@@ -454,6 +458,55 @@ pub fn gate(ticked: bool, poll_interval_s: Option<u32>, health: &Health) -> Opti
         return Some(Unhealthy::LinkSilent { seconds: waiting });
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// Setup mode: when to give the configured network another chance
+// ---------------------------------------------------------------------------
+
+/// How long setup mode waits with nobody using the portal before it reboots to
+/// try the configured network again.
+///
+/// Five minutes, set from both ends. Long enough for somebody who has just
+/// noticed the setup screen to join the access point from a phone, find the
+/// page and type a password — and every lease the portal grants and every
+/// request it serves restarts the count, so this only has to cover the pauses
+/// between a person's actions, not the whole session. Short enough that the
+/// case it exists for costs minutes rather than days: a power cut takes the
+/// router and the scoreboard down together, the scoreboard boots faster,
+/// spends its three join attempts against a router that is not up yet, and
+/// before this sat in setup mode until somebody power-cycled it.
+pub const SETUP_RETRY_IDLE_S: u32 = 5 * 60;
+
+/// Decide whether a device in setup mode should reboot and try its configured
+/// network again. Returns how long the portal has been idle when it should.
+///
+/// `reason` is why setup mode was entered. Only the two that mean "there is a
+/// network and it did not work" ever retry. [`SetupReason::NoConfig`] has
+/// nothing to retry, and rebooting it would only take the access point away
+/// from whoever is about to set it up. [`SetupReason::BadAuth`] retries even
+/// though a wrong password does not fix itself, because the reason is sticky
+/// across the three attempts: one rejection from a router that is still
+/// starting up marks the whole boot `bad_auth`. Retrying a password that
+/// really is wrong costs one round of attempts every five minutes, and only
+/// while nobody is at the portal to fix it.
+///
+/// `entered_s` is when setup mode began and `last_activity_s` when the portal
+/// last granted a DHCP lease or served an HTTP request, both in uptime seconds.
+/// The idle time runs from whichever is later, so a person's arrival restarts
+/// it and the device is never pulled out from under someone using it.
+pub fn setup_retry(
+    reason: SetupReason,
+    entered_s: u32,
+    last_activity_s: Option<u32>,
+    now_s: u32,
+) -> Option<u32> {
+    if reason == SetupReason::NoConfig {
+        return None;
+    }
+    let quiet_since = last_activity_s.map_or(entered_s, |at| at.max(entered_s));
+    let idle = now_s.saturating_sub(quiet_since);
+    (idle >= SETUP_RETRY_IDLE_S).then_some(idle)
 }
 
 /// The two strings `_friendly_error` returns: what went wrong, and the detail

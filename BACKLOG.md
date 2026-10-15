@@ -619,6 +619,15 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     nothing. Making the gate mandatory first meant fixing what opt-in had
     hidden — see item 70's note of the same date.
 
+    The same change closed this item's other way of staying dark: a unit whose
+    three station attempts all fail at boot — a router slower to come back from
+    a power cut than the scoreboard — used to sit in setup mode forever. With a
+    network configured (`connection_failed`, `bad_auth`), setup mode now resets
+    to retry station mode after five minutes with no DHCP lease granted and no
+    HTTP request served (`supervise::setup_retry`, decided by the host-tested
+    `scoreboard_model::poll::setup_retry`), with a `setup retry` breadcrumb at
+    `/api/logs/previous`.
+
 70. **The health gate cannot tell a dead network from a dead backend** — the
     known cost of closing item 69, worth fixing before the watchdog is ever
     defaulted on. With `watchdog.enabled`, a backend outage longer than

@@ -41,7 +41,7 @@
 use core::net::Ipv4Addr;
 
 use edge_dhcp::server::{Server, ServerOptions};
-use edge_dhcp::{Options, Packet};
+use edge_dhcp::{DhcpOption, MessageType, Options, Packet};
 use embassy_futures::yield_now;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{IpEndpoint, IpListenEndpoint, Stack};
@@ -161,6 +161,14 @@ pub async fn serve(stack: Stack<'static>, address: Ipv4Addr) -> ! {
             continue;
         };
 
+        // A lease granted is a phone joining the setup network, which is the
+        // first thing a person setting the device up does — and what holds
+        // off `supervise::setup_retry` while they do the rest. An ACK, not an
+        // OFFER: an offer is only a proposal, and a NAK is a refusal.
+        if is_ack(&reply) {
+            crate::supervise::note_portal_activity();
+        }
+
         let destination = reply_destination(&request);
         match reply.encode(&mut reply_buffer) {
             Ok(encoded) => {
@@ -176,6 +184,15 @@ pub async fn serve(stack: Stack<'static>, address: Ipv4Addr) -> ! {
         // the HTTP server they are joining in order to reach.
         yield_now().await;
     }
+}
+
+/// Whether a reply grants a lease: a DHCPACK, which edge-dhcp sends only after
+/// it has written the lease into its table.
+fn is_ack(reply: &Packet<'_>) -> bool {
+    reply
+        .options
+        .iter()
+        .any(|option| matches!(option, DhcpOption::MessageType(MessageType::Ack)))
 }
 
 /// RFC 2131 §4.1's destination rules, as every real server implements them.

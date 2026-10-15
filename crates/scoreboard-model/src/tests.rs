@@ -2528,3 +2528,115 @@ mod health_gate {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Setup mode's retry of a configured network
+// ---------------------------------------------------------------------------
+
+mod setup_retry {
+    use crate::poll::{SETUP_RETRY_IDLE_S, setup_retry};
+    use crate::snapshot::SetupReason;
+
+    /// Three failed attempts take about this long; setup mode starts after.
+    const ENTERED: u32 = 90;
+
+    #[test]
+    fn the_wait_is_five_minutes() {
+        // The number the field case is sized by — long enough to type a
+        // password, short enough that a router outage costs minutes. If this
+        // changes, the docs on the constant have to change with it.
+        assert_eq!(SETUP_RETRY_IDLE_S, 300);
+    }
+
+    /// THE FIELD CASE: a power cut, the router slower to come back than the
+    /// scoreboard, three attempts spent against nothing, and nobody near the
+    /// portal. Five quiet minutes later, try the network again.
+    #[test]
+    fn a_failed_connection_retries_after_five_quiet_minutes() {
+        let due_at = ENTERED + SETUP_RETRY_IDLE_S;
+        assert_eq!(
+            setup_retry(SetupReason::ConnectionFailed, ENTERED, None, due_at - 1),
+            None
+        );
+        assert_eq!(
+            setup_retry(SetupReason::ConnectionFailed, ENTERED, None, due_at),
+            Some(SETUP_RETRY_IDLE_S)
+        );
+    }
+
+    /// The reason is sticky across the three attempts, so one rejection from
+    /// a router that is still starting up reads as a wrong password. It gets
+    /// the same retry.
+    #[test]
+    fn a_rejected_password_retries_too() {
+        assert_eq!(
+            setup_retry(SetupReason::BadAuth, ENTERED, None, ENTERED + SETUP_RETRY_IDLE_S),
+            Some(SETUP_RETRY_IDLE_S)
+        );
+    }
+
+    /// A device with no network configured has nothing to retry, and a reboot
+    /// would only take the access point away from whoever is about to set it
+    /// up — however long it has sat there.
+    #[test]
+    fn an_unconfigured_device_never_retries() {
+        for now in [ENTERED + SETUP_RETRY_IDLE_S, 86_400, u32::MAX] {
+            assert_eq!(setup_retry(SetupReason::NoConfig, ENTERED, None, now), None);
+        }
+    }
+
+    /// Somebody using the portal restarts the count, so the access point is
+    /// never pulled out from under them.
+    #[test]
+    fn portal_activity_restarts_the_count() {
+        let joined = ENTERED + 200;
+        assert_eq!(
+            setup_retry(
+                SetupReason::ConnectionFailed,
+                ENTERED,
+                Some(joined),
+                ENTERED + SETUP_RETRY_IDLE_S
+            ),
+            None,
+            "five minutes after entering, but only 100 s after a phone joined"
+        );
+        assert_eq!(
+            setup_retry(
+                SetupReason::ConnectionFailed,
+                ENTERED,
+                Some(joined),
+                joined + SETUP_RETRY_IDLE_S
+            ),
+            Some(SETUP_RETRY_IDLE_S)
+        );
+    }
+
+    #[test]
+    fn a_person_working_through_the_portal_is_never_interrupted() {
+        // A request every two minutes for an hour — a slow typist with the
+        // page open. Never due.
+        for now in ENTERED..ENTERED + 3_600 {
+            let last_request = ENTERED + (now - ENTERED) / 120 * 120;
+            assert_eq!(
+                setup_retry(SetupReason::BadAuth, ENTERED, Some(last_request), now),
+                None,
+                "{now}"
+            );
+        }
+    }
+
+    #[test]
+    fn activity_before_setup_mode_does_not_shorten_the_wait() {
+        // Uptime seconds from before the access point came up cannot be
+        // portal activity; the count still starts at entering setup mode.
+        assert_eq!(
+            setup_retry(
+                SetupReason::ConnectionFailed,
+                ENTERED,
+                Some(10),
+                ENTERED + SETUP_RETRY_IDLE_S - 1
+            ),
+            None
+        );
+    }
+}

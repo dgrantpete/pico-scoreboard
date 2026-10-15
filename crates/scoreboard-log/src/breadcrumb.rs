@@ -3,8 +3,9 @@
 //! The RAM ring above is the deployed diagnostic surface right up until the
 //! device reboots, at which point it is gone — it is RAM, and that is the whole
 //! design (SPEC §9: pull, not persist). So the failures a ring cannot report
-//! are exactly the interesting ones: a panic, and a watchdog that starved
-//! because something stopped. This is the record for those, and it is
+//! are exactly the interesting ones: a panic, a watchdog that starved because
+//! something stopped, and setup mode giving up on an idle portal to try the
+//! configured network again. This is the record for those, and it is
 //! deliberately *one* record — the previous boot's cause of death, not a log.
 //!
 //! It replaces `logger.py`'s `/logs/previous.log`, which was the whole ring
@@ -87,6 +88,13 @@ pub enum Cause {
     /// breadcrumb is indistinguishable from a power cut, and this is what
     /// tells the two apart after the fact.
     WatchdogStarved = 2,
+    /// Setup mode reset the device to try its configured network again,
+    /// because nobody had used the portal in five minutes. Its own cause
+    /// rather than a reuse of [`Cause::WatchdogStarved`]: no watchdog starved,
+    /// and the record has to say which of the device's deliberate resets this
+    /// was. A unit that comes back to its network after a router outage
+    /// explains itself with this one.
+    SetupRetry = 3,
 }
 
 impl Cause {
@@ -94,6 +102,7 @@ impl Cause {
         match value {
             1 => Some(Cause::Panic),
             2 => Some(Cause::WatchdogStarved),
+            3 => Some(Cause::SetupRetry),
             _ => None,
         }
     }
@@ -102,6 +111,7 @@ impl Cause {
         match self {
             Cause::Panic => "panic",
             Cause::WatchdogStarved => "watchdog starved",
+            Cause::SetupRetry => "setup retry",
         }
     }
 }
@@ -386,6 +396,17 @@ mod tests {
         let mut bytes = [0u8; MAX_BYTES];
         assert_eq!(crumb.encode(&mut bytes), Ok(MAX_BYTES));
         assert_eq!(Breadcrumb::decode(&bytes), Ok(crumb));
+    }
+
+    #[test]
+    fn every_cause_survives_the_round_trip() {
+        for cause in [Cause::Panic, Cause::WatchdogStarved, Cause::SetupRetry] {
+            let mut crumb = sample();
+            crumb.cause = cause;
+            let mut bytes = [0u8; MAX_BYTES];
+            let len = crumb.encode(&mut bytes).expect("encodes");
+            assert_eq!(Breadcrumb::decode(&bytes[..len]), Ok(crumb), "{cause:?}");
+        }
     }
 
     #[test]

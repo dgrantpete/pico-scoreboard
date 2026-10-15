@@ -73,6 +73,14 @@
 //!   reset → [`bringup`] joins again from scratch. Mandatory on every unit that
 //!   updates over the air ([`crate::supervise::WATCHDOG_ALWAYS_ON`]); see
 //!   [`watch_link`] for why a loop here could not have done it.
+//! - **Setup mode with a network configured**: three failed attempts put the
+//!   device on its own access point, and before 2026-10-14 it stayed there
+//!   until somebody power-cycled it. Now, once five minutes pass with no lease
+//!   granted and no request served, [`crate::supervise::setup_retry`] leaves a
+//!   breadcrumb and resets, and [`bringup`] tries the network again — every
+//!   five minutes or so, for as long as the network stays away and nobody is
+//!   using the portal. A device with no network configured stays in setup
+//!   mode; there is nothing to retry.
 
 pub mod api_client;
 pub mod captive_dns;
@@ -317,6 +325,10 @@ pub async fn bringup(
                 scoreboard_portal::mdns::Responder::new(&credentials.device_name, ip.octets()),
             )));
             arm_watchdog(spawner, deferred.watchdog, false);
+            // The way back to a configured network that failed at boot — most
+            // often a router that came back from a power cut slower than this
+            // device did. Whether it ever fires is its own decision.
+            spawner.spawn(defmt::unwrap!(crate::supervise::setup_retry(reason)));
 
             status::publish(status::NetStatus::Ap {
                 reason,
@@ -382,7 +394,9 @@ pub async fn bringup(
 ///
 /// `station` decides whether the poller's health counts. It must not in setup
 /// mode: there is no poller there by design, so nothing would ever be asked or
-/// answered, and only the render loop counts.
+/// answered, and only the render loop counts. Setup mode's own way back to the
+/// network is [`crate::supervise::setup_retry`], which is not a watchdog
+/// matter and runs whatever this decides.
 fn arm_watchdog(spawner: Spawner, watchdog: embassy_rp::watchdog::Watchdog, station: bool) {
     let (enabled, timeout_ms, poll_interval_s) = crate::config::with(|config| {
         (

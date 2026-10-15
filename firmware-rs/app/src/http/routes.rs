@@ -140,6 +140,11 @@ impl<State> picoserve::routing::PathRouterService<State> for Dispatch {
         request: picoserve::request::Request<'_, R>,
         response_writer: W,
     ) -> Result<ResponseSent, W::Error> {
+        // Every request is somebody at the portal — a captive-portal probe, the
+        // page, or its API calls — and while there is somebody, setup mode
+        // must not reset to retry the network from under them. Here because
+        // this is the one place every request passes, catch-all included.
+        supervise::note_portal_activity();
         if path == "/" {
             return get(index)
                 .call_method_handler(state, (), request, response_writer)

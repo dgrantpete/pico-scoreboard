@@ -173,6 +173,20 @@ Appendix A). The retry semantics are `net::wifi`'s module docs, including the
 table that maps every `wlan.status()` code the state machine acted on onto a
 `cyw43::JoinError`, and the three deviations the change of mechanism forced.
 
+**A fourth deviation, and a behaviour `main.py` never had (2026-10-14): setup
+mode with a configured network retries it.** Exhausting the three attempts used
+to be final until somebody power-cycled the unit, and the commonest way to
+exhaust them is a power cut — the router and the scoreboard go down together
+and the scoreboard comes back first. Now, in setup mode for `connection_failed`
+or `bad_auth` (never `no_network_configured`), five minutes with no DHCP lease
+granted and no HTTP request served resets the device to run the station flow
+again, leaving a `setup retry` breadcrumb at `/api/logs/previous`. Five because
+it is long enough for a phone to join the access point and type a password —
+and any portal activity restarts the count — and short enough that a router
+outage costs minutes rather than days. The decision is
+`scoreboard_model::poll::setup_retry`, host-tested; the task is
+`supervise::setup_retry`.
+
 The portal's two *decisions about bytes* — what a DNS answer looks like, and
 whether a `Host` header names this device — live in `crates/scoreboard-portal`
 rather than in the firmware, so they are host-tested (§2's crate-boundary rule).
