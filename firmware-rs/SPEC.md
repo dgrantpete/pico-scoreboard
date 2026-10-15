@@ -92,7 +92,7 @@ pico-scoreboard/
 - Two API surfaces: `encode` (used by backend; std-compatible because no_std code runs fine under std) and `decode` (used by firmware, and by backend tests for round-tripping).
 - Error type mirrors today's `DeserializeError` including byte-offset context (`@29`-style) — this diagnostic has already earned its keep.
 - Backend migrates to this crate immediately. **This step has standalone value even if the rewrite stalls**: wire drift becomes a compile error, and `wire_format_check.py` (≈1.4 k lines) is deleted.
-- `WIRE_VERSION` stays 2; the rewrite must not require a wire bump.
+- `WIRE_VERSION` stays 2; the rewrite must not require a wire bump. Since 2026-10-14 it has carried five sports: MLB, NBA, NHL, football (NFL and college) and soccer. Hockey arrived as new payloads on new endpoints, and that needed no bump either, because the version byte gates a layout per endpoint (NHL.md §4).
 
 ---
 
@@ -101,7 +101,7 @@ pico-scoreboard/
 - **Core 0:** embassy executor. Tasks: net supervisor (wifi state machine), poller, HTTP server (picoserve, one task per connection — **four**, see §7.3), mDNS responder, storage/log flush, brightness loop, input loop, watchdog feeder. The OTA client and the time sync are *phases of the poll loop* rather than tasks of their own, which is what returned the socket §7.1 had reserved for OTA.
 - **Core 1:** second embassy executor (embassy-rp multicore), running exactly one task: the render loop. Core 1 never touches the network, storage, or the allocator-that-doesn't-exist. Its stack lives in SRAM allocated at spawn (embassy-rp `spawn_core1` takes an explicit static stack — size it in the budget, §11).
 - **Core 0 → Core 1 handoff** replaces today's "immutable after construction, read by the display thread" convention with a compile-checked equivalent: a double-buffered snapshot —
-  - `scoreboard-model`'s `SnapshotChannel`: **three** `ScoreboardSnapshot` slots in a `static`, one atomic index cell, ownership moving by atomic swap. Core 0 publishes; core 1 latches at the top of each frame and renders from that reference for the whole frame. The seed read "`[ScoreboardSnapshot; 2]`" — a double buffer races, because a latched frame outlives the publish that supersedes it and two commits can land inside one frame. Rationale and the measured cost: BUDGET.md, "Correction to SPEC §4".
+  - `scoreboard-model`'s `SnapshotChannel`: **three** `ScoreboardSnapshot` slots in a `static`, one atomic index cell, ownership moving by atomic swap. Core 0 publishes; core 1 latches at the top of each frame and renders from that reference for the whole frame. The seed read "`[ScoreboardSnapshot; 2]`" — a double buffer races, because a latched frame outlives the publish that supersedes it and two commits can land inside one frame. Rationale and the measured cost: BUDGET.md, "Correction to SPEC §4". A snapshot is 3,224 B today (`the_snapshot_stays_inside_its_budget_line`): it holds all five sports' views side by side. The channel is 9,680 B.
   - `ScoreboardSnapshot` lives in `scoreboard-model`, contains no borrows into network buffers (bounded owned fields), and is `Copy`-free but `Sync`.
   - Anything higher-rate (brightness value) is a plain `AtomicU8`.
 - MicroPython idiom → embassy mapping (for the mechanical port): `create_task` → `#[embassy_executor::task]` + `spawner.spawn`; `asyncio.Event` → `embassy_sync::signal::Signal`; `wait_for(x, t)` → `embassy_time::with_timeout`; `sleep_ms` → `Timer::after_millis`; `ticks_ms` arithmetic → `Instant`/`Duration`.
@@ -133,7 +133,7 @@ Mechanical port; largest volume, lowest risk:
 - **Fonts:** retarget `tools/compile_fonts.py` to emit Rust (`build.rs` invokes it, or port the generator): `static GLYPHS: [Glyph; N]` with the same MONO_HLSB packing; `FontWriter` API preserved. All `&'static`, zero init cost, no import-time table building.
 - **QR codes:** setup-flow QR (replaces `miqro`). Preferred: a no-alloc no_std QR crate; the encoder needs ~4 KB of scratch for the largest version used — provide it as a caller-owned buffer. If no suitable crate passes the no-alloc audit (§10), port the needed subset of miqro (it is small and the format is stable).
 - Text scrolling, animations, brightness curves: direct port; assert frame-time headroom with a defmt timing probe around the render loop (budget: one frame period — ≤ 50 ms at the 20 FPS this was specified for, ≤ 16.7 ms since task #17 moved the loop to 60 FPS; expected: low single-digit ms). **Measured on silicon, Phase 3: worst frame 7.4 ms, worst render 2.0 ms, zero overruns** — see BUDGET.md, "Core 1: measured frame times". Dropping MicroPython's strip pre-rendering was the right call by roughly 35×, and it is what left enough headroom for 60 FPS to be a constant change rather than an optimisation project. Three quarters of that frame was never the render path but `hub75`'s repack, which task #20 then rebuilt on fused tables: `show` measured **2,241 µs** against 5,250 (BACKLOG 63, closed 2026-08-09 on device), taking core 1's duty at 60 FPS from ~44 % to ~20 %.
-- Host tests: golden-image tests per sport/state using `backend/testdata/*.json` replayed through the backend encoder → wire bytes → firmware decode → render into the simulator buffer. This was the parity harness for the whole port. **Built and green — see `firmware-rs/PARITY.md`** for the verdict table, how time is pinned, and what is deliberately out of scope. Since 2026-10-01 the same corpus runs as Rust-owned golden frames (`tests/golden_frames.rs`): the MicroPython firmware is frozen, and a deliberate visual change is re-blessed rather than mirrored.
+- Host tests: golden-image tests per sport/state using `backend/testdata/*.json` replayed through the backend encoder → wire bytes → firmware decode → render into the simulator buffer. This was the parity harness for the whole port. **Built and green — see `firmware-rs/PARITY.md`** for the verdict table, how time is pinned, and what is deliberately out of scope. Since 2026-10-01 the same corpus runs as Rust-owned golden frames (`tests/golden_frames.rs`): the MicroPython firmware is frozen, and a deliberate visual change is re-blessed rather than mirrored. Hockey, the fifth sport (`firmware-rs/NHL.md`), has no MicroPython screen at all: it was built in Rust and joined that corpus directly.
 
 ---
 
@@ -356,7 +356,7 @@ consult BUDGET.md for what is measured and what is still a guess.
 | Item | Est. | Notes |
 |---|---|---|
 | HUB75 BCM framebuffers (×2) | 64 KB | **Measured, Phase 1**: 2 × 32,768 B. The seed read "~48 KB, 64×32" — the shipping panel is 128×64 |
-| Snapshot double buffer | ~8 KB | bounded strings dominate; measure from model |
+| Snapshot double buffer | ~8 KB | bounded strings dominate; measure from model. **Measured**: a triple buffer (§4) of 3,224 B snapshots, 9,680 B, plus the `Store`'s fourth copy at 3,304 B (2026-10-15, five sports) |
 | embassy-net buffers + sockets | ~48 KB | poller + server×2 + DNS + OTA |
 | cyw43 driver state | ~16 KB | |
 | Receive/scratch buffers (wire, HTTP, OTA chunk) | ~40 KB | unioned where phases can't overlap (OTA vs. poll) |

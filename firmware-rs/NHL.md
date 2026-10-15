@@ -498,6 +498,17 @@ never validated (football's situation rule).
   night, 85–630 KB each). Raise to 48 and note the Fly machine's memory
   headroom in the same commit.
 
+**Measured** (2026-10-15; BUDGET.md carries each number and how to
+reproduce it):
+
+- Snapshot 3,224 B, +400 B a slot against the +350 B estimate.
+- Flash +30,832 B on the device image. None of it is the extractor, which
+  runs only on the backend: the model, the screens and the wire decode alone
+  pass the 15–25 KB estimate. The rink and star sprites are 955 B.
+- Wire: the corpus runs 89–101 B pregame, 60–221 B live and 57–110 B final.
+- Backend cache: 48 entries, ≈ 30 MB resident worst case (a release build
+  measured 5.4 → 35.4 MB private) against the Fly machine's 256 MB.
+
 ## 6. Phases (each ends green: `cargo test --workspace`, clippy, thumbv8m builds)
 
 ### 6.0 Corpus and fixtures — done 2026-10-14
@@ -538,7 +549,7 @@ coordinate normalization, OT collapse, ENG/PPG/SHG/penalty-shot tags, the
 start → pregame, the shootout's attempt types, side attribution order,
 first-16 rule, next shooter and tied score, and stars from the scoreboard.
 
-### 6.3 Backend
+### 6.3 Backend — done 2026-10-15 (the deploy is §6.8's)
 `src/hockey/{mod,handler,adapter,types,wire}.rs`; `AnyLeague::Nhl`
 ("hockey"/"nhl") in `espn/league.rs` (+ `VALID_LEAGUES`; the existing
 `invalid_pairs…` test uses `hockey/nhl` as its *invalid* example — swap it
@@ -548,7 +559,7 @@ degrade-to-None rule (`fetch_commentary`'s shape); `wire_corpus.rs` arms;
 logo route needs nothing (payload-resolved). Deploy staging → bench → prod
 (owner call).
 
-### 6.4 `scoreboard-model`
+### 6.4 `scoreboard-model` — done 2026-10-14
 `Sport::Hockey`; `LeagueId::from_slug` → key `hockey/nhl`, name `NHL`
 (an unknown hockey slug falls back like football/soccer, so a second league
 is a table row); `GameDetail::Hockey`; `WireFeed` arm; `Mode::HockeyLive`,
@@ -559,7 +570,7 @@ last-goal top line + scorer + color, shootout state, lamp side + anchor);
 `ot_losses: Option<u16>`; `commit_hockey_*` with the §3.6 flash filter and
 §3.7 lamp stamp; bounds test arms; the size pin.
 
-### 6.5 `scoreboard-render`
+### 6.5 `scoreboard-render` — done 2026-10-15 (screens 2026-10-14, golden frames 2026-10-15)
 `game/hockey.rs` (live A and B, final, shootout inside each live layout);
 `geometry.rs` tables `HOCKEY_LIVE_A`, `HOCKEY_LIVE_B`, `HOCKEY_FINAL`,
 `HockeyLiveVariant` + `RenderSettings.hockey_live` + `apply_variant`
@@ -605,16 +616,38 @@ While there, fix the comments that still name MicroPython files as the
 mirror source (`screen_geometry.py`, `football.py LEAGUE_NAMES`) — the Rust
 geometry and `feed.rs` are the sources now.
 
-### 6.8 Mock, staging, release
+### 6.8 Mock, staging, release — mock and configs done 2026-10-15
 `tools/espn/mock.example.yml` + `infra/fly/mock.staging.yml` gain hockey
 scenarios (pregame → live PP → intermission → final SO) from the fixtures;
 bench on the staging pair; `publish-fw --channel dev`, soak through a real
 NHL night, then `stable`.
 
-### 6.9 Docs
+Done: scenario mode serves a fixture's paired `<name>.summary.json`
+verbatim as that event's summary (soccer's `commentary` line is unchanged,
+and an event cannot have both). The loader rejects a pair whose summary header
+disagrees with its event on id or status. The mock rewrites only the
+scoreboard event's dates, so a pair that agrees on disk agrees when served,
+and the summary keeps its capture-day dates, which the backend never reads.
+Both configs carry the same `nhl-demo` slate, twelve teams, each screen
+once: `pregame` (both goalies), `power_play`, `end_of_period`,
+`shootout_teamless_attempt` (live, 1–1 in the tally, SEA to shoot;
+`shootout` shares its event id with `final_so_no_stars`), `final` (three
+stars) and `final_so_no_stars`. A local backend over the mock served every
+game, JSON and struct, and each struct payload decoded through
+`scoreboard_wire` in the state its fixture holds. Still to do: deploy the
+staging pair, bench, `publish-fw --channel dev`, the soak, `stable`.
+
+### 6.9 Docs — done 2026-10-15, except ARCHITECTURE.md
 ARCHITECTURE.md ("four sports" → five; backend tree; routes), SPEC.md
 (sport list, snapshot), BUDGET.md (§5 numbers), `scoreboard-espn/DESIGN.md`
 (hockey lane + the summary table), BACKLOG (52 now five copies).
+
+Done: SPEC.md (§3's five sports, §4 and §11's measured snapshot, §6's
+Rust-only sport); BUDGET.md (§5's numbers, summarized in §5's "Measured");
+DESIGN.md's hockey lane, which landed with 6.2; BACKLOG 52 recounted (five
+copies of the league registry, two of them frozen with the MicroPython
+tree) and §7's open cleanups as items 103–107. ARCHITECTURE.md is gitignored
+and updated outside the repo.
 
 ## 7. Cross-sport cleanups found while designing (each its own change)
 
@@ -633,19 +666,21 @@ Rust-owned golden frames (PARITY.md, "Team colors — a luminance floor").
   side by side, though only one is ever shown. An enum would make the
   `Mode`/view pairing unrepresentable-when-wrong and save the difference
   between the sum and the largest view ×4. Measure first; take it only if
-  RAM wants it.
+  RAM wants it. **Open: BACKLOG 103.**
 - **C4 Line-score OT headers.** NBA/football finals label overtime columns
   "5", "6". Hockey needs a per-sport header function anyway ("OT", "SO");
-  NBA/football could adopt "OT" for their first overtime.
+  NBA/football could adopt "OT" for their first overtime. **Hockey's half
+  landed with 6.4** (`build_hockey_linescore`); **NBA/football: BACKLOG
+  104.**
 - **C5 Shootout markers for soccer penalties** — soccer shows only "PENS";
   the hockey marker row is sport-neutral. Needs the penalty-kick sequence
-  from the soccer summary.
+  from the soccer summary. **Open: BACKLOG 105.**
 - **C6 `GameDetail` boilerplate** — `game_id()`/`abbreviations()` are
   12-arm matches that become 15; a shared header accessor per sport module
-  would make them 5.
+  would make them 5. **Open: BACKLOG 106** (they are 15 now).
 - **C7 Final "decision line"** — if the cycling final (option 3) is ever
   chosen, the same line serves MLB's W/L/SV pitchers (ESPN's
-  `featuredAthletes` exists there too).
+  `featuredAthletes` exists there too). **Conditional: BACKLOG 107.**
 
 ## 8. Risks
 

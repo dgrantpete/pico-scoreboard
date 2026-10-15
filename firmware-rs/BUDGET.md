@@ -33,7 +33,7 @@ no heap to absorb a mistake.
 | Provisioning (`net::bringup` arena) | 1,656 | **MEASURED** | The scan's 64-entry BSSID table and the credentials. It was 4,400 B until the poller landed: the boot-time `Store` was a local of this task, and making it a `static` that bringup borrows removed 2,872 B rather than paying for a second copy in the poller's arena. Task-arena, so it is statically allocated but has no reader after the boot. |
 | HTTP server — sockets, request buffers, task arenas | 100,612 | **MEASURED** | `scoreboard-app`, task #10, **re-measured at four connections (108bc85, drill day)**. 88,320 B of task arena — 22,080 each for four connections (1,536 B TCP receive + 2,920 B TCP send + 4,096 B request buffer, and picoserve's request-handling future around them) — plus 12,292 B of pooled response scratch, one 3,072 B slot per connection. It was 50,114 B at two connections. **The arena figure is dominated by the future, not the buffers** — see the multiplier note below before adding a route, and the four-connections note for why the count is what it is. |
 | Receive/scratch buffers (OTA chunk) | 0 | **MEASURED** | The last of SPEC §11's 40,960 B guess, and it turned out to be nothing. An update is a *phase of the poll loop*, so the poller's 4,096 B receive buffer is idle for the whole download and splits into a 2,048 B header half and a 2,048 B chunk half; the `BlockingFirmwareUpdater`'s own aligned buffer is **one byte**, on the stack. See "The download costs zero RAM" below. |
-| Glyph/font tables + compiled sprites | 0 | **MEASURED** | `crates/scoreboard-render`. **9,538 B of flash, 0 B of RAM** — read out of the crate's own object code, not asserted. Breakdown and the command below. |
+| Glyph/font tables + compiled sprites | 0 | **MEASURED** | `crates/scoreboard-render`. **10,493 B of flash, 0 B of RAM** — read out of the crate's own object code, not asserted. 9,538 B before hockey's rink and star (2026-10-15). Breakdown and the command below. |
 | Core-1 render-loop task arena | 3,448 | **MEASURED** | `scoreboard-app`. The loop's `LoopState` — frame rail, prepared view, skip memo, probe — plus the display and everything else held across the frame's await. It lives in the **task arena, not on the core-1 stack**: an embassy task's future is a static. See the correction below. The crest pool it now owns is a `static` it borrows, so it is the line above and not this one. It was 1,384 B until task #20's repack: the driver travels in this arena, so `hub75::packing::FusedTables` (1 KiB) and its alignment came here rather than to a `static` of their own. |
 | Input, brightness and watchdog task arenas | 888 | **MEASURED** | `scoreboard-app`, task #12. `supervise::watchdog` 360 B, `inputs::run` 264 B, `brightness::auto_brightness` 264 B. All three are small because the state that could have been large is not theirs: the button fold is two 24 B structs, the brightness chain is three floats, and the watchdog holds a counter. The 3 KB storage buffer is a **stack** local of a plain `fn`, deliberately — see the note below. |
 | Crash breadcrumb — served copy | 228 | **MEASURED** | `supervise::PREVIOUS`, the decoded copy `/api/logs/previous` serves so that opening the logs page does not park core 1 to read flash. **The 240 B RAM cell is no longer in this budget**: since drill day it lives at `scoreboard_layout::BREADCRUMB_BASE`, in the top 256 B that no profile's linker map contains — reserved, not allocated. See the caveat at the end of this file. |
@@ -159,10 +159,14 @@ instantiate it once per layer (`http::scratch` measured that multiplier at 22×)
 And the button driver's state is two 24 B folds, because the PIO holds the
 timing and the CPU holds only an anchor.
 
-**Flash: 1,096,104 B**, 69.7 % of the 1,536 KB active partition — the raw `.bin`
-of the boot-integrated image, measured 2026-08-16. It read 993,760 B (63.1 %)
-after task #12, on the standalone profile and before the OTA path linked; the
-profile change alone is 73,744 B of it, per the three-image table below. The
+**Flash: 1,170,988 B**, 74.4 % of the 1,536 KB active partition — the raw `.bin`
+of the boot-integrated image at dda7ed0, measured 2026-10-15. Hockey is 30,832 B
+of that, priced in the next section. It read 1,096,104 B (69.7 %) on 2026-08-16;
+the 44,052 B between that and the commit before hockey (1,140,156 B) is two
+months of other work and a newer toolchain, not attributed here. It read
+993,760 B (63.1 %) after task #12, on the standalone profile and before the OTA
+path linked; the profile change alone is 73,744 B of it, per the three-image
+table below. The
 bulk of task #12's own increase was `sequential-storage`'s map (its item
 iteration, page-state machine, CRC and auto-repair paths all instantiate against
 one concrete flash type) and `DeviceConfig::serialize`, which is the *write*
@@ -180,6 +184,49 @@ The largest single *function* in the image is 35,582 B: the visitor
 parsing `PUT /api/config` into bounded types with no allocator, and it scales
 with the number of config keys — worth a glance whenever the configuration
 grows a section.
+
+### What the fifth sport cost in flash (NHL.md §5)
+
+Measured 2026-10-15 as a clean before/after: `aca047f`, the commit before
+hockey's model and screens (d60e4c3), against dda7ed0, built the same way with
+the same `SCOREBOARD_FW_VERSION`. Nothing else between the two touches firmware
+code (6fc4e08 and dda7ed0 change tests only).
+
+| Section | Before | After | Δ |
+|---|---:|---:|---:|
+| `.text` | 751,856 | 780,128 | +28,272 |
+| `.rodata` | 376,748 | 378,112 | +1,364 |
+| `.data` | 11,244 | 12,444 | +1,200 |
+| Raw image | 1,140,156 | 1,170,988 | **+30,832** |
+
+By symbol (the per-crate sums land within 1.2 KB of the section delta):
+`scoreboard-render` +14.9 KB, the hockey screens, 11.3 KB of it inlined into
+`frame::render`; the decode-and-commit path, about 13 KB, split between
+`scoreboard-model` (+4.7 KB, `WireFeed::detail` +3.0 KB of it) and the
+poller's task body it inlines into (+6.8 KB); `heapless` +1.1 KB of new
+string-capacity instantiations. `.rodata` is the rink and the star (955 B,
+"The render tables are flash" below) plus constants. `.data` is `CHANNEL`'s
+three slots growing 400 B each: it is initialized data, so the snapshot's
+growth costs flash as well as RAM (see the `CHANNEL` note below).
+
+§5 estimated 15–25 KB for "the extractor tables + renderer". The device
+carries none of the extractor: `scoreboard-espn` runs on the backend, and the
+ELF has no `scoreboard_espn` symbol. The 30.8 KB is the model, the screens and
+the wire decode, which alone pass the estimate's upper bound. Phase 6.6's
+config, menu and poller wiring is not in it yet; the config keys will grow
+the `ConfigPatch` visitor above. **401,876 B of headroom** remain before an
+image stops fitting the active partition.
+
+Reproduce, from `firmware-rs/app` (`rust-objcopy` is the toolchain sysroot's,
+as `tools/build.py` finds it):
+
+```sh
+SCOREBOARD_FW_VERSION=measure cargo build --release --locked \
+  --no-default-features --features link-boot-integrated
+ELF=target/thumbv8m.main-none-eabihf/release/scoreboard-app
+rust-objcopy -O binary "$ELF" fw.bin && wc -c fw.bin
+arm-none-eabi-size -A "$ELF"
+```
 
 ### Correction to SPEC §4 — the handoff needs three buffers, not two
 
@@ -333,9 +380,13 @@ buffer, so the peak is their sum.
 One buffer, not two: a list refresh and a detail poll never overlap, so the list
 gets all 4,096 B, and the detail phase — which is the only time a decoded game
 and a crest are alive at once — splits it 2,048/2,048 with `split_at_mut`. The
-2,048 B detail half holds a corpus maximum of 148 B, a computed worst case near
-800 B, and the headers. Overflow is loud: reqwless answers `BufferTooSmall` and
-the panel shows `Network error / response too large`.
+2,048 B detail half holds a corpus maximum of 221 B, a computed worst case near
+800 B, and the headers. The maximum was 148 B (a soccer final) until hockey: a
+live NHL game carries its goals, so the corpus runs 60–221 B live (`empty_net`,
+seven goals, is the largest), 89–101 B pregame and 57–110 B final. Hockey's own
+worst case — sixteen goals and a 255-byte play line — is about 460 B (NHL.md
+§5), under soccer's 800 B. Overflow is loud: reqwless answers `BufferTooSmall`
+and the panel shows `Network error / response too large`.
 
 ### The render tables are flash, and that is checked rather than assumed
 
@@ -351,11 +402,18 @@ visible in the symbol table:
 | `unscii_16` heap + index | 3,888 | `.rodata` |
 | `unscii_8` heap + index | 2,360 | `.rodata` |
 | `spleen_5x8` heap + index | 1,410 | `.rodata` |
-| 10 compiled sprites (pixels + palettes) | 1,880 | `.rodata` |
-| **Total** | **9,538** | **flash, 0 B RAM** |
+| The three font descriptors | 60 | `.rodata` |
+| 12 compiled sprites (pixels + palettes) | 2,775 | `.rodata` |
+| **Total** | **10,493** | **flash, 0 B RAM** |
 
-The 19 Aseprite slices cost nothing at all: they are `const` rectangles, folded
-into the code that reads them.
+Re-measured 2026-10-15 for NHL.md §5. Hockey's two sprites are 955 B of it:
+the rink, a 124×15 four-bit sheet with an 8-color palette (930 + 16 B), and
+the 5×5 star (5 + 4 B). That is inside §5's "< 1 KB", and it is the whole
+difference from the 9,538 B this table read before. The descriptors were
+counted in the sprite row until now; the total is the same either way.
+
+The 24 Aseprite slices cost nothing at all: they are `const` rectangles,
+folded into the code that reads them.
 
 Reproduce (needs `binutils-arm-none-eabi`):
 
@@ -837,7 +895,7 @@ Measured 2026-08-08, `--release`, `thumbv8m.main-none-eabihf`, raw `.bin` via
 | Image | Bytes | Of its partition | Notes |
 |---|---:|---:|---|
 | `scoreboard-boot` | 14,208 | 43.4% of 32 KB | `opt-level = "s"`, defmt + `embassy_boot=trace`. The spike's was 12.2 KB; the difference is logging kept on purpose — those trace lines are the only direct evidence of what a given boot decided, and drill day reads them. |
-| `scoreboard-app`, `link-boot-integrated` | 1,088,880 | 69.1% of 1536 KB | What `publish-fw` ships. **1,096,104 B / 69.7 % as of 108bc85** — the four-connection change added 7,224 B of code. |
+| `scoreboard-app`, `link-boot-integrated` | 1,088,880 | 69.1% of 1536 KB | What `publish-fw` ships. **1,096,104 B / 69.7 % as of 108bc85** — the four-connection change added 7,224 B of code. **1,170,988 B / 74.4 % at dda7ed0** (2026-10-15), hockey 30,832 B of it. |
 | `scoreboard-app`, `link-standalone` | 1,015,136 | — | The bench image. Not re-measured since. |
 
 **The boot-integrated image is 73,744 B larger**, and all of it is the OTA
@@ -845,7 +903,8 @@ path: `ed25519-dalek` + `curve25519-dalek`, `sha2`, and `embassy-boot`. That is
 the price of the device being able to refuse an image, and it is paid only by
 the profile that can install one.
 
-**476,760 B of headroom** before an image stops fitting the active partition.
+**476,760 B of headroom** before an image stops fitting the active partition
+(401,876 B at dda7ed0, 2026-10-15).
 Worth watching rather than worrying about: the DFU partition is one erase page
 larger than active by construction, so the ceiling is a single number and the
 const asserts in `firmware-rs/layout` fail the build rather than the swap.
@@ -949,6 +1008,27 @@ Both caveats these numbers carried are now closed (2026-08-19):
   the LAN lane was unchanged (~3 s for the ~490 KB body, the same
   window/RTT floor as the PowerSave round), so the throughput floors
   above are TCP-window physics, not a power-state artifact.
+
+## The backend's JSON cache — 16 → 48 entries for hockey (2026-10-15)
+
+Not device RAM: the backend's, on a 256 MB Fly machine (`backend/fly.toml`,
+the staging app's too). NHL.md §5 priced it here. `JSON_CACHE_CAPACITY`
+(`backend/src/espn/client.rs`) went from 16 to 48 with the NHL routes
+(6fc4e08). Sixteen covered the league scoreboards and the live soccer
+summaries. D3 adds a summary per live or final NHL game any device shows, up
+to 16 a night at 85–630 KB each.
+
+- **Resident worst case: ≈ 30 MB.** Every slot holds the largest body the
+  backend fetches, a double-overtime NHL final summary at ~630 KB:
+  48 × 630 KB. An expired entry is replaced, never purged, so this is the
+  steady state of a busy night, not a spike.
+- **Per request: a 64 KiB extractor scratch** (`espn::adapt::SCRATCH_LEN`).
+  The extractors stream and build no document tree, so the cached bodies are
+  the whole cost.
+- **Measured:** a local release build against the mock serving `final_2ot`'s
+  629 KB summary for 48 events went from **5.4 to 35.4 MB private**, with a
+  **52 MB peak working set** under 48 concurrent refetches. Against 256 MB it
+  fits with room to spare.
 
 ## Caveats to close before the numbers can be trusted end to end
 

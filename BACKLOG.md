@@ -40,10 +40,16 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     (`encode_<sport>_game`, `<SPORT>_FLAG_*`), `{Sport}PregameTeam`
     naming, shared enums/handlers from `shared/`, testdata nested per
     ESPN league slug, and a `_TABLES`/`_ACTIVE` registry key per screen.
-52. **League display names are triplicated** — frontend SportsCard,
-    firmware soccer.LEAGUE_NAMES, backend espn/league.rs (casing already
-    drifts: "Premier League" vs "PREMIER LEAGUE"). Single source or
-    codegen.
+52. **The league registry is written down five times** (recounted
+    2026-10-15, with the NHL). Three copies are maintained: the backend's
+    `espn/league.rs` (which slugs exist, `VALID_LEAGUES`; it holds no
+    names), the panel's names in `scoreboard-model`'s `feed.rs` ("PREMIER
+    LEAGUE"), and the settings page's labels and hints in
+    `SportsCard.svelte` ("Premier League"). Two are frozen with the
+    MicroPython tree, `football.py` and `soccer.py` `LEAGUE_NAMES`, and
+    leave with it. The case differs by surface because the panel draws upper
+    case; that is presentation, not drift. A new league is a row in each
+    maintained copy, as the NHL was. Single source or codegen for the three.
 53. **Soccer `attendance`** — 100%-present in the corpus for every state;
     add to the wire only when a screen design wants it.
 57. **spleen-5x8 accent glyphs are ASCII stand-ins** — the Latin-1 font
@@ -1173,3 +1179,31 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     state is `post`, cache its summary for minutes rather than seconds (the
     stars come from the scoreboard, so nothing on the final screen waits on a
     fresh summary). Measure the upstream bytes before and after.
+
+Items 102–106 are the cross-sport cleanups `firmware-rs/NHL.md` §7 found
+while designing hockey and kept out of the NHL change (D8). Each is its own
+reviewed change.
+
+103. **Snapshot views as a sum (NHL.md C3).** Every sport's view lives in
+    the snapshot side by side, though only one is ever shown: 3,224 B a
+    snapshot since hockey added 400 B, and four copies resident (three
+    channel slots and the `Store`). An enum would make the `Mode`/view
+    pairing unrepresentable when wrong, and save the difference between the
+    sum and the largest view, four times over. Measure first; take it only if
+    RAM wants it.
+104. **Line-score OT headers for NBA and football (NHL.md C4).** Their finals
+    label overtime columns "5", "6". Hockey's header row already says "OT"
+    and "SO" (`build_hockey_linescore`); NBA and football could adopt "OT"
+    for their first overtime.
+105. **Shootout markers for soccer penalties (NHL.md C5).** Soccer shows only
+    "PENS". Hockey's shootout marker row is sport-neutral and could carry the
+    kick-by-kick sequence, which needs the penalty sequence from the soccer
+    summary.
+106. **`GameDetail` boilerplate (NHL.md C6).** `game_id()` and
+    `abbreviations()` in `scoreboard-model`'s `feed.rs` are 15-arm matches
+    now, five sports by three states. A shared header accessor per sport
+    module would make them 5.
+107. **CONDITIONAL — a final "decision line" (NHL.md C7).** Only if D2 ever
+    flips to the cycling final (the line score with a cycling stars line):
+    the same line would serve MLB's W/L/SV pitchers, since ESPN's
+    `featuredAthletes` exists there too.
