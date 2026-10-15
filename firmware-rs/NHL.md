@@ -1,8 +1,10 @@
 # NHL — end-to-end spec
 
-Status: **decided** (owner, 2026-10-12; drafted 2026-10-01). Implemented so
-far: the collector change (§9.1) and the wire format (§4, phase 6.1,
-frozen 2026-10-14). Visual decisions
+Status: **decided** (owner, 2026-10-12; drafted 2026-10-01) and
+**implemented** (phases 6.0–6.7 and 6.9, 2026-10-14/15; §2/§3 revised
+against two weeks of real games on 2026-10-14). What remains is §6.8's
+release path: staging, the dev channel, a real NHL night, then stable.
+Visual decisions
 reference the mockup gallery (published Artifact "NHL Panel Mockups") and the
 goal-mark study (Artifact "Rink Goal Dots"); every mockup was
 drawn by a scratch program linking the real `scoreboard-render` crate over
@@ -598,16 +600,20 @@ rows, then a bless).
 Mutation contract: the lamp and PP-zone pulse are pure functions of
 snapshot anchors and the wall rail; no renderer state.
 
-### 6.6 Config, input, app
+### 6.6 Config, input, app — done 2026-10-15
 - `scoreboard-config`: `SportsConfig.nhl: SportToggle` (default **on**, D5),
   `SportsPatch.nhl`, `VariantsConfig.hockey_live` (default `B`) and
   `hockey_final`, defaults, patch + tests.
 - `scoreboard-input` menu tests gain the NHL row; label from `LeagueId`.
-- `firmware-rs/app`: `sources_from_config` (D6 order), `probe.rs` mode
-  names, crest pool unchanged.
+- The poll sources moved from the app's `sources_from_config` to
+  `DeviceConfig::league_sources()` (D6 order, host-tested), and the slate
+  grew to `MAX_SOURCES = 9` — exactly the registered leagues, with a test
+  that fails when a tenth is registered: NHL on by default would otherwise
+  have pushed a fully configured unit's World Cup out of rotation. `probe.rs`
+  mode names; crest pool unchanged.
 - No `scoreboard-direct` work: direct mode is legacy (BACKLOG 100).
 
-### 6.7 Frontend
+### 6.7 Frontend — done 2026-10-15
 `SportsCard.svelte`: an NHL row in `ENABLED_SPORTS`, rendered only when
 `"nhl" in config.sports` (D7). `ScreenLayoutsCard.svelte`: `hockey_live`
 (A Period ledger / B Rink). `types.ts`: `nhl`, `hockey_live`,

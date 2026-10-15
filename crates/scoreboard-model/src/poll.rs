@@ -78,9 +78,10 @@ pub const RESPONSE_BYTES: usize = 4096;
 /// (`_refresh_lists` completes before `_poll_current`), so the list gets all of
 /// it and this split costs nothing.
 ///
-/// 2,048 B against a corpus maximum of 148 B and a computed worst case near
-/// 800 B (a soccer live game carrying a 255-byte commentary line), plus the
-/// header block.
+/// 2,048 B against a corpus maximum of 221 B (hockey's `empty_net`) and a
+/// computed worst case near 800 B (a soccer live game carrying a 255-byte
+/// commentary line; a hockey live game with 16 goals and a 255-byte play line
+/// is ≈ 460 B), plus the header block.
 pub const DETAIL_BYTES: usize = 2048;
 
 /// The receive buffer's back half: one 24×24 RGB565 crest, 1,152 B, plus the
