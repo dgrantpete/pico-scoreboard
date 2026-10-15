@@ -239,8 +239,9 @@ is part of why D3 fetches the summary for finals too.
 1. Goalie ids ← `boxscore.players` goalies group, per team.
 2. Per side from `onIce`: `skaters = entries − (goalie present ? 1 : 0)`,
    `pulled = no goalie present`. **Sane** iff both teams' goalie groups are
-   non-empty **and** both sides have 3–6 skaters. (Puck drop's empty goalie
-   groups would otherwise read as both nets empty.)
+   non-empty, both sides have 3–6 skaters, **and** at most one side is
+   pulled. (Puck drop's empty goalie groups would otherwise read as both nets
+   empty; two empty nets at once is not hockey.)
 3. If sane: pulled on either side → `EmptyNet(side)` (wins over PP for the
    banner; the skater dots still show the true counts); skaters differ →
    `PowerPlay(more, more_n, fewer_n)`; equal and < 5 → `Matched(n)`;
@@ -250,8 +251,9 @@ is part of why D3 fetches the summary for finals too.
    team-relative `strength` (Power Play → that team; Shorthanded → the
    other; anything else `Even`), skater counts unknown (0). Team-less plays
    are skipped: they carry strengths no side can be read from (§2). Emit a
-   quirk — except for the expected cases, the empty goalie groups after
-   puck drop and `onIce` `[]` at a period start, which are normal.
+   quirk — except for the expected cases, both goalie groups empty after
+   puck drop and `onIce` `[]` at a period start, which are normal. One
+   side's group empty while the other's is not is unexpected and quirks.
 5. During a live shootout there is no strength (the group is absent):
    `onIce` holds only the goalies.
 6. Display: `Matched(3)` in the regular-season OT is normal and gets **no**
@@ -270,13 +272,17 @@ is part of why D3 fetches the summary for finals too.
   when ESPN logged none: §4's coordinate bit).
 - Coordinates are normalized so **away attacks +x** (football's
   convention: away moves right): away plots at `(|x|, y·sign(x))`, home at
-  `(−|x|, −y·sign(x))` — a 180° rotation, which keeps handedness.
-- Keep the newest 16 goals. The bottom-strip "last goal" is the newest.
+  `(−|x|, −y·sign(x))` — a 180° rotation, which keeps handedness — with
+  `sign(0) = +1`, so a goal on the center line keeps its y rather than
+  collapsing onto the axis.
+- Keep the newest 16 goals. The bottom-strip "last goal" is the newest goal
+  kept, and the scorer shown is that goal's: a goal dropped for an
+  unplaceable team never leaves a blank scorer beside an older goal.
 
 ### 3.6 The play flash
 
-Only goals and penalties flash — hits, faceoffs and stoppages are noise on a
-wall. Source: the newest eligible goal or penalty play in the summary (else
+Only goals (§3.5's — shootout attempts are the tracker's, never the flash's)
+and penalties flash — hits, faceoffs and stoppages are noise on a wall. Source: the newest eligible goal or penalty play in the summary (else
 the scoreboard `situation.lastPlay`, filtered the same way as far as its
 fields allow). Text: ESPN's play text, prefixed `GOAL! ` for goals.
 **Not eligible:** the placeholder penalty (type 143 — every penalty's first
@@ -319,9 +325,11 @@ tied through a shootout (§3.8).
   attempts afresh.
 - The shooter's side, first that applies: the play's team; else a
   participant found in a team's goalie group (that team defended, so the
-  other shot); else alternation — shooters strictly alternate, so the side
-  opposite the previous attempt's (the next attempt's, for the first). An
-  attempt none of the three can place is dropped with a quirk.
+  other shot); else alternation — shooters strictly alternate, so an attempt
+  takes its side from the nearest placed attempt, forwards or backwards (a
+  run of unplaced attempts at the start is as determined as one in the
+  middle). Only when no attempt at all can be placed are they dropped, with
+  a quirk.
 - Per side keep the **first** 16 attempts (bitmask + count): the tally stays
   right through round 16; past it — beyond the longest NHL shootout on
   record — the markers freeze.
@@ -348,7 +356,8 @@ nothing hockey-specific). A delayed start lands here (§3.1).
 
 Three-stars screen (D2): crests + scores (winner color / loser gray), result
 label in accent, three rows of star icons (1/2/3 stars, gold) + `shortName`
-in the player's team color, a rule, then `series.summary` (playoffs) and
+in the player's team color, a rule, then `series.summary` (playoffs only —
+a regular-season final never shows one) and
 `SHOTS a-h` (§3.3). The stars come from the **scoreboard** event's
 `featuredAthletes` (`firstStar`/`secondStar`/`thirdStar`, side from
 `team.id`), all three or none; they arrive minutes after FINAL, so the
