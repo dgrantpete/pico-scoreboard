@@ -7,6 +7,18 @@
 
 	const status = $derived(settingsStore.status);
 
+	// The release a version string names: `2026.10.12-03942fd+BootIntegrated`
+	// is release `2026.10.12-03942fd`, linked for the bootloader. The release
+	// is what an owner compares against what was published, so it is shown
+	// whole; the link profile only tells a probe-flashed image from an OTA'd
+	// one, which is a developer's question, so it stays in the tooltip. (This
+	// line once showed the first 8 characters — right for MicroPython's
+	// content hashes, and for Rust's dates it made every build of a month read
+	// `2026.10.`, so an up-to-date unit looked stale.)
+	function release(version: string): string {
+		return version.split("+", 1)[0];
+	}
+
 	// --- On-demand OTA check -------------------------------------------------
 	// 'installing' covers the whole download -> restart -> re-apply window;
 	// the device is intermittently unreachable throughout, so progress is
@@ -46,7 +58,7 @@
 			const res = await picoApi.checkUpdate();
 			if (res.status === "current") {
 				phase = "current";
-				note = `Up to date (${res.version?.slice(0, 8) ?? "?"})`;
+				note = `Up to date (${res.version ? release(res.version) : "?"})`;
 				return;
 			}
 			if (res.status !== "updating") {
@@ -74,7 +86,7 @@
 				const s = await picoApi.getStatus({ timeoutMs: 4000 });
 				if (s.app_version && s.app_version !== before) {
 					phase = "done";
-					note = `Updated to ${s.app_version.slice(0, 8)} — reloading…`;
+					note = `Updated to ${release(s.app_version)} — reloading…`;
 					// The web app itself ships inside the update; reload to serve it.
 					setTimeout(() => window.location.reload(), 2500);
 					return;
@@ -124,7 +136,7 @@
 				WiFi setup is required to fetch scores
 			{:else if status?.connected}
 				{status.ip} &bull; {status.hostname} &bull; app
-				<span class="app-version">{status.app_version?.slice(0, 8) ?? "dev"}</span>
+				<span class="app-version" title={status.app_version ?? undefined}>{status.app_version ? release(status.app_version) : "dev"}</span>
 			{:else}
 				Current network connection status
 			{/if}

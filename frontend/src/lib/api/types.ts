@@ -150,7 +150,11 @@ export interface NetworkStatus {
 	memory_free: number;
 	flash_used: number;
 	flash_free: number;
-	// sha256 of the running app's ROMFS image; null on dev (littlefs) deploys
+	// The running firmware's version: `<release>+<link profile>`, e.g.
+	// `2026.10.12-03942fd+BootIntegrated`, or `dev+Standalone` on a bench
+	// build. Changes across every install, which is how the update flow sees
+	// one land. (The frozen MicroPython firmware reported a ROMFS sha256, or
+	// null on a littlefs deploy.)
 	app_version?: string | null;
 	// True when the watchdog and its recovery path are on regardless of
 	// watchdog.enabled — every over-the-air (boot-integrated) unit. Absent on

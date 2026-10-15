@@ -69,7 +69,9 @@ use crate::{ringlog, supervise};
 /// landed (`StatusCard.svelte` polls until it changes), so it has to be the
 /// thing that actually changes across an install. The link profile rides along
 /// because a probe-flashed image and an OTA'd one are otherwise indistinguishable
-/// from the settings page.
+/// from the settings page — which shows the release before the `+` and keeps
+/// the whole string for the tooltip, because the release is what an owner
+/// compares against what was published.
 pub const APP_VERSION: &str = concat!(env!("FW_VERSION"), "+", env!("LINK_PROFILE"));
 
 /// The response body. Field order is the response's; the SPA reads by name.

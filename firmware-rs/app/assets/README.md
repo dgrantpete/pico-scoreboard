@@ -46,15 +46,18 @@ the frontend actually changed, not that somebody rebuilt it.
 
 | | |
 |---|---|
-| SHA-1 | `496aa1b664da78e830448805e55fa9fca7e656b8` |
-| ETag (first 8 bytes) | `496aa1b664da78e8` |
-| Size | 56,607 B |
+| SHA-1 | `610bb72421b0199099104131b2e72836620fad21` |
+| ETag (first 8 bytes) | `610bb72421b01990` |
+| Size | 56,517 B |
 | Built | 2026-10-14, `bun 1.3.6`, in the same commit as the frontend change it carries |
 
-The 302-byte growth is the Advanced card's watchdog row reading the device's
-`watchdog_always_on` and dropping the switch on units where it does nothing.
-The previous artifact was 56,305 B with SHA-1 `e436e643…`, built 2026-08-19
-from the `frontend/` of commit `3259128` — a bake that followed its frontend
-change in a commit of its own, the failure mode the rule above warns about.
-Rebuilding that tree on 2026-10-14 reproduced it byte for byte before this
-change was made.
+The status card shows the whole release version (`2026.10.12-03942fd`, with
+the link profile in its tooltip) instead of its first eight characters, which
+for a date-shaped version was `2026.10.` for every build of a month. The
+artifact before it, 56,607 B (`496aa1b6…`), was the Advanced card's watchdog
+row reading the device's `watchdog_always_on`; before that, 56,305 B
+(`e436e643…`), built 2026-08-19 from the `frontend/` of commit `3259128` — a
+bake that followed its frontend change in a commit of its own, the failure
+mode the rule above warns about. Rebuilding that tree on 2026-10-14
+reproduced it byte for byte before either change was made, and this one
+rebuilds to the same SHA-1 twice running.
