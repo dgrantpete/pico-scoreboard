@@ -16,10 +16,20 @@ const LOGO_CACHE_CAPACITY: usize = 64;
 /// of Picos collapses into (at most) one upstream fetch per TTL window.
 const JSON_CACHE_TTL: Duration = Duration::from_secs(5);
 
-/// Distinct JSON URLs cached at once: one per pollable league plus a summary
-/// URL per live soccer game (commentary), with headroom. LRU rather than a
-/// plain map so parameterized URLs can't grow unbounded.
-const JSON_CACHE_CAPACITY: usize = 16;
+/// Distinct JSON URLs cached at once: one per pollable league (nine), a
+/// summary URL per live soccer game (commentary), and a summary URL per live
+/// or final NHL game a device shows — up to 16 a night (NHL.md §5) — with
+/// headroom. LRU rather than a plain map so parameterized URLs can't grow
+/// unbounded.
+///
+/// Memory: an expired entry is replaced, never purged, so the resident worst
+/// case is every slot holding the largest body the backend fetches — an NHL
+/// summary, ~630 KB after a double-overtime final (NHL.md §2): 48 × 630 KB ≈
+/// 30 MB. The extractors stream each body through a 64 KiB scratch and build
+/// no document tree, so the bodies are the whole cost: filling every slot
+/// with that summary took a local release build from 5 to 35 MB private,
+/// against the Fly machine's 256 MB (`fly.toml`).
+const JSON_CACHE_CAPACITY: usize = 48;
 
 /// HTTP client for ESPN with in-memory logo and JSON caches.
 #[derive(Debug, Clone)]

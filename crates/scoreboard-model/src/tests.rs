@@ -2679,6 +2679,7 @@ fn every_string_bound_clears_the_corpus() {
         ("play text", snapshot::PLAY_TEXT),
         ("player name", snapshot::PLAYER),
         ("scorers", snapshot::SCORERS),
+        ("series", snapshot::SERIES),
         ("team line", snapshot::TEAM_LINE),
         // Columns, not bytes: three chars each.
         ("periods", snapshot::LINESCORE / 3),

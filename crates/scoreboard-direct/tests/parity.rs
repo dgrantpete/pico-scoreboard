@@ -202,6 +202,9 @@ fn the_gate_covers_every_committed_golden() {
 
     let mut on_disk = BTreeSet::new();
     walk(&testdata().join("wire"), "", &mut on_disk);
+    // Hockey arrived after direct mode went legacy (BACKLOG 100): it has no
+    // feed here, so its goldens are the wire corpus's alone.
+    on_disk.retain(|name| !name.starts_with("hockey/"));
 
     let exercised: BTreeSet<String> = corpus()
         .into_iter()

@@ -19,6 +19,7 @@ pub mod error;
 pub mod espn;
 pub mod football;
 pub mod fw_update;
+pub mod hockey;
 pub mod logo;
 pub mod mlb;
 pub mod nba;
@@ -48,6 +49,8 @@ use espn::league::AnyLeague;
         mlb::handler::get_game,
         nba::handler::list_games,
         nba::handler::get_game,
+        hockey::handler::list_games,
+        hockey::handler::get_game,
         football::handler::list_games,
         football::handler::get_game,
         soccer::handler::list_games,
@@ -91,6 +94,23 @@ use espn::league::AnyLeague;
         nba::NbaFinalGame,
         nba::NbaPregameTeam,
         nba::NbaFinalTeam,
+        hockey::HockeyGame,
+        hockey::HockeyLiveGame,
+        hockey::HockeyPregameGame,
+        hockey::HockeyFinalGame,
+        hockey::HockeyPregameTeam,
+        hockey::HockeyFinalTeam,
+        hockey::HockeyRecord,
+        hockey::HockeyShots,
+        hockey::HockeyStrength,
+        hockey::StrengthSituation,
+        hockey::HockeyGoal,
+        hockey::HockeyCoordinate,
+        hockey::GoalTag,
+        hockey::HockeyShootout,
+        hockey::ShootoutAttempt,
+        hockey::HockeyStars,
+        hockey::HockeyStar,
         football::FootballGame,
         football::FootballLiveGame,
         football::FootballPregameGame,
@@ -116,6 +136,7 @@ use espn::league::AnyLeague;
         (name = "team", description = "Team logo endpoint"),
         (name = "mlb", description = "MLB live game data (ESPN-backed)"),
         (name = "nba", description = "NBA live game data (ESPN-backed)"),
+        (name = "hockey", description = "NHL live game data (ESPN-backed)"),
         (name = "football", description = "Football live game data — NFL + NCAAF (ESPN-backed)"),
         (name = "soccer", description = "Soccer live game data (ESPN-backed)"),
         (name = "app", description = "Device app OTA image + manifest (MicroPython fleet)"),
@@ -283,6 +304,7 @@ async fn games_list(
     match AnyLeague::from_path(&sport, &league)? {
         AnyLeague::Mlb => mlb::list_games(&state, &headers).await,
         AnyLeague::Nba => nba::list_games(&state, &headers).await,
+        AnyLeague::Nhl => hockey::list_games(&state, &headers).await,
         AnyLeague::Football(league) => football::list_games(&state, league, &headers).await,
         AnyLeague::Soccer(league) => soccer::list_games(&state, league, &headers).await,
     }
@@ -298,6 +320,7 @@ async fn games_detail(
     match AnyLeague::from_path(&sport, &league)? {
         AnyLeague::Mlb => mlb::get_game(&state, &game_id, &headers).await,
         AnyLeague::Nba => nba::get_game(&state, &game_id, &headers).await,
+        AnyLeague::Nhl => hockey::get_game(&state, &game_id, &headers).await,
         AnyLeague::Football(league) => football::get_game(&state, league, &game_id, &headers).await,
         AnyLeague::Soccer(league) => soccer::get_game(&state, league, &game_id, &headers).await,
     }
@@ -353,6 +376,40 @@ mod tests {
         // The football routes are present under their own tag.
         assert!(value["paths"]["/football/{league}/games"].is_object());
         assert!(value["paths"]["/football/{league}/games/{game_id}"].is_object());
+    }
+
+    /// Hockey is a full sibling in the doc too: `HockeyGame` is the same
+    /// three-state `oneOf`, the internally tagged strength situation keeps its
+    /// `kind` discriminator, and the routes sit under their own tag.
+    #[test]
+    fn openapi_registers_hockey_as_a_sibling_sport() {
+        let doc = ApiDoc::openapi();
+        let json = serde_json::to_string(&doc).expect("OpenAPI doc serializes");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        let arms = value["components"]["schemas"]["HockeyGame"]["oneOf"]
+            .as_array()
+            .expect("HockeyGame is a oneOf over its states");
+        let states: Vec<&str> = arms
+            .iter()
+            .filter_map(|arm| arm["allOf"][1]["properties"]["state"]["enum"][0].as_str())
+            .collect();
+        assert_eq!(states, ["pregame", "live", "final"]);
+
+        let situations = value["components"]["schemas"]["StrengthSituation"]["oneOf"]
+            .as_array()
+            .expect("StrengthSituation is a oneOf over its kinds");
+        let kinds: Vec<&str> = situations
+            .iter()
+            .filter_map(|arm| arm["properties"]["kind"]["enum"][0].as_str())
+            .collect();
+        assert_eq!(kinds, ["even", "power_play", "matched", "empty_net"]);
+
+        assert_eq!(
+            value["paths"]["/hockey/nhl/games"]["get"]["tags"][0],
+            "hockey"
+        );
+        assert!(value["paths"]["/hockey/nhl/games/{game_id}"].is_object());
     }
 
     /// The generic games routes share the `/{sport}/{league}/...` prefix with

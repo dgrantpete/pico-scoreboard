@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::AppError;
 use crate::football::FootballGame;
+use crate::hockey::HockeyGame;
 use crate::mlb::MlbGame;
 use crate::nba::NbaGame;
 use crate::soccer::SoccerGame;
@@ -138,6 +139,69 @@ pub(crate) fn soccer_games() -> Vec<(String, SoccerGame)> {
         .collect()
 }
 
+/// Hockey fixtures are pairs: `<name>.json`, the scoreboard event, and
+/// `<name>.summary.json`, the per-event summary at the same moment
+/// (`testdata/hockey/nhl/PROVENANCE.md`). The second half of a pair is not a
+/// fixture of its own.
+const SUMMARY_STEM: &str = ".summary";
+
+/// The live fixture also pinned without its summary, under
+/// [`NO_SUMMARY_SUFFIX`].
+const HOCKEY_SCOREBOARD_ONLY: &str = "nhl/in_progress";
+
+/// Golden-name suffix for a hockey payload served from the scoreboard alone —
+/// what the handler sends when the summary fetch or parse failed (NHL.md D3).
+const NO_SUMMARY_SUFFIX: &str = ".no_summary";
+
+/// One hockey fixture as the detail handler sees it: the scoreboard extract,
+/// then, where the handler would fetch one and `with_summary` allows, the
+/// pair's summary half through the same adapter call.
+fn hockey_parts(
+    name: &str,
+    with_summary: bool,
+) -> (
+    scoreboard_espn::hockey::Extract,
+    Option<scoreboard_espn::hockey::Summary>,
+) {
+    use crate::hockey::adapter;
+
+    let (id, body) = fixture_body("hockey", name);
+    let extract = adapter::detail_extract(body.as_bytes(), &id, "test://corpus/hockey")
+        .unwrap_or_else(|e| panic!("hockey/{name}: {e:?}"));
+    let summary = (with_summary && adapter::wants_summary(&extract)).then(|| {
+        let path = testdata()
+            .join("hockey")
+            .join(format!("{name}{SUMMARY_STEM}.json"));
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("hockey/{name}: a live or final fixture is a pair: {e}"));
+        adapter::summary(&bytes, &extract, "test://corpus/hockey/summary")
+            .unwrap_or_else(|| panic!("hockey/{name}: summary unreadable"))
+    });
+    (extract, summary)
+}
+
+/// Every hockey fixture with its summary — the canonical goldens — plus
+/// [`HOCKEY_SCOREBOARD_ONLY`] without it, pinning the degrade.
+pub(crate) fn hockey_games() -> Vec<(String, HockeyGame)> {
+    use crate::hockey::adapter::game_from_extract;
+
+    let mut games: Vec<(String, HockeyGame)> = fixture_names("hockey")
+        .into_iter()
+        .filter(|name| !name.ends_with(SUMMARY_STEM))
+        .map(|name| {
+            let (extract, summary) = hockey_parts(&name, true);
+            let game = game_from_extract(&extract, summary.as_ref());
+            (name, game)
+        })
+        .collect();
+    let (extract, _) = hockey_parts(HOCKEY_SCOREBOARD_ONLY, false);
+    games.push((
+        format!("{HOCKEY_SCOREBOARD_ONLY}{NO_SUMMARY_SUFFIX}"),
+        game_from_extract(&extract, None),
+    ));
+    games
+}
+
 /// Golden-name suffix for a payload encoded with the `ext=1` extension.
 const EXT_SUFFIX: &str = ".ext1";
 
@@ -170,6 +234,9 @@ pub(crate) fn encoded_corpus() -> Vec<Encoded> {
     }
     for (name, game) in soccer_games() {
         push("soccer", name, crate::soccer::wire::encode_game(&game));
+    }
+    for (name, game) in hockey_games() {
+        push("hockey", name, crate::hockey::wire::encode_game(&game));
     }
     out
 }
@@ -333,6 +400,50 @@ fn corpus_string_maxima() -> Vec<(&'static str, usize)> {
         }
     }
 
+    for (name, game) in hockey_games() {
+        let bytes = crate::hockey::wire::encode_game(&game);
+        match wire::hockey::decode(&bytes).unwrap_or_else(|e| panic!("hockey/{name}: {e}")) {
+            wire::hockey::Game::Live(live) => {
+                max.note("game id", live.game_id);
+                max.note("clock", live.clock);
+                max.team(&live.away);
+                max.team(&live.home);
+                max.note("player name", live.last_scorer);
+                if let Some(play) = live.last_play {
+                    max.note("play id", play.id);
+                    max.note("play text", play.text);
+                }
+            }
+            wire::hockey::Game::Pregame(pregame) => {
+                max.note("game id", pregame.game_id);
+                max.note("venue", pregame.venue);
+                // Empty outside the playoffs, and every pregame in the corpus
+                // is a regular-season game: measured anyway, so the first
+                // playoff fixture meets its budget line.
+                max.note("info secondary", pregame.info_secondary);
+                max.note("abbreviation", pregame.away.abbreviation);
+                max.note("abbreviation", pregame.home.abbreviation);
+                for goalie in [pregame.away.goalie, pregame.home.goalie]
+                    .into_iter()
+                    .flatten()
+                {
+                    max.note("player name", goalie);
+                }
+            }
+            wire::hockey::Game::Final(game) => {
+                max.note("game id", game.game_id);
+                max.final_team(&game.away);
+                max.final_team(&game.home);
+                for star in game.stars.iter().flatten() {
+                    max.note("player name", star.name);
+                }
+                if let Some(series) = game.series {
+                    max.note("series", series);
+                }
+            }
+        }
+    }
+
     max.0.into_iter().collect()
 }
 
@@ -413,6 +524,7 @@ mod tests {
                     wire::football::decode(bytes).map(|g| wire::football::encode(&g, &mut out))
                 }
                 "soccer" => wire::soccer::decode(bytes).map(|g| wire::soccer::encode(&g, &mut out)),
+                "hockey" => wire::hockey::decode(bytes).map(|g| wire::hockey::encode(&g, &mut out)),
                 other => panic!("unknown sport {other}"),
             };
             decoded
@@ -424,6 +536,33 @@ mod tests {
                 "{} does not survive a decode/encode round trip",
                 entry.name
             );
+        }
+    }
+
+    /// Hockey's DTO is copied from the extractor's combined view, and
+    /// `hockey/wire.rs` turns it back into one. The two must compose to the
+    /// identity, or the JSON and the struct representation of one game could
+    /// disagree: every hockey fixture, with and without its summary, encodes
+    /// the same through the DTO as straight from the crate's view.
+    #[test]
+    fn hockey_dto_round_trips_the_combined_view() {
+        use scoreboard_wire as wire;
+
+        let names = fixture_names("hockey");
+        let fixtures = names.iter().filter(|name| !name.ends_with(SUMMARY_STEM));
+        for name in fixtures {
+            for with_summary in [true, false] {
+                let (extract, summary) = hockey_parts(name, with_summary);
+                let view = extract.as_game(summary.as_ref());
+                let direct =
+                    crate::shared::wire::encoded(256, |out| wire::hockey::encode(&view, out));
+                let game = crate::hockey::adapter::game_from_extract(&extract, summary.as_ref());
+                assert_eq!(
+                    hex::encode(crate::hockey::wire::encode_game(&game)),
+                    hex::encode(direct),
+                    "hockey/{name} (summary: {with_summary}) changes through the DTO"
+                );
+            }
         }
     }
 
@@ -439,11 +578,13 @@ mod tests {
             ("abbreviation", 8),
             ("clock", 12),
             ("game id", 16),
+            ("info secondary", 56),
             ("line score", 16),
             ("play id", 24),
             ("play text", 128),
             ("player name", 32),
             ("scorers", 128),
+            ("series", 32),
             ("team line", 32),
             ("venue", 48),
             ("weather condition", 24),
