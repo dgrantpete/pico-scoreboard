@@ -23,16 +23,23 @@ export type GammaConfig =
 	| { type: "none" };
 
 // Display configuration
-// Screen layout variant letters, keyed per sport × screen (see firmware
-// scoreboard/screen_geometry.py tables). Applied live on save — no reboot.
+// Screen layout variant letters, keyed per sport × screen (see the Rust
+// renderer's tables, crates/scoreboard-render/src/geometry.rs, and
+// RenderSettings::apply_variant there). Applied live on save — no reboot.
 // Screens with a single design (pregame — "Big time" locked in 2026-07-15 —
 // soccer final, NBA live, football live) gain a key here only once a second
-// design exists.
+// design exists. hockey_final is the exception: the firmware keeps the key so
+// a box-score final stays one letter away (NHL.md §3.10), and the settings
+// page offers no picker for it.
 export interface VariantsConfig {
 	mlb_final: string;
 	nba_final: string;
 	football_final: string;
 	soccer_live: string;
+	// Absent on firmware without hockey (the frozen MicroPython); see
+	// SportsConfig.nhl.
+	hockey_live?: string;
+	hockey_final?: string;
 }
 
 export interface DisplayConfig {
@@ -97,11 +104,14 @@ export interface OtaConfig {
 export type OtaConfigUpdate = Partial<OtaConfig>;
 
 // Sports / league selection. Football and soccer leagues are ESPN slugs
-// (see the firmware LEAGUE_NAMES tables in scoreboard/football.py and
-// scoreboard/soccer.py); empty list = that sport off.
+// (see the firmware's league registry, LEAGUES in
+// crates/scoreboard-model/src/feed.rs); empty list = that sport off.
 export interface SportsConfig {
 	mlb: { enabled: boolean };
 	nba: { enabled: boolean };
+	// Present only on firmware that has hockey: the frozen MicroPython never
+	// sends the key, and its absence is what hides the toggle (NHL.md D7).
+	nhl?: { enabled: boolean };
 	football: { leagues: string[] };
 	soccer: { leagues: string[] };
 }

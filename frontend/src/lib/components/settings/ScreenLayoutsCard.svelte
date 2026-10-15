@@ -2,13 +2,16 @@
 	import { settingsStore } from "$lib/stores/settings.svelte";
 	import type { VariantsConfig } from "$lib/api/types";
 
-	// Mirrors the variant tables in firmware scoreboard/screen_geometry.py.
+	// Mirrors the variant tables in the Rust renderer
+	// (crates/scoreboard-render/src/geometry.rs, RenderSettings::apply_variant).
 	// Keys are per sport × screen so every sport's look can be tuned
 	// independently. Applied live on save, so layouts can be compared on the
 	// panel quickly. The option lists are shared while the sports still ship
 	// the same designs; they fork alongside the firmware tables.
 	// Pregame has no row: the "Big time" design was locked in for every
 	// sport on 2026-07-15 and the other pregame variants were deleted.
+	// A row shows only when the device's config carries its key, so firmware
+	// without hockey (the frozen MicroPython) gets no hockey row (NHL.md D7).
 	const FINAL_OPTIONS = [
 		{ value: "A", label: "A — Marquee + boxscore" },
 		{ value: "B", label: "B — Stacked ledger" },
@@ -31,6 +34,15 @@
 			label: "NBA Final",
 			hint: "Basketball final screen with the quarter line score",
 			options: FINAL_OPTIONS,
+		},
+		{
+			key: "hockey_live",
+			label: "NHL Live",
+			hint: "Live game screen — B draws every goal where it was scored",
+			options: [
+				{ value: "A", label: "A — Period ledger" },
+				{ value: "B", label: "B — Rink" },
+			],
 		},
 		{
 			key: "football_final",
@@ -85,7 +97,7 @@
 			</p>
 		</header>
 		<div class="card-content">
-			{#each LAYOUTS as layout, i (layout.key)}
+			{#each LAYOUTS.filter((layout) => layout.key in config.display.variants) as layout, i (layout.key)}
 				{#if i > 0}
 					<hr class="separator" />
 				{/if}

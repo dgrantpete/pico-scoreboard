@@ -46,18 +46,22 @@ the frontend actually changed, not that somebody rebuilt it.
 
 | | |
 |---|---|
-| SHA-1 | `610bb72421b0199099104131b2e72836620fad21` |
-| ETag (first 8 bytes) | `610bb72421b01990` |
-| Size | 56,517 B |
-| Built | 2026-10-14, `bun 1.3.6`, in the same commit as the frontend change it carries |
+| SHA-1 | `80e23203b05a816bf9c980859ab20f7c97f06ff1` |
+| ETag (first 8 bytes) | `80e23203b05a816b` |
+| Size | 56,617 B |
+| Built | 2026-10-15, `bun 1.3.6`, in the same commit as the frontend change it carries |
 
-The status card shows the whole release version (`2026.10.12-03942fd`, with
-the link profile in its tooltip) instead of its first eight characters, which
-for a date-shaped version was `2026.10.` for every build of a month. The
-artifact before it, 56,607 B (`496aa1b6…`), was the Advanced card's watchdog
-row reading the device's `watchdog_always_on`; before that, 56,305 B
-(`e436e643…`), built 2026-08-19 from the `frontend/` of commit `3259128` — a
-bake that followed its frontend change in a commit of its own, the failure
-mode the rule above warns about. Rebuilding that tree on 2026-10-14
-reproduced it byte for byte before either change was made, and this one
-rebuilds to the same SHA-1 twice running.
+The settings page gains the NHL: a switch on the Sports card and an "NHL
+Live" layout picker (A Period ledger / B Rink), each shown only when the
+device's `GET /api/config` carries its key, so a unit on the frozen
+MicroPython never sees either (NHL.md D7). The artifact before it, 56,517 B
+(`610bb724…`), was the status card showing the whole release version
+(`2026.10.12-03942fd`, with the link profile in its tooltip) instead of its
+first eight characters, which for a date-shaped version was `2026.10.` for
+every build of a month; before that, 56,607 B (`496aa1b6…`), the Advanced
+card's watchdog row reading the device's `watchdog_always_on`; and before
+that, 56,305 B (`e436e643…`), built 2026-08-19 from the `frontend/` of
+commit `3259128` — a bake that followed its frontend change in a commit of
+its own, the failure mode the rule above warns about. The tree before this
+change rebuilt to `610bb724…` byte for byte, and this one rebuilds to the
+same SHA-1 twice running.

@@ -3,20 +3,25 @@
 	import type { Config } from "$lib/api/types";
 
 	// Single-league sports ({enabled} config shape): one registry row per
-	// sport; a 4th sport is one entry here. Multi-league sports ({leagues[]}
-	// shape) get a slug list like SOCCER_LEAGUES below.
+	// sport, in the board's rotation order (NHL.md D6); another is one entry
+	// here. Multi-league sports ({leagues[]} shape) get a slug list like
+	// SOCCER_LEAGUES below. A row shows only when the device's config has its
+	// key — capability by presence, so a firmware without hockey (the frozen
+	// MicroPython) shows no NHL switch (NHL.md D7).
+	type ToggleSport = keyof Config["sports"] & ("mlb" | "nba" | "nhl");
 	const ENABLED_SPORTS: {
-		key: keyof Config["sports"] & ("mlb" | "nba");
+		key: ToggleSport;
 		label: string;
 		hint: string;
 	}[] = [
 		{ key: "mlb", label: "MLB", hint: "Major League Baseball" },
 		{ key: "nba", label: "NBA", hint: "National Basketball Association" },
+		{ key: "nhl", label: "NHL", hint: "National Hockey League" },
 	];
 
-	// Mirrors the firmware's league registries (scoreboard/football.py +
-	// scoreboard/soccer.py LEAGUE_NAMES / backend espn/league.rs). Values
-	// are ESPN league slugs.
+	// Mirrors the firmware's league registry (LEAGUES in
+	// crates/scoreboard-model/src/feed.rs) and the backend's
+	// (backend/src/espn/league.rs). Values are ESPN league slugs.
 	const FOOTBALL_LEAGUES: { slug: string; label: string; hint: string }[] = [
 		{ slug: "nfl", label: "NFL", hint: "National Football League" },
 		{
@@ -33,7 +38,7 @@
 		{ slug: "fifa.world", label: "World Cup", hint: "FIFA World Cup" },
 	];
 
-	function toggleSport(key: "mlb" | "nba") {
+	function toggleSport(key: ToggleSport) {
 		const current = settingsStore.config?.sports[key]?.enabled ?? false;
 		settingsStore.updateSports(key, { enabled: !current });
 	}
@@ -57,7 +62,7 @@
 			</p>
 		</header>
 		<div class="card-content">
-			{#each ENABLED_SPORTS as sport (sport.key)}
+			{#each ENABLED_SPORTS.filter((sport) => sport.key in config.sports) as sport (sport.key)}
 				<div class="row-between">
 					<div class="label-group">
 						<span class="label-text">{sport.label}</span>
@@ -66,7 +71,7 @@
 					<label class="switch">
 						<input
 							type="checkbox"
-							checked={config.sports[sport.key].enabled}
+							checked={config.sports[sport.key]?.enabled ?? false}
 							onchange={() => toggleSport(sport.key)}
 						/>
 						<span class="switch-track"><span class="switch-thumb"></span></span>
