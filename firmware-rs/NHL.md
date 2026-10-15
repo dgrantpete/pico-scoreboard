@@ -37,7 +37,7 @@ from the goal-mark study. The last column keeps what was turned down.
 | D2 | Final screen | **"Three stars"** (own screen, soccer-final silhouette) | Shared line-score final with hockey columns; line score + cycling stars line |
 | D3 | Fetch the per-game summary for live/final hockey | **Yes** — on the backend, like soccer's commentary; the device still receives one small wire payload. Live it carries strength, goals, the shootout and the flash; on finals the reliable shots (§3.3) — the stars turned out to come from the scoreboard (§2, 2026-10-14) | Scoreboard-only: no strength, no tags, no shootout tracker, unreliable final shots |
 | D4 | Goal lamp (scoring side's number pulses red) | **Yes, 20 s** | No |
-| D5 | Sport identity | **`Sport::Hockey`, league slug `nhl`, endpoint `hockey/nhl`, config `sports.nhl: {enabled}`** (single-league toggle, like NBA) | Multi-league `sports.hockey.leagues[]` — only if a second hockey league is wanted soon |
+| D5 | Sport identity | **`Sport::Hockey`, league slug `nhl`, endpoint `hockey/nhl`, config `sports.nhl: {enabled}`** (single-league toggle, like NBA), **on by default** (owner, 2026-10-15: friends' units should start rotating hockey without anyone opening the settings page) | Multi-league `sports.hockey.leagues[]` — only if a second hockey league is wanted soon |
 | D6 | Rotation / menu order | **MLB, NBA, NHL, football…, soccer…** | Append after soccer |
 | D7 | MicroPython | **No hockey.** The SPA hides the NHL toggle unless `GET /api/config` returns a `sports.nhl` key (MicroPython's defaults never will) — capability by presence, zero legacy change | Ship hockey parsers to the fleet (not worth it) |
 | D8 | Cross-sport fixes found here (§7 C1, C2) | **Separate reviewed changes**, not in the NHL diff (both shipped 2026-10-02) | Fold in |
@@ -493,7 +493,7 @@ never validated (football's situation rule).
 `tests.rs`. The corpus goldens under `backend/testdata/wire/hockey/` come
 from real fixtures with 6.3's `wire_corpus.rs` arms.
 
-### 6.2 `scoreboard-espn` (hardest lane — strongest model, line-by-line review)
+### 6.2 `scoreboard-espn` — done 2026-10-15 (hardest lane — strongest model, line-by-line review)
 `src/hockey.rs`: two path tables like soccer's (scoreboard event; summary
 plays/onIce/boxscore goalies/featuredAthletes), one extractor, owned
 `Extract` with `as_game()`. All sixteen DESIGN.md rulings apply; hockey has
@@ -559,7 +559,7 @@ Mutation contract: the lamp and PP-zone pulse are pure functions of
 snapshot anchors and the wall rail; no renderer state.
 
 ### 6.6 Config, input, app
-- `scoreboard-config`: `SportsConfig.nhl: SportToggle` (default off),
+- `scoreboard-config`: `SportsConfig.nhl: SportToggle` (default **on**, D5),
   `SportsPatch.nhl`, `VariantsConfig.hockey_live` (default `B`) and
   `hockey_final`, defaults, patch + tests.
 - `scoreboard-input` menu tests gain the NHL row; label from `LeagueId`.
