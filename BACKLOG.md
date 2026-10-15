@@ -1144,3 +1144,19 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     history. `png-stream` and the picojson/embedded-tls forks go if nothing
     else needs them. Until then, treat that code as frozen: no adaptation work
     (e.g. dark crests stay backend-only).
+101. **Back off the link-silence reset when the internet, not the Wi-Fi, is
+    down (2026-10-14).** Since the health gate became mandatory on fleet
+    builds (item 69's 2026-10-14 note), a unit whose router is up but whose
+    internet is not — an ISP outage, or a network that blocks the backend —
+    starves, resets and rejoins about every two minutes until it returns:
+    every request it sends goes unanswered, and from the device that is
+    indistinguishable from the radio having fallen off the network, which is
+    the failure a reset does fix. It recovers on its own the moment the
+    internet does, so this is a nuisance (the startup sequence every two
+    minutes, a breadcrumb write per reset) rather than a hazard. The shape
+    worth building: count consecutive `LinkSilent` resets in the breadcrumb
+    cell (it already survives a watchdog reset) and stretch the gate's
+    patience per consecutive reset — doubling, capped near 30 minutes — so a
+    radio wedge is still caught on the first lap and an outage costs a reset
+    every half hour instead of every two minutes. Host-test the schedule
+    beside `poll::gate`.
