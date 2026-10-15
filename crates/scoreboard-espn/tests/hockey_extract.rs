@@ -315,8 +315,10 @@ fn check_fixture(name: &str, without: &Game<'_>, with: Option<&Game<'_>>) {
                 assert_eq!(game.last_play, None);
             }
             assert_eq!(a.strength, None);
-            // Empty goalie groups: the quiet fallback, the face-off's Even.
-            assert_eq!(b.strength, strength(StrengthKind::Even, 0, 0));
+            // The goalie groups are empty for the first minutes; the
+            // scoreboard's probables are the known goalies, and every unit
+            // reads true: five and a goalie each.
+            assert_eq!(b.strength, strength(StrengthKind::Even, 5, 5));
         }
         "in_progress" => {
             let (a, b) = (live(without), live(with.unwrap()));
@@ -502,9 +504,14 @@ fn check_fixture(name: &str, without: &Game<'_>, with: Option<&Game<'_>>) {
                     next_shooter: Some(Side::Home),
                 })
             );
+            // An attempt is not a goal: the flash is the last pre-shootout
+            // play, Josi's minor at 19:47 of the 3rd.
             assert_eq!(
                 last_play(b),
-                Some(("401892474000005810", "GOAL! Tim Stützle Goal Wrist Shot"))
+                Some((
+                    "401892474000011090",
+                    "Roman Josi Delaying Game - Puck over glass"
+                ))
             );
         }
         "shootout_teamless_attempt" => {
@@ -526,18 +533,21 @@ fn check_fixture(name: &str, without: &Game<'_>, with: Option<&Game<'_>>) {
             );
             assert_eq!(
                 last_play(b),
-                Some(("401892492000005240", "GOAL! Matvei Michkov Goal Wrist Shot"))
+                Some((
+                    "401892492000011440",
+                    "Too many men/ice served by Matvei Michkov"
+                )),
+                "the bench minor in overtime, not the shootout goals"
             );
         }
         "shootout_failed_attempt" => {
             let (a, b) = (live(without), live(with.unwrap()));
             assert_eq!((a.away.abbreviation, a.home.abbreviation), ("BUF", "MTL"));
             assert_eq!((a.away.score, a.home.score), (3, 3));
-            // The scoreboard poll already has Bolduc's attempt as a goal.
-            assert_eq!(
-                last_play(a),
-                Some(("401892490000008060", "GOAL! Zachary Bolduc Goal Backhand"))
-            );
+            // The scoreboard poll already has Bolduc's attempt as a type-505
+            // goal; at period 5 in the regular season that is an attempt,
+            // and an attempt never flashes.
+            assert_eq!(last_play(a), None);
             assert_eq!(b.shots, shots(17, 38));
             assert_eq!(b.goals.len(), 6);
             assert_eq!(b.last_scorer, "O. Zellweger");
@@ -550,12 +560,14 @@ fn check_fixture(name: &str, without: &Game<'_>, with: Option<&Game<'_>>) {
                     next_shooter: Some(Side::Away),
                 })
             );
-            assert_eq!(
-                last_play(b),
-                Some((
-                    "401892490000008050",
-                    "GOAL! Alexandre Texier Goal Snap Shot"
-                ))
+            // Nor from the summary: the flash is the last pre-shootout play,
+            // Slafkovský's holding minor in overtime.
+            let (id, text) = last_play(b).expect("a penalty in overtime");
+            assert_eq!(id, "401892490000010710");
+            assert!(
+                text.starts_with("Juraj Slafkovsk")
+                    && text.ends_with(" Holding against Josh Norris"),
+                "{text}"
             );
         }
         "onice_glitch" => {
@@ -775,7 +787,7 @@ fn chunk_split_invariance_over_every_pair() {
             continue;
         };
         let context = reference.summary_context();
-        let whole = summarize(&text, context);
+        let whole = summarize(&text, context.clone());
         // The summaries run to 630 KB; the byte-at-a-time feed covers the
         // largest, a shootout and a puck drop, the rest the two others.
         let one_byte = matches!(
@@ -786,7 +798,7 @@ fn chunk_split_invariance_over_every_pair() {
             .into_iter()
             .chain(one_byte.then_some(&[1][..]))
         {
-            let split = summarize_sized(&text, context, sizes);
+            let split = summarize_sized(&text, context.clone(), sizes);
             assert_eq!(
                 split.summary, whole.summary,
                 "{name}: summary diverged at {sizes:?}"
@@ -961,6 +973,36 @@ fn period_five_is_a_second_overtime_in_the_playoffs() {
     let extract = found(&body, &id_of(&event));
     let game = extract.as_game(None);
     assert_eq!((live(&game).away.score, live(&game).home.score), (3, 3));
+}
+
+#[test]
+fn a_live_playoff_game_at_period_five_is_overtime_not_a_shootout() {
+    let event = fixture("overtime");
+    let body = wrap(&[&mutate(&event, |v| {
+        v["season"]["type"] = serde_json::json!(3);
+        v["competitions"][0]["status"]["period"] = serde_json::json!(5);
+        v["competitions"][0]["competitors"][0]["score"] = serde_json::json!("4");
+    })]);
+    let extract = found(&body, &id_of(&event));
+    let summary = summarize(
+        &summary_text("overtime").unwrap(),
+        extract.summary_context(),
+    )
+    .summary;
+    let game = extract.as_game(Some(&summary));
+    assert!(live(&game).playoffs);
+    assert_eq!(live(&game).shootout, None);
+    assert_eq!(
+        live(&game).strength,
+        strength(StrengthKind::Matched, 3, 3),
+        "3-on-3 overtime, derived"
+    );
+    assert_eq!(
+        (live(&game).away.score, live(&game).home.score),
+        (3, 4),
+        "no tie forcing"
+    );
+    round_trip(&game);
 }
 
 #[test]
@@ -1143,9 +1185,17 @@ fn strength_falls_back_to_the_latest_team_bearing_non_penalty_play_with_a_quirk(
 }
 
 #[test]
-fn puck_drops_empty_goalie_groups_fall_back_quietly() {
-    let (_, report) = summary_report("puck_drop");
-    assert_eq!(report.summary.strength, strength(StrengthKind::Even, 0, 0));
+fn puck_drops_empty_goalie_groups_are_covered_by_the_probables() {
+    let (extract, report) = summary_report("puck_drop");
+    assert_eq!(
+        extract.probable_goalies,
+        [
+            Some("4587909".try_into().unwrap()),
+            Some("4587815".try_into().unwrap())
+        ],
+        "Hofer (STL, away) and Ersson (OTT, home)"
+    );
+    assert_eq!(report.summary.strength, strength(StrengthKind::Even, 5, 5));
     assert_eq!(report.quirks.0, vec![]);
 }
 
@@ -1223,6 +1273,313 @@ fn no_strength_during_a_live_shootout() {
     // A final derives none either, whatever its stale onIce says.
     let (_, report) = summary_report("final");
     assert_eq!(report.summary.strength, None);
+}
+
+#[test]
+fn the_strength_fallback_skips_penalties_of_either_season_shape() {
+    // onIce gone (the quiet fallback); the newest play becomes a BUF penalty
+    // carrying the "Power Play" strength from before it — §3.4 step 4 must
+    // reach past it to UTA's shot on the power play, whatever the penalty's
+    // season shape.
+    let (extract, _) = pair("power_play");
+    for penalty in [
+        serde_json::json!({"id": "33", "text": "Hooking", "penaltyMinutes": "2", "penaltyType": "Minor"}),
+        serde_json::json!({"id": "509", "text": "Penalty"}),
+    ] {
+        let text = mutate(&summary_text("power_play").unwrap(), |v| {
+            v["onIce"] = serde_json::json!([]);
+            v["plays"].as_array_mut().unwrap().push(serde_json::json!({
+                "id": "401892472000007300", "type": penalty, "text": "X Hooking",
+                "period": {"number": 2, "displayValue": "2nd"},
+                "clock": {"displayValue": "14:40"}, "team": {"id": "2"},
+                "scoringPlay": false, "strength": {"id": "702"}
+            }));
+        });
+        let report = summarize(&text, extract.summary_context());
+        assert_eq!(
+            report.summary.strength,
+            strength(StrengthKind::PowerPlay(Side::Away), 0, 0),
+            "{penalty}"
+        );
+        assert_eq!(report.quirks.0, vec![]);
+    }
+}
+
+/// `boxscore.players` block for one team, by team id.
+fn roster<'a>(v: &'a mut serde_json::Value, team: &str) -> &'a mut serde_json::Value {
+    v["boxscore"]["players"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|t| t["team"]["id"] == team)
+        .unwrap()
+}
+
+/// `onIce` block for one team, by team id.
+fn unit<'a>(v: &'a mut serde_json::Value, team: &str) -> &'a mut Vec<serde_json::Value> {
+    v["onIce"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|b| b["teamId"] == team)
+        .unwrap()["entries"]
+        .as_array_mut()
+        .unwrap()
+}
+
+#[test]
+fn the_probable_goalie_is_a_known_goalie_before_the_group_lists_him() {
+    // Swayman (BOS, 4712036) leaves the goalies group for the forwards:
+    // listed, but a goalie only because the scoreboard's probable says so.
+    let text = mutate(&summary_text("in_progress").unwrap(), |v| {
+        for group in roster(v, "1")["statistics"].as_array_mut().unwrap() {
+            if group["name"] == "goalies" {
+                group["athletes"] = serde_json::json!([]);
+            } else if group["name"] == "forwards" {
+                group["athletes"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({"athlete": {"id": "4712036"}}));
+            }
+        }
+    });
+    let (extract, _) = pair("in_progress");
+    let report = summarize(&text, extract.summary_context());
+    assert_eq!(report.summary.strength, strength(StrengthKind::Even, 5, 5));
+    assert_eq!(report.quirks.0, vec![]);
+
+    // Another probable: BOS's known goalie is not on the ice and every BOS
+    // entry is a listed player — a pulled net.
+    let event = fixture("in_progress");
+    let body = wrap(&[&mutate(&event, |v| {
+        v["competitions"][0]["competitors"][1]["probables"][0]["athlete"]["id"] =
+            serde_json::json!("1");
+    })]);
+    let extract = found(&body, &id_of(&event));
+    let report = summarize(&text, extract.summary_context());
+    assert_eq!(
+        report.summary.strength,
+        strength(StrengthKind::EmptyNet(Side::Away), 6, 5)
+    );
+    assert_eq!(report.quirks.0, vec![]);
+
+    // No probable at all: BOS has no known goalie, which is insane, not a
+    // pull.
+    let body = wrap(&[&mutate(&event, |v| {
+        v["competitions"][0]["competitors"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("probables");
+    })]);
+    let extract = found(&body, &id_of(&event));
+    assert_eq!(extract.probable_goalies[0], None);
+    let report = summarize(&text, extract.summary_context());
+    assert_eq!(report.summary.strength, strength(StrengthKind::Even, 0, 0));
+    assert_eq!(report.quirks.0, vec![Quirk::OnIceInsane]);
+}
+
+#[test]
+fn a_goalie_change_reads_present_before_the_boxscore_lists_him() {
+    // Askarov (SJ, 4697394) leaves the ice for an id no group lists: the
+    // relief goalie, present — not an empty net.
+    let (extract, _) = pair("in_progress");
+    let swap_goalie = |id: &str| {
+        mutate(&summary_text("in_progress").unwrap(), |v| {
+            for entry in unit(v, "18") {
+                if entry["athleteid"] == "4697394" {
+                    entry["athleteid"] = serde_json::json!(id);
+                }
+            }
+        })
+    };
+    let report = summarize(&swap_goalie("7777777"), extract.summary_context());
+    assert_eq!(report.summary.strength, strength(StrengthKind::Even, 5, 5));
+    assert_eq!(report.quirks.0, vec![]);
+
+    // A listed skater in his place is six skaters and no goalie: pulled.
+    let mut listed = parse(&summary_text("in_progress").unwrap());
+    let on_ice: Vec<String> = unit(&mut listed, "18")
+        .iter()
+        .map(|e| e["athleteid"].as_str().unwrap().to_string())
+        .collect();
+    let bench = roster(&mut listed, "18")["statistics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["name"] == "forwards")
+        .unwrap()["athletes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["athlete"]["id"].as_str().unwrap().to_string())
+        .find(|id| !on_ice.contains(id))
+        .unwrap();
+    let report = summarize(&swap_goalie(&bench), extract.summary_context());
+    assert_eq!(
+        report.summary.strength,
+        strength(StrengthKind::EmptyNet(Side::Home), 5, 6)
+    );
+    assert_eq!(report.quirks.0, vec![]);
+}
+
+#[test]
+fn a_real_pull_reads_empty_net_when_every_entry_is_listed() {
+    let (_, report) = summary_report("empty_net");
+    assert_eq!(
+        report.summary.strength,
+        strength(StrengthKind::EmptyNet(Side::Away), 6, 5)
+    );
+    assert_eq!(report.quirks.0, vec![]);
+    // Why it reads pulled and not as a relief goalie: PIT's six are all in
+    // PIT's boxscore groups, and none is a known goalie.
+    let mut v = parse(&summary_text("empty_net").unwrap());
+    let on_ice: Vec<String> = unit(&mut v, "16")
+        .iter()
+        .map(|e| e["athleteid"].as_str().unwrap().to_string())
+        .collect();
+    let listed: Vec<String> = roster(&mut v, "16")["statistics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|g| g["athletes"].as_array().unwrap().iter())
+        .map(|a| a["athlete"]["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(on_ice.len(), 6);
+    assert!(on_ice.iter().all(|id| listed.contains(id)));
+    assert!(
+        !on_ice.contains(&"5188366".to_string()),
+        "Murashov is on the bench"
+    );
+}
+
+#[test]
+fn an_intermissions_pulled_reading_is_no_strength_but_a_carried_power_play_shows() {
+    // NJ (away, 11) pulled Allen (5111) before the horn: onIce freezes that
+    // unit, and the intermission believes none of it.
+    let (extract, _) = pair("end_of_period");
+    let pulled = mutate(&summary_text("end_of_period").unwrap(), |v| {
+        unit(v, "11").retain(|e| e["athleteid"] != "5111");
+    });
+    let report = summarize(&pulled, extract.summary_context());
+    assert_eq!(report.summary.strength, None);
+    assert_eq!(report.quirks.0, vec![]);
+
+    // The same unit in play reads as the empty net it is.
+    let event = fixture("end_of_period");
+    let body = wrap(&[&mutate(&event, |v| {
+        v["competitions"][0]["status"]["type"]["name"] = serde_json::json!("STATUS_IN_PROGRESS");
+    })]);
+    let in_play = found(&body, &id_of(&event));
+    let report = summarize(&pulled, in_play.summary_context());
+    assert_eq!(
+        report.summary.strength,
+        strength(StrengthKind::EmptyNet(Side::Away), 5, 5)
+    );
+
+    // A power play carrying into the next period still shows: a NJ skater
+    // in the box.
+    let short = mutate(&summary_text("end_of_period").unwrap(), |v| {
+        let entries = unit(v, "11");
+        let skater = entries
+            .iter()
+            .position(|e| e["athleteid"] != "5111")
+            .unwrap();
+        entries.remove(skater);
+    });
+    let report = summarize(&short, extract.summary_context());
+    assert_eq!(
+        report.summary.strength,
+        strength(StrengthKind::PowerPlay(Side::Home), 4, 5)
+    );
+    assert_eq!(report.quirks.0, vec![]);
+}
+
+#[test]
+fn an_incomplete_listing_never_hides_a_real_empty_net() {
+    // Forty extra ids overflow SJ's listed players: a quirk, and "not
+    // listed" stops meaning "the relief goalie" for SJ.
+    let (extract, _) = pair("in_progress");
+    let overflow = |v: &mut serde_json::Value| {
+        let forwards = roster(v, "18")["statistics"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|g| g["name"] == "forwards")
+            .unwrap();
+        for n in 0..40 {
+            forwards["athletes"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"athlete": {"id": format!("6{n:06}")}}));
+        }
+    };
+    let text = mutate(&summary_text("in_progress").unwrap(), overflow);
+    let report = summarize(&text, extract.summary_context());
+    assert_eq!(
+        report.summary.strength,
+        strength(StrengthKind::Even, 5, 5),
+        "the known goalie still counts"
+    );
+    assert_eq!(report.quirks.0, vec![Quirk::BoundedOverflow]);
+
+    // Askarov leaves for an unlisted id: with the listing incomplete that
+    // proves nothing, so SJ reads pulled — the honest reading, since the
+    // alternative could hide a real empty net behind a dropped skater.
+    let text = mutate(&summary_text("in_progress").unwrap(), |v| {
+        overflow(v);
+        for entry in unit(v, "18") {
+            if entry["athleteid"] == "4697394" {
+                entry["athleteid"] = serde_json::json!("7777777");
+            }
+        }
+    });
+    let report = summarize(&text, extract.summary_context());
+    assert_eq!(
+        report.summary.strength,
+        strength(StrengthKind::EmptyNet(Side::Home), 5, 6)
+    );
+    assert_eq!(report.quirks.0, vec![Quirk::BoundedOverflow]);
+}
+
+#[test]
+fn six_skaters_is_the_sane_ceiling_and_seven_is_insane() {
+    let (extract, _) = pair("in_progress");
+    // onIce[0] is SJ (home): five skaters and the goalie.
+    let with_extra = |n: usize| {
+        mutate(&summary_text("in_progress").unwrap(), |v| {
+            let entries = v["onIce"][0]["entries"].as_array_mut().unwrap();
+            for k in 0..n {
+                entries.push(serde_json::json!({"athleteid": format!("8{k}")}));
+            }
+        })
+    };
+    let report = summarize(&with_extra(1), extract.summary_context());
+    assert_eq!(
+        report.summary.strength,
+        strength(StrengthKind::PowerPlay(Side::Home), 5, 6)
+    );
+    assert_eq!(report.quirks.0, vec![]);
+    let report = summarize(&with_extra(2), extract.summary_context());
+    assert_eq!(report.summary.strength, strength(StrengthKind::Even, 0, 0));
+    assert_eq!(report.quirks.0, vec![Quirk::OnIceInsane]);
+}
+
+#[test]
+fn both_nets_empty_at_once_is_insane() {
+    let (extract, _) = pair("in_progress");
+    let text = mutate(&summary_text("in_progress").unwrap(), |v| {
+        // Swayman (BOS) and Askarov (SJ) leave their units.
+        let goalies = ["4712036", "4697394"];
+        for block in v["onIce"].as_array_mut().unwrap() {
+            block["entries"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|e| !goalies.contains(&e["athleteid"].as_str().unwrap()));
+        }
+    });
+    let report = summarize(&text, extract.summary_context());
+    assert_eq!(report.summary.strength, strength(StrengthKind::Even, 0, 0));
+    assert_eq!(report.quirks.0, vec![Quirk::OnIceInsane]);
 }
 
 // ------------------------------------------------------- §3.5 goals
@@ -1475,10 +1832,14 @@ fn a_goal_whose_team_matches_neither_side_is_dropped_with_a_quirk() {
     let report = summarize(&text, extract.summary_context());
     assert_eq!(report.summary.goals.len(), 4);
     assert_eq!(
-        report.summary.last_scorer, "",
-        "the dropped goal was the newest"
+        report.summary.last_scorer, "I. Stenberg",
+        "the newest goal kept, not the dropped one"
     );
     assert_eq!(report.quirks.0, vec![Quirk::UnplaceableGoal]);
+    let game = extract.as_game(Some(&report.summary));
+    assert_eq!(live(&game).goals.last().unwrap().side, Side::Home);
+    assert_eq!(live(&game).last_scorer, "I. Stenberg");
+    round_trip(&game);
 }
 
 // ------------------------------------------------------- §3.6 flash
@@ -1555,9 +1916,7 @@ fn the_flash_falls_back_to_the_scoreboard_without_a_summary() {
     assert_eq!(last_play(live(&extract.as_game(summary.as_ref()))), fight);
 
     // With a summary the summary decides, even when it has nothing yet.
-    let (extract, _) = pair("shootout_failed_attempt");
-    assert!(live(&extract.as_game(None)).last_play.is_some());
-    let text = mutate(&summary_text("shootout_failed_attempt").unwrap(), |v| {
+    let text = mutate(&summary_text("onice_glitch").unwrap(), |v| {
         v["plays"] = serde_json::json!([]);
     });
     let summary = summarize(&text, extract.summary_context()).summary;
@@ -1581,6 +1940,42 @@ fn the_flash_falls_back_to_the_scoreboard_without_a_summary() {
     assert_eq!(
         live(&found(&body, &id_of(&event)).as_game(None)).last_play,
         None
+    );
+}
+
+#[test]
+fn a_shootout_attempt_never_flashes_from_either_source() {
+    // The summary's gate is pinned per fixture by the corpus sweep (the three
+    // live shootouts flash their last pre-shootout play). The scoreboard's
+    // own type-505 lastPlay is gated by status.period and the season kind.
+    let event = fixture("shootout");
+    let target = id_of(&event);
+    let with_goal = |period: u8, season: u8| {
+        wrap(&[&mutate(&event, |v| {
+            v["competitions"][0]["status"]["period"] = serde_json::json!(period);
+            v["season"]["type"] = serde_json::json!(season);
+            v["competitions"][0]["situation"]["lastPlay"] = serde_json::json!({
+                "id": "401892474000005810", "type": {"id": "505", "text": "Goal"},
+                "text": "Tim Stützle Goal Wrist Shot", "scoreValue": 1
+            });
+        })])
+    };
+    let extract = found(&with_goal(5, 2), &target);
+    assert_eq!(live(&extract.as_game(None)).last_play, None, "an attempt");
+    let flashed = |extract: &Extract| {
+        last_play(live(&extract.as_game(None))).map(|(_, text)| text.to_string())
+    };
+    let extract = found(&with_goal(4, 2), &target);
+    assert_eq!(
+        flashed(&extract).as_deref(),
+        Some("GOAL! Tim Stützle Goal Wrist Shot"),
+        "an overtime goal"
+    );
+    let extract = found(&with_goal(5, 3), &target);
+    assert_eq!(
+        flashed(&extract).as_deref(),
+        Some("GOAL! Tim Stützle Goal Wrist Shot"),
+        "a playoff second-overtime goal"
     );
 }
 
@@ -1724,8 +2119,8 @@ fn an_unplaceable_attempt_is_dropped_with_a_quirk() {
     );
     assert_eq!(report.quirks.0, vec![Quirk::UnplaceableAttempt]);
 
-    // Two unplaceable in a row drop both; a later placed one still counts and
-    // sets the next shooter; the quirk fires once.
+    // Two team-less attempts ahead of a placed one take their sides from it,
+    // backwards: strict alternation fully determines them, no quirk.
     let report = teamless_with_attempts(
         &extract,
         vec![
@@ -1737,12 +2132,76 @@ fn an_unplaceable_attempt_is_dropped_with_a_quirk() {
     assert_eq!(
         report.summary.shootout,
         Some(Shootout {
-            away: attempts(0, 0),
-            home: attempts(1, 0b1),
+            away: attempts(1, 0b0),
+            home: attempts(2, 0b11),
             next_shooter: Some(Side::Away),
         })
     );
+    assert_eq!(report.quirks.0, vec![]);
+
+    // With no placed attempt anywhere there is nothing to alternate from:
+    // every attempt drops, the quirk fires once.
+    let report = teamless_with_attempts(
+        &extract,
+        vec![
+            so_attempt(1, "505", None, &[]),
+            so_attempt(2, "506", None, &[]),
+            so_attempt(3, "507", None, &[]),
+        ],
+    );
+    let shootout = report.summary.shootout.unwrap();
+    assert_eq!(
+        (shootout.away, shootout.home),
+        (attempts(0, 0), attempts(0, 0))
+    );
     assert_eq!(report.quirks.0, vec![Quirk::UnplaceableAttempt]);
+}
+
+/// The reviewer's probe: an unplaced prefix of two, then SEA, then PHI —
+/// SEA shot third, so the first was SEA's and the second PHI's.
+#[test]
+fn unplaced_attempts_alternate_from_the_nearest_placed_one_in_either_direction() {
+    let (extract, _) = pair("shootout_teamless_attempt");
+    let report = teamless_with_attempts(
+        &extract,
+        vec![
+            so_attempt(1, "505", None, &[]),
+            so_attempt(2, "506", None, &[]),
+            so_attempt(3, "506", Some("124292"), &[]),
+            so_attempt(4, "505", Some("15"), &[]),
+        ],
+    );
+    assert_eq!(
+        report.summary.shootout,
+        Some(Shootout {
+            away: attempts(2, 0b01),
+            home: attempts(2, 0b10),
+            next_shooter: Some(Side::Away),
+        })
+    );
+    assert_eq!(report.quirks.0, vec![]);
+
+    // A gap in the middle resolves from the nearer anchor; two attempts away
+    // is the same side again.
+    let report = teamless_with_attempts(
+        &extract,
+        vec![
+            so_attempt(1, "506", Some("15"), &[]),
+            so_attempt(2, "506", None, &[]),
+            so_attempt(3, "505", None, &[]),
+            so_attempt(4, "506", None, &[]),
+            so_attempt(5, "505", Some("15"), &[]),
+        ],
+    );
+    assert_eq!(
+        report.summary.shootout,
+        Some(Shootout {
+            away: attempts(2, 0b00),
+            home: attempts(3, 0b110),
+            next_shooter: Some(Side::Away),
+        })
+    );
+    assert_eq!(report.quirks.0, vec![]);
 }
 
 #[test]
@@ -2022,7 +2481,7 @@ fn playoff_pregame_info_secondary_joins_headline_and_series() {
 }
 
 #[test]
-fn alternate_color_falls_back_to_the_primary_when_absent_and_rejects_when_malformed() {
+fn alternate_color_falls_back_to_the_primary_when_absent_or_mistyped_and_rejects_a_bad_string() {
     let event = fixture("in_progress"); // no alternateColor on either team
     let target = id_of(&event);
     let extract = found(&wrap(&[&event]), &target);
@@ -2043,20 +2502,69 @@ fn alternate_color_falls_back_to_the_primary_when_absent_and_rejects_when_malfor
     let game = extract.as_game(None);
     assert_eq!(live(&game).home.colors.alternate, 0xffffff);
 
-    for junk in [serde_json::json!("xyz"), serde_json::json!(12)] {
+    // A string that is not a color rejects the game, as the primary's would.
+    let body = wrap(&[&mutate(&event, |v| {
+        v["competitions"][0]["competitors"][0]["team"]["alternateColor"] = serde_json::json!("xyz");
+    })]);
+    let mut scratch = vec![0u8; 64 * 1024];
+    let mut extractor = GameExtractor::new(&target, IgnoreQuirks, &mut scratch).unwrap();
+    extractor.write(body.as_bytes()).unwrap();
+    assert!(matches!(
+        extractor.finish(),
+        Err(ExtractError::Transform(TransformError::Color))
+    ));
+
+    // Any other type reads as absent: the primary stands in and the game is
+    // served, never 502'd over a field nothing reads.
+    for junk in [serde_json::json!(12), serde_json::Value::Null] {
         let body = wrap(&[&mutate(&event, |v| {
             v["competitions"][0]["competitors"][0]["team"]["alternateColor"] = junk.clone();
         })]);
-        let mut scratch = vec![0u8; 64 * 1024];
-        let mut extractor = GameExtractor::new(&target, IgnoreQuirks, &mut scratch).unwrap();
-        extractor.write(body.as_bytes()).unwrap();
-        assert!(
-            matches!(
-                extractor.finish(),
-                Err(ExtractError::Transform(TransformError::Color))
+        let extract = found(&body, &target);
+        let game = extract.as_game(None);
+        assert_eq!(
+            (
+                live(&game).home.colors.primary,
+                live(&game).home.colors.alternate
             ),
+            (0x00788a, 0x00788a),
             "{junk}"
         );
+    }
+}
+
+#[test]
+fn a_regular_season_series_is_not_served_on_a_final() {
+    let event = fixture("final");
+    let body = wrap(&[&mutate(&event, |v| {
+        v["competitions"][0]["series"] =
+            serde_json::json!({"type": "season", "summary": "CAR leads series 1-0"});
+    })]);
+    let extract = found(&body, &id_of(&event));
+    assert!(!extract.playoffs);
+    assert_eq!(final_(&extract.as_game(None)).series, None);
+    let (extract, _) = pair("playoff_clincher");
+    assert_eq!(
+        final_(&extract.as_game(None)).series,
+        Some("CAR wins series 4-2")
+    );
+}
+
+#[test]
+fn a_line_score_entry_without_a_number_drops_the_event() {
+    let event = fixture("final");
+    let target = id_of(&event);
+    for bad in [
+        serde_json::json!({"value": "1", "period": 1}),
+        serde_json::json!({"period": 1}),
+        serde_json::json!(7),
+    ] {
+        let body = wrap(&[&mutate(&event, |v| {
+            v["competitions"][0]["competitors"][0]["linescores"][0] = bad.clone();
+        })]);
+        let report = detail(&body, &target);
+        assert_eq!(report.outcome, GameOutcome::Absent, "{bad}");
+        assert_eq!((report.ok, report.failed), (0, 1));
     }
 }
 
@@ -2360,18 +2868,15 @@ fn summary_bounds_degrade_without_panicking() {
             athletes.push(real);
         }
     });
-    let report = summarize(&text, context);
+    let report = summarize(&text, context.clone());
+    // The bound's failure mode: the real goalies fell past the group, yet
+    // the scoreboard's probables still know them, so both units read true.
+    // Nothing panicked, nothing was lost silently.
     assert_eq!(
         report.quirks.0,
         vec![Quirk::BoundedOverflow, Quirk::BoundedOverflow]
     );
-    // The bound's failure mode, and why it quirks: the real goalies fell
-    // past it, so neither unit finds its goalie and §3.4 reads two pulled
-    // but sane sides. Nothing panicked, nothing was lost silently.
-    assert_eq!(
-        report.summary.strength,
-        strength(StrengthKind::EmptyNet(Side::Away), 6, 6)
-    );
+    assert_eq!(report.summary.strength, strength(StrengthKind::Even, 5, 5));
 
     // A third onIce block, boxscore team, player group and header
     // competitor each quirk once and are ignored.
@@ -2388,7 +2893,7 @@ fn summary_bounds_degrade_without_panicking() {
             .unwrap()
             .push(extra);
     });
-    let report = summarize(&text, context);
+    let report = summarize(&text, context.clone());
     assert_eq!(
         report
             .quirks
@@ -2408,7 +2913,7 @@ fn summary_bounds_degrade_without_panicking() {
             entries.push(serde_json::json!({"athleteid": format!("8{n}")}));
         }
     });
-    let report = summarize(&text, context);
+    let report = summarize(&text, context.clone());
     assert_eq!(report.summary.strength, strength(StrengthKind::Even, 0, 0));
     assert_eq!(report.quirks.0, vec![Quirk::OnIceInsane]);
 
@@ -2429,7 +2934,7 @@ fn summary_bounds_degrade_without_panicking() {
             );
         }
     });
-    let report = summarize(&text, context);
+    let report = summarize(&text, context.clone());
     assert_eq!(report.summary.last_scorer, "M. Poitras");
     assert_eq!(report.quirks.0, vec![]);
 }
@@ -2444,17 +2949,20 @@ fn a_malformed_summary_region_degrades_only_what_depended_on_it() {
     let text = mutate(&base, |v| {
         v.as_object_mut().unwrap().remove("header");
     });
-    let report = summarize(&text, context);
+    let report = summarize(&text, context.clone());
     assert_eq!(report.summary.shots, None);
-    // No goalie group maps to a side either, which is §3.4's quiet
-    // fallback — and the fallback play has no side to map to.
+    // The onIce blocks map to no side, which is insane; the fallback play
+    // has no side to map to either.
     assert_eq!(report.summary.strength, None);
     assert!(report.summary.goals.is_empty());
     assert!(
         report.summary.last_play.is_some(),
         "the flash needs no side"
     );
-    assert_eq!(report.quirks.0, vec![Quirk::UnplaceableGoal]);
+    assert_eq!(
+        report.quirks.0,
+        vec![Quirk::OnIceInsane, Quirk::UnplaceableGoal]
+    );
 
     // Scalars where objects belong are ignored, not fatal.
     let text = mutate(&base, |v| {
@@ -2462,12 +2970,12 @@ fn a_malformed_summary_region_degrades_only_what_depended_on_it() {
         v["onIce"] = serde_json::json!("none");
         v["boxscore"]["players"] = serde_json::Value::Null;
     });
-    let report = summarize(&text, context);
+    let report = summarize(&text, context.clone());
     assert_eq!(report.summary.shots, shots(16, 10));
     assert_eq!(
         report.quirks.0,
         vec![],
-        "no goalie groups is the quiet fallback"
+        "no onIce blocks is the quiet fallback"
     );
 
     // Not JSON at all is the stream error, the caller's degrade-to-None.

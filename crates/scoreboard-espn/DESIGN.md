@@ -264,8 +264,11 @@ lane, decided here so nobody relitigates it:
   pregame date that is not a start time, or two home/two away markers.
   `alternateColor` is optional — ESPN sent none for the NHL through
   2026-10-14, then one for every team from 23:44 UTC that day — so absent
-  reads as the primary and a present one is parsed like every other
-  sport's. Everything else degrades; nothing in a summary fails a game.
+  (or not a string) reads as the primary and only a string that is not six
+  hex digits rejects. A `linescores[*]` entry without a numeric `value`
+  drops the event in every state — the NBA lane's rule, since skipping it
+  would shift the periods after it. Everything else degrades; nothing in a
+  summary fails a game.
 - **The summary table** reads `plays[*]` (`id`, `type.{id,penaltyType,
   penaltyMinutes}`, `text`, `period.number`, `clock.displayValue`,
   `team.id`, `scoringPlay`, `participants[*].{type,athlete.id,
@@ -283,17 +286,32 @@ lane, decided here so nobody relitigates it:
   `BoundedOverflow` past it; `ATTEMPT_ATHLETES` = 3 participant ids per
   attempt for the goalie fallback, extras dropped silently; `ON_ICE_IDS` =
   8 athlete ids per `onIce` side (more entries are insane whether or not a
-  goalie is among them); `GOALIES_PER_TEAM` = 4, a fifth is a quirk; a
-  third `onIce` block, player group, boxscore team or header competitor
-  is a quirk and ignored; line scores at the wire's `MAX_LINE_SCORE`; the
-  games list at `LIST_MAX` = 32 (16 games a night, 2×).
+  goalie is among them); `GOALIES_PER_TEAM` = 4, a fifth is a quirk;
+  `LISTED_PER_TEAM` = 32 listed players per team (a dressed roster is 20),
+  past which the relief-goalie inference is suspended for that team with a
+  quirk — an incomplete listing must never make a real skater read as the
+  goalie and hide an empty net; a third `onIce` block, player group,
+  boxscore team or header competitor is a quirk and ignored; line scores
+  at the wire's `MAX_LINE_SCORE`; the games list at `LIST_MAX` = 32 (16
+  games a night, 2×).
+- **Known goalies** (§3.4, 2026-10-15): the boxscore goalies group plus
+  the scoreboard's probable starting goalie, whose `athlete.id` rides the
+  `SummaryContext`; a goalie is present when a known one is on the ice or
+  when an on-ice id is not a listed player of its team (the relief goalie
+  before the boxscore lists him). An intermission's pulled reading is the
+  frozen last unit and yields no strength.
 - **Quirks** (`common::Quirk`): `OnIceInsane`, `FinalDetailMismatch`,
   `UnknownStatusName`, `TiedFinal`, `UnplaceableAttempt`, `UnplaceableGoal`,
   plus the shared `MalformedRecord` (W-L-OTL), `ClippedLineScore` and
-  `BoundedOverflow`. NHL.md §3 names the cases that stay quiet: puck
-  drop's empty goalie groups, `onIce` `[]` at a period start, the shootout
+  `BoundedOverflow`. NHL.md §3 names the cases that stay quiet: `onIce`
+  `[]` at a period start, the shootout and an intermission's pulled reading
   (no strength at all), the 143 placeholder and minutes-less penalty-shot
-  calls (expected shapes, not quirks).
+  calls (expected shapes, not quirks); puck drop's empty goalie groups are
+  covered by the probables and compute a real strength. Two empty nets at
+  once is insane, not an empty net. A shootout
+  attempt the play itself cannot place takes its side from the nearest
+  placed attempt in either direction — strict alternation determines it —
+  and is dropped only when there is none.
 
 ## Lanes and validation
 

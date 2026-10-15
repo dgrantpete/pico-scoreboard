@@ -27,7 +27,10 @@
 //!   exactly two `competitors`, each with `homeAway`, `team.id`,
 //!   `team.abbreviation` and `team.color` (strings);
 //! - live: `status.period` (number) and `status.displayClock` (string);
-//! - live and final: each competitor's `score` (string).
+//! - live and final: each competitor's `score` (string);
+//! - every state: a `linescores[*]` entry, when there is one, carries a
+//!   numeric `value` — skipping a bad entry would shift every later period
+//!   left, so the NBA lane's rule applies and the event is dropped.
 //!
 //! An event whose `competitions` array is empty is clean but unservable
 //! ([`GameOutcome::NoCompetition`]). A found target is **rejected**
@@ -38,11 +41,13 @@
 //! for the NHL through 2026-10-14 (0/484 at design time, 19 of the 20
 //! fixtures), then one for every team from 2026-10-14 23:44 UTC — a field
 //! the feed went a whole season without is not one to drop games over, so an
-//! absent alternate reads as the primary; a present one is parsed like every
-//! other sport's and fails the same way. Everything else degrades: a wrong
-//! type on an optional field reads as absent, an unknown status name follows
-//! its state with a quirk, a malformed record is a quirk and no record, and
-//! nothing in the summary can fail the game.
+//! absent alternate reads as the primary. A string that is not six hex
+//! digits is the Color rejection, like the primary's; any other type reads
+//! as absent, like every optional field (the other lanes drop the event
+//! there — a serde-era rule hockey has no reason to keep). Everything else
+//! degrades: a wrong type on an optional field reads as absent, an unknown
+//! status name follows its state with a quirk, a malformed record is a quirk
+//! and no record, and nothing in the summary can fail the game.
 //!
 //! # The summary tables
 //!
@@ -51,7 +56,8 @@
 //! `participants[*].{type,athlete.id,athlete.shortName}`, `coordinate.{x,y}`,
 //! `strength.id`, `shotInfo.id`. `onIce[*]`: `teamId`, `entries[*].athleteid`.
 //! `boxscore.players[*]`: `team.id`, `statistics[*].name`,
-//! `statistics[*].athletes[*].athlete.id` (the goalie groups).
+//! `statistics[*].athletes[*].athlete.id` (the goalie group, and every id
+//! any group lists — §3.4's listed players).
 //! `boxscore.teams[*]`: `team.id`, `statistics[*].{name,displayValue}`
 //! (`shotsTotal`). `header.competitions[0].competitors[*]`: `team.id`,
 //! `homeAway` — the one team-id → side mapping every other summary reference
@@ -67,9 +73,13 @@
 //! dropped silently; each `onIce` side stores [`ON_ICE_IDS`] athlete ids
 //! (more entries than that are insane whether or not a goalie is among
 //! them); each team's goalie group holds [`GOALIES_PER_TEAM`] ids, a fifth
-//! is a quirk; a third `onIce` block, player group, boxscore team or header
-//! competitor is a quirk and ignored. Line scores use the wire's own
-//! [`MAX_LINE_SCORE`]. The games list holds [`LIST_MAX`].
+//! is a quirk; each team's listed players fill [`LISTED_PER_TEAM`] — past
+//! it the relief-goalie inference is suspended for that team with a quirk,
+//! because an unlisted id proves nothing once the listing is incomplete, and
+//! a real skater must never read as unlisted; a third `onIce` block, player
+//! group, boxscore team or header competitor is a quirk and ignored. Line
+//! scores use the wire's own [`MAX_LINE_SCORE`]. The games list holds
+//! [`LIST_MAX`].
 
 use core::fmt::Write as _;
 
@@ -85,9 +95,9 @@ use scoreboard_wire::{
 };
 
 use crate::common::{
-    compose, crest_path, linescore_byte, num_u8, order_home_away, parse_hex_rgb, parse_start_time,
-    saturate_score, set_text, wire_phase, CrestPath, Crests, EText, Exact, HomeAway, IgnoreQuirks,
-    LivePhase, Quirk, Quirks, WireText,
+    compose, crest_path, linescore_byte, num_u16, num_u8, order_home_away, parse_hex_rgb,
+    parse_start_time, saturate_score, wire_phase, CrestPath, Crests, EText, Exact, HomeAway,
+    IgnoreQuirks, LivePhase, Quirk, Quirks, WireText,
 };
 use crate::path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 
@@ -95,10 +105,10 @@ use Seg::{AnyIndex, Index, Key};
 
 // ---------------------------------------------------------------- bounds
 
-/// ESPN ids (event, team, athlete) are numeric strings of at most 7 digits in
-/// the corpus ("129764", "5188366"); as compare keys they refuse to truncate
-/// (ruling 16) and an overlong one matches nothing.
-const ID_BYTES: usize = 24;
+/// ESPN ids are numeric strings: event ids run 9 digits ("401892505"), team
+/// ids up to 6 ("129764"), athlete ids up to 7 ("5188366"). As compare keys
+/// they refuse to truncate (ruling 16) and an overlong one matches nothing.
+pub const ID_BYTES: usize = 24;
 /// Scores parse to `u32` (10 digits); margin for a sign or leading zeros.
 const SCORE_BYTES: usize = 16;
 /// A valid color is at most 7 bytes (`#RRGGBB`); longer fails the parse.
@@ -127,8 +137,20 @@ pub const ATTEMPT_ATHLETES: usize = 3;
 pub const ON_ICE_IDS: usize = 8;
 /// Goalie ids per team: two dress, three with an emergency backup.
 pub const GOALIES_PER_TEAM: usize = 4;
+/// Listed players per team, every `boxscore.players` group taken together
+/// and deduplicated (the skaters group repeats the forwards and defenses):
+/// a dressed roster is 20, with margin for scratches the boxscore carries.
+/// Past it the set is incomplete, so "not listed" no longer means "not a
+/// skater" and §3.4's relief-goalie inference is suspended for that team
+/// (with a quirk) — a real skater must never read as the goalie, which
+/// would hide a real empty net.
+pub const LISTED_PER_TEAM: usize = 32;
 /// Two teams play. Pools keyed by team hold this many and quirk on a third.
-const TEAMS: usize = 2;
+pub const TEAMS: usize = 2;
+
+/// An ESPN athlete id the scoreboard hands to the summary pass (§3.4's
+/// probable starting goalie), in the ids' own compare-key storage.
+pub type AthleteId = heapless::String<ID_BYTES>;
 
 // ------------------------------------------------------------ ESPN codes
 
@@ -166,6 +188,10 @@ pub struct Extract {
     /// `season.type` 3 — what tells a regular-season shootout from a playoff
     /// second overtime at period 5 (§3.1).
     pub playoffs: bool,
+    /// Each side's probable starting goalie by `athlete.id`, `[away, home]`:
+    /// the summary pass's input to §3.4 (the goalie the boxscore group lacks
+    /// at puck drop and after a change), outside the wire view.
+    pub probable_goalies: [Option<AthleteId>; TEAMS],
     pub kind: Kind,
 }
 
@@ -204,8 +230,9 @@ pub struct PregameTeam {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Live {
-    /// ESPN's raw period — 0 is possible under STATUS_DELAYED at period ≥ 1
-    /// only in theory; DELAYED at 0 is a [`Kind::Pregame`] (§3.1).
+    /// ESPN's raw period: 1–3, 4 the first overtime, 5 a regular-season
+    /// shootout or a playoff second overtime, and on. Never 0 under
+    /// STATUS_DELAYED — that is a [`Kind::Pregame`] (§3.1).
     pub period: u8,
     /// `EndOfPeriod` for STATUS_END_PERIOD, the intermission; else in play.
     pub phase: LivePhase,
@@ -285,7 +312,7 @@ pub struct Summary {
     /// The newest [`MAX_GOALS`] goals outside the shootout, oldest first,
     /// coordinates normalized so away attacks +x (§3.5).
     pub goals: heapless::Vec<Goal, MAX_GOALS>,
-    /// The newest goal's scorer; empty when there is no goal.
+    /// The scorer of the newest goal kept; empty when there is none.
     pub last_scorer: EText,
     /// The newest eligible goal or penalty play (§3.6).
     pub last_play: Option<LastPlay>,
@@ -297,7 +324,7 @@ pub struct Summary {
 /// a byte. Built by [`Extract::summary_context`] from the scoreboard pass,
 /// which the backend runs first anyway — the same shape as football's
 /// `is_college` call parameter (ruling 8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SummaryContext {
     /// `season.type` 3: period 5 is a second overtime, never the shootout.
     playoffs: bool,
@@ -309,6 +336,14 @@ pub struct SummaryContext {
     /// period ≥ 5): `onIce` holds only the goalies and §3.4 derives no
     /// strength at all — not even a quirk.
     live_shootout: bool,
+    /// The intermission: `onIce` freezes the last unit through the break,
+    /// an extra attacker included, so a pulled reading is not believed
+    /// there (§3.4 step 3).
+    end_of_period: bool,
+    /// Each side's probable starting goalie — a known goalie before the
+    /// boxscore group lists anyone and after a change it has not caught up
+    /// with (§3.4 step 1).
+    probable_goalies: [Option<AthleteId>; TEAMS],
 }
 
 impl Extract {
@@ -336,6 +371,8 @@ impl Extract {
             playoffs: self.playoffs,
             state: self.state(),
             live_shootout: self.live_shootout(),
+            end_of_period: matches!(&self.kind, Kind::Live(live) if live.phase == LivePhase::EndOfPeriod),
+            probable_goalies: self.probable_goalies.clone(),
         }
     }
 
@@ -530,28 +567,18 @@ pub fn parse_record_otl(summary: &str) -> Option<Record> {
 /// seconds elapsed (§3.2).
 fn elapsed_seconds(text: &str) -> Option<u16> {
     let (minutes, seconds) = text.split_once(':')?;
-    let minutes: u16 = num_digits(minutes)?;
-    let seconds: u16 = num_digits(seconds)?;
+    let (minutes, seconds) = (num_u16(minutes)?, num_u16(seconds)?);
     if seconds >= 60 {
         return None;
     }
     minutes.checked_mul(60)?.checked_add(seconds)
 }
 
-/// An unsigned integer literal that fits — the shape of every ESPN code,
-/// whether it arrives as a JSON string (`"505"`) or a number.
-fn num_digits<T: core::str::FromStr>(text: &str) -> Option<T> {
-    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    text.parse().ok()
-}
-
-/// A code field: ESPN sends ids as strings, the engine hands numbers as raw
-/// text; both parse the same way.
+/// A code field: ESPN sends ids as strings (`"505"`), the engine hands
+/// numbers as raw text; both are an unsigned literal that fits.
 fn code(value: Value<'_>) -> Option<u16> {
     match value {
-        Value::Str(text) | Value::Num(text) => num_digits(text),
+        Value::Str(text) | Value::Num(text) => num_u16(text),
         _ => None,
     }
 }
@@ -595,9 +622,11 @@ fn is_penalty(type_id: Option<u16>, penalty_type: bool) -> bool {
     penalty_type || matches!(type_id, Some(TYPE_PENALTY_2025 | TYPE_PLACEHOLDER_PENALTY))
 }
 
-/// §3.6's eligibility: `Some(true)` for a goal, `Some(false)` for a penalty
-/// that is neither the placeholder nor a minutes-less penalty-shot call,
-/// `None` for everything else (hits, faceoffs, stoppages, shots).
+/// §3.6's eligibility: `Some(true)` for a goal — one of §3.5's, so a shootout
+/// attempt is not one and callers pass `scoring` already gated — `Some(false)`
+/// for a penalty that is neither the placeholder nor a minutes-less
+/// penalty-shot call, `None` for everything else (hits, faceoffs, stoppages,
+/// shots).
 fn flash_kind(
     type_id: Option<u16>,
     scoring: bool,
@@ -784,6 +813,7 @@ const P_STAT_VALUE: usize = 40;
 const P_PROBABLE: usize = 41;
 const P_PROBABLE_NAME: usize = 42;
 const P_PROBABLE_ATHLETE: usize = 43;
+const P_PROBABLE_ATHLETE_ID: usize = 44;
 
 #[rustfmt::skip]
 static SCOREBOARD_TABLE: &[Pattern] = &[
@@ -831,6 +861,7 @@ static SCOREBOARD_TABLE: &[Pattern] = &[
     /* P_PROBABLE                 */ &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("probables"), AnyIndex],
     /* P_PROBABLE_NAME            */ &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("probables"), AnyIndex, Key("name")],
     /* P_PROBABLE_ATHLETE         */ &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("probables"), AnyIndex, Key("athlete"), Key("shortName")],
+    /* P_PROBABLE_ATHLETE_ID      */ &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("probables"), AnyIndex, Key("athlete"), Key("id")],
 ];
 
 // Summary body. Everything else in its 85–630 KB (rosters, standings, odds,
@@ -922,17 +953,21 @@ struct CompetitorScratch {
     abbreviation: WireText,
     color: Exact<COLOR_BYTES>,
     alternate: Exact<COLOR_BYTES>,
-    alternate_bad: bool,
     /// The first `records[]` entry of type `total`/`ytd`: `None` = none yet,
     /// `Some(None)` = present but not W-L-OTL, `Some(Some(_))` = parsed.
     record: Option<Option<Record>>,
     line: heapless::Vec<u8, MAX_LINE_SCORE>,
     line_clipped: bool,
+    /// A `linescores[]` entry without a numeric `value` (or a scalar entry):
+    /// the periods after it would shift, so the event is dropped.
+    line_bad: bool,
     /// Game `statistics[]` — season values before the game, `[]` at puck
     /// drop; the identity needs both.
     saves: Option<u32>,
     goals: Option<u32>,
+    /// The probable starting goalie's `shortName` and `athlete.id`.
     goalie: WireText,
+    goalie_id: Exact<ID_BYTES>,
 }
 
 /// Which `statistics[]` entry is in progress.
@@ -955,6 +990,7 @@ struct EntryScratch {
     stat_value: Option<u32>,
     probable_goalie: bool,
     probable_name: WireText,
+    probable_id: Exact<ID_BYTES>,
 }
 
 /// `situation.lastPlay`, with the fields §3.6's filter can read there.
@@ -1035,6 +1071,7 @@ fn du_ok(s: &EventScratch) -> bool {
             || !competitor.team_id.seen()
             || !competitor.abbreviation.seen()
             || !competitor.color.seen()
+            || competitor.line_bad
         {
             return false;
         }
@@ -1073,9 +1110,8 @@ fn team_colors(competitor: &CompetitorScratch) -> Result<TeamColors, TransformEr
         .valid()
         .and_then(parse_hex_rgb)
         .ok_or(TransformError::Color)?;
-    let alternate = if competitor.alternate_bad {
-        return Err(TransformError::Color);
-    } else if competitor.alternate.seen() {
+    // Only a string is ever stored here; any other type read as absent.
+    let alternate = if competitor.alternate.seen() {
         competitor
             .alternate
             .valid()
@@ -1148,15 +1184,16 @@ fn info_secondary(playoffs: bool, headline: &WireText, series: &WireText) -> ETe
 }
 
 /// §3.6 over the scoreboard's `situation.lastPlay`, as far as its fields
-/// allow: a goal is type 505 (there is no `scoringPlay` here), a penalty is
+/// allow: a goal is type 505 (there is no `scoringPlay` here) outside the
+/// shootout, which `status.period` and the season kind place; a penalty is
 /// judged by the same `penaltyType`/`penaltyMinutes`/143 rule as the summary.
-fn scoreboard_flash(play: &LastPlayScratch) -> Option<LastPlay> {
+fn scoreboard_flash(play: &LastPlayScratch, in_shootout: bool) -> Option<LastPlay> {
     if !play.present {
         return None;
     }
     let goal = flash_kind(
         play.type_id,
-        play.type_id == Some(TYPE_GOAL),
+        play.type_id == Some(TYPE_GOAL) && !in_shootout,
         play.penalty_type,
         play.penalty_minutes,
     )?;
@@ -1221,7 +1258,7 @@ fn transform<Q: Quirks>(s: &EventScratch, quirks: &mut Q) -> Result<Extract, Tra
             away: live_team(away)?,
             home: live_team(home)?,
             shots: identity_shots(away, home, false),
-            last_play: scoreboard_flash(&s.last_play),
+            last_play: scoreboard_flash(&s.last_play, !playoffs && period >= FIRST_SHOOTOUT_PERIOD),
         }),
         GameState::Final => {
             let away_team = final_team(away)?;
@@ -1246,7 +1283,13 @@ fn transform<Q: Quirks>(s: &EventScratch, quirks: &mut Q) -> Result<Extract, Tra
                 periods_played: period,
                 shots: identity_shots(away, home, true),
                 stars: stars(s, home_id, away_id),
-                series: s.series.get().map(owned),
+                // Playoffs only, like the pregame's: a regular-season event
+                // can carry a season series nobody asked for.
+                series: if playoffs {
+                    s.series.get().map(owned)
+                } else {
+                    None
+                },
                 away: away_team,
                 home: home_team,
             })
@@ -1256,8 +1299,17 @@ fn transform<Q: Quirks>(s: &EventScratch, quirks: &mut Q) -> Result<Extract, Tra
         game_id: owned(s.id.as_str()),
         crests,
         playoffs,
+        probable_goalies: [athlete_id(&away.goalie_id), athlete_id(&home.goalie_id)],
         kind,
     })
+}
+
+/// A valid compare key as an owned id; an unseen or overlong one is none.
+fn athlete_id(id: &Exact<ID_BYTES>) -> Option<AthleteId> {
+    let mut out = AthleteId::new();
+    // `valid` guarantees it fit the same capacity, so the push cannot fail.
+    out.push_str(id.valid()?).ok()?;
+    Some(out)
 }
 
 // --------------------------------------------------------------- the sink
@@ -1343,14 +1395,21 @@ impl<Q: Quirks> ScoreboardSink<Q> {
     }
 
     fn fold_linescore(&mut self, indices: &[u16]) {
-        let Some(value) = self.scratch.entry.line_value else {
-            return;
-        };
+        let value = self.scratch.entry.line_value;
         let mut clipped = false;
         if let Some(competitor) = self.competitor(indices) {
-            if competitor.line.push(linescore_byte(value)).is_err() && !competitor.line_clipped {
-                competitor.line_clipped = true;
-                clipped = true;
+            match value {
+                Some(value) => {
+                    if competitor.line.push(linescore_byte(value)).is_err()
+                        && !competitor.line_clipped
+                    {
+                        competitor.line_clipped = true;
+                        clipped = true;
+                    }
+                }
+                // NBA's rule: an entry that holds no number fails the event
+                // rather than shifting the periods after it.
+                None => competitor.line_bad = true,
             }
         }
         if clipped {
@@ -1369,15 +1428,21 @@ impl<Q: Quirks> ScoreboardSink<Q> {
         }
     }
 
+    /// The first `probableStartingGoalie` entry's name (the pregame line) and
+    /// id (§3.4's known goalie), each kept from the first entry that has it.
     fn fold_probable(&mut self, indices: &[u16]) {
         if !self.scratch.entry.probable_goalie {
             return;
         }
-        let name = core::mem::take(&mut self.scratch.entry.probable_name);
-        if let (Some(name), Some(competitor)) = (name.get(), self.competitor(indices)) {
-            if !competitor.goalie.seen() {
-                competitor.goalie.set(name);
-            }
+        let entry = core::mem::take(&mut self.scratch.entry);
+        let Some(competitor) = self.competitor(indices) else {
+            return;
+        };
+        if let (Some(name), false) = (entry.probable_name.get(), competitor.goalie.seen()) {
+            competitor.goalie.set(name);
+        }
+        if let (Some(id), false) = (entry.probable_id.valid(), competitor.goalie_id.seen()) {
+            competitor.goalie_id.set(id);
         }
     }
 
@@ -1597,10 +1662,9 @@ impl<Q: Quirks> Sink for ScoreboardSink<Q> {
                     (P_TEAM_COLOR, Value::Str(text)) => competitor.color.set(text),
                     (P_TEAM_ID | P_TEAM_ABBR | P_TEAM_COLOR, _) => invalid = true,
                     (P_TEAM_ALT, Value::Str(text)) => competitor.alternate.set(text),
-                    // Present but not a string: the shared Color rejection.
-                    (P_TEAM_ALT, _) => competitor.alternate_bad = true,
                     (P_TEAM_LOGO, Value::Str(href)) => competitor.crest = crest_path(href),
-                    // A malformed crest costs the event nothing, as in every
+                    // An alternate that is not a string reads as absent; a
+                    // malformed crest costs the event nothing, as in every
                     // lane.
                     _ => {}
                 }
@@ -1643,9 +1707,21 @@ impl<Q: Quirks> Sink for ScoreboardSink<Q> {
                     s.entry.probable_name.set(text);
                 }
             }
-            // Scalars where the per-competitor arrays' elements belong: an
-            // entry that holds nothing.
-            P_RECORD | P_LINESCORE | P_STAT | P_PROBABLE => {}
+            P_PROBABLE_ATHLETE_ID => {
+                if let Value::Str(text) = value {
+                    s.entry.probable_id.set(text);
+                }
+            }
+            // A scalar line-score entry holds no number: the event fails
+            // (see `fold_linescore`).
+            P_LINESCORE => {
+                if let Some(competitor) = self.competitor(indices) {
+                    competitor.line_bad = true;
+                }
+            }
+            // Scalars where the other per-competitor arrays' elements belong:
+            // an entry that holds nothing.
+            P_RECORD | P_STAT | P_PROBABLE => {}
             _ => {}
         }
         Directive::Continue
@@ -1930,6 +2006,9 @@ struct GoalRec {
     elapsed: u16,
     tag: GoalTag,
     coordinate: Option<(i8, i8)>,
+    /// Kept per goal because the newest *kept* goal's scorer is the one the
+    /// strip shows, and which goal that is waits for the team mapping.
+    scorer: EText,
 }
 
 /// A shootout attempt awaiting its side (§3.8).
@@ -1961,12 +2040,26 @@ struct GroupScratch {
     overflowed: bool,
 }
 
-/// One `boxscore.players[*]` block: a team and its goalie ids.
+/// One `boxscore.players[*]` block: a team, its goalie ids, and every id it
+/// lists (§3.4 step 1's listed players).
 #[derive(Debug, Clone, Default)]
-struct TeamGoalies {
+struct TeamRoster {
     team_id: Exact<ID_BYTES>,
-    ids: heapless::Vec<Exact<ID_BYTES>, GOALIES_PER_TEAM>,
+    goalies: heapless::Vec<Exact<ID_BYTES>, GOALIES_PER_TEAM>,
+    players: heapless::Vec<Exact<ID_BYTES>, LISTED_PER_TEAM>,
+    /// The listing is incomplete: "not listed" proves nothing any more.
+    players_overflowed: bool,
     group: GroupScratch,
+}
+
+impl TeamRoster {
+    fn lists(&self, id: &Exact<ID_BYTES>) -> bool {
+        self.players.iter().any(|player| same_id(player, id))
+    }
+
+    fn has_goalie(&self, id: &Exact<ID_BYTES>) -> bool {
+        self.goalies.iter().any(|goalie| same_id(goalie, id))
+    }
 }
 
 /// The `boxscore.teams[*].statistics[*]` entry in progress.
@@ -2032,7 +2125,6 @@ struct SummarySink<Q: Quirks> {
     quirks: Q,
     play: PlayScratch,
     goals: heapless::Vec<GoalRec, MAX_GOALS>,
-    last_scorer: EText,
     flash: Option<LastPlay>,
     /// The latest team-bearing non-penalty play's team and strength code —
     /// §3.4's fallback.
@@ -2042,7 +2134,7 @@ struct SummarySink<Q: Quirks> {
     shootout_seen: bool,
     shootout_ended: bool,
     on_ice: Pool<OnIceBlock>,
-    players: Pool<TeamGoalies>,
+    players: Pool<TeamRoster>,
     box_teams: Pool<BoxTeam>,
     header: Pool<HeaderTeam>,
 }
@@ -2054,7 +2146,6 @@ impl<Q: Quirks> SummarySink<Q> {
             quirks,
             play: PlayScratch::default(),
             goals: heapless::Vec::new(),
-            last_scorer: EText::new(),
             flash: None,
             fallback: None,
             attempts: heapless::Vec::new(),
@@ -2111,7 +2202,9 @@ impl<Q: Quirks> SummarySink<Q> {
             self.fallback = Some((play.team_id.clone(), play.strength));
         }
 
-        if play.scoring && !in_shootout {
+        // §3.5's goals exclude the shootout; §3.6's are the same goals.
+        let goal = play.scoring && !in_shootout;
+        if goal {
             if self.goals.is_full() {
                 self.goals.remove(0);
             }
@@ -2123,9 +2216,8 @@ impl<Q: Quirks> SummarySink<Q> {
                 elapsed: play.elapsed.unwrap_or(0),
                 tag: goal_tag(play.strength, play.shot_info),
                 coordinate: play.x.zip(play.y),
+                scorer: owned(play.scorer.get().or(play.first_name.get()).unwrap_or("")),
             });
-            let scorer = play.scorer.get().or(play.first_name.get()).unwrap_or("");
-            set_text(&mut self.last_scorer, scorer);
         }
 
         if in_shootout {
@@ -2149,12 +2241,8 @@ impl<Q: Quirks> SummarySink<Q> {
             }
         }
 
-        if let Some(goal) = flash_kind(
-            play.type_id,
-            play.scoring,
-            play.penalty_type,
-            play.penalty_minutes,
-        ) {
+        if let Some(goal) = flash_kind(play.type_id, goal, play.penalty_type, play.penalty_minutes)
+        {
             if let (Some(id), Some(text)) = (play.id.get(), play.text.get()) {
                 self.flash = Some(LastPlay {
                     id: owned(id),
@@ -2174,7 +2262,7 @@ impl<Q: Quirks> SummarySink<Q> {
         }
         group.active = false;
         if group.is_goalies {
-            team.ids = core::mem::take(&mut group.ids);
+            team.goalies = core::mem::take(&mut group.ids);
             if group.overflowed {
                 self.quirks.quirk(Quirk::BoundedOverflow);
             }
@@ -2194,176 +2282,31 @@ impl<Q: Quirks> SummarySink<Q> {
         }
     }
 
-    /// The team-id → side mapping, from the header competitors.
-    fn header_ids(&self) -> (Option<Exact<ID_BYTES>>, Option<Exact<ID_BYTES>>) {
-        let mut home = None;
-        let mut away = None;
-        for team in &self.header.items {
-            match team.home_away {
-                Some(HomeAway::Home) if home.is_none() => home = Some(team.team_id.clone()),
-                Some(HomeAway::Away) if away.is_none() => away = Some(team.team_id.clone()),
-                _ => {}
-            }
-        }
-        (home, away)
-    }
-
-    /// §3.4 steps 1–4: `onIce` against the goalie groups, else the latest
-    /// play's strength. Quiet in the expected cases — an empty goalie group
-    /// (puck drop) or no `onIce` blocks (a period start) — and a quirk
-    /// otherwise.
-    fn resolve_strength(
-        &mut self,
-        home: Option<&str>,
-        away: Option<&str>,
-        goalies: &[&[Exact<ID_BYTES>]; TEAMS],
-    ) -> Option<Strength> {
-        let goalies_known = goalies.iter().all(|ids| !ids.is_empty());
-        if goalies_known && !self.on_ice.items.is_empty() {
-            let mut units: [Option<(u8, bool)>; TEAMS] = [None, None];
-            let mut insane = false;
-            for block in &self.on_ice.items {
-                match side_of(&block.team_id, home, away) {
-                    Some(side) => {
-                        let k = slot(side);
-                        if units[k].is_some() {
-                            insane = true;
-                        }
-                        let goalie = block
-                            .athletes
-                            .iter()
-                            .any(|athlete| goalies[k].iter().any(|g| same_id(athlete, g)));
-                        let skaters = block.entries.saturating_sub(u8::from(goalie));
-                        units[k] = Some((skaters, !goalie));
-                    }
-                    None => insane = true,
-                }
-            }
-            if let (false, [Some((away_skaters, away_pulled)), Some((home_skaters, home_pulled))]) =
-                (insane, units)
-            {
-                let sane = (3..=6).contains(&away_skaters) && (3..=6).contains(&home_skaters);
-                if sane {
-                    let kind = if away_pulled {
-                        StrengthKind::EmptyNet(Side::Away)
-                    } else if home_pulled {
-                        StrengthKind::EmptyNet(Side::Home)
-                    } else if away_skaters > home_skaters {
-                        StrengthKind::PowerPlay(Side::Away)
-                    } else if home_skaters > away_skaters {
-                        StrengthKind::PowerPlay(Side::Home)
-                    } else if away_skaters < 5 {
-                        StrengthKind::Matched
-                    } else {
-                        StrengthKind::Even
-                    };
-                    return Some(Strength {
-                        kind,
-                        away_skaters,
-                        home_skaters,
-                    });
-                }
-            }
-            self.quirks.quirk(Quirk::OnIceInsane);
-        }
-        let (team, strength) = self.fallback.as_ref()?;
-        let side = side_of(team, home, away)?;
-        let kind = match *strength {
-            Some(STRENGTH_POWER_PLAY) => StrengthKind::PowerPlay(side),
-            Some(STRENGTH_SHORT_HANDED) => StrengthKind::PowerPlay(other(side)),
-            _ => StrengthKind::Even,
-        };
-        Some(Strength {
-            kind,
-            away_skaters: 0,
-            home_skaters: 0,
-        })
-    }
-
-    /// §3.8: sides by the play's team, then a participant in a goalie group
-    /// (that team defended), then alternation; the first 16 per side; the
-    /// next shooter opposite the last attempt, none after `Shootout End`.
-    fn resolve_shootout(
-        &mut self,
-        home: Option<&str>,
-        away: Option<&str>,
-        goalies: &[&[Exact<ID_BYTES>]; TEAMS],
-    ) -> Shootout {
-        let mut sides: heapless::Vec<Option<Side>, ATTEMPT_MAX> = self
-            .attempts
-            .iter()
-            .map(|attempt| {
-                side_of(&attempt.team_id, home, away).or_else(|| {
-                    attempt.athletes.iter().find_map(|athlete| {
-                        [Side::Away, Side::Home].into_iter().find_map(|defended| {
-                            goalies[slot(defended)]
-                                .iter()
-                                .any(|g| same_id(athlete, g))
-                                .then(|| other(defended))
-                        })
-                    })
-                })
-            })
-            .collect();
-        // Shooters strictly alternate: an unplaced attempt takes the side
-        // opposite the previous one's — the next one's, for the first.
-        for i in 0..sides.len() {
-            if sides[i].is_none() {
-                let neighbour = if i > 0 {
-                    sides[i - 1]
-                } else {
-                    sides.get(1).copied().flatten()
-                };
-                sides[i] = neighbour.map(other);
-            }
-        }
-
-        let mut taken = [0u8; TEAMS];
-        let mut scored = [0u16; TEAMS];
-        let mut last = None;
-        let mut dropped = false;
-        for (attempt, side) in self.attempts.iter().zip(sides.iter()) {
-            let Some(side) = *side else {
-                dropped = true;
-                continue;
-            };
-            let k = slot(side);
-            if usize::from(taken[k]) < MAX_SHOOTOUT_ATTEMPTS {
-                if attempt.scored {
-                    scored[k] |= 1 << taken[k];
-                }
-                taken[k] += 1;
-            }
-            last = Some(side);
-        }
-        if dropped {
-            self.quirks.quirk(Quirk::UnplaceableAttempt);
-        }
-        Shootout {
-            away: ShootoutAttempts {
-                taken: taken[0],
-                scored: scored[0],
-            },
-            home: ShootoutAttempts {
-                taken: taken[1],
-                scored: scored[1],
-            },
-            next_shooter: if self.shootout_ended {
-                None
-            } else {
-                last.map(other)
-            },
-        }
-    }
-
     /// Everything that waited for the team mapping (ruling 4), resolved.
-    fn resolve(mut self) -> SummaryReport<Q> {
-        let (home_id, away_id) = self.header_ids();
+    /// The sink is taken apart so the pools lend their ids while the quirk
+    /// receiver is written to.
+    fn resolve(self) -> SummaryReport<Q> {
+        let Self {
+            context,
+            mut quirks,
+            goals: goal_recs,
+            flash,
+            fallback,
+            attempts,
+            shootout_seen,
+            shootout_ended,
+            on_ice,
+            players,
+            box_teams,
+            header,
+            ..
+        } = self;
+        let (home_id, away_id) = header_ids(&header.items);
         let home = home_id.as_ref().and_then(Exact::valid);
         let away = away_id.as_ref().and_then(Exact::valid);
 
         let mut shots = [None; TEAMS];
-        for team in &self.box_teams.items {
+        for team in &box_teams.items {
             if let Some(side) = side_of(&team.team_id, home, away) {
                 shots[slot(side)] = team.shots;
             }
@@ -2373,17 +2316,20 @@ impl<Q: Quirks> SummarySink<Q> {
             _ => None,
         };
 
-        let mut goalies: [&[Exact<ID_BYTES>]; TEAMS] = [&[], &[]];
-        for team in &self.players.items {
+        let mut rosters: [Option<&TeamRoster>; TEAMS] = [None, None];
+        for team in &players.items {
             if let Some(side) = side_of(&team.team_id, home, away) {
-                goalies[slot(side)] = &team.ids;
+                rosters[slot(side)] = Some(team);
             }
         }
 
+        // The strip shows the scorer of the newest goal kept: a dropped
+        // newest goal hands the line to the one before it, never leaves it
+        // empty beside a goal that is still there.
         let mut goals = heapless::Vec::new();
+        let mut last_scorer = EText::new();
         let mut unplaceable = false;
-        let newest = self.goals.len().checked_sub(1);
-        for (index, rec) in self.goals.iter().enumerate() {
+        for rec in &goal_recs {
             match side_of(&rec.team_id, home, away) {
                 Some(side) => {
                     let _ = goals.push(Goal {
@@ -2393,34 +2339,30 @@ impl<Q: Quirks> SummarySink<Q> {
                         elapsed: rec.elapsed,
                         coordinate: rec.coordinate.map(|(x, y)| normalize(side, x, y)),
                     });
+                    last_scorer = rec.scorer.clone();
                 }
-                None => {
-                    unplaceable = true;
-                    if Some(index) == newest {
-                        self.last_scorer.clear();
-                    }
-                }
+                None => unplaceable = true,
             }
         }
 
-        // The pools borrow `self` immutably above and the quirk receiver
-        // needs it mutably below, so the derived values are taken first.
-        let derive_strength = self.context.state == GameState::Live && !self.context.live_shootout;
-        let goalies_owned: [heapless::Vec<Exact<ID_BYTES>, GOALIES_PER_TEAM>; TEAMS] = [
-            goalies[0].iter().cloned().collect(),
-            goalies[1].iter().cloned().collect(),
-        ];
-        let goalies: [&[Exact<ID_BYTES>]; TEAMS] = [&goalies_owned[0], &goalies_owned[1]];
-        let strength = if derive_strength {
-            self.resolve_strength(home, away, &goalies)
+        let strength = if context.state == GameState::Live && !context.live_shootout {
+            resolve_strength(
+                &on_ice.items,
+                fallback.as_ref(),
+                home,
+                away,
+                &rosters,
+                &context,
+                &mut quirks,
+            )
         } else {
             None
         };
-        let shootout = self
-            .shootout_seen
-            .then(|| self.resolve_shootout(home, away, &goalies));
+        let shootout = shootout_seen.then(|| {
+            resolve_shootout(&attempts, shootout_ended, home, away, &rosters, &mut quirks)
+        });
         if unplaceable {
-            self.quirks.quirk(Quirk::UnplaceableGoal);
+            quirks.quirk(Quirk::UnplaceableGoal);
         }
 
         SummaryReport {
@@ -2428,12 +2370,211 @@ impl<Q: Quirks> SummarySink<Q> {
                 shots,
                 strength,
                 goals,
-                last_scorer: self.last_scorer,
-                last_play: self.flash,
+                last_scorer,
+                last_play: flash,
                 shootout,
             },
-            quirks: self.quirks,
+            quirks,
         }
+    }
+}
+
+/// The team-id → side mapping, from the header competitors.
+fn header_ids(header: &[HeaderTeam]) -> (Option<Exact<ID_BYTES>>, Option<Exact<ID_BYTES>>) {
+    let mut home = None;
+    let mut away = None;
+    for team in header {
+        match team.home_away {
+            Some(HomeAway::Home) if home.is_none() => home = Some(team.team_id.clone()),
+            Some(HomeAway::Away) if away.is_none() => away = Some(team.team_id.clone()),
+            _ => {}
+        }
+    }
+    (home, away)
+}
+
+/// §3.4 steps 1–5: `onIce` against the known goalies and the listed
+/// players, else the latest play's strength. Quiet in the one expected case
+/// — no `onIce` blocks, a period start — and a quirk for anything else
+/// that fails.
+fn resolve_strength<Q: Quirks>(
+    on_ice: &[OnIceBlock],
+    fallback: Option<&(Exact<ID_BYTES>, Option<u16>)>,
+    home: Option<&str>,
+    away: Option<&str>,
+    rosters: &[Option<&TeamRoster>; TEAMS],
+    context: &SummaryContext,
+    quirks: &mut Q,
+) -> Option<Strength> {
+    if !on_ice.is_empty() {
+        if let Some(strength) =
+            on_ice_strength(on_ice, home, away, rosters, &context.probable_goalies)
+        {
+            // Step 3: the intermission freezes the last unit, extra attacker
+            // included, so a pulled net there is nothing to show; a power
+            // play carrying over still is.
+            if context.end_of_period && matches!(strength.kind, StrengthKind::EmptyNet(_)) {
+                return None;
+            }
+            return Some(strength);
+        }
+        quirks.quirk(Quirk::OnIceInsane);
+    }
+    let (team, strength) = fallback?;
+    let side = side_of(team, home, away)?;
+    let kind = match *strength {
+        Some(STRENGTH_POWER_PLAY) => StrengthKind::PowerPlay(side),
+        Some(STRENGTH_SHORT_HANDED) => StrengthKind::PowerPlay(other(side)),
+        _ => StrengthKind::Even,
+    };
+    Some(Strength {
+        kind,
+        away_skaters: 0,
+        home_skaters: 0,
+    })
+}
+
+/// §3.4 steps 1–2 and 4 over the two units; `None` is "not sane": a block
+/// that maps to no side or to a side already seen, a side without a block,
+/// a team with no known goalie, skaters outside 3–6, or both nets empty at
+/// once — which is not hockey, only a feed that lost both goalies.
+fn on_ice_strength(
+    on_ice: &[OnIceBlock],
+    home: Option<&str>,
+    away: Option<&str>,
+    rosters: &[Option<&TeamRoster>; TEAMS],
+    probables: &[Option<AthleteId>; TEAMS],
+) -> Option<Strength> {
+    let mut units: [Option<(u8, bool)>; TEAMS] = [None, None];
+    for block in on_ice {
+        let k = slot(side_of(&block.team_id, home, away)?);
+        if units[k].is_some() {
+            return None;
+        }
+        let (roster, probable) = (rosters[k], probables[k].as_deref());
+        // A known goalie: the boxscore's group, or the scoreboard's probable
+        // — the group lists only goalies who have played, so it is empty at
+        // puck drop and behind every goalie change.
+        let known = |id: &Exact<ID_BYTES>| {
+            roster.is_some_and(|roster| roster.has_goalie(id)) || id.valid() == probable
+        };
+        // The relief goalie: on the ice before the boxscore lists him, so
+        // not a listed player — provable only while the listing is complete.
+        let unlisted = |id: &Exact<ID_BYTES>| {
+            roster.is_none_or(|roster| !roster.players_overflowed && !roster.lists(id))
+        };
+        let present = block.athletes.iter().any(|id| known(id) || unlisted(id));
+        let skaters = block.entries.saturating_sub(u8::from(present));
+        units[k] = Some((skaters, !present));
+    }
+    let [Some((away_skaters, away_pulled)), Some((home_skaters, home_pulled))] = units else {
+        return None;
+    };
+    let known_goalie = |k: usize| {
+        rosters[k].is_some_and(|roster| !roster.goalies.is_empty()) || probables[k].is_some()
+    };
+    let in_range = |skaters: u8| (3..=6).contains(&skaters);
+    if !known_goalie(0)
+        || !known_goalie(1)
+        || !in_range(away_skaters)
+        || !in_range(home_skaters)
+        || (away_pulled && home_pulled)
+    {
+        return None;
+    }
+    let kind = if away_pulled {
+        StrengthKind::EmptyNet(Side::Away)
+    } else if home_pulled {
+        StrengthKind::EmptyNet(Side::Home)
+    } else if away_skaters > home_skaters {
+        StrengthKind::PowerPlay(Side::Away)
+    } else if home_skaters > away_skaters {
+        StrengthKind::PowerPlay(Side::Home)
+    } else if away_skaters < 5 {
+        StrengthKind::Matched
+    } else {
+        StrengthKind::Even
+    };
+    Some(Strength {
+        kind,
+        away_skaters,
+        home_skaters,
+    })
+}
+
+/// §3.8: sides by the play's team, then a participant in a goalie group
+/// (that team defended), then alternation; the first 16 per side; the next
+/// shooter opposite the last attempt, none after `Shootout End`.
+fn resolve_shootout<Q: Quirks>(
+    attempts: &[AttemptRec],
+    ended: bool,
+    home: Option<&str>,
+    away: Option<&str>,
+    rosters: &[Option<&TeamRoster>; TEAMS],
+    quirks: &mut Q,
+) -> Shootout {
+    // What the play itself says: its team, else the team of a goalie among
+    // its participants (the boxscore group's, as §3.8 reads), who defended.
+    let anchors: heapless::Vec<Option<Side>, ATTEMPT_MAX> = attempts
+        .iter()
+        .map(|attempt| {
+            side_of(&attempt.team_id, home, away).or_else(|| {
+                attempt.athletes.iter().find_map(|athlete| {
+                    [Side::Away, Side::Home].into_iter().find_map(|defended| {
+                        rosters[slot(defended)]
+                            .is_some_and(|roster| roster.has_goalie(athlete))
+                            .then(|| other(defended))
+                    })
+                })
+            })
+        })
+        .collect();
+    // Shooters strictly alternate, so an attempt the play itself cannot
+    // place takes its side from the nearest one that was, behind it or ahead
+    // of it: the same side an even distance away, the other side an odd one.
+    let placed = |i: usize| {
+        anchors[i].or_else(|| {
+            (1..anchors.len()).find_map(|distance| {
+                let behind = i.checked_sub(distance).and_then(|j| anchors[j]);
+                let ahead = anchors.get(i + distance).copied().flatten();
+                behind
+                    .or(ahead)
+                    .map(|side| if distance % 2 == 0 { side } else { other(side) })
+            })
+        })
+    };
+
+    let mut taken = [0u8; TEAMS];
+    let mut scored = [0u16; TEAMS];
+    let mut last = None;
+    let mut dropped = false;
+    for (i, attempt) in attempts.iter().enumerate() {
+        let Some(side) = placed(i) else {
+            dropped = true;
+            continue;
+        };
+        let k = slot(side);
+        if usize::from(taken[k]) < MAX_SHOOTOUT_ATTEMPTS {
+            if attempt.scored {
+                scored[k] |= 1 << taken[k];
+            }
+            taken[k] += 1;
+        }
+        last = Some(side);
+    }
+    if dropped {
+        quirks.quirk(Quirk::UnplaceableAttempt);
+    }
+    Shootout {
+        away: ShootoutAttempts {
+            taken: taken[0],
+            scored: scored[0],
+        },
+        home: ShootoutAttempts {
+            taken: taken[1],
+            scored: scored[1],
+        },
+        next_shooter: if ended { None } else { last.map(other) },
     }
 }
 
@@ -2527,6 +2668,12 @@ impl<Q: Quirks> Sink for SummarySink<Q> {
                 if let (Value::Str(text), Some(team)) = (value, self.players.current()) {
                     let mut id = Exact::default();
                     id.set(text);
+                    // Every group lists the player; the goalies group's name
+                    // may follow its athletes, so the group keeps its own
+                    // copy until its close says which it was.
+                    if !team.lists(&id) && team.players.push(id.clone()).is_err() {
+                        team.players_overflowed = true;
+                    }
                     if team.group.ids.push(id).is_err() {
                         team.group.overflowed = true;
                     }
@@ -2622,7 +2769,16 @@ impl<Q: Quirks> Sink for SummarySink<Q> {
                 self.fold_group();
                 false
             }
-            S_PLAYERS => self.players.close(),
+            S_PLAYERS => {
+                let listing_overflowed = self
+                    .players
+                    .current()
+                    .is_some_and(|team| team.players_overflowed);
+                if listing_overflowed {
+                    self.quirks.quirk(Quirk::BoundedOverflow);
+                }
+                self.players.close()
+            }
             S_BOX_STAT => {
                 self.fold_box_stat();
                 false
