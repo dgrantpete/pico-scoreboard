@@ -70,8 +70,13 @@ transform/wire/firmware path runs for real. Driven by a hot-reloaded
 `mock.yml` (copy `mock.example.yml`), two modes per league:
 
 - **scenario** — compose a slate from `backend/testdata/` fixture events;
-  dates are shifted to "today" (pre-state fixtures take `start_in`); a
-  `commentary` line serves as that event's summary.
+  dates are shifted to "today" (pre-state fixtures take `start_in`). An
+  event's summary is its fixture's paired `<name>.summary.json` served
+  verbatim (the NHL corpus — the backend reads strength, goals and the
+  shootout from it), else a `commentary` line (soccer); an event with both,
+  or a pair whose summary header disagrees with its event on id or status,
+  is a config error. Summaries keep their capture-day dates — the backend
+  reads none.
 - **replay** — time-warped re-serve of a captured stream from the Postgres
   store (`source: store`) or an exported `.espnbundle` (`source: bundle`),
   with `speed`, `loop`, and `start_offset`; served dates are rewritten

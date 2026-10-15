@@ -11,7 +11,9 @@ All served-date rewriting funnels through `shift_event_dates` — ESPN dates
 appear at BOTH `event.date` and `competitions[0].date` in minute-precision
 `%Y-%m-%dT%H:%MZ` form, and the backend parses the event-level one for
 pregame start times. A serve must never crash on an unparseable date; the
-field is left untouched instead.
+field is left untouched instead. Summary bodies are never rewritten: the
+backend reads no date from a summary (soccer reads the commentary text;
+hockey reads plays, `onIce`, the boxscore and the header's team sides).
 """
 
 import json
@@ -32,6 +34,8 @@ _ENTRY_KEYS_COMMON = {"name", "mode", "sport", "league"}
 _SCENARIO_KEYS = _ENTRY_KEYS_COMMON | {"events"}
 _SCENARIO_EVENT_KEYS = {"fixture", "start_in", "commentary"}
 _REPLAY_KEYS = _ENTRY_KEYS_COMMON | {"source", "date", "bundle", "speed", "loop", "start_offset"}
+
+SUMMARY_SUFFIX = ".summary.json"      # a fixture's paired summary body, if it has one
 
 DEFAULT_PREGAME_LEAD_S = 60 * 60      # start_in default for pre-state fixtures
 PAST_SHIFT_S = 90 * 60                # in/post fixtures read as "started 90m ago"
@@ -95,7 +99,7 @@ def shift_event_dates(event: dict, warp) -> None:
 class ScenarioEvent:
     fixture: str                # path relative to the testdata root
     start_in: float | None      # seconds; pre-state fixtures only
-    commentary: str | None      # served at /summary for this event's id
+    commentary: str | None      # a soccer-style /summary line for this event's id
 
 
 @dataclass(frozen=True)
@@ -263,6 +267,13 @@ class ScenarioState:
     byte-stable payloads and its games-list ETag/304 flow works. `pre`
     fixtures get start = t0 + start_in; `in`/`post` fixtures are shifted so
     their original start maps to t0 - 90m ("earlier today").
+
+    An event's `/summary` is its fixture's paired `<name>.summary.json`,
+    served verbatim (hockey: the backend reads strength, goals and the
+    shootout from it), else its `commentary` line (soccer); one event cannot
+    have both. Only the scoreboard event's dates are rewritten, so a pair
+    whose header agrees with its event on disk (id, status) agrees when
+    served; the summary keeps its capture-day dates, which nothing reads.
     """
 
     def __init__(self, entry: ScenarioEntry, testdata_root: Path):
@@ -306,7 +317,10 @@ class ScenarioState:
                     shift_event_dates(event, lambda orig, d=delta: orig + d)
 
             events.append(event)
-            if item.commentary is not None:
+            paired = self._paired_summary(entry, item, path, event)
+            if paired is not None:
+                summaries[event_id] = paired
+            elif item.commentary is not None:
                 summaries[event_id] = json.dumps(
                     {"commentary": [{"sequence": 1, "text": item.commentary}]}
                 ).encode()
@@ -316,9 +330,55 @@ class ScenarioState:
         self.summaries = summaries
 
     @staticmethod
-    def _event_state(event: dict) -> str:
-        competitions = event.get("competitions") or [{}]
-        return competitions[0].get("status", {}).get("type", {}).get("state") or "unknown"
+    def _status_type(holder: dict) -> dict:
+        """`competitions[0].status.type` of an event or a summary header."""
+        try:
+            status_type = holder["competitions"][0]["status"]["type"]
+        except (KeyError, IndexError, TypeError):
+            return {}
+        return status_type if isinstance(status_type, dict) else {}
+
+    @classmethod
+    def _event_state(cls, event: dict) -> str:
+        return cls._status_type(event).get("state") or "unknown"
+
+    @classmethod
+    def _paired_summary(
+        cls, entry: ScenarioEntry, item: ScenarioEvent, path: Path, event: dict
+    ) -> bytes | None:
+        """The fixture's `<name>.summary.json` bytes, or None without one.
+
+        The pair must be one moment of one game: the header names the event's
+        id and status. A mismatch, or a commentary line beside the pair, is a
+        MockError rather than a guess at which the demo meant.
+        """
+        summary_path = path.with_name(path.stem + SUMMARY_SUFFIX)
+        if not summary_path.is_file():
+            return None
+        _require(
+            item.commentary is None,
+            f"scenario {entry.name!r}: {item.fixture} has a paired summary "
+            f"({summary_path.name}) and a commentary line — the pair is the summary, "
+            f"drop the commentary",
+        )
+        try:
+            body = summary_path.read_bytes()
+            header = json.loads(body).get("header")
+        except (OSError, ValueError, AttributeError) as exc:
+            raise MockError(f"scenario {entry.name!r}: cannot load {summary_path}: {exc}")
+        _require(
+            isinstance(header, dict),
+            f"scenario {entry.name!r}: {summary_path.name} has no header object",
+        )
+        event_id, event_status = str(event["id"]), cls._status_type(event).get("name")
+        summary_id, summary_status = str(header.get("id")), cls._status_type(header).get("name")
+        _require(
+            (summary_id, summary_status) == (event_id, event_status),
+            f"scenario {entry.name!r}: {summary_path.name} is event {summary_id} "
+            f"{summary_status}, its fixture is event {event_id} {event_status} — "
+            f"not a pair",
+        )
+        return body
 
     def scoreboard(self) -> bytes:
         return self.scoreboard_body
@@ -341,7 +401,7 @@ class ReplayRuntime:
     FUNCTION (not a constant delta): `t_wall(t_cap) = wall_t0 +
     (t_cap - capture_t0 - start_offset) / speed`, so displayed start times
     stay consistent with warped progress at any speed. Summary bodies are
-    served verbatim (the backend reads only commentary text).
+    served verbatim (the backend reads no date from a summary).
     """
 
     def __init__(self, entry: ReplayEntry, source, wall_t0: float | None = None):

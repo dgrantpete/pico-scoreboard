@@ -20,6 +20,22 @@ leagues:
       - fixture: nba/in_progress.json
       - fixture: nba/final.json
 
+  # Every hockey screen, twelve different teams. shootout.json is the same
+  # game (event id) as final_so_no_stars.json, so the live shootout is
+  # another night's.
+  - name: nhl-demo
+    mode: scenario
+    sport: hockey
+    league: nhl
+    events:
+      - fixture: hockey/nhl/pregame.json                    # goalies on the team lines
+        start_in: 2h
+      - fixture: hockey/nhl/power_play.json                 # UTA 5 on 4
+      - fixture: hockey/nhl/end_of_period.json              # the intermission
+      - fixture: hockey/nhl/shootout_teamless_attempt.json  # live shootout, 1-1, SEA up
+      - fixture: hockey/nhl/final.json                      # three stars
+      - fixture: hockey/nhl/final_so_no_stars.json          # just final, no stars yet
+
   - name: worldcup-demo
     mode: scenario
     sport: soccer

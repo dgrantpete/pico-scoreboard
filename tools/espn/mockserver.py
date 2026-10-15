@@ -1,7 +1,7 @@
 """Fake-ESPN HTTP server: serves the two upstream routes the backend fetches.
 
     GET /{sport}/{league}/scoreboard          -> {"events": [...]}
-    GET /{sport}/{league}/summary?event={id}  -> {"commentary": [...]}
+    GET /{sport}/{league}/summary?event={id}  -> a summary body, else 404
 
 The real Rust backend is pointed here via APP_ESPN__BASE_URL; it reads only
 HTTP status + body, so plain 200 application/json is the whole contract.
