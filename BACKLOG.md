@@ -1160,3 +1160,16 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     radio wedge is still caught on the first lap and an outage costs a reset
     every half hour instead of every two minutes. Host-test the schedule
     beside `poll::gate`.
+102. **A final hockey game's summary is refetched every cache window
+    (2026-10-15).** D3 fetches the per-game summary for finals too, because
+    the summary's boxscore is the reliable shots source there (NHL.md §3.3:
+    185/188 sides against the scoreboard identity's 151/188). But a final
+    summary is 470–630 KB, it no longer changes, and the JSON cache keys
+    freshness off ESPN's short max-age — so every device poll of a final in
+    rotation costs the backend another full summary fetch, all for two
+    numbers. Fits today (one cache slot per game, measured in
+    `JSON_CACHE_CAPACITY`'s note), but it is the one hockey cost that scales
+    with how long finals stay on screen. The shape: once a game's scoreboard
+    state is `post`, cache its summary for minutes rather than seconds (the
+    stars come from the scoreboard, so nothing on the final screen waits on a
+    fresh summary). Measure the upstream bytes before and after.
