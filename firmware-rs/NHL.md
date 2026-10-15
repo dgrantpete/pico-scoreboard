@@ -159,7 +159,14 @@ names each pair's polls and evidence.
   same poll as the scoreboard's statistics or one later, never while those
   are `[]`; on finals it matched the play-by-play shot count on 185/188
   sides.
-- `onIce[]`: entries **include the goalie**; counts give strength (6v6, 6v5
+- Goalie changes: 12 in 94 finals. The relief goalie is on the ice before
+  any boxscore group lists him for 0–80 s (median ~52 s); the scoreboard's
+  probable goalie was the starter in 180/180 captured team-games. No
+  document names a dressed backup before he plays (no `rosters` block;
+  `leaders`, `header`, `gameInfo` carry no players).
+- `onIce[]`: entries carry only `athleteid`, `whereabouts` ("In Play") and a
+  `projections` link — no position, and no ordering puts the goalie first.
+  Entries **include the goalie**; counts give strength (6v6, 6v5
   on a PP, 4v4 in 3-on-3 OT); a pulled goalie = no goalie among the entries.
   Insane on 0.14% of sampled polls (a 3-entry side during a fight stoppage,
   an empty side); `[]` at period starts and for ~40 s into OT; may still
@@ -236,27 +243,40 @@ is part of why D3 fetches the summary for finals too.
 
 ### 3.4 Strength (summary)
 
-1. Goalie ids ← `boxscore.players` goalies group, per team.
-2. Per side from `onIce`: `skaters = entries − (goalie present ? 1 : 0)`,
-   `pulled = no goalie present`. **Sane** iff both teams' goalie groups are
-   non-empty, both sides have 3–6 skaters, **and** at most one side is
-   pulled. (Puck drop's empty goalie groups would otherwise read as both nets
-   empty; two empty nets at once is not hockey.)
-3. If sane: pulled on either side → `EmptyNet(side)` (wins over PP for the
+1. Per team: **known goalies** = the `boxscore.players` goalies group ∪ the
+   scoreboard's probable starting goalie (its `athlete.id`, handed to the
+   summary pass with the season kind); **listed players** = every id in that
+   team's `boxscore.players` groups. The goalies group alone is not enough:
+   it lists only goalies who have *played*, so it is empty for the first
+   ~2 min (puck drop) and lags every goalie change by up to ~80 s, and a
+   relief goalie on the ice before the boxscore lists him reads as an empty
+   net (11 of 12 changes in the phase 6.0 fortnight).
+2. Per side from `onIce` (entries carry ids only — no position): the goalie
+   is **present** if a known goalie is among the entries, or — the relief
+   goalie — if some entry is not a listed player of that team; otherwise the
+   side is **pulled**. `skaters = entries − (goalie present ? 1 : 0)`.
+   **Sane** iff the team has at least one known goalie, both sides have 3–6
+   skaters, and at most one side is pulled (two empty nets at once is not
+   hockey). Measured over the fortnight against the goalies who really
+   played: every one of 209 real goalie-less polls found, no false empty net
+   (the goalies-group-only rule produced 348).
+3. During an intermission (`EndOfPeriod`) a pulled side is not believed:
+   `onIce` freezes the last unit, including an extra attacker's, through the
+   break. If either side reads pulled there, there is no strength (the group
+   is absent); a power play carrying into the next period still shows.
+4. If sane: pulled on either side → `EmptyNet(side)` (wins over PP for the
    banner; the skater dots still show the true counts); skaters differ →
    `PowerPlay(more, more_n, fewer_n)`; equal and < 5 → `Matched(n)`;
    otherwise `Even`.
-4. If not sane: the latest play that is **not** a penalty (penaltyType
+5. If not sane: the latest play that is **not** a penalty (penaltyType
    present, type 509, or the 143 placeholder) and **has a team**, by its
    team-relative `strength` (Power Play → that team; Shorthanded → the
    other; anything else `Even`), skater counts unknown (0). Team-less plays
    are skipped: they carry strengths no side can be read from (§2). Emit a
-   quirk — except for the expected cases, both goalie groups empty after
-   puck drop and `onIce` `[]` at a period start, which are normal. One
-   side's group empty while the other's is not is unexpected and quirks.
-5. During a live shootout there is no strength (the group is absent):
+   quirk — except for `onIce` `[]` at a period start, which is normal.
+6. During a live shootout there is no strength (the group is absent):
    `onIce` holds only the goalies.
-6. Display: `Matched(3)` in the regular-season OT is normal and gets **no**
+7. Display: `Matched(3)` in the regular-season OT is normal and gets **no**
    banner; `Matched(4)` shows "4 ON 4"; `PowerPlay` shows "POWER PLAY" +
    "a ON d"; `EmptyNet` shows "EMPTY NET" + "6 ON 5" (or the true counts).
    **No countdown anywhere** (§2: none exists; reconstructing one is wrong
