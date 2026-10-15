@@ -391,7 +391,7 @@ the buffer sizing — is host-tested in `scoreboard-model::poll`.
 | Behaviour | Status | Notes |
 |---|---|---|
 | One poller owns every league, slates merged into one rotation | **Match** | |
-| `sources_from_config` order: MLB, NBA, football, soccer | **Match** | |
+| `sources_from_config` order: MLB, NBA, football, soccer | **Match** | Now `DeviceConfig::league_sources`, host-tested. The NHL, which MicroPython never had, sits between NBA and football (NHL.md D6). |
 | Live-first rotation; finals before pregames; empty merged slate → `no_games` | **Match** | `Slate`, host-tested. |
 | League filter, its empty-slate fallback, and the index restore | **Match** | `Slate`, host-tested. |
 | Per-source ETag; `304` keeps the cached slate | **Match** | Bench-validated. |

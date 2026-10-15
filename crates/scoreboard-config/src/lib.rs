@@ -40,6 +40,8 @@
 #![forbid(unsafe_code)]
 
 use heapless::{String, Vec};
+use scoreboard_model::slate::MAX_SOURCES;
+use scoreboard_model::{LeagueId, Sport};
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub use scoreboard_log::Level as LogLevel;
@@ -206,7 +208,7 @@ impl GammaConfig {
 
 /// The configured design per sport × screen.
 ///
-/// Only the four keys `_DEFAULTS` carries are modelled. `screen_geometry`
+/// The four keys `_DEFAULTS` carries, plus hockey's two. `screen_geometry`
 /// registers more names than these (the pregame and single-design live
 /// screens), and it already ignores both unknown keys and unknown letters — so
 /// an unmodelled key in a stored config selected nothing before and selects
@@ -222,6 +224,15 @@ pub struct VariantsConfig {
     pub football_final: String<MAX_VARIANT>,
     #[serde(default = "defaults::variant_a")]
     pub soccer_live: String<MAX_VARIANT>,
+    /// A "Period ledger" or B "Rink", B by default (NHL.md D1).
+    #[serde(default = "defaults::variant_b")]
+    pub hockey_live: String<MAX_VARIANT>,
+    /// "Three stars" is the only design today (D2), so `A` is the only letter
+    /// that selects anything. Modelled anyway: NHL.md §3.10 keeps the
+    /// box-score final one `apply_variant` away should D2 flip, and this key
+    /// is what would select it.
+    #[serde(default = "defaults::variant_a")]
+    pub hockey_final: String<MAX_VARIANT>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -260,12 +271,19 @@ impl From<Rgb> for scoreboard_model::Rgb888 {
     }
 }
 
+/// Fields in rotation and menu order (NHL.md D6), which is also the order `GET
+/// /api/config` lists them in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SportsConfig {
     #[serde(default = "defaults::mlb")]
     pub mlb: SportToggle,
     #[serde(default)]
     pub nba: SportToggle,
+    /// The key's presence in `GET /api/config` is how the settings page knows
+    /// this firmware has hockey (NHL.md D7); the frozen MicroPython never
+    /// sends it.
+    #[serde(default = "defaults::nhl")]
+    pub nhl: SportToggle,
     #[serde(default)]
     pub football: SportLeagues,
     #[serde(default)]
@@ -423,9 +441,43 @@ impl DeviceConfig {
         settings.apply_variant("nba_final", &variants.nba_final);
         settings.apply_variant("football_final", &variants.football_final);
         settings.apply_variant("soccer_live", &variants.soccer_live);
+        settings.apply_variant("hockey_live", &variants.hockey_live);
+        settings.apply_variant("hockey_final", &variants.hockey_final);
         settings.show_dividers = self.display.show_dividers;
         settings.set_scroll_speed(self.display.scroll_speed_px_per_sec);
         settings
+    }
+
+    /// The configured leagues as poll sources, in rotation and menu order —
+    /// NHL.md D6: MLB, NBA, NHL, the football leagues, the soccer leagues.
+    ///
+    /// `poller.py:223-239`'s `sources_from_config`, here rather than in the
+    /// app so the order is host-tested. The app reads it once, at poller
+    /// start: `api_routes.py` never rebuilt the sources either, so changing
+    /// which leagues are polled has always taken a reboot.
+    pub fn league_sources(&self) -> LeagueSources {
+        let mut out = LeagueSources {
+            sources: Vec::new(),
+            dropped: 0,
+        };
+        let sports = &self.sports;
+        let toggles = [
+            (sports.mlb, Sport::Mlb, "mlb"),
+            (sports.nba, Sport::Nba, "nba"),
+            (sports.nhl, Sport::Hockey, "nhl"),
+        ];
+        for (toggle, sport, slug) in toggles {
+            if toggle.enabled {
+                out.push(LeagueId::from_slug(sport, slug));
+            }
+        }
+        for slug in sports.football.active() {
+            out.push(LeagueId::from_slug(Sport::Football, slug));
+        }
+        for slug in sports.soccer.active() {
+            out.push(LeagueId::from_slug(Sport::Soccer, slug));
+        }
+        out
     }
 
     /// The UI colors, as the model carries them.
@@ -454,6 +506,29 @@ pub enum LoadComplaint {
     Unparseable,
     /// Parsed, but `poll_interval >= game_rotation`. Only those two keys reset.
     InvalidCadence(CadenceError),
+}
+
+/// The configured leagues, as [`DeviceConfig::league_sources`] builds them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeagueSources {
+    pub sources: Vec<LeagueId, MAX_SOURCES>,
+    /// Configured leagues past [`MAX_SOURCES`], which are not polled.
+    ///
+    /// A count rather than an `expect`, because this is reachable: every
+    /// registered league fits at once, but `PUT /api/config` takes
+    /// unregistered slugs too (up to [`MAX_LEAGUES`] per sport, so a league
+    /// the backend adds needs no release), and a panic at poller start would
+    /// be a boot loop. Zero for anything the settings page can produce; the
+    /// app logs it otherwise.
+    pub dropped: usize,
+}
+
+impl LeagueSources {
+    fn push(&mut self, league: LeagueId) {
+        if self.sources.push(league).is_err() {
+            self.dropped += 1;
+        }
+    }
 }
 
 /// The response buffer was too small.

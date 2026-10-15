@@ -330,6 +330,16 @@ mod tests {
         ])
     }
 
+    /// Every registered league switched on: nine rows in rotation order (NHL.md
+    /// D6), the most the settings page can configure.
+    fn every_league() -> Slate {
+        let leagues: Vec<(Sport, &str), MAX_SOURCES> = scoreboard_model::feed::LEAGUES
+            .iter()
+            .map(|league| (league.sport, league.slug))
+            .collect();
+        slate_with(&leagues)
+    }
+
     fn open(slate: &mut Slate, store: &mut Store) -> MenuController {
         let mut menu = MenuController::new();
         assert_eq!(
@@ -369,6 +379,45 @@ mod tests {
         assert!(view.rows.iter().all(|row| row.checked));
         assert_eq!(view.highlight, 0, "the cursor starts on the first item");
         assert_eq!(view.thumb_y, -1, "two rows need no scrollbar");
+    }
+
+    #[test]
+    fn the_nhl_row_sits_after_nba_under_its_league_name() {
+        let mut slate = every_league();
+        let mut store = Store::new();
+        let _menu = open(&mut slate, &mut store);
+        let view = &store.snapshot().menu;
+        let labels: Vec<&str, { thumb::VISIBLE_ROWS }> =
+            view.rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(labels, ["MLB", "NBA", "NHL", "NFL", "NCAA FOOTBALL"]);
+        assert!(view.thumb_y >= 0, "nine rows need a scrollbar");
+    }
+
+    #[test]
+    fn the_ninth_league_unchecks_and_reopens_unchecked() {
+        // Its bit is the ninth, one past what a byte-wide filter could hold.
+        let mut slate = every_league();
+        let mut store = Store::new();
+        let mut menu = open(&mut slate, &mut store);
+        for _ in 0..8 {
+            menu.press(Button::A, Press::Short, &mut slate, &mut store, 0);
+        }
+        menu.press(Button::B, Press::Short, &mut slate, &mut store, 0);
+        assert_eq!(
+            menu.press(Button::B, Press::Long, &mut slate, &mut store, 0),
+            Action::FilterApplied
+        );
+        assert_eq!(slate.filter(), Some(0b0_1111_1111));
+
+        menu.press(Button::B, Press::Long, &mut slate, &mut store, 1_000);
+        for _ in 0..8 {
+            menu.press(Button::A, Press::Short, &mut slate, &mut store, 1_000);
+        }
+        let view = &store.snapshot().menu;
+        let row = &view.rows[view.highlight as usize];
+        assert_eq!(row.source, 8);
+        assert_eq!(row.label.as_str(), "WORLD CUP");
+        assert!(!row.checked, "the session reopens with the ninth league off");
     }
 
     #[test]

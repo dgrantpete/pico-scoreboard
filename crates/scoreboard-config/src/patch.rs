@@ -127,6 +127,8 @@ pub struct VariantsPatch {
     pub nba_final: Option<String<MAX_VARIANT>>,
     pub football_final: Option<String<MAX_VARIANT>>,
     pub soccer_live: Option<String<MAX_VARIANT>>,
+    pub hockey_live: Option<String<MAX_VARIANT>>,
+    pub hockey_final: Option<String<MAX_VARIANT>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -144,6 +146,7 @@ pub struct ColorsPatch {
 pub struct SportsPatch {
     pub mlb: Option<TogglePatch>,
     pub nba: Option<TogglePatch>,
+    pub nhl: Option<TogglePatch>,
     pub football: Option<LeaguesPatch>,
     pub soccer: Option<LeaguesPatch>,
 }
@@ -280,6 +283,11 @@ impl DeviceConfig {
                     &variants.football_final,
                 );
                 set(&mut self.display.variants.soccer_live, &variants.soccer_live);
+                set(&mut self.display.variants.hockey_live, &variants.hockey_live);
+                set(
+                    &mut self.display.variants.hockey_final,
+                    &variants.hockey_final,
+                );
                 applied.render_settings = true;
             }
             if set(&mut self.display.show_dividers, &display.show_dividers) {
@@ -308,6 +316,9 @@ impl DeviceConfig {
             }
             if let Some(nba) = &sports.nba {
                 set(&mut self.sports.nba.enabled, &nba.enabled);
+            }
+            if let Some(nhl) = &sports.nhl {
+                set(&mut self.sports.nhl.enabled, &nhl.enabled);
             }
             if let Some(football) = &sports.football {
                 set(&mut self.sports.football.leagues, &football.leagues);

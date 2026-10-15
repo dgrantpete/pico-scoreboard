@@ -29,6 +29,8 @@ fn defaults_match_the_micropython_defaults_dict() {
     assert_eq!(config.display.blanking_time_ns, 0);
     assert_eq!(config.display.variants.mlb_final.as_str(), "C");
     assert_eq!(config.display.variants.soccer_live.as_str(), "A");
+    assert_eq!(config.display.variants.hockey_live.as_str(), "B");
+    assert_eq!(config.display.variants.hockey_final.as_str(), "A");
     assert!(config.display.show_dividers);
     assert_eq!(
         config.display.scroll_speed_px_per_sec,
@@ -37,6 +39,7 @@ fn defaults_match_the_micropython_defaults_dict() {
     assert_eq!(config.colors.accent, Rgb::new(255, 255, 0));
     assert!(config.sports.mlb.enabled);
     assert!(!config.sports.nba.enabled);
+    assert!(config.sports.nhl.enabled, "NHL.md D5: on by default");
     assert_eq!(config.log.level.as_str(), "debug");
     assert_eq!(config.server.cache_max_age_seconds, 600);
     assert!(!config.watchdog.enabled);
@@ -68,6 +71,8 @@ fn the_serialized_shape_carries_every_key_the_spa_reads() {
         "\"variants\"",
         "\"mlb_final\"",
         "\"soccer_live\"",
+        "\"hockey_live\"",
+        "\"hockey_final\"",
         "\"show_dividers\"",
         "\"scroll_speed_px_per_sec\"",
         "\"colors\"",
@@ -75,6 +80,7 @@ fn the_serialized_shape_carries_every_key_the_spa_reads() {
         "\"clock_warning\"",
         "\"sports\"",
         "\"mlb\"",
+        "\"nhl\"",
         "\"football\"",
         "\"leagues\"",
         "\"log\"",
@@ -128,6 +134,235 @@ fn a_partial_stored_document_takes_defaults_for_everything_absent() {
     assert_eq!(config.network.ssid.as_str(), "HOME");
     assert_eq!(config.network.device_name.as_str(), "scoreboard");
     assert_eq!(config.server.cache_max_age_seconds, 600);
+}
+
+/// A document the firmware before hockey stored, byte for byte: its
+/// `to_json` after a fresh device's first settings-page save — NBA on, the
+/// NFL, MLS and the Premier League picked, NBA's final on A. This crate's
+/// serializer last changed in `3259128`, ahead of the 2026.10.12-03942fd
+/// release on the units, so it is what every unit in the field has in flash.
+const STORED_BEFORE_HOCKEY: &str = concat!(
+    r#"{"network":{"ssid":"HOME-NETWORK-5G","password":"correct-horse-battery","#,
+    r#""device_name":"scoreboard","connect_timeout_seconds":60},"#,
+    r#""api":{"url":"https://pico-scoreboard-backend.fly.dev","key":"k3y"},"#,
+    r#""display":{"brightness":100,"poll_interval_seconds":30,"game_rotation_seconds":60,"#,
+    r#""data_frequency_khz":20000,"target_refresh_rate":120.0,"gamma":{"type":"srgb"},"#,
+    r#""blanking_time_ns":0,"#,
+    r#""variants":{"mlb_final":"C","nba_final":"A","football_final":"C","soccer_live":"A"},"#,
+    r#""show_dividers":true,"scroll_speed_px_per_sec":30},"#,
+    r#""colors":{"primary":{"r":255,"g":255,"b":255},"secondary":{"r":128,"g":128,"b":128},"#,
+    r#""accent":{"r":255,"g":255,"b":0},"clock_normal":{"r":0,"g":255,"b":0},"#,
+    r#""clock_warning":{"r":255,"g":10,"b":10}},"#,
+    r#""sports":{"mlb":{"enabled":true},"nba":{"enabled":true},"#,
+    r#""football":{"leagues":["nfl"]},"soccer":{"leagues":["usa.1","eng.1"]}},"#,
+    r#""log":{"level":"debug"},"server":{"cache_max_age_seconds":600},"#,
+    r#""watchdog":{"enabled":false,"timeout_ms":8000},"#,
+    r#""ota":{"enabled":true,"channel":"stable"}}"#,
+);
+
+/// The same release's document with every league its settings page offered
+/// switched on: eight sources, the most it could configure.
+const STORED_EVERY_LEAGUE_BEFORE_HOCKEY: &str = concat!(
+    r#"{"network":{"ssid":"HOME-NETWORK-5G","password":"correct-horse-battery","#,
+    r#""device_name":"scoreboard","connect_timeout_seconds":60},"#,
+    r#""api":{"url":"https://pico-scoreboard-backend.fly.dev","key":"k3y"},"#,
+    r#""display":{"brightness":100,"poll_interval_seconds":30,"game_rotation_seconds":60,"#,
+    r#""data_frequency_khz":20000,"target_refresh_rate":120.0,"gamma":{"type":"srgb"},"#,
+    r#""blanking_time_ns":0,"#,
+    r#""variants":{"mlb_final":"C","nba_final":"C","football_final":"C","soccer_live":"A"},"#,
+    r#""show_dividers":true,"scroll_speed_px_per_sec":30},"#,
+    r#""colors":{"primary":{"r":255,"g":255,"b":255},"secondary":{"r":128,"g":128,"b":128},"#,
+    r#""accent":{"r":255,"g":255,"b":0},"clock_normal":{"r":0,"g":255,"b":0},"#,
+    r#""clock_warning":{"r":255,"g":10,"b":10}},"#,
+    r#""sports":{"mlb":{"enabled":true},"nba":{"enabled":true},"#,
+    r#""football":{"leagues":["nfl","college-football"]},"#,
+    r#""soccer":{"leagues":["usa.1","eng.1","mex.1","fifa.world"]}},"#,
+    r#""log":{"level":"debug"},"server":{"cache_max_age_seconds":600},"#,
+    r#""watchdog":{"enabled":false,"timeout_ms":8000},"#,
+    r#""ota":{"enabled":true,"channel":"stable"}}"#,
+);
+
+fn source_keys(config: &DeviceConfig) -> std::vec::Vec<StdString> {
+    let built = config.league_sources();
+    assert_eq!(built.dropped, 0, "every configured league should fit");
+    built
+        .sources
+        .iter()
+        .map(|league| StdString::from(league.key.as_str()))
+        .collect()
+}
+
+#[test]
+fn a_config_stored_before_hockey_loads_with_the_nhl_on() {
+    let (config, complaint) = DeviceConfig::from_json(STORED_BEFORE_HOCKEY.as_bytes());
+    assert_eq!(complaint, None);
+
+    // `sports` is present and `nhl` is not: the per-key default, not the
+    // section's, is what has to answer — and it answers D5's "on".
+    assert!(config.sports.nhl.enabled);
+    assert_eq!(config.display.variants.hockey_live.as_str(), "B");
+    assert_eq!(config.display.variants.hockey_final.as_str(), "A");
+
+    // Everything the document did say survives.
+    assert_eq!(config.network.ssid.as_str(), "HOME-NETWORK-5G");
+    assert!(config.sports.mlb.enabled && config.sports.nba.enabled);
+    assert_eq!(config.display.variants.nba_final.as_str(), "A");
+
+    // The key now goes out on `GET /api/config`, which is how the settings
+    // page learns this firmware has hockey (D7).
+    assert!(json(&config).contains(r#""nhl":{"enabled":true}"#));
+
+    // And the rotation picks hockey up in D6 order.
+    assert_eq!(
+        source_keys(&config),
+        [
+            "baseball/mlb",
+            "basketball/nba",
+            "hockey/nhl",
+            "football/nfl",
+            "soccer/usa.1",
+            "soccer/eng.1",
+        ]
+    );
+}
+
+#[test]
+fn a_unit_with_every_league_on_keeps_all_of_them_when_the_nhl_joins() {
+    // The upgrade a ninth source would have broken: the eight leagues this
+    // unit polled yesterday plus the NHL D5 switches on. With an eight-slot
+    // slate the World Cup fell off the end, silently.
+    let (config, complaint) = DeviceConfig::from_json(STORED_EVERY_LEAGUE_BEFORE_HOCKEY.as_bytes());
+    assert_eq!(complaint, None);
+    assert_eq!(
+        source_keys(&config),
+        [
+            "baseball/mlb",
+            "basketball/nba",
+            "hockey/nhl",
+            "football/nfl",
+            "football/college-football",
+            "soccer/usa.1",
+            "soccer/eng.1",
+            "soccer/mex.1",
+            "soccer/fifa.world",
+        ]
+    );
+}
+
+#[test]
+fn every_registered_league_fits_the_slate() {
+    // Switch on every league the firmware knows by name. A tenth registered
+    // league fails here: bump `slate::MAX_SOURCES` and re-measure the poller
+    // arena (BUDGET.md) in the same change.
+    let mut config = DeviceConfig::new();
+    for league in scoreboard_model::feed::LEAGUES {
+        let slug = heapless::String::try_from(league.slug).expect("a slug fits MAX_LEAGUE");
+        match league.sport {
+            Sport::Mlb => config.sports.mlb.enabled = true,
+            Sport::Nba => config.sports.nba.enabled = true,
+            Sport::Hockey => {
+                assert_eq!(
+                    league.slug, "nhl",
+                    "a second hockey league needs a config shape to switch it on (NHL.md D5)"
+                );
+                config.sports.nhl.enabled = true;
+            }
+            Sport::Football => config.sports.football.leagues.push(slug).unwrap(),
+            Sport::Soccer => config.sports.soccer.leagues.push(slug).unwrap(),
+        }
+    }
+
+    let built = config.league_sources();
+    assert_eq!(
+        built.dropped,
+        0,
+        "{} leagues are registered and the slate holds {}",
+        scoreboard_model::feed::LEAGUES.len(),
+        MAX_SOURCES
+    );
+    assert_eq!(
+        MAX_SOURCES,
+        scoreboard_model::feed::LEAGUES.len(),
+        "MAX_SOURCES is sized to exactly the registered leagues, no headroom"
+    );
+    // The registry is written in D6 order, so the sources come out in it.
+    let keys: std::vec::Vec<&str> = built.sources.iter().map(|l| l.key.as_str()).collect();
+    let registered: std::vec::Vec<StdString> = scoreboard_model::feed::LEAGUES
+        .iter()
+        .map(|league| StdString::from(LeagueId::from_slug(league.sport, league.slug).key.as_str()))
+        .collect();
+    assert_eq!(keys, registered);
+}
+
+#[test]
+fn the_default_rotation_is_mlb_then_the_nhl() {
+    assert_eq!(
+        source_keys(&DeviceConfig::new()),
+        ["baseball/mlb", "hockey/nhl"]
+    );
+}
+
+#[test]
+fn the_nhl_source_is_the_endpoint_the_backend_serves() {
+    // The poller builds `/{key}/games` and `/{key}/games/{id}` from this key
+    // verbatim, so this is the request path: `/hockey/nhl/games`.
+    let (config, _) = DeviceConfig::from_json(br#"{"sports":{"mlb":{"enabled":false}}}"#);
+    let built = config.league_sources();
+    assert_eq!(built.sources.len(), 1);
+    let nhl = &built.sources[0];
+    assert_eq!(nhl.key.as_str(), "hockey/nhl");
+    assert_eq!(nhl.sport, Sport::Hockey);
+    assert_eq!(nhl.display_name.as_str(), "NHL", "the menu row's label");
+}
+
+#[test]
+fn a_hand_written_config_past_the_slate_counts_what_it_drops() {
+    // Unregistered slugs poll by design, so a raw `PUT` can name more leagues
+    // than the slate holds. The overflow is counted for the log, never a panic
+    // (that would be a boot loop), and what fits is the D6-ordered prefix.
+    let (config, complaint) = DeviceConfig::from_json(
+        br#"{"sports":{"nba":{"enabled":true},
+            "football":{"leagues":["nfl","college-football","ufl"]},
+            "soccer":{"leagues":["usa.1","eng.1","esp.1","ger.1","ita.1"]}}}"#,
+    );
+    assert_eq!(complaint, None);
+    let built = config.league_sources();
+    assert_eq!(built.sources.len(), MAX_SOURCES);
+    assert_eq!(built.dropped, 2, "11 configured, 9 fit");
+    let keys: std::vec::Vec<&str> = built.sources.iter().map(|l| l.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            "baseball/mlb",
+            "basketball/nba",
+            "hockey/nhl",
+            "football/nfl",
+            "football/college-football",
+            "football/ufl",
+            "soccer/usa.1",
+            "soccer/eng.1",
+            "soccer/esp.1",
+        ]
+    );
+}
+
+#[test]
+fn switching_the_nhl_off_sticks_across_a_reboot() {
+    let mut config = DeviceConfig::new();
+    let applied = config
+        .apply(&patch(r#"{"sports":{"nhl":{"enabled":false}}}"#))
+        .unwrap();
+    assert!(!config.sports.nhl.enabled);
+    assert!(config.sports.mlb.enabled, "the patch named only the NHL");
+    // Sources are read once at poller start, so there is nothing to apply
+    // live; the settings page prompts for the reboot.
+    assert!(!applied.any());
+
+    // The stored `false` is a present key, so the default never overrides it.
+    let (reloaded, complaint) = DeviceConfig::from_json(json(&config).as_bytes());
+    assert_eq!(complaint, None);
+    assert!(!reloaded.sports.nhl.enabled);
+    assert_eq!(source_keys(&reloaded), ["baseball/mlb"]);
 }
 
 #[test]
@@ -303,6 +538,29 @@ fn a_variants_patch_reapplies_render_settings_even_when_it_names_one_screen() {
 }
 
 #[test]
+fn the_hockey_layouts_reach_the_render_settings() {
+    use scoreboard_render::geometry::HockeyLiveVariant;
+
+    let mut config = DeviceConfig::new();
+    assert_eq!(config.render_settings().hockey_live, HockeyLiveVariant::B);
+
+    let applied = config
+        .apply(&patch(r#"{"display":{"variants":{"hockey_live":"A"}}}"#))
+        .unwrap();
+    assert!(applied.render_settings);
+    assert_eq!(config.display.variants.hockey_live.as_str(), "A");
+    assert_eq!(config.display.variants.hockey_final.as_str(), "A");
+    assert_eq!(config.render_settings().hockey_live, HockeyLiveVariant::A);
+
+    // A letter hockey has no design for leaves the screen as it was, as an
+    // unknown final letter does.
+    config
+        .apply(&patch(r#"{"display":{"variants":{"hockey_live":"C"}}}"#))
+        .unwrap();
+    assert_eq!(config.render_settings().hockey_live, HockeyLiveVariant::B);
+}
+
+#[test]
 fn an_empty_body_is_an_empty_patch() {
     let mut config = DeviceConfig::new();
     let before = config.clone();
@@ -454,6 +712,8 @@ fn a_maximally_full_config_fits_the_storage_and_response_buffers() {
         &mut config.display.variants.nba_final,
         &mut config.display.variants.football_final,
         &mut config.display.variants.soccer_live,
+        &mut config.display.variants.hockey_live,
+        &mut config.display.variants.hockey_final,
     ] {
         fill(variant);
     }

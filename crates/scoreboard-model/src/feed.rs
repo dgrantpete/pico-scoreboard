@@ -38,52 +38,63 @@ impl LeagueId {
             sport,
             display_name: crate::text::Text::new(),
         };
-        let (prefix, name) = match sport {
-            Sport::Mlb => ("baseball/mlb", Some("MLB")),
-            Sport::Nba => ("basketball/nba", Some("NBA")),
-            Sport::Hockey => ("hockey", hockey_league_name(slug)),
-            Sport::Football => ("football", football_league_name(slug)),
-            Sport::Soccer => ("soccer", soccer_league_name(slug)),
+        let prefix = match sport {
+            Sport::Mlb => "baseball/mlb",
+            Sport::Nba => "basketball/nba",
+            Sport::Hockey => "hockey",
+            Sport::Football => "football",
+            Sport::Soccer => "soccer",
         };
         crate::text::set_plain(&mut id.key, prefix);
         if matches!(sport, Sport::Hockey | Sport::Football | Sport::Soccer) {
             let _ = id.key.push('/');
             crate::text::set_plain_append(&mut id.key, slug);
         }
-        match name {
-            Some(name) => crate::text::set_plain(&mut id.display_name, name),
+        let registered = LEAGUES
+            .iter()
+            .find(|league| league.sport == sport && league.slug == slug);
+        match registered {
+            Some(league) => crate::text::set_plain(&mut id.display_name, league.display_name),
             None => crate::text::push_folded_upper(&mut id.display_name, slug),
         }
         id
     }
 }
 
-/// Mirrors the backend's NHL registration (`backend/src/espn/league.rs`). One
-/// league today; another is a row here (NHL.md §6.4).
-fn hockey_league_name(slug: &str) -> Option<&'static str> {
-    match slug {
-        "nhl" => Some("NHL"),
-        _ => None,
-    }
+/// A league the firmware knows by name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegisteredLeague {
+    pub sport: Sport,
+    /// The config slug, which is also the ESPN slug the endpoint key ends in.
+    pub slug: &'static str,
+    pub display_name: &'static str,
 }
 
-/// Mirrors the backend's `FootballLeague` registry (`backend/src/espn/league.rs`).
-fn football_league_name(slug: &str) -> Option<&'static str> {
-    match slug {
-        "nfl" => Some("NFL"),
-        "college-football" => Some("NCAA FOOTBALL"),
-        _ => None,
-    }
-}
+/// Every league registered by name, mirroring the backend's registries
+/// (`backend/src/espn/league.rs`), in rotation and menu order (NHL.md D6).
+///
+/// A table rather than a match per sport so the set can be enumerated:
+/// [`crate::slate::MAX_SOURCES`] is sized to exactly this many, and
+/// `scoreboard-config` proves every row fits at once. A slug that is not here
+/// still polls, under its own upper-cased name.
+pub const LEAGUES: &[RegisteredLeague] = &[
+    league(Sport::Mlb, "mlb", "MLB"),
+    league(Sport::Nba, "nba", "NBA"),
+    // One hockey league today; another is a row here (NHL.md §6.4).
+    league(Sport::Hockey, "nhl", "NHL"),
+    league(Sport::Football, "nfl", "NFL"),
+    league(Sport::Football, "college-football", "NCAA FOOTBALL"),
+    league(Sport::Soccer, "usa.1", "MLS"),
+    league(Sport::Soccer, "eng.1", "PREMIER LEAGUE"),
+    league(Sport::Soccer, "mex.1", "LIGA MX"),
+    league(Sport::Soccer, "fifa.world", "WORLD CUP"),
+];
 
-/// Mirrors the backend's `SoccerLeague` registry.
-fn soccer_league_name(slug: &str) -> Option<&'static str> {
-    match slug {
-        "usa.1" => Some("MLS"),
-        "eng.1" => Some("PREMIER LEAGUE"),
-        "mex.1" => Some("LIGA MX"),
-        "fifa.world" => Some("WORLD CUP"),
-        _ => None,
+const fn league(sport: Sport, slug: &'static str, display_name: &'static str) -> RegisteredLeague {
+    RegisteredLeague {
+        sport,
+        slug,
+        display_name,
     }
 }
 

@@ -97,10 +97,9 @@ use embassy_net::Stack;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant, Timer};
-use scoreboard_config::DeviceConfig;
+use scoreboard_config::{DeviceConfig, LeagueSources};
 use scoreboard_input::button::Press;
 use scoreboard_input::menu::{Action, Button as MenuButton, MenuController};
-use scoreboard_model::feed::LeagueId;
 use scoreboard_model::poll::{
     self, FailureTracker, Health, PollError, SkipKind, SkipMachine, SkipVerdict,
 };
@@ -218,34 +217,6 @@ pub fn health() -> Health {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Sources
-// ---------------------------------------------------------------------------
-
-/// The configured leagues, in poll order: MLB, NBA, football leagues, soccer
-/// leagues. `sources_from_config` (`poller.py:223-239`).
-///
-/// Read once, at task start. `api_routes.py` re-applied colours and display
-/// settings live but never rebuilt the poller's sources, so changing which
-/// leagues are polled has always taken a reboot; [`Slate::set_sources`] drops
-/// every cached game anyway, which is why it is not a thing to do casually.
-fn sources_from_config(config: &DeviceConfig) -> heapless::Vec<LeagueId, MAX_SOURCES> {
-    let mut sources = heapless::Vec::new();
-    if config.sports.mlb.enabled {
-        let _ = sources.push(LeagueId::from_slug(Sport::Mlb, "mlb"));
-    }
-    if config.sports.nba.enabled {
-        let _ = sources.push(LeagueId::from_slug(Sport::Nba, "nba"));
-    }
-    for slug in config.sports.football.active() {
-        let _ = sources.push(LeagueId::from_slug(Sport::Football, slug));
-    }
-    for slug in config.sports.soccer.active() {
-        let _ = sources.push(LeagueId::from_slug(Sport::Soccer, slug));
-    }
-    sources
-}
-
 /// The cadence, re-read every tick so a `PUT /api/config` takes effect without
 /// a reboot — which is what `poller.py` got for free by holding the `Config`
 /// object the API route mutated.
@@ -345,7 +316,10 @@ pub async fn run(
     publisher: Publisher<'static>,
     stack: Stack<'static>,
 ) -> ! {
-    let sources = crate::config::with(sources_from_config);
+    // Read once: changing which leagues are polled takes a reboot, and
+    // `Slate::set_sources` drops every cached game anyway, which is why it is
+    // not a thing to do casually.
+    let LeagueSources { sources, dropped } = crate::config::with(DeviceConfig::league_sources);
     let mut poller = Poller {
         store,
         publisher,
@@ -365,10 +339,19 @@ pub async fn run(
     poller.slate.set_sources(&sources);
 
     if sources.is_empty() {
-        // Not an error: `sources_from_config` returns nothing when every sport
-        // is switched off, and the panel's answer to that is the same as its
+        // Not an error: `league_sources` returns nothing when every sport is
+        // switched off, and the panel's answer to that is the same as its
         // answer to a day with no games.
         crate::error!("poll: no sports enabled, nothing to poll");
+    }
+    if dropped > 0 {
+        // Only a hand-written config gets here — every league the settings
+        // page offers fits at once — so say which limit it hit.
+        crate::error!(
+            "poll: {} configured leagues past the first {} are not polled",
+            dropped,
+            MAX_SOURCES
+        );
     }
     for source in &sources {
         crate::debug!("poll: source {}", source.key.as_str());

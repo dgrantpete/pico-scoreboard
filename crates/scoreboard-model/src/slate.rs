@@ -11,10 +11,23 @@ use crate::feed::{LeagueId, ListSink};
 use crate::snapshot::GAME_ID;
 use crate::text::{Text, set_folded};
 
-/// Leagues that can be configured at once: MLB, NBA, two football leagues,
-/// and up to four soccer leagues, with room to spare. Also the width of the
-/// filter bitmask.
-pub const MAX_SOURCES: usize = 8;
+/// Leagues that can be configured at once: exactly the registered leagues
+/// ([`crate::feed::LEAGUES`] — MLB, NBA, NHL, two football, four soccer), so
+/// every combination the settings page offers fits.
+///
+/// No headroom, on purpose. Each source costs a league descriptor here and an
+/// ETag slot in the app's poller, and spare slots would hide the moment this
+/// needs rethinking: `scoreboard-config`'s
+/// `every_registered_league_fits_the_slate` fails the day a tenth league is
+/// registered, and that failure is the cue to bump this and re-measure the
+/// poller arena. A hand-written config can still name more (unregistered
+/// slugs poll by design); `DeviceConfig::league_sources` counts those rather
+/// than dropping them silently.
+///
+/// Also the width of the filter bitmask, a `u16`.
+pub const MAX_SOURCES: usize = 9;
+
+const _: () = assert!(MAX_SOURCES <= u16::BITS as usize);
 
 /// Games held across every league. A college-football Saturday is the worst
 /// case the corpus suggests (~70 games) alongside a full MLB slate; entries
@@ -55,7 +68,7 @@ pub struct Slate {
     /// Rotation restricted to these sources; `None` is every league. Session
     /// state by design — the persisted config owns which leagues are polled at
     /// all, and this resets on reboot.
-    filter: Option<u8>,
+    filter: Option<u16>,
     locked: bool,
     /// The `(source, game id)` on screen, cached so a slate rebuild can put
     /// the index back on it even though the entries themselves moved.
@@ -81,7 +94,7 @@ impl Slate {
         }
     }
 
-    /// Install the configured leagues, in poll order: MLB, NBA, football
+    /// Install the configured leagues, in poll order: MLB, NBA, NHL, football
     /// leagues, soccer leagues. Drops every cached game — a source list only
     /// changes on a config write, which invalidates the indices anyway.
     ///
@@ -159,14 +172,14 @@ impl Slate {
         self.sync_current();
     }
 
-    fn source_mask(&self) -> u8 {
+    fn source_mask(&self) -> u16 {
         match self.sources.len() {
             0 => 0,
-            len => (1u16 << len).wrapping_sub(1) as u8,
+            len => (1u32 << len).wrapping_sub(1) as u16,
         }
     }
 
-    fn collect_rotation(&mut self, filter: Option<u8>) {
+    fn collect_rotation(&mut self, filter: Option<u16>) {
         self.rotation.clear();
         self.push_state(filter, GameState::Live);
         if self.rotation.is_empty() {
@@ -175,7 +188,7 @@ impl Slate {
         }
     }
 
-    fn push_state(&mut self, filter: Option<u8>, state: GameState) {
+    fn push_state(&mut self, filter: Option<u16>, state: GameState) {
         for source in 0..self.sources.len() as u8 {
             if filter.is_some_and(|mask| mask & (1 << source) == 0) {
                 continue;
@@ -296,7 +309,7 @@ impl Slate {
     }
 
     /// The active filter as a source bitmask; `None` is every league.
-    pub fn filter(&self) -> Option<u8> {
+    pub fn filter(&self) -> Option<u16> {
         self.filter
     }
 
@@ -308,7 +321,7 @@ impl Slate {
     /// filtered out, the rebuild moves the board to a filtered-in game despite
     /// the lock — the user just excluded that league on purpose.
     pub fn set_filter(&mut self, keys: &[&str]) -> bool {
-        let mut mask = 0u8;
+        let mut mask = 0u16;
         for (index, source) in self.sources.iter().enumerate() {
             if keys.contains(&source.key.as_str()) {
                 mask |= 1 << index;

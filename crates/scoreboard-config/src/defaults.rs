@@ -66,6 +66,10 @@ pub(crate) fn variant_a() -> String<{ crate::MAX_VARIANT }> {
     text("A")
 }
 
+pub(crate) fn variant_b() -> String<{ crate::MAX_VARIANT }> {
+    text("B")
+}
+
 pub(crate) fn variant_c() -> String<{ crate::MAX_VARIANT }> {
     text("C")
 }
@@ -90,8 +94,17 @@ pub(crate) fn red() -> Rgb {
     Rgb::new(255, 10, 10)
 }
 
-/// MLB is the one sport on by default — the others wait for their season.
+/// MLB is on by default; NBA and the multi-league sports wait for somebody to
+/// pick them.
 pub(crate) fn mlb() -> SportToggle {
+    SportToggle { enabled: true }
+}
+
+/// NHL is on by default too (NHL.md D5, the owner's call on 2026-10-15):
+/// friends' units should start rotating hockey without anyone opening the
+/// settings page. A document stored before hockey existed has no `nhl` key,
+/// so this is also what every upgraded unit reads.
+pub(crate) fn nhl() -> SportToggle {
     SportToggle { enabled: true }
 }
 
@@ -172,6 +185,8 @@ impl Default for VariantsConfig {
             nba_final: variant_c(),
             football_final: variant_c(),
             soccer_live: variant_a(),
+            hockey_live: variant_b(),
+            hockey_final: variant_a(),
         }
     }
 }
@@ -193,6 +208,7 @@ impl Default for SportsConfig {
         SportsConfig {
             mlb: mlb(),
             nba: SportToggle::default(),
+            nhl: nhl(),
             football: SportLeagues::default(),
             soccer: SportLeagues::default(),
         }

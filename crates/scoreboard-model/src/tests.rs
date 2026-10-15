@@ -1231,6 +1231,33 @@ fn a_filter_naming_every_league_is_no_filter() {
 }
 
 #[test]
+fn the_filter_reaches_the_ninth_source() {
+    // Every registered league at once is nine sources, one past a byte: the
+    // last one's bit is the one a `u8` mask would have lost.
+    let every: Vec<LeagueId> = crate::feed::LEAGUES
+        .iter()
+        .map(|league| LeagueId::from_slug(league.sport, league.slug))
+        .collect();
+    assert_eq!(every.len(), crate::slate::MAX_SOURCES);
+    let mut slate = Slate::new();
+    slate.set_sources(&every);
+    assert_eq!(slate.sources().len(), every.len(), "nothing truncated");
+    list(&mut slate, 0, &[(GameState::Final, "m1")]);
+    list(&mut slate, 8, &[(GameState::Final, "w1")]);
+    slate.rebuild();
+
+    assert!(slate.set_filter(&["soccer/fifa.world"]));
+    assert_eq!(slate.filter(), Some(1 << 8));
+    assert_eq!(slate.len(), 1);
+    assert_eq!(slate.current().unwrap().id, "w1");
+
+    // Naming all nine is still "no filter" — the full mask spans the ninth bit.
+    let keys: Vec<&str> = every.iter().map(|league| league.key.as_str()).collect();
+    assert!(slate.set_filter(&keys));
+    assert!(slate.filter().is_none());
+}
+
+#[test]
 fn the_rotation_lock_is_independent_of_the_filter() {
     let mut slate = Slate::new();
     slate.set_sources(&sources());
@@ -2729,7 +2756,7 @@ impl Maxima {
 fn the_snapshot_stays_inside_its_budget_line() {
     assert_eq!(ScoreboardSnapshot::SIZE, 3_224);
     assert_eq!(crate::SnapshotChannel::SIZE, 9_680);
-    assert_eq!(Slate::SIZE, 4_596);
+    assert_eq!(Slate::SIZE, 4_668);
 }
 
 // =========================================================================
