@@ -41,9 +41,10 @@
 //! [`Sink`]-based `encode` (the backend's side) and borrowing `decode` (the
 //! firmware's side) are defined together per sport so they cannot drift.
 //! Decoded strings, line scores and hockey's goal records borrow the caller's
-//! receive buffer: nothing here allocates, and no field is owned. Copying what outlives the buffer is
-//! the caller's decision — the firmware's snapshot has bounded owned fields for
-//! exactly that, so this crate never has to guess a capacity.
+//! receive buffer: nothing here allocates, and no field is owned. Copying what
+//! outlives the buffer is the caller's decision — the firmware's snapshot has
+//! bounded owned fields for exactly that, so this crate never has to guess a
+//! capacity.
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
