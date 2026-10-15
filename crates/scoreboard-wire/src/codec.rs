@@ -171,6 +171,27 @@ impl<'a> Reader<'a> {
         Ok((away, home))
     }
 
+    /// `count` fixed-size records whose count the fixed section carries
+    /// (hockey's goals), borrowed as arrays so a record's fields are plain
+    /// indexing, like [`Reader::fixed`].
+    pub(crate) fn records<const N: usize>(
+        &mut self,
+        field: &'static str,
+        count: usize,
+    ) -> Result<&'a [[u8; N]], DecodeError> {
+        let need = count * N;
+        let have = self.remaining();
+        if need > have {
+            return Err(DecodeError::at(
+                self.offset,
+                DecodeErrorKind::TruncatedRecords { field, need, have },
+            ));
+        }
+        let bytes = &self.buf[self.offset..self.offset + need];
+        self.offset += need;
+        Ok(bytes.as_chunks::<N>().0)
+    }
+
     /// One `u8`-length-prefixed UTF-8 string, borrowed from the payload.
     ///
     /// The bytes are validated as UTF-8 but otherwise untouched: normalizing to
@@ -246,7 +267,8 @@ pub(crate) fn le_u32<const N: usize>(fixed: &[u8; N], index: usize) -> u32 {
     ])
 }
 
-/// The away/home color pairs that close every fixed section.
+/// The away/home color pairs every fixed section carries — last, except in
+/// the hockey sections that append their own fields to NBA's.
 pub(crate) fn color_pairs<const N: usize>(
     fixed: &[u8; N],
     index: usize,

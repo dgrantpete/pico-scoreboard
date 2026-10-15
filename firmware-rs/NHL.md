@@ -1,7 +1,8 @@
 # NHL — end-to-end spec
 
-Status: **decided** (owner, 2026-10-12; drafted 2026-10-01). Nothing here is
-implemented yet except the collector change in §9.1. Visual decisions
+Status: **decided** (owner, 2026-10-12; drafted 2026-10-01). Implemented so
+far: the collector change (§9.1) and the wire format (§4, phase 6.1,
+frozen 2026-10-14). Visual decisions
 reference the mockup gallery (published Artifact "NHL Panel Mockups") and the
 goal-mark study (Artifact "Rink Goal Dots"); every mockup was
 drawn by a scratch program linking the real `scoreboard-render` crate over
@@ -214,48 +215,95 @@ hold a goal — plus an SO column) so the box-score variant stays one
 
 ## 4. Wire format — `scoreboard-wire/src/hockey.rs`
 
-New sport, new payloads, same `WIRE_VERSION = 2` header (the version byte
-gates layout *per endpoint*, and no deployed decoder requests
-`/hockey/nhl/*`). Layouts below are the proposal; Phase 1 freezes them with
-goldens. Conventions as every sport: little-endian, `u8`-prefixed strings,
-flags gate optional strings, no trailing bytes.
+**Frozen** (phase 6.1, 2026-10-14). The crate module is normative; this
+section mirrors it for the lanes that implement against it. New sport, new
+payloads, same `WIRE_VERSION = 2` header: the version byte gates layout *per
+endpoint*, and no deployed decoder has ever requested `/hockey/nhl/*`, so
+there is no `ext=1` extension — the first layout carries everything.
+Conventions as every sport: little-endian, `u8`-prefixed UTF-8 strings, flags
+gate optional groups and strings, a group whose flag is unset is zeroed, no
+trailing bytes. Bit 4 of every state's flags is "playoffs": it is what tells
+a regular-season shootout from a playoff 2OT at period 5 (§2).
 
-**Live (state 1)**, fixed section at offset 2:
+**Live (state 1)** — fixed 36 bytes at offset 2 (`<BBBHHIIIIBBBBBBBBHHB`):
+NBA live's 23 bytes, then hockey's.
 
 | off | type | field |
 |-----|------|-------|
-| 2 | u8 | flags: b0 last play, b1 strength known, b2 shootout, b3 SOG present, b4 playoffs |
-| 3 | u8 | period |
-| 4 | u8 | phase (`LivePhase` code) |
-| 5 | u16 | away score |
+| 2 | u8 | flags: b0 last play, b1 strength, b2 shootout, b3 SOG, b4 playoffs; b5–7 zero |
+| 3 | u8 | period, ESPN's raw number (§3.1) |
+| 4 | u8 | phase (`LivePhase`: 0 in progress, 2 end of period = the intermission; 1 is never sent) |
+| 5 | u16 | away score (the tied game score during a shootout, §3.8) |
 | 7 | u16 | home score |
 | 9 | u32×4 | colors (away primary/alt, home primary/alt) |
-| 25 | u8 | away SOG |
+| 25 | u8 | away SOG (b3) |
 | 26 | u8 | home SOG |
-| 27 | u8 | strength (0 even, 1/2 PP away/home, 3 matched, 4/5 EN away/home) |
-| 28 | u8 | away skaters (0 unknown) |
+| 27 | u8 | strength (b1): 0 even, 1/2 power play away/home (the side with more skaters), 3 matched, 4/5 empty net away/home (the side whose goalie is pulled) |
+| 28 | u8 | away skaters (b1; 0 unknown) |
 | 29 | u8 | home skaters |
-| 30 | u8 | goal count N (≤ 16) |
-| 31 | u8 | away SO attempts (≤ 16) |
+| 30 | u8 | goal count N, 0..=16 |
+| 31 | u8 | away SO attempts (b2), 0..=16 |
 | 32 | u8 | home SO attempts |
-| 33 | u16 | away SO scored bitmask |
-| 35 | u16 | home SO scored bitmask |
-| 37 | u8 | next shooter (0 none, 1 away, 2 home) |
+| 33 | u16 | away SO goals: bit i = attempt i scored, first attempt bit 0 |
+| 35 | u16 | home SO goals |
+| 37 | u8 | next shooter (b2): 0 none (the shootout is over), 1 away, 2 home |
 
-Then N goal records, 6 bytes each: `u8 side|tag` (b0 side, b1–2 tag),
-`u8 period`, `u16 elapsed s`, `i8 x`, `i8 y`. Strings: `game_id`, away
-abbr, home abbr, `clock`, iff N > 0 the newest goal's scorer, iff b0 play
-id + play text.
+Then N goal records from offset 38, oldest first, 6 bytes each (`<BBHbb`):
 
-**Pregame (state 0)**: NBA's pregame plus `u16` OTL per side, flags for
-each side's goalie, b4 playoffs; strings `game_id`, abbrs, `venue`,
-`info_secondary`, iff flagged away/home goalie.
+| off | type | field |
+|-----|------|-------|
+| +0 | u8 | b0 side (0 away, 1 home), b1–2 tag (0 GOAL, 1 PPG, 2 SHG, 3 ENG), b3 coordinate present; b4–7 zero |
+| +1 | u8 | period |
+| +2 | u16 | elapsed seconds in the period |
+| +4 | i8 | x, §3.5's normalized feet, −100..=100 (0 when b3 is clear) |
+| +5 | i8 | y, −43..=43 (0 when b3 is clear) |
 
-**Final (state 2)**: flags (b0 stars, b1 series, b2 SOG, b4 playoffs),
-`periods_played`, scores, colors, SOG ×2, star sides (2 bits ×3), the two
-raw per-period line scores (the shared `write_final` byte shape for the
-period part); strings `game_id`, abbrs, iff b0 three star names, iff b1
+The coordinate bit is for a goal ESPN logs without one: it keeps its slot in
+the count and can still be the last goal, it just gets no rink mark.
+
+Strings after the last record: `game_id`, away abbr, home abbr, `clock`,
+iff N > 0 the newest goal's scorer, iff b0 play id + play text.
+
+**Pregame (state 0)** — fixed 33 bytes at offset 2 (`<BHHHHIIIIIHH`): NBA
+pregame's 29 bytes, then `u16` away OTL at 31 and `u16` home OTL at 33.
+Flags: b0/b1 away/home record (W, L and OTL travel together), b2/b3
+away/home goalie (football's team-line bits), b4 playoffs; b5–7 zero.
+Strings from offset 35: `game_id`, away abbr, home abbr, `venue`,
+`info_secondary` (always present, empty outside the playoffs), iff b2 away
+goalie, iff b3 home goalie.
+
+**Final (state 2)** — a 4-byte hockey prefix at offset 2, then the shared
+final (`common::write_final`, the MLB/NBA/football bytes) whole from offset 6:
+
+| off | type | field |
+|-----|------|-------|
+| 2 | u8 | flags: b0 stars, b1 series, b2 SOG, b4 playoffs; b3 and b5–7 zero |
+| 3 | u8 | away SOG (b2) |
+| 4 | u8 | home SOG |
+| 5 | u8 | star sides (b0): 2 bits per star, first star lowest — 0 unknown, 1 away, 2 home; b6–7 zero |
+| 6 | u8 | periods_played, ESPN's raw count |
+| 7 | u8 | away line-score length |
+| 8 | u8 | home line-score length |
+| 9 | u16 | away score (a shootout winner's includes the +1) |
+| 11 | u16 | home score |
+| 13 | u32×4 | colors |
+
+Then the raw per-period line scores (away, home: each OT its own entry, the
+shootout a fifth period of 1/0), `game_id`, away abbr, home abbr (the shared
+final ends here), iff b0 the first, second and third star names, iff b1 the
 series summary.
+
+**Encode** clamps rather than fails, as the format does everywhere: the
+newest 16 goals; at most 16 SO attempts per side, with goal bits past the
+count dropped; coordinates pulled back to the boards. Whatever encodes,
+decodes.
+
+**Decode rejects:** a flag bit the state leaves undefined; an unknown phase,
+strength, next-shooter or star-side code; a goal record with b4–7 set;
+N > 16; SO attempts > 16; an SO goal bit at or past its side's attempt count;
+a present coordinate outside ±100 / ±43; truncation anywhere; trailing
+bytes. A group whose flag is unset is a placeholder — decoded as absent and
+never validated (football's situation rule).
 
 ## 5. Budgets
 
@@ -267,6 +315,10 @@ series summary.
   Update the pinned numbers in the same commit; record in BUDGET.md.
 - Flash: the extractor tables + renderer ≈ 15–25 KB (soccer's lane was the
   largest at ~1.5 kLOC); the rink + star sprites < 1 KB.
+- Wire (§4): a live game with 6 goals and a goal line is ≈ 215 B; 16 goals
+  and a 255-byte play line ≈ 460 B, well inside the receive buffer's
+  2,048-B detail half (`poll::DETAIL_BYTES`). Pregame and final run
+  55–140 B.
 - Backend: `JSON_CACHE_CAPACITY` (16) was sized for soccer summaries; NHL
   adds a summary per live game shown by any device (up to 16 NHL games a
   night, 85–630 KB each). Raise to 48 and note the Fly machine's memory
@@ -290,10 +342,11 @@ series summary.
   `tools/extract_fixtures.py` is still sqlite-bound (BACKLOG 61) — either
   port it first or pull NHL fixtures with a short SQL query.
 
-### 6.1 `scoreboard-wire`
+### 6.1 `scoreboard-wire` — done 2026-10-14
 `hockey.rs` per §4: `Game/Pregame/Live/Final`, `encode`/`decode`, round-trip
-+ truncation + malformed-input tests in `tests.rs`, goldens under
-`backend/testdata/wire/hockey/`.
++ truncation + malformed-input tests and hand-checked hex goldens in
+`tests.rs`. The corpus goldens under `backend/testdata/wire/hockey/` come
+from real fixtures with 6.3's `wire_corpus.rs` arms.
 
 ### 6.2 `scoreboard-espn` (hardest lane — strongest model, line-by-line review)
 `src/hockey.rs`: two path tables like soccer's (scoreboard event; summary

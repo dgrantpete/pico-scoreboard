@@ -46,11 +46,25 @@ pub enum DecodeErrorKind {
         need: usize,
         have: usize,
     },
+    /// A run of fixed-size records (hockey's goals) ends past the payload.
+    TruncatedRecords {
+        field: &'static str,
+        need: usize,
+        have: usize,
+    },
     /// An enum-valued byte outside its known set (inning half, live phase,
-    /// soccer period, full-time flavor, game state).
+    /// soccer period, full-time flavor, game state, hockey's strength and side
+    /// codes), or a flags byte with a bit its layout does not define.
     InvalidCode {
         field: &'static str,
         code: u8,
+    },
+    /// A count or magnitude past what the format allows — a hockey goal count
+    /// over 16, a shootout goal bit past its attempt count, a coordinate
+    /// beyond the boards. Signed and wide enough for every field it reports.
+    OutOfRange {
+        field: &'static str,
+        value: i32,
     },
     /// A well-formed payload followed by bytes nothing claims.
     Trailing(usize),
@@ -83,8 +97,14 @@ impl fmt::Display for DecodeError {
             DecodeErrorKind::TruncatedLineScores { need, have } => {
                 write!(f, "truncated linescores: need {need} bytes, have {have}")
             }
+            DecodeErrorKind::TruncatedRecords { field, need, have } => {
+                write!(f, "truncated {field}: need {need} bytes, have {have}")
+            }
             DecodeErrorKind::InvalidCode { field, code } => {
                 write!(f, "invalid {field} code: {code}")
+            }
+            DecodeErrorKind::OutOfRange { field, value } => {
+                write!(f, "{field} out of range: {value}")
             }
             DecodeErrorKind::Trailing(extra) => write!(f, "{extra} unexpected trailing bytes"),
         }

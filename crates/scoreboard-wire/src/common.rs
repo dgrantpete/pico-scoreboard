@@ -165,7 +165,9 @@ pub(crate) fn payload_reader(buf: &[u8]) -> Reader<'_> {
 /// lengths, the two scores, the two color pairs — then the away and home
 /// line-score bytes, then `game_id`, `away.abbreviation`, `home.abbreviation`.
 /// Only the period's name differs between the sports (innings vs quarters),
-/// which is a field name, not a byte.
+/// which is a field name, not a byte. Hockey's final carries these same bytes
+/// whole, behind a 4-byte prefix of its own and ahead of its optional strings
+/// (see [`crate::hockey`]).
 const FINAL_LEN: usize = 23;
 
 pub(crate) struct FinalParts<'a> {
@@ -202,6 +204,15 @@ pub(crate) fn write_final<S: Sink + ?Sized>(
 
 pub(crate) fn read_final(buf: &[u8]) -> Result<FinalParts<'_>, DecodeError> {
     let mut reader = payload_reader(buf);
+    let parts = read_final_parts(&mut reader)?;
+    reader.finish()?;
+    Ok(parts)
+}
+
+/// The shared final from wherever `reader` stands, leaving it just past
+/// `home.abbreviation` — the one reader for both [`read_final`] and the hockey
+/// final that wraps these bytes, so the two cannot drift.
+pub(crate) fn read_final_parts<'a>(reader: &mut Reader<'a>) -> Result<FinalParts<'a>, DecodeError> {
     let fixed = reader.fixed::<FINAL_LEN>()?;
     let (away_colors, home_colors) = color_pairs(fixed, 7);
     let (away_line, home_line) = reader.line_scores(fixed[1] as usize, fixed[2] as usize)?;
@@ -209,7 +220,6 @@ pub(crate) fn read_final(buf: &[u8]) -> Result<FinalParts<'_>, DecodeError> {
     let game_id = reader.string("game_id")?;
     let away_abbreviation = reader.string("away abbreviation")?;
     let home_abbreviation = reader.string("home abbreviation")?;
-    reader.finish()?;
 
     Ok(FinalParts {
         game_id,

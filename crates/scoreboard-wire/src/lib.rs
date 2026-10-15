@@ -25,7 +25,8 @@
 //! are exactly v2 — the gift fleet and every firmware before 2026-10-12 never
 //! send it. Each module's `encode` writes v2 and `encode_ext` adds the
 //! extension; `decode` accepts both. Defined today: the [`nba`] pregame's team
-//! lines.
+//! lines. A new sport needs none: no deployed decoder has ever requested its
+//! endpoint, so its first v2 layout carries everything ([`hockey`]).
 //!
 //! # Header
 //!
@@ -39,8 +40,8 @@
 //!
 //! [`Sink`]-based `encode` (the backend's side) and borrowing `decode` (the
 //! firmware's side) are defined together per sport so they cannot drift.
-//! Decoded strings and line scores borrow the caller's receive buffer: nothing
-//! here allocates, and no field is owned. Copying what outlives the buffer is
+//! Decoded strings, line scores and hockey's goal records borrow the caller's
+//! receive buffer: nothing here allocates, and no field is owned. Copying what outlives the buffer is
 //! the caller's decision — the firmware's snapshot has bounded owned fields for
 //! exactly that, so this crate never has to guess a capacity.
 
@@ -59,6 +60,7 @@ mod tests;
 
 pub mod error;
 pub mod football;
+pub mod hockey;
 pub mod list;
 pub mod mlb;
 pub mod nba;

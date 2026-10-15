@@ -12,7 +12,7 @@ use std::{format, vec::Vec};
 use crate::error::{DecodeError, DecodeErrorKind};
 use crate::{
     BufferFull, FinalTeam, GameState, LastPlay, LivePhase, Record, Side, SliceSink, TeamColors,
-    TeamState, clamp_temperature, football, list, mlb, nba, saturate_score, soccer,
+    TeamState, clamp_temperature, football, hockey, list, mlb, nba, saturate_score, soccer,
 };
 
 /// Every corpus payload fits comfortably; the largest is a soccer live game
@@ -844,6 +844,898 @@ fn football_final_regulation() {
         football::decode(&unhex(GOLDEN_FOOTBALL_FINAL)).unwrap(),
         game
     );
+}
+
+// --- Hockey ---
+//
+// No deployed encoder predates these; the goldens were written by this
+// encoder and checked field by field against the layout tables in
+// `hockey.rs`, which is what makes them a contract rather than a snapshot.
+
+const fn hockey_goal(
+    side: Side,
+    tag: hockey::GoalTag,
+    period: u8,
+    elapsed: u16,
+    x: i8,
+    y: i8,
+) -> hockey::Goal {
+    hockey::Goal {
+        side,
+        tag,
+        period,
+        elapsed,
+        coordinate: Some(hockey::Coordinate { x, y }),
+    }
+}
+
+/// SEA @ CGY early in the second: five goals, one on the power play.
+static HOCKEY_GOALS: [hockey::Goal; 5] = [
+    hockey_goal(Side::Away, hockey::GoalTag::Goal, 1, 441, 46, 7),
+    hockey_goal(Side::Home, hockey::GoalTag::Goal, 1, 771, -66, -9),
+    hockey_goal(Side::Home, hockey::GoalTag::PowerPlay, 1, 1078, -68, -2),
+    hockey_goal(Side::Away, hockey::GoalTag::Goal, 1, 1124, 70, 14),
+    hockey_goal(Side::Home, hockey::GoalTag::Goal, 2, 85, -75, -16),
+];
+
+/// The home side on the power play the last play (a tripping minor) gave it.
+fn hockey_live() -> hockey::Live<'static> {
+    hockey::Live {
+        game_id: "401891781",
+        period: 2,
+        phase: LivePhase::InProgress,
+        clock: "13:38",
+        playoffs: false,
+        away: team("SEA", 2, 0x001628, 0x99D9D9),
+        home: team("CGY", 3, 0xC8102E, 0xF1BE48),
+        shots: Some(hockey::Shots { away: 21, home: 18 }),
+        strength: Some(hockey::Strength {
+            kind: hockey::StrengthKind::PowerPlay(Side::Home),
+            away_skaters: 4,
+            home_skaters: 5,
+        }),
+        goals: hockey::Goals::new(&HOCKEY_GOALS),
+        last_scorer: "N. Kadri",
+        shootout: None,
+        last_play: Some(LastPlay {
+            id: "401891781000005110",
+            text: "Jordan Eberle Tripping against Rasmus Andersson",
+        }),
+    }
+}
+
+const GOLDEN_HOCKEY_LIVE: &str = "02010b02000200030028160000d9d999002e10c80048bef100151202040505000000000000000801b9012e0709010303bef70b013604bcfe08016404460e09025500b5f00934303138393137383103534541034347590531333a3338084e2e204b61647269123430313839313738313030303030353131302f4a6f7264616e20456265726c65205472697070696e6720616761696e7374205261736d757320416e64657273736f6e";
+
+#[test]
+fn hockey_live_on_a_power_play() {
+    let game = hockey::Game::Live(hockey_live());
+    assert_eq!(
+        encoded(|out| hockey::encode(&game, out)),
+        GOLDEN_HOCKEY_LIVE
+    );
+    let bytes = unhex(GOLDEN_HOCKEY_LIVE);
+    let decoded = hockey::decode(&bytes).unwrap();
+    assert_eq!(decoded, game);
+    let hockey::Game::Live(live) = decoded else {
+        unreachable!()
+    };
+    assert_eq!(live.goals.len(), 5);
+    assert_eq!(live.goals.last(), Some(HOCKEY_GOALS[4]));
+    assert_eq!(live.goals.iter().next_back(), Some(HOCKEY_GOALS[4]));
+    assert_eq!(live.goals.get(5), None);
+}
+
+const GOLDEN_HOCKEY_PUCK_DROP: &str = "0201000100000000001cb8ff00000000001646fa0000000000000000000000000000000000000934303138393138313603424f53035048490532303a3030";
+
+#[test]
+fn hockey_live_at_puck_drop_has_no_goals_and_no_scorer() {
+    // Flags 0: no play, no strength, no shootout, no shots. N = 0, so the
+    // scorer string is not on the wire either: the clock is the last field.
+    let game = hockey::Game::Live(hockey::Live {
+        game_id: "401891816",
+        period: 1,
+        phase: LivePhase::InProgress,
+        clock: "20:00",
+        playoffs: false,
+        away: team("BOS", 0, 0xFFB81C, 0x000000),
+        home: team("PHI", 0, 0xFA4616, 0x000000),
+        shots: None,
+        strength: None,
+        goals: hockey::Goals::new(&[]),
+        last_scorer: "",
+        shootout: None,
+        last_play: None,
+    });
+    assert_eq!(
+        encoded(|out| hockey::encode(&game, out)),
+        GOLDEN_HOCKEY_PUCK_DROP
+    );
+    assert_eq!(
+        hockey::decode(&unhex(GOLDEN_HOCKEY_PUCK_DROP)).unwrap(),
+        game
+    );
+}
+
+#[test]
+fn hockey_live_scorer_travels_only_with_a_goal() {
+    // A goalless game has no "last goal": encode drops the scorer, decode
+    // reports it empty.
+    let game = hockey::Game::Live(hockey::Live {
+        goals: hockey::Goals::new(&[]),
+        last_scorer: "N. Kadri",
+        ..hockey_live()
+    });
+    let bytes = unhex(&encoded(|out| hockey::encode(&game, out)));
+    let hockey::Game::Live(decoded) = hockey::decode(&bytes).unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(decoded.last_scorer, "");
+    assert!(decoded.goals.is_empty());
+    assert_eq!(decoded.goals.last(), None);
+}
+
+fn sixteen_hockey_goals() -> Vec<hockey::Goal> {
+    (0..16u16)
+        .map(|n| hockey::Goal {
+            side: if n % 2 == 0 { Side::Away } else { Side::Home },
+            tag: hockey::GoalTag::from_code((n % 4) as u8).unwrap(),
+            period: 1 + (n / 6) as u8,
+            elapsed: n * 70,
+            coordinate: (n != 7).then_some(hockey::Coordinate {
+                x: if n % 2 == 0 { 100 } else { -100 },
+                y: if n % 3 == 0 { -43 } else { 43 },
+            }),
+        })
+        .collect()
+}
+
+#[test]
+fn hockey_live_carries_sixteen_goals_at_the_coordinate_bounds() {
+    let goals = sixteen_hockey_goals();
+    let game = hockey::Game::Live(hockey::Live {
+        goals: hockey::Goals::new(&goals),
+        ..hockey_live()
+    });
+    let bytes = unhex(&encoded(|out| hockey::encode(&game, out)));
+    assert_eq!(bytes[30], 16);
+    let decoded = hockey::decode(&bytes).unwrap();
+    assert_eq!(decoded, game);
+    let hockey::Game::Live(live) = decoded else {
+        unreachable!()
+    };
+    assert_eq!(live.goals.len(), hockey::MAX_GOALS);
+    assert_eq!(live.goals.iter().collect::<Vec<_>>(), goals);
+    // The one goal ESPN logged without a coordinate keeps its slot.
+    assert_eq!(live.goals.get(7).unwrap().coordinate, None);
+    assert_eq!(live.goals.get(7).unwrap().elapsed, 490);
+}
+
+#[test]
+fn hockey_goal_tags_and_sides_each_round_trip() {
+    for (code, tag) in [
+        (0, hockey::GoalTag::Goal),
+        (1, hockey::GoalTag::PowerPlay),
+        (2, hockey::GoalTag::ShortHanded),
+        (3, hockey::GoalTag::EmptyNet),
+    ] {
+        assert_eq!(tag.code(), code);
+        assert_eq!(hockey::GoalTag::from_code(code), Some(tag));
+        for (side, side_bit) in [(Side::Away, 0), (Side::Home, 1)] {
+            let goal = [hockey_goal(side, tag, 3, 1199, -12, 30)];
+            let game = hockey::Game::Live(hockey::Live {
+                goals: hockey::Goals::new(&goal),
+                ..hockey_live()
+            });
+            let bytes = unhex(&encoded(|out| hockey::encode(&game, out)));
+            // bit0 side, bits1–2 tag, bit3 coordinate present.
+            assert_eq!(bytes[38], side_bit | (code << 1) | 0x08);
+            assert_eq!(hockey::decode(&bytes).unwrap(), game);
+        }
+    }
+    assert_eq!(hockey::GoalTag::from_code(4), None);
+}
+
+#[test]
+fn hockey_strength_codes_round_trip() {
+    for (kind, code, away_skaters, home_skaters) in [
+        (hockey::StrengthKind::Even, 0, 5, 5),
+        (hockey::StrengthKind::PowerPlay(Side::Away), 1, 5, 4),
+        (hockey::StrengthKind::PowerPlay(Side::Home), 2, 3, 5),
+        (hockey::StrengthKind::Matched, 3, 4, 4),
+        (hockey::StrengthKind::EmptyNet(Side::Away), 4, 6, 5),
+        (hockey::StrengthKind::EmptyNet(Side::Home), 5, 5, 6),
+        // The play-strength fallback: a power play, counts unknown.
+        (hockey::StrengthKind::PowerPlay(Side::Away), 1, 0, 0),
+    ] {
+        assert_eq!(kind.code(), code);
+        assert_eq!(hockey::StrengthKind::from_code(code), Some(kind));
+        let game = hockey::Game::Live(hockey::Live {
+            strength: Some(hockey::Strength {
+                kind,
+                away_skaters,
+                home_skaters,
+            }),
+            ..hockey_live()
+        });
+        let bytes = unhex(&encoded(|out| hockey::encode(&game, out)));
+        assert_eq!(bytes[27..30], [code, away_skaters, home_skaters]);
+        assert_eq!(hockey::decode(&bytes).unwrap(), game);
+    }
+    assert_eq!(hockey::StrengthKind::from_code(6), None);
+}
+
+/// A regular-season shootout after three away and two home attempts: away
+/// scored its first and third, home its first, home shoots next. The game
+/// score stays the tied 3–3.
+fn hockey_shootout() -> hockey::Live<'static> {
+    hockey::Live {
+        period: 5,
+        clock: "0:00",
+        away: team("SEA", 3, 0x001628, 0x99D9D9),
+        strength: None,
+        shootout: Some(hockey::Shootout {
+            away: hockey::ShootoutAttempts {
+                taken: 3,
+                scored: 0b101,
+            },
+            home: hockey::ShootoutAttempts {
+                taken: 2,
+                scored: 0b01,
+            },
+            next_shooter: Some(Side::Home),
+        }),
+        last_play: None,
+        ..hockey_live()
+    }
+}
+
+const GOLDEN_HOCKEY_SHOOTOUT: &str = "02010c05000300030028160000d9d999002e10c80048bef100151200000005030205000100020801b9012e0709010303bef70b013604bcfe08016404460e09025500b5f009343031383931373831035345410343475904303a3030084e2e204b61647269";
+
+#[test]
+fn hockey_live_shootout_in_progress() {
+    let game = hockey::Game::Live(hockey_shootout());
+    assert_eq!(
+        encoded(|out| hockey::encode(&game, out)),
+        GOLDEN_HOCKEY_SHOOTOUT
+    );
+    assert_eq!(
+        hockey::decode(&unhex(GOLDEN_HOCKEY_SHOOTOUT)).unwrap(),
+        game
+    );
+}
+
+#[test]
+fn hockey_live_shootout_over_has_no_next_shooter() {
+    // Away's third attempt decided it 2–1: the shootout block stays (the
+    // screen keeps the tally) but nobody shoots next.
+    let mut live = hockey_shootout();
+    live.shootout = Some(hockey::Shootout {
+        away: hockey::ShootoutAttempts {
+            taken: 3,
+            scored: 0b101,
+        },
+        home: hockey::ShootoutAttempts {
+            taken: 3,
+            scored: 0b001,
+        },
+        next_shooter: None,
+    });
+    let game = hockey::Game::Live(live);
+    let bytes = unhex(&encoded(|out| hockey::encode(&game, out)));
+    assert_eq!(bytes[2] & 0x04, 0x04);
+    assert_eq!(bytes[37], 0);
+    assert_eq!(hockey::decode(&bytes).unwrap(), game);
+
+    // And away shooting next is code 1.
+    live.shootout.as_mut().unwrap().next_shooter = Some(Side::Away);
+    let game = hockey::Game::Live(live);
+    let bytes = unhex(&encoded(|out| hockey::encode(&game, out)));
+    assert_eq!(bytes[37], 1);
+    assert_eq!(hockey::decode(&bytes).unwrap(), game);
+}
+
+#[test]
+fn hockey_live_full_shootout_uses_the_whole_mask() {
+    let mut live = hockey_shootout();
+    live.shootout = Some(hockey::Shootout {
+        away: hockey::ShootoutAttempts {
+            taken: 16,
+            scored: 0x8001,
+        },
+        home: hockey::ShootoutAttempts {
+            taken: 16,
+            scored: 0x0001,
+        },
+        next_shooter: None,
+    });
+    let game = hockey::Game::Live(live);
+    let bytes = unhex(&encoded(|out| hockey::encode(&game, out)));
+    assert_eq!(bytes[31..37], [16, 16, 0x01, 0x80, 0x01, 0x00]);
+    assert_eq!(hockey::decode(&bytes).unwrap(), game);
+}
+
+#[test]
+fn hockey_live_extends_the_nba_fixed_section() {
+    // With only a last play flagged, hockey's first 23 fixed bytes are NBA's.
+    let live = hockey::Live {
+        strength: None,
+        shots: None,
+        ..hockey_live()
+    };
+    let nba_game = nba::Game::Live(nba::Live {
+        game_id: live.game_id,
+        period: live.period,
+        phase: live.phase,
+        clock: live.clock,
+        away: live.away,
+        home: live.home,
+        last_play: live.last_play,
+    });
+    let hockey_bytes = unhex(&encoded(|out| {
+        hockey::encode(&hockey::Game::Live(live), out)
+    }));
+    let nba_bytes = unhex(&encoded(|out| nba::encode(&nba_game, out)));
+    assert_eq!(hockey_bytes[..25], nba_bytes[..25]);
+}
+
+fn hockey_pregame() -> hockey::Pregame<'static> {
+    hockey::Pregame {
+        game_id: "401874176",
+        start_time: 1_781_481_600,
+        venue: "Lenovo Center",
+        info_secondary: "Stanley Cup Final - Game 6 - CAR leads series 3-2",
+        playoffs: true,
+        away: hockey::PregameTeam {
+            abbreviation: "VGK",
+            colors: TeamColors {
+                primary: 0x344555,
+                alternate: 0xB4975A,
+            },
+            record: Some(hockey::Record {
+                wins: 50,
+                losses: 22,
+                ot_losses: 10,
+            }),
+            goalie: Some("A. Hill"),
+        },
+        home: hockey::PregameTeam {
+            abbreviation: "CAR",
+            colors: TeamColors {
+                primary: 0xCE1126,
+                alternate: 0xA4A9AD,
+            },
+            record: Some(hockey::Record {
+                wins: 53,
+                losses: 22,
+                ot_losses: 7,
+            }),
+            goalie: Some("F. Andersen"),
+        },
+    }
+}
+
+const GOLDEN_HOCKEY_PRE: &str = "02001f320016003500160080402f6a554534005a97b4002611ce00ada9a4000a000700093430313837343137360356474b034341520d4c656e6f766f2043656e746572315374616e6c6579204375702046696e616c202d2047616d652036202d20434152206c656164732073657269657320332d3207412e2048696c6c0b462e20416e64657273656e";
+
+#[test]
+fn hockey_pregame_playoffs_with_goalies() {
+    let game = hockey::Game::Pregame(hockey_pregame());
+    assert_eq!(encoded(|out| hockey::encode(&game, out)), GOLDEN_HOCKEY_PRE);
+    assert_eq!(hockey::decode(&unhex(GOLDEN_HOCKEY_PRE)).unwrap(), game);
+}
+
+const GOLDEN_HOCKEY_PRE_BARE: &str = "020000000000000000000080402f6a554534005a97b4002611ce00ada9a40000000000093430313837343137360356474b034341520d4c656e6f766f2043656e74657200";
+
+#[test]
+fn hockey_pregame_without_optional_data() {
+    // Regular season, no records, no probable goalies: flags 0, the record
+    // fields zero, `info_secondary` empty but present.
+    let mut pregame = hockey_pregame();
+    pregame.info_secondary = "";
+    pregame.playoffs = false;
+    pregame.away.record = None;
+    pregame.home.record = None;
+    pregame.away.goalie = None;
+    pregame.home.goalie = None;
+    let game = hockey::Game::Pregame(pregame);
+    assert_eq!(
+        encoded(|out| hockey::encode(&game, out)),
+        GOLDEN_HOCKEY_PRE_BARE
+    );
+    assert_eq!(
+        hockey::decode(&unhex(GOLDEN_HOCKEY_PRE_BARE)).unwrap(),
+        game
+    );
+}
+
+#[test]
+fn hockey_pregame_carries_one_goalie_alone() {
+    let mut pregame = hockey_pregame();
+    pregame.away.goalie = None;
+    let game = hockey::Game::Pregame(pregame);
+    let bytes = unhex(&encoded(|out| hockey::encode(&game, out)));
+    assert_eq!(bytes[2], 0x01 | 0x02 | 0x08 | 0x10);
+    assert_eq!(hockey::decode(&bytes).unwrap(), game);
+}
+
+#[test]
+fn hockey_pregame_extends_the_nba_fixed_section() {
+    let pregame = hockey::Pregame {
+        playoffs: false,
+        ..hockey_pregame()
+    };
+    let nba_team = |team: hockey::PregameTeam<'static>| nba::PregameTeam {
+        abbreviation: team.abbreviation,
+        colors: team.colors,
+        record: team.record.map(|record| Record {
+            wins: record.wins,
+            losses: record.losses,
+        }),
+        line: None,
+    };
+    let nba_game = nba::Game::Pregame(nba::Pregame {
+        game_id: pregame.game_id,
+        start_time: pregame.start_time,
+        venue: pregame.venue,
+        away: nba_team(pregame.away),
+        home: nba_team(pregame.home),
+    });
+    let mut hockey_bytes = unhex(&encoded(|out| {
+        hockey::encode(&hockey::Game::Pregame(pregame), out)
+    }));
+    let nba_bytes = unhex(&encoded(|out| nba::encode(&nba_game, out)));
+    // The goalie bits are hockey's; with them masked, the 29 bytes match.
+    hockey_bytes[2] &= 0x03;
+    assert_eq!(hockey_bytes[..31], nba_bytes[..31]);
+}
+
+/// Game 3 of the 2026 final: CAR wins 5–4 in the second overtime.
+fn hockey_final() -> hockey::Final<'static> {
+    hockey::Final {
+        game_id: "401874173",
+        periods_played: 5,
+        playoffs: true,
+        away: final_team("CAR", 5, 0xCE1126, 0xA4A9AD, &[0, 2, 2, 0, 1]),
+        home: final_team("VGK", 4, 0x344555, 0xB4975A, &[0, 2, 2, 0, 0]),
+        shots: Some(hockey::Shots { away: 44, home: 39 }),
+        stars: Some([
+            hockey::Star {
+                name: "S. Aho",
+                side: Some(Side::Away),
+            },
+            hockey::Star {
+                name: "J. Eichel",
+                side: Some(Side::Home),
+            },
+            hockey::Star {
+                name: "F. Andersen",
+                side: Some(Side::Away),
+            },
+        ]),
+        series: Some("CAR leads series 2-1"),
+    }
+}
+
+const GOLDEN_HOCKEY_FINAL: &str = "0202172c2719050505050004002611ce00ada9a400554534005a97b4000002020001000202000009343031383734313733034341520356474b06532e2041686f094a2e2045696368656c0b462e20416e64657273656e14434152206c656164732073657269657320322d31";
+
+#[test]
+fn hockey_final_playoff_double_overtime() {
+    let game = hockey::Game::Final(hockey_final());
+    assert_eq!(
+        encoded(|out| hockey::encode(&game, out)),
+        GOLDEN_HOCKEY_FINAL
+    );
+    assert_eq!(hockey::decode(&unhex(GOLDEN_HOCKEY_FINAL)).unwrap(), game);
+}
+
+const GOLDEN_HOCKEY_FINAL_SO: &str = "02020000000005050504000300476800008c8f8f002e10c800421e040000020100010002010000093430313830323533360344414c03464c41";
+
+#[test]
+fn hockey_final_shootout_without_stars_series_or_shots() {
+    // DAL wins the shootout: the fifth "period" is the shootout's 1/0, and
+    // the score includes it, as ESPN reports. Flags 0, prefix all zero.
+    let game = hockey::Game::Final(hockey::Final {
+        game_id: "401802536",
+        periods_played: 5,
+        playoffs: false,
+        away: final_team("DAL", 4, 0x006847, 0x8F8F8C, &[0, 2, 1, 0, 1]),
+        home: final_team("FLA", 3, 0xC8102E, 0x041E42, &[0, 2, 1, 0, 0]),
+        shots: None,
+        stars: None,
+        series: None,
+    });
+    assert_eq!(
+        encoded(|out| hockey::encode(&game, out)),
+        GOLDEN_HOCKEY_FINAL_SO
+    );
+    assert_eq!(
+        hockey::decode(&unhex(GOLDEN_HOCKEY_FINAL_SO)).unwrap(),
+        game
+    );
+}
+
+#[test]
+fn hockey_final_star_sides_pack_two_bits_each() {
+    // An overtime final whose second star ESPN gave no team: code 0.
+    let mut game = hockey_final();
+    game.periods_played = 4;
+    game.playoffs = false;
+    game.series = None;
+    game.away.line_score = &[0, 2, 2, 1];
+    game.home.line_score = &[0, 2, 2, 0];
+    game.stars.as_mut().unwrap()[1].side = None;
+    game.stars.as_mut().unwrap()[2].side = Some(Side::Home);
+    let game = hockey::Game::Final(game);
+    let bytes = unhex(&encoded(|out| hockey::encode(&game, out)));
+    assert_eq!(bytes[2], 0x01 | 0x04);
+    assert_eq!(bytes[5], 0b10_00_01);
+    assert_eq!(hockey::decode(&bytes).unwrap(), game);
+}
+
+#[test]
+fn hockey_final_embeds_the_shared_final_whole() {
+    // Without stars or series, everything after the 4-byte prefix is the
+    // shared final, byte for byte what NBA's encoder writes.
+    let game = hockey::Final {
+        stars: None,
+        series: None,
+        ..hockey_final()
+    };
+    let nba_game = nba::Game::Final(nba::Final {
+        game_id: game.game_id,
+        periods_played: game.periods_played,
+        away: game.away,
+        home: game.home,
+    });
+    let hockey_bytes = unhex(&encoded(|out| {
+        hockey::encode(&hockey::Game::Final(game), out)
+    }));
+    let nba_bytes = unhex(&encoded(|out| nba::encode(&nba_game, out)));
+    assert_eq!(hockey_bytes[6..], nba_bytes[2..]);
+}
+
+// Encode-side bounds: encode clamps rather than fail, and what it writes
+// always decodes.
+
+#[test]
+fn hockey_goals_keep_the_newest_sixteen() {
+    let goals: Vec<hockey::Goal> = (0..4)
+        .map(|n| hockey_goal(Side::Away, hockey::GoalTag::Goal, 1, n, 1, 1))
+        .chain(sixteen_hockey_goals())
+        .collect();
+    assert_eq!(goals.len(), 20);
+    let view = hockey::Goals::new(&goals);
+    assert_eq!(view.len(), hockey::MAX_GOALS);
+    assert_eq!(view.get(0), Some(goals[4]));
+    let game = hockey::Game::Live(hockey::Live {
+        goals: view,
+        ..hockey_live()
+    });
+    let bytes = unhex(&encoded(|out| hockey::encode(&game, out)));
+    let hockey::Game::Live(decoded) = hockey::decode(&bytes).unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(decoded.goals.iter().collect::<Vec<_>>(), goals[4..]);
+}
+
+#[test]
+fn hockey_shootout_attempts_cap_at_the_mask_width() {
+    let mut live = hockey_shootout();
+    live.shootout = Some(hockey::Shootout {
+        away: hockey::ShootoutAttempts {
+            taken: 20,
+            scored: 0xFFFF,
+        },
+        // A goal bit past the attempt count is not an attempt.
+        home: hockey::ShootoutAttempts {
+            taken: 3,
+            scored: 0xFF,
+        },
+        next_shooter: Some(Side::Home),
+    });
+    let bytes = unhex(&encoded(|out| {
+        hockey::encode(&hockey::Game::Live(live), out)
+    }));
+    assert_eq!(bytes[31..37], [16, 3, 0xFF, 0xFF, 0x07, 0x00]);
+    let hockey::Game::Live(decoded) = hockey::decode(&bytes).unwrap() else {
+        unreachable!()
+    };
+    let shootout = decoded.shootout.unwrap();
+    assert_eq!(shootout.away.taken as usize, hockey::MAX_SHOOTOUT_ATTEMPTS);
+    assert_eq!(shootout.home.scored, 0b111);
+}
+
+#[test]
+fn hockey_coordinates_clamp_to_the_boards() {
+    let goal = [hockey_goal(
+        Side::Home,
+        hockey::GoalTag::EmptyNet,
+        3,
+        1150,
+        i8::MIN,
+        i8::MAX,
+    )];
+    let game = hockey::Game::Live(hockey::Live {
+        goals: hockey::Goals::new(&goal),
+        ..hockey_live()
+    });
+    let bytes = unhex(&encoded(|out| hockey::encode(&game, out)));
+    assert_eq!(bytes[42..44], [(-100i8) as u8, 43]);
+    let hockey::Game::Live(decoded) = hockey::decode(&bytes).unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(
+        decoded.goals.last().unwrap().coordinate,
+        Some(hockey::Coordinate {
+            x: -hockey::MAX_COORDINATE_X,
+            y: hockey::MAX_COORDINATE_Y,
+        })
+    );
+}
+
+// Decode-side: every prefix of a valid payload fails cleanly, and each
+// rejection rule in the module docs has its case.
+
+/// One golden per shape: each state with its optional parts present, and
+/// again with them absent — where the payload ends on a different field.
+fn hockey_payloads() -> [Vec<u8>; 7] {
+    [
+        unhex(GOLDEN_HOCKEY_LIVE),
+        unhex(GOLDEN_HOCKEY_PUCK_DROP),
+        unhex(GOLDEN_HOCKEY_SHOOTOUT),
+        unhex(GOLDEN_HOCKEY_PRE),
+        unhex(GOLDEN_HOCKEY_PRE_BARE),
+        unhex(GOLDEN_HOCKEY_FINAL),
+        unhex(GOLDEN_HOCKEY_FINAL_SO),
+    ]
+}
+
+#[test]
+fn hockey_truncation_at_every_offset_is_a_clean_error() {
+    for bytes in hockey_payloads() {
+        for len in 0..bytes.len() {
+            let error = hockey::decode(&bytes[..len])
+                .expect_err("a strict prefix of a payload is never a payload");
+            assert!(
+                matches!(
+                    error.kind,
+                    DecodeErrorKind::Empty
+                        | DecodeErrorKind::Truncated(_)
+                        | DecodeErrorKind::TruncatedFixed { .. }
+                        | DecodeErrorKind::TruncatedLength(_)
+                        | DecodeErrorKind::TruncatedString { .. }
+                        | DecodeErrorKind::TruncatedLineScores { .. }
+                        | DecodeErrorKind::TruncatedRecords { .. }
+                ),
+                "prefix {len} of {} reported {error}",
+                bytes.len()
+            );
+        }
+    }
+}
+
+#[test]
+fn hockey_trailing_bytes_are_rejected_in_every_state() {
+    for mut bytes in hockey_payloads() {
+        let end = bytes.len();
+        bytes.push(0);
+        assert_eq!(
+            hockey::decode(&bytes).unwrap_err(),
+            DecodeError {
+                offset: end,
+                kind: DecodeErrorKind::Trailing(1),
+            }
+        );
+    }
+}
+
+#[test]
+fn hockey_truncated_goal_records_report_the_shortfall() {
+    let bytes = unhex(GOLDEN_HOCKEY_LIVE);
+    let error = hockey::decode(&bytes[..50]).unwrap_err();
+    assert_eq!(
+        error,
+        DecodeError {
+            offset: 38,
+            kind: DecodeErrorKind::TruncatedRecords {
+                field: "goal records",
+                need: 30,
+                have: 12,
+            },
+        }
+    );
+    assert_eq!(
+        format!("{error}"),
+        "@38: truncated goal records: need 30 bytes, have 12"
+    );
+}
+
+fn hockey_live_err(edit: impl FnOnce(&mut Vec<u8>)) -> DecodeError {
+    let mut bytes = unhex(GOLDEN_HOCKEY_LIVE);
+    edit(&mut bytes);
+    hockey::decode(&bytes).expect_err("payload must be rejected")
+}
+
+fn invalid(offset: usize, field: &'static str, code: u8) -> DecodeError {
+    DecodeError {
+        offset,
+        kind: DecodeErrorKind::InvalidCode { field, code },
+    }
+}
+
+fn out_of_range(offset: usize, field: &'static str, value: i32) -> DecodeError {
+    DecodeError {
+        offset,
+        kind: DecodeErrorKind::OutOfRange { field, value },
+    }
+}
+
+#[test]
+fn hockey_undefined_flag_bits_are_rejected() {
+    for bit in [0x20, 0x40, 0x80] {
+        let error = hockey_live_err(|bytes| bytes[2] |= bit);
+        assert_eq!(error, invalid(2, "live flags", 0x0B | bit));
+    }
+
+    for bit in [0x20, 0x40, 0x80] {
+        let mut bytes = unhex(GOLDEN_HOCKEY_PRE);
+        bytes[2] |= bit;
+        assert_eq!(
+            hockey::decode(&bytes).unwrap_err(),
+            invalid(2, "pregame flags", 0x1F | bit)
+        );
+    }
+
+    // Bit3 is the final's gap, kept so playoffs is bit4 in every state.
+    for bit in [0x08, 0x20, 0x40, 0x80] {
+        let mut bytes = unhex(GOLDEN_HOCKEY_FINAL);
+        bytes[2] |= bit;
+        assert_eq!(
+            hockey::decode(&bytes).unwrap_err(),
+            invalid(2, "final flags", 0x17 | bit)
+        );
+    }
+}
+
+#[test]
+fn hockey_unknown_codes_are_rejected() {
+    assert_eq!(
+        hockey_live_err(|bytes| bytes[4] = 3),
+        invalid(4, "live phase", 3)
+    );
+    assert_eq!(
+        hockey_live_err(|bytes| bytes[27] = 6),
+        invalid(27, "strength", 6)
+    );
+
+    let mut shooter = unhex(GOLDEN_HOCKEY_SHOOTOUT);
+    shooter[37] = 3;
+    assert_eq!(
+        hockey::decode(&shooter).unwrap_err(),
+        invalid(37, "next shooter", 3)
+    );
+
+    // A goal record's bits 4–7 are spare; the third record starts at 50.
+    for spare in [0x10, 0x80] {
+        let error = hockey_live_err(|bytes| bytes[50] |= spare);
+        assert_eq!(error, invalid(50, "goal side/tag", 0x0B | spare));
+    }
+
+    // The third star's side 3, then a bit above the third star.
+    for (sides, code) in [(0b11_10_01, 0b11_10_01), (0b0100_1001, 0b0100_1001)] {
+        let mut bytes = unhex(GOLDEN_HOCKEY_FINAL);
+        bytes[5] = sides;
+        assert_eq!(
+            hockey::decode(&bytes).unwrap_err(),
+            invalid(5, "star sides", code)
+        );
+    }
+}
+
+#[test]
+fn hockey_counts_past_sixteen_are_rejected() {
+    assert_eq!(
+        hockey_live_err(|bytes| bytes[30] = 17),
+        out_of_range(30, "goal count", 17)
+    );
+
+    let mut away = unhex(GOLDEN_HOCKEY_SHOOTOUT);
+    away[31] = 17;
+    assert_eq!(
+        hockey::decode(&away).unwrap_err(),
+        out_of_range(31, "away shootout attempts", 17)
+    );
+
+    let mut home = unhex(GOLDEN_HOCKEY_SHOOTOUT);
+    home[32] = 255;
+    let error = hockey::decode(&home).unwrap_err();
+    assert_eq!(error, out_of_range(32, "home shootout attempts", 255));
+    assert_eq!(
+        format!("{error}"),
+        "@32: home shootout attempts out of range: 255"
+    );
+}
+
+#[test]
+fn hockey_shootout_goals_past_the_attempt_count_are_rejected() {
+    // Away has taken 3: bit 3 is a fourth attempt that never happened.
+    let mut away = unhex(GOLDEN_HOCKEY_SHOOTOUT);
+    away[33] |= 0b1000;
+    assert_eq!(
+        hockey::decode(&away).unwrap_err(),
+        out_of_range(33, "away shootout goals", 0b1101)
+    );
+
+    // Home has taken 2; bit 15 lives in the mask's high byte.
+    let mut home = unhex(GOLDEN_HOCKEY_SHOOTOUT);
+    home[36] = 0x80;
+    assert_eq!(
+        hockey::decode(&home).unwrap_err(),
+        out_of_range(35, "home shootout goals", 0x8001)
+    );
+
+    // With no attempts, no bit may be set.
+    let mut none = unhex(GOLDEN_HOCKEY_SHOOTOUT);
+    none[32] = 0;
+    assert_eq!(
+        hockey::decode(&none).unwrap_err(),
+        out_of_range(35, "home shootout goals", 1)
+    );
+}
+
+#[test]
+fn hockey_coordinates_past_the_boards_are_rejected() {
+    // The first record's x at 42, y at 43.
+    assert_eq!(
+        hockey_live_err(|bytes| bytes[42] = 101),
+        out_of_range(42, "goal x", 101)
+    );
+    assert_eq!(
+        hockey_live_err(|bytes| bytes[42] = i8::MIN as u8),
+        out_of_range(42, "goal x", -128)
+    );
+    assert_eq!(
+        hockey_live_err(|bytes| bytes[43] = (-44i8) as u8),
+        out_of_range(43, "goal y", -44)
+    );
+}
+
+#[test]
+fn hockey_absent_groups_are_placeholders_decode_never_reads() {
+    // Football's rule: a group whose flag is unset decodes as absent whatever
+    // its bytes hold. Clear strength and shots, then poison their bytes and
+    // the (unflagged) shootout block with values that would be rejected if
+    // read.
+    let mut bytes = unhex(GOLDEN_HOCKEY_LIVE);
+    bytes[2] &= !(0x02 | 0x08);
+    bytes[25..38].copy_from_slice(&[
+        9, 9, 0xEE, 9, 9, 5, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    ]);
+    let hockey::Game::Live(live) = hockey::decode(&bytes).unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(
+        (live.strength, live.shots, live.shootout),
+        (None, None, None)
+    );
+    assert_eq!(live.goals.len(), 5);
+
+    // A goal without a coordinate: its x/y bytes are not read either.
+    let mut bytes = unhex(GOLDEN_HOCKEY_LIVE);
+    bytes[38] &= !0x08;
+    bytes[42..44].copy_from_slice(&[0x7F, 0x80]);
+    let hockey::Game::Live(live) = hockey::decode(&bytes).unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(live.goals.get(0).unwrap().coordinate, None);
+
+    // A final without stars ignores the star-sides byte, and without shots
+    // ignores their bytes.
+    let mut bytes = unhex(GOLDEN_HOCKEY_FINAL_SO);
+    bytes[3..6].copy_from_slice(&[7, 7, 0xFF]);
+    let hockey::Game::Final(game) = hockey::decode(&bytes).unwrap() else {
+        unreachable!()
+    };
+    assert_eq!((game.stars, game.shots), (None, None));
 }
 
 // --- Encode-side rules ---
