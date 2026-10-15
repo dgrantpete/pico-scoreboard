@@ -340,7 +340,11 @@ fn corpus_sample() -> Vec<PathBuf> {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.extension().is_some_and(|x| x == "json") {
+            } else if path.extension().is_some_and(|x| x == "json")
+                // Hockey's per-game summaries ride beside its event fixtures and
+                // are a different document; the summary tables test their own.
+                && !path.to_string_lossy().ends_with(".summary.json")
+            {
                 files.push(path);
             }
         }
