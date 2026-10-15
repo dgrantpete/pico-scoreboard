@@ -14,6 +14,8 @@ color clock_warning 255 10 10
 variant football_final C
 variant football_live A
 variant football_pregame C
+variant hockey_final A
+variant hockey_live B
 variant mlb_final C
 variant mlb_live A
 variant mlb_pregame C
@@ -36,6 +38,28 @@ game football__nfl__in_progress_empty_situation football nfl backend/testdata/wi
 game football__nfl__in_progress_redzone football nfl backend/testdata/wire/football/nfl/in_progress_redzone.bin 2 3
 game football__nfl__pregame football nfl backend/testdata/wire/football/nfl/pregame.bin 2 3
 game football__nfl__pregame_odds football nfl backend/testdata/wire/football/nfl/pregame_odds.bin 2 3
+# Hockey crests: one slot per team, alphabetical (BOS 0 ... WSH 20).
+game hockey__nhl__delayed_start hockey nhl backend/testdata/wire/hockey/nhl/delayed_start.bin 16 5
+game hockey__nhl__empty_net hockey nhl backend/testdata/wire/hockey/nhl/empty_net.bin 13 3
+game hockey__nhl__end_of_period hockey nhl backend/testdata/wire/hockey/nhl/end_of_period.bin 9 6
+game hockey__nhl__final hockey nhl backend/testdata/wire/hockey/nhl/final.bin 20 2
+game hockey__nhl__final_2ot hockey nhl backend/testdata/wire/hockey/nhl/final_2ot.bin 2 19
+game hockey__nhl__final_ot hockey nhl backend/testdata/wire/hockey/nhl/final_ot.bin 4 15
+game hockey__nhl__final_so hockey nhl backend/testdata/wire/hockey/nhl/final_so.bin 5 7
+game hockey__nhl__final_so_no_stars hockey nhl backend/testdata/wire/hockey/nhl/final_so_no_stars.bin 10 11
+game hockey__nhl__four_on_four hockey nhl backend/testdata/wire/hockey/nhl/four_on_four.bin 4 5
+game hockey__nhl__in_progress hockey nhl backend/testdata/wire/hockey/nhl/in_progress.bin 0 15
+game hockey__nhl__in_progress_no_summary hockey nhl backend/testdata/wire/hockey/nhl/in_progress.no_summary.bin 0 15
+game hockey__nhl__onice_glitch hockey nhl backend/testdata/wire/hockey/nhl/onice_glitch.bin 19 14
+game hockey__nhl__overtime hockey nhl backend/testdata/wire/hockey/nhl/overtime.bin 17 19
+game hockey__nhl__penalty_placeholder hockey nhl backend/testdata/wire/hockey/nhl/penalty_placeholder.bin 4 5
+game hockey__nhl__playoff_clincher hockey nhl backend/testdata/wire/hockey/nhl/playoff_clincher.bin 2 19
+game hockey__nhl__power_play hockey nhl backend/testdata/wire/hockey/nhl/power_play.bin 18 1
+game hockey__nhl__pregame hockey nhl backend/testdata/wire/hockey/nhl/pregame.bin 5 4
+game hockey__nhl__puck_drop hockey nhl backend/testdata/wire/hockey/nhl/puck_drop.bin 16 11
+game hockey__nhl__shootout hockey nhl backend/testdata/wire/hockey/nhl/shootout.bin 10 11
+game hockey__nhl__shootout_failed_attempt hockey nhl backend/testdata/wire/hockey/nhl/shootout_failed_attempt.bin 1 8
+game hockey__nhl__shootout_teamless_attempt hockey nhl backend/testdata/wire/hockey/nhl/shootout_teamless_attempt.bin 14 12
 game mlb__final mlb mlb backend/testdata/wire/mlb/final.bin 4 5
 game mlb__live_inning mlb mlb backend/testdata/wire/mlb/live_inning.bin 6 7
 game mlb__pregame mlb mlb backend/testdata/wire/mlb/pregame.bin 8 9

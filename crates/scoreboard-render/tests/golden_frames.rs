@@ -95,6 +95,7 @@ fn sport_from(name: &str) -> Sport {
     match name {
         "mlb" => Sport::Mlb,
         "nba" => Sport::Nba,
+        "hockey" => Sport::Hockey,
         "football" => Sport::Football,
         "soccer" => Sport::Soccer,
         other => panic!("manifest names an unknown sport: {other}"),
