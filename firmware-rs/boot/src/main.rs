@@ -25,9 +25,10 @@
 //! this bootloader an RP2350 watchdog is already counting when the app's first
 //! instruction runs, and an armed watchdog cannot be disarmed. So the
 //! boot-integrated app **always** runs a feeder, whatever `watchdog.enabled`
-//! says — that flag survives as "may the health gate deliberately starve it",
-//! which is a different question. `app/src/supervise.rs` carries the same note
-//! from the other side.
+//! says — and since 2026-10-14 its health gate may always starve that feeder
+//! too, because every unit behind this bootloader is a fleet unit with nobody
+//! at a debugger. `app/src/supervise.rs` (`WATCHDOG_ALWAYS_ON`) carries the
+//! same note from the other side.
 //!
 //! [`WATCHDOG_TIMEOUT`] is therefore also a hard budget on the app's boot: every
 //! blocking step between reset and the first feed has to fit inside it. The one

@@ -46,15 +46,15 @@ the frontend actually changed, not that somebody rebuilt it.
 
 | | |
 |---|---|
-| SHA-1 | `e436e6431b630e7b48cbbbe3ce851ca51b6b77b3` |
-| ETag (first 8 bytes) | `e436e6431b630e7b` |
-| Size | 56,305 B |
-| Built | 2026-08-19, `bun 1.3.6`, from the `frontend/` of commit `3259128` |
+| SHA-1 | `496aa1b664da78e830448805e55fa9fca7e656b8` |
+| ETag (first 8 bytes) | `496aa1b664da78e8` |
+| Size | 56,607 B |
+| Built | 2026-10-14, `bun 1.3.6`, in the same commit as the frontend change it carries |
 
-This artifact names a source commit, which the rule above says it should not
-need to: the timezone lane's frontend change (`3259128`) landed without its
-bake, so the bundle follows in a commit of its own — the failure mode the rule
-warns about, caught at the next flash boundary rather than on a device. The
-1,664-byte growth is the timezone card, its store, and the offset-schedule API
-surface. The previous artifact was 54,641 B with SHA-1 `8f3da1a8…`, built
-2026-08-08.
+The 302-byte growth is the Advanced card's watchdog row reading the device's
+`watchdog_always_on` and dropping the switch on units where it does nothing.
+The previous artifact was 56,305 B with SHA-1 `e436e643…`, built 2026-08-19
+from the `frontend/` of commit `3259128` — a bake that followed its frontend
+change in a commit of its own, the failure mode the rule above warns about.
+Rebuilding that tree on 2026-10-14 reproduced it byte for byte before this
+change was made.

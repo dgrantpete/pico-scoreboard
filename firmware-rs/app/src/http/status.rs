@@ -112,6 +112,16 @@ pub struct Status {
     pub log_latest_seq: u32,
 
     pub app_version: &'static str,
+    /// Whether the hardware watchdog and its health gate are on regardless of
+    /// `watchdog.enabled` — true on every `link-boot-integrated` image. See
+    /// [`supervise::WATCHDOG_ALWAYS_ON`] for why.
+    ///
+    /// Its own field rather than something the settings page infers from
+    /// `app_version`'s `+BootIntegrated` suffix: the page needs to know what
+    /// the switch *does* on this device, not which linker script built it, and
+    /// a suffix that is a `Debug` rendering of an enum is not a contract worth
+    /// parsing.
+    pub watchdog_always_on: bool,
 }
 
 impl Status {
@@ -142,6 +152,7 @@ impl Status {
             log_entries,
             log_latest_seq,
             app_version: APP_VERSION,
+            watchdog_always_on: supervise::WATCHDOG_ALWAYS_ON,
             ota_state: ota_state.as_str(),
             ota_progress,
         };

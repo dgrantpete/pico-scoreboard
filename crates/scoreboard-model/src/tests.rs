@@ -2478,6 +2478,26 @@ mod health_gate {
         );
     }
 
+    /// A trial image whose first requests go unanswered starves well inside
+    /// the OTA confirm's deadline, so the bootloader reverts it rather than
+    /// the deadline confirming it. Deliberate — the firmware's
+    /// `supervise::CONFIRM_DEADLINE_S` docs carry the argument — and pinned
+    /// here because the gate has no notion of a trial: if it ever grows one,
+    /// this is the test that has to change on purpose.
+    #[test]
+    fn a_trial_whose_requests_go_unanswered_starves_before_the_confirm_deadline() {
+        /// `supervise::CONFIRM_DEADLINE_S` in the firmware.
+        const CONFIRM_DEADLINE_S: u32 = 600;
+        /// A join and a DHCP lease after the swap boot, then the first poll.
+        const FIRST_POLL: u32 = 40;
+        let run = run(CONFIRM_DEADLINE_S, INTERVAL, |t| {
+            (t >= FIRST_POLL && (t - FIRST_POLL).is_multiple_of(45)).then_some(Request::Lost)
+        });
+        let (starved_at, verdict) = run.starved.expect("an unanswered trial must starve");
+        assert!(starved_at < CONFIRM_DEADLINE_S);
+        assert_eq!(verdict, Unhealthy::LinkSilent { seconds: 92 });
+    }
+
     // -- The OTA download: one request per read ----------------------------
 
     /// A slow transfer that keeps moving never waits long: every read is a

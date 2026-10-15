@@ -8,6 +8,12 @@
 		{ value: "error", label: "Errors only" },
 		{ value: "none", label: "Off" },
 	];
+
+	// The device says whether the watchdog switch means anything on it: on an
+	// over-the-air unit the watchdog and its recovery path are always on. Until
+	// status arrives this is false and the switch shows, which is the older
+	// and bench behaviour.
+	const watchdogAlwaysOn = $derived(settingsStore.status?.watchdog_always_on === true);
 </script>
 
 {#if settingsStore.config}
@@ -71,31 +77,48 @@
 
 			<hr class="separator" />
 
-			<div class="row-between">
+			{#if watchdogAlwaysOn}
+				<!-- No switch: on a scoreboard that updates itself the device
+				     ignores watchdog.enabled, and a control that does nothing is
+				     worse than none. The timeout still applies, so it stays. -->
 				<div class="label-group">
 					<span class="label-text">Hardware Watchdog</span>
 					<p class="text-sm text-muted">
-						Auto-reboot if the firmware wedges. Leave off while developing
-						over USB — an armed watchdog reboots shortly after the script
-						is interrupted. Takes effect after a reboot.
+						Always on. If the display freezes, or the scoreboard stops
+						hearing back from the internet for three poll intervals, it
+						restarts itself and reconnects. Scoreboards that update
+						themselves keep this on — there is nobody nearby to restart one
+						by hand.
 					</p>
 				</div>
-				<label class="switch">
-					<input
-						type="checkbox"
-						checked={config.watchdog.enabled}
-						onchange={() =>
-							settingsStore.updateWatchdog("enabled", !settingsStore.config?.watchdog.enabled)}
-					/>
-					<span class="switch-track"><span class="switch-thumb"></span></span>
-				</label>
-			</div>
+			{:else}
+				<div class="row-between">
+					<div class="label-group">
+						<span class="label-text">Hardware Watchdog</span>
+						<p class="text-sm text-muted">
+							Restart automatically if the display freezes or the network
+							connection is lost. Leave off while debugging — an armed
+							watchdog resets a core halted at a breakpoint a few seconds
+							later. Takes effect after a reboot.
+						</p>
+					</div>
+					<label class="switch">
+						<input
+							type="checkbox"
+							checked={config.watchdog.enabled}
+							onchange={() =>
+								settingsStore.updateWatchdog("enabled", !settingsStore.config?.watchdog.enabled)}
+						/>
+						<span class="switch-track"><span class="switch-thumb"></span></span>
+					</label>
+				</div>
+			{/if}
 
-			{#if config.watchdog.enabled}
+			{#if watchdogAlwaysOn || config.watchdog.enabled}
 				<NumberField
 					id="watchdog-timeout"
 					label="Watchdog Timeout (ms)"
-					hint="Reboot after this long without a healthy heartbeat (hardware max ~8300)"
+					hint="Restart after this long without a healthy check-in (hardware max ~8300). Takes effect after a reboot."
 					min={2000}
 					max={8300}
 					step={100}

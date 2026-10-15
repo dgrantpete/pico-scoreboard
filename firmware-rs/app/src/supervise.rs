@@ -516,21 +516,46 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 /// signals and acting on the verdict.
 use scoreboard_model::poll::{Unhealthy, gate};
 
+/// Whether recovery is mandatory on this build: the watchdog always armed and
+/// the health gate always allowed to starve it, whatever `watchdog.enabled`
+/// says.
+///
+/// True under `link-boot-integrated`, which is every unit that updates over the
+/// air — the profile `tools/build.py publish-fw` ships.
+///
+/// `watchdog.enabled` exists for a developer at a debugger: an armed watchdog
+/// cannot be disarmed, so a core halted at a breakpoint would be reset under
+/// them a few seconds later. A fleet unit has no such developer. It is on a
+/// shelf in somebody else's house, and a recovery path that is off by default
+/// has never recovered anything: a friend's unit fell off its network three
+/// times on 2026-10-12/13 (BACKLOG 69's failure exactly — rendering, silent,
+/// no link event) and stayed dark each time until somebody pulled the plug,
+/// because its stored configuration said `"enabled": false`, as every unit's
+/// does. The device persists its whole configuration document, so changing the
+/// default would never have reached it; the flag is simply not consulted here.
+///
+/// Under `link-standalone` — a probe or USB on the bench — the flag keeps its
+/// meaning and decides whether a watchdog exists at all. No migration either
+/// way: the stored value is left alone, and a unit that goes back on the bench
+/// gets its old meaning back. `/api/status` reports this as
+/// `watchdog_always_on`, so the settings page never offers a switch that does
+/// nothing.
+pub const WATCHDOG_ALWAYS_ON: bool = cfg!(feature = "link-boot-integrated");
+
 /// Arm the hardware watchdog and feed it while the device is working.
 ///
 /// Armed **only after the network phase**, which is `main.py`'s arrangement.
-/// Under `link-standalone` it is also opt-in (`config.watchdog.enabled`,
-/// default off): once armed a watchdog cannot be disarmed, so a probe session
-/// that halts the core would reset the device a few seconds later — which is
-/// exactly why the bench default is off.
+/// Whether it is armed at all is [`WATCHDOG_ALWAYS_ON`]'s question: under
+/// `link-standalone` it is opt-in (`config.watchdog.enabled`, default off),
+/// and under `link-boot-integrated` the bootloader armed an 8 s watchdog before
+/// this program's first instruction, nothing can turn it off, and this task
+/// always runs. The drill of 2026-08-16 is when that second half was
+/// discovered, eight seconds at a time.
 ///
-/// Under `link-boot-integrated` there is no opt: the bootloader armed an 8 s
-/// watchdog before this program's first instruction and nothing can turn it
-/// off, so this task always runs and always feeds. What `enabled` still
-/// controls is `gate_enabled` — whether the health gate may *deliberately
-/// starve* the feed when the device is demonstrably not working. `main.rs`'s
-/// boot documentation states this contract; the drill of 2026-08-16 is when
-/// its absence was discovered, eight seconds at a time.
+/// Once running, it **always gates**. There used to be a `gate_enabled` that
+/// let a boot-integrated unit feed unconditionally; it is gone for the reason
+/// [`WATCHDOG_ALWAYS_ON`] gives, and on `link-standalone` the task only exists
+/// when somebody asked for it.
 ///
 /// The feed interval is `timeout / 4`, so three consecutive missed feeds are
 /// needed before a reset. That is the margin: one late tick is a busy executor,
@@ -540,7 +565,6 @@ pub async fn watchdog(
     mut hardware: embassy_rp::watchdog::Watchdog,
     timeout_ms: u32,
     poll_interval_s: Option<u32>,
-    gate_enabled: bool,
 ) -> ! {
     let timeout = Duration::from_millis(timeout_ms as u64);
     hardware.start(timeout);
@@ -600,16 +624,10 @@ pub async fn watchdog(
             }
         }
 
-        // With the gate disabled the verdict is never consulted: the feed is
-        // unconditional, because under a bootloader's watchdog "do not feed"
-        // and "reboot the device" are the same statement and only the gate has
-        // the standing to make it.
-        let verdict = if gate_enabled {
-            gate(ticked, poll_interval_s, &health)
-        } else {
-            None
-        };
-        let Some(reason) = verdict else {
+        // No exemption for a trial image: one whose requests go unanswered
+        // starves here and the bootloader reverts it, before the confirm above
+        // can reach its deadline. That is deliberate — see CONFIRM_DEADLINE_S.
+        let Some(reason) = gate(ticked, poll_interval_s, &health) else {
             hardware.feed(timeout);
             continue;
         };
@@ -812,6 +830,23 @@ const CONFIRM_MIN_UPTIME_S: u32 = 30;
 /// network up, this confirms on that evidence alone and says so at ERROR.
 /// Reverting would not have fixed an unreachable backend, and an update that
 /// quietly un-installs itself a week later is worse than one that is kept.
+///
+/// **Since the health gate became mandatory on every unit that can be in a
+/// trial at all ([`WATCHDOG_ALWAYS_ON`], 2026-10-14), this deadline is reachable
+/// only by a trial that has not sent a request** — the quiet pollers the gate
+/// deliberately leaves alone: no sports enabled, or an `api.url` that does not
+/// parse. A trial whose requests go unanswered starves at about three poll
+/// intervals, long before ten minutes, and the bootloader reverts it.
+///
+/// That is a choice, not an oversight, and it is the opposite of the argument
+/// above for this one case. The two ways to be wrong are not symmetric on a
+/// fleet nobody can touch: an image with broken networking that confirms here
+/// can never take another update, and gets fixed with a USB cable in a friend's
+/// living room; a good image reverted over an outage in its first minute leaves
+/// the unit on its old, working image, visible in the backend's request log,
+/// and gets fixed by publishing a new version string. The window is also
+/// narrow — a trial boots seconds after a download that worked, and needs only
+/// one answer.
 const CONFIRM_DEADLINE_S: u32 = 600;
 
 /// `POST /api/reboot`'s signal.

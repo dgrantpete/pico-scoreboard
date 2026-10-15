@@ -58,6 +58,18 @@ use crate::manifest::{MAX_VERSION, Version};
 /// A [`reverted`](Attempt::reverted) record needs no retries at all — the image
 /// was installed, ran, and failed its own health gate, which is a verdict
 /// rather than an accident.
+///
+/// **It is not always the image's fault either, and it is treated as a verdict
+/// anyway.** A power cut during the trial window has always reverted an
+/// innocent image. Since 2026-10-14 so can link silence: the watchdog's health
+/// gate is mandatory on fleet builds, so a trial whose requests go unanswered
+/// starves and reverts — a router rebooting in the minute after an update
+/// looks exactly like an image whose networking is broken. The asymmetry is
+/// what decides it. A wrongly refused good version leaves the unit on its old,
+/// working image, visible in the backend's request log, and costs a republish
+/// under a new version string. A broken image that was given the benefit of
+/// the doubt confirms, can never take another update, and costs a USB cable in
+/// somebody else's house.
 pub const MAX_ATTEMPTS: u8 = 3;
 
 /// What the device has tried to install, and how that went.

@@ -602,6 +602,23 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
       one pathology below. Task #13's soak has to turn it on, or the soak is not
       testing the thing that unblocks it.
 
+    **2026-10-14: the gate is unconditional on fleet builds.** A friend's unit
+    (boot-integrated, stable channel) went silent three times in two days —
+    2026-10-12 08:49 and 21:05 MDT, 2026-10-13 16:32 MDT — and stayed silent
+    until somebody power-cycled it: no TCP connection reached the backend
+    afterwards, which is this item's failure exactly. The gate built above
+    would have had each one back within about two minutes, but it only starved
+    when `watchdog.enabled` was set, the flag defaults off, and the device
+    persists its whole configuration document — so every unit carried an
+    explicit `"enabled": false` and no default change could have reached them.
+    Under `link-boot-integrated` the flag is no longer read and the gate is
+    mandatory (`supervise::WATCHDOG_ALWAYS_ON`, which carries the argument: the
+    toggle is for a developer at a debugger, and a fleet unit has none). Under
+    `link-standalone` it keeps its meaning. No migration; `/api/status` reports
+    `watchdog_always_on` and the settings page drops the switch where it does
+    nothing. Making the gate mandatory first meant fixing what opt-in had
+    hidden — see item 70's note of the same date.
+
 70. **The health gate cannot tell a dead network from a dead backend** — the
     known cost of closing item 69, worth fixing before the watchdog is ever
     defaulted on. With `watchdog.enabled`, a backend outage longer than

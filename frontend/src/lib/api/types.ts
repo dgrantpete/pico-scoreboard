@@ -59,7 +59,11 @@ export type ServerConfigUpdate = Partial<ServerConfig>;
 
 // Hardware watchdog configuration
 export interface WatchdogConfig {
-	enabled: boolean; // default false: an armed WDT reboots ~8s after mpremote interrupts the script
+	// Honoured only where NetworkStatus.watchdog_always_on is false (a bench
+	// build): default false, because an armed watchdog cannot be disarmed and
+	// would reset a core halted at a breakpoint. Every over-the-air unit has
+	// the watchdog on whatever this says.
+	enabled: boolean;
 	timeout_ms: number; // clamped on-device to 2000..8300 (RP2350 hardware max)
 }
 
@@ -148,6 +152,12 @@ export interface NetworkStatus {
 	flash_free: number;
 	// sha256 of the running app's ROMFS image; null on dev (littlefs) deploys
 	app_version?: string | null;
+	// True when the watchdog and its recovery path are on regardless of
+	// watchdog.enabled — every over-the-air (boot-integrated) unit. Absent on
+	// firmware that does not report it (a dev server pointed at an older
+	// device), which reads as false: the switch is shown, and there it is what
+	// turns the watchdog on.
+	watchdog_always_on?: boolean;
 }
 
 // Reboot response

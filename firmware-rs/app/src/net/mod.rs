@@ -59,6 +59,20 @@
 //! so the poller's connection is free for the whole download and the two can
 //! never want a socket at the same time. mDNS took the slot, which is how the
 //! table stayed the same size after Phase 4 added a responder.
+//!
+//! # Getting back on the network
+//!
+//! Nothing in this module reconnects, and nothing should: the failure that
+//! matters (BACKLOG 69) is a radio that is off the network while the stack
+//! reports no change at all, so there is no event to reconnect *on*. The way
+//! back is a reset and a fresh join, decided elsewhere:
+//!
+//! - **A station whose link has gone quiet**: requests leave and are never
+//!   answered → after three poll intervals the health gate
+//!   ([`scoreboard_model::poll::gate`]) starves the watchdog → breadcrumb →
+//!   reset → [`bringup`] joins again from scratch. Mandatory on every unit that
+//!   updates over the air ([`crate::supervise::WATCHDOG_ALWAYS_ON`]); see
+//!   [`watch_link`] for why a loop here could not have done it.
 
 pub mod api_client;
 pub mod captive_dns;
@@ -347,27 +361,28 @@ pub async fn bringup(
     // moved to whoever owns them next, and nothing else it holds has a reader.
 }
 
-/// Start the watchdog task, if the configuration — or the bootloader — asks
-/// for one.
+/// Start the watchdog task, unless this is a bench build whose configuration
+/// says not to.
 ///
 /// Under `link-standalone` this is opt-in and off by default, which is
 /// `main.py`'s arrangement and the reason a bench session can halt the core at
 /// a breakpoint without the device rebooting under the debugger a few seconds
 /// later.
 ///
-/// Under `link-boot-integrated` the choice was made before this program's
-/// first instruction: the bootloader armed an 8 s watchdog that cannot be
-/// disarmed, so the feeder task is mandatory and `enabled` survives only as
-/// "may the health gate deliberately starve it" — the contract `main.rs`'s
-/// boot documentation states. The first boot-integrated boot on hardware
-/// (2026-08-16) is what proved the distinction: without this arm the device
-/// starved eight seconds after every boot, at the splash.
+/// Under `link-boot-integrated` there is no choice to make, twice over. The
+/// bootloader armed an 8 s watchdog before this program's first instruction
+/// and it cannot be disarmed, so the feeder is mandatory — the first
+/// boot-integrated boot on hardware (2026-08-16) starved eight seconds after
+/// every boot, at the splash, without this arm. And the health gate is
+/// mandatory too, because that is every unit that updates over the air and
+/// none of them has a developer at a debugger;
+/// [`crate::supervise::WATCHDOG_ALWAYS_ON`] carries the argument and the field
+/// outages that made it. `watchdog.enabled` is not read there at all, and the
+/// timeout still is.
 ///
 /// `station` decides whether the poller's health counts. It must not in setup
-/// mode: there is no poller there by design, so its health would read as "never
-/// reached the backend" forever and the gate would reset the device every few
-/// seconds while somebody was typing their Wi-Fi password into the settings
-/// page.
+/// mode: there is no poller there by design, so nothing would ever be asked or
+/// answered, and only the render loop counts.
 fn arm_watchdog(spawner: Spawner, watchdog: embassy_rp::watchdog::Watchdog, station: bool) {
     let (enabled, timeout_ms, poll_interval_s) = crate::config::with(|config| {
         (
@@ -376,21 +391,23 @@ fn arm_watchdog(spawner: Spawner, watchdog: embassy_rp::watchdog::Watchdog, stat
             config.display.poll_interval_seconds,
         )
     });
-    let bootloader_armed = cfg!(feature = "link-boot-integrated");
-    if !enabled && !bootloader_armed {
+    if !enabled && !crate::supervise::WATCHDOG_ALWAYS_ON {
         defmt::info!("watchdog: disabled by configuration");
         return;
     }
     if !enabled {
+        // Worth a line: it is the one place the stored setting and the
+        // device's behaviour disagree, and somebody reading the log with the
+        // settings document open deserves to be told which one won.
         defmt::info!(
-            "watchdog: feeding the bootloader's watchdog; health gate disabled by configuration"
+            "watchdog: always on in a boot-integrated build; watchdog.enabled = false is a \
+             bench setting and is not consulted"
         );
     }
     spawner.spawn(defmt::unwrap!(crate::supervise::watchdog(
         watchdog,
         timeout_ms,
         station.then_some(poll_interval_s),
-        enabled,
     )));
 }
 
@@ -423,11 +440,19 @@ pub fn reason_name(reason: scoreboard_model::SetupReason) -> &'static str {
 
 /// Log every transition of the stack's IPv4 configuration.
 ///
-/// Deliberately **not** a reconnect loop: `main.py` has none either. A station
-/// that loses its link surfaces as poller failures, then the error screen, then
-/// the watchdog, and inventing a different recovery here would be a behaviour
-/// change smuggled in under "networking". What this buys is the difference
-/// between diagnosing an overnight drop from the log and guessing at it.
+/// Deliberately **not** a reconnect loop: `main.py` has none either, and it
+/// could not be one that works. BACKLOG 69's failure — the radio off the
+/// network while embassy-net still believes its configuration is up — fires no
+/// transition here at all, so a loop keyed on these events would sit through
+/// exactly the outage it was written for.
+///
+/// The recovery path is the reset. A station that loses its link surfaces as
+/// requests that are never answered; after three poll intervals of that the
+/// health gate starves the watchdog, the breadcrumb says why, and the next boot
+/// rejoins from scratch — the one known way to clear whatever state the radio
+/// was in. On every unit that updates over the air that path is mandatory
+/// ([`crate::supervise::WATCHDOG_ALWAYS_ON`]). What this task buys is the
+/// difference between diagnosing a drop from the log and guessing at it.
 #[embassy_executor::task]
 async fn watch_link(stack: Stack<'static>) -> ! {
     loop {
