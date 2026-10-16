@@ -52,8 +52,12 @@ pub(crate) fn list_entries(bytes: &[u8], url: &str) -> Result<Vec<GameListEntry>
 /// summary when [`wants_summary`] says so and builds the DTO.
 pub(crate) fn detail_extract(bytes: &[u8], game_id: &str, url: &str) -> Result<Extract, AppError> {
     let mut scratch = vec![0u8; SCRATCH_LEN];
-    let mut extractor = GameExtractor::new(game_id, TracingQuirks::new("hockey"), &mut scratch)
-        .map_err(|e| stream_error(url, e))?;
+    let mut extractor = GameExtractor::new(
+        game_id,
+        TracingQuirks::for_event("hockey", game_id),
+        &mut scratch,
+    )
+    .map_err(|e| stream_error(url, e))?;
     extractor.write(bytes).map_err(|e| stream_error(url, e))?;
     let report = extractor.finish().map_err(|e| extract_error(e, url))?;
     warn_failed_events(url, u64::from(report.failed));
@@ -97,7 +101,7 @@ pub(crate) fn summary(bytes: &[u8], extract: &Extract, url: &str) -> Option<Summ
     let mut scratch = vec![0u8; SCRATCH_LEN];
     let mut extractor = match SummaryExtractor::new(
         extract.summary_context(),
-        TracingQuirks::new("hockey"),
+        TracingQuirks::for_event("hockey", extract.game_id.as_str()),
         &mut scratch,
     ) {
         Ok(extractor) => extractor,

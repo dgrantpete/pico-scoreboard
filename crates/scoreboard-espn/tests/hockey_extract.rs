@@ -42,6 +42,9 @@ const FIXTURES: &[&str] = &[
     "shootout_teamless_attempt",
     "shootout_failed_attempt",
     "final_so_no_stars",
+    "goalie_omitted",
+    "pull_pending_penalty",
+    "stale_after_tying_goal",
 ];
 
 fn testdata(rel: &str) -> PathBuf {
@@ -569,6 +572,39 @@ fn check_fixture(name: &str, without: &Game<'_>, with: Option<&Game<'_>>) {
                     && text.ends_with(" Holding against Josh Norris"),
                 "{text}"
             );
+        }
+        "goalie_omitted" => {
+            let (a, b) = (live(without), live(with.unwrap()));
+            assert_eq!((a.period, a.clock), (2, "19:24"));
+            assert_eq!((a.away.abbreviation, a.home.abbreviation), ("STL", "MIN"));
+            assert_eq!((a.away.score, a.home.score), (1, 2));
+            assert_eq!(a.strength, None);
+            // Wallstedt is missing from MIN's five while MIN leads in the
+            // 2nd: a count that fits no pull, so he is presumed omitted —
+            // not the EMPTY NET the first production night served.
+            assert_eq!(b.strength, strength(StrengthKind::Even, 5, 5));
+        }
+        "pull_pending_penalty" => {
+            let (a, b) = (live(without), live(with.unwrap()));
+            assert_eq!((a.period, a.clock), (1, "5:23"));
+            assert_eq!((a.away.abbreviation, a.home.abbreviation), ("NYR", "NJ"));
+            assert_eq!((a.away.score, a.home.score), (0, 0));
+            // Six NYR attackers behind NJ's tripping, pending with only a
+            // same-clock stoppage after it: the delayed-penalty pull.
+            assert_eq!(
+                b.strength,
+                strength(StrengthKind::EmptyNet(Side::Away), 6, 5)
+            );
+        }
+        "stale_after_tying_goal" => {
+            let (a, b) = (live(without), live(with.unwrap()));
+            assert_eq!((a.period, a.clock), (3, "0:11"));
+            assert_eq!((a.away.abbreviation, a.home.abbreviation), ("VAN", "FLA"));
+            assert_eq!((a.away.score, a.home.score), (2, 2));
+            // FLA's extra-attacker unit frozen after the goal that tied it:
+            // nothing trails and nothing is pending, so the goalie is back
+            // and the six are capped at five.
+            assert_eq!(b.strength, strength(StrengthKind::Even, 5, 5));
         }
         "onice_glitch" => {
             let (a, b) = (live(without), live(with.unwrap()));
@@ -1327,6 +1363,35 @@ fn unit<'a>(v: &'a mut serde_json::Value, team: &str) -> &'a mut Vec<serde_json:
         .unwrap()
 }
 
+/// Up to `count` listed forwards of one team who are not on the ice.
+fn bench(v: &serde_json::Value, team: &str, count: usize) -> Vec<String> {
+    let on_ice: Vec<String> = v["onIce"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|b| b["entries"].as_array().unwrap().iter())
+        .map(|e| e["athleteid"].as_str().unwrap().to_string())
+        .collect();
+    v["boxscore"]["players"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["team"]["id"] == team)
+        .unwrap()["statistics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["name"] == "forwards")
+        .unwrap()["athletes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["athlete"]["id"].as_str().unwrap().to_string())
+        .filter(|id| !on_ice.contains(id))
+        .take(count)
+        .collect()
+}
+
 #[test]
 fn the_probable_goalie_is_a_known_goalie_before_the_group_lists_him() {
     // Swayman (BOS, 4712036) leaves the goalies group for the forwards:
@@ -1348,12 +1413,14 @@ fn the_probable_goalie_is_a_known_goalie_before_the_group_lists_him() {
     assert_eq!(report.summary.strength, strength(StrengthKind::Even, 5, 5));
     assert_eq!(report.quirks.0, vec![]);
 
-    // Another probable: BOS's known goalie is not on the ice and every BOS
-    // entry is a listed player — a pulled net.
+    // Another probable, and BOS now trailing: its known goalie is not on
+    // the ice, every BOS entry is a listed player, six of them while behind
+    // — a pulled net.
     let event = fixture("in_progress");
     let body = wrap(&[&mutate(&event, |v| {
         v["competitions"][0]["competitors"][1]["probables"][0]["athlete"]["id"] =
             serde_json::json!("1");
+        v["competitions"][0]["competitors"][0]["score"] = serde_json::json!("4");
     })]);
     let extract = found(&body, &id_of(&event));
     let report = summarize(&text, extract.summary_context());
@@ -1454,11 +1521,16 @@ fn a_real_pull_reads_empty_net_when_every_entry_is_listed() {
 
 #[test]
 fn an_intermissions_pulled_reading_is_no_strength_but_a_carried_power_play_shows() {
-    // NJ (away, 11) pulled Allen (5111) before the horn: onIce freezes that
-    // unit, and the intermission believes none of it.
+    // DET (home, 5), trailing 3-4, pulled Gibson (2590824) for a sixth
+    // attacker before the horn: onIce freezes that unit, and the
+    // intermission believes none of it.
     let (extract, _) = pair("end_of_period");
+    let base = parse(&summary_text("end_of_period").unwrap());
+    let extra = bench(&base, "5", 1).remove(0);
     let pulled = mutate(&summary_text("end_of_period").unwrap(), |v| {
-        unit(v, "11").retain(|e| e["athleteid"] != "5111");
+        let entries = unit(v, "5");
+        entries.retain(|e| e["athleteid"] != "2590824");
+        entries.push(serde_json::json!({"athleteid": extra}));
     });
     let report = summarize(&pulled, extract.summary_context());
     assert_eq!(report.summary.strength, None);
@@ -1473,7 +1545,7 @@ fn an_intermissions_pulled_reading_is_no_strength_but_a_carried_power_play_shows
     let report = summarize(&pulled, in_play.summary_context());
     assert_eq!(
         report.summary.strength,
-        strength(StrengthKind::EmptyNet(Side::Away), 5, 5)
+        strength(StrengthKind::EmptyNet(Side::Home), 5, 6)
     );
 
     // A power play carrying into the next period still shows: a NJ skater
@@ -1566,20 +1638,272 @@ fn six_skaters_is_the_sane_ceiling_and_seven_is_insane() {
 
 #[test]
 fn both_nets_empty_at_once_is_insane() {
+    // Swayman (BOS) and Askarov (SJ) both leave for a sixth attacker behind
+    // coincidental minors still pending at one whistle: each unit's count
+    // and context fit a pull, and two pulls are not hockey.
     let (extract, _) = pair("in_progress");
+    let base = parse(&summary_text("in_progress").unwrap());
+    let (bos, sj) = (
+        bench(&base, "1", 1).remove(0),
+        bench(&base, "18", 1).remove(0),
+    );
     let text = mutate(&summary_text("in_progress").unwrap(), |v| {
-        // Swayman (BOS) and Askarov (SJ) leave their units.
-        let goalies = ["4712036", "4697394"];
-        for block in v["onIce"].as_array_mut().unwrap() {
-            block["entries"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|e| !goalies.contains(&e["athleteid"].as_str().unwrap()));
+        for (team, goalie, extra) in [("1", "4712036", &bos), ("18", "4697394", &sj)] {
+            let entries = unit(v, team);
+            entries.retain(|e| e["athleteid"] != goalie);
+            entries.push(serde_json::json!({"athleteid": extra}));
+        }
+        let plays = v["plays"].as_array_mut().unwrap();
+        for (id, team) in [("401892503000099900", "1"), ("401892503000099910", "18")] {
+            plays.push(serde_json::json!({
+                "id": id, "type": {"id": "45", "text": "Roughing", "penaltyMinutes": "2", "penaltyType": "Minor"},
+                "text": "Roughing", "period": {"number": 2, "displayValue": "2nd"},
+                "clock": {"displayValue": "10:05"}, "team": {"id": team}, "scoringPlay": false,
+                "strength": {"id": "701"}
+            }));
         }
     });
     let report = summarize(&text, extract.summary_context());
     assert_eq!(report.summary.strength, strength(StrengthKind::Even, 0, 0));
     assert_eq!(report.quirks.0, vec![Quirk::OnIceInsane]);
+}
+
+// ---------------------------------------- §3.4 step 2: goalie-less units
+
+/// `pull_pending_penalty`'s summary with one play appended after NJ's
+/// tripping and its same-clock stoppage.
+fn pending_then(play: serde_json::Value) -> String {
+    mutate(&summary_text("pull_pending_penalty").unwrap(), |v| {
+        v["plays"].as_array_mut().unwrap().push(play);
+    })
+}
+
+fn row(id: &str, type_id: &str, clock: &str, team: Option<&str>) -> serde_json::Value {
+    let mut play = serde_json::json!({
+        "id": id, "type": {"id": type_id, "text": "x"}, "text": "x",
+        "period": {"number": 1, "displayValue": "1st"},
+        "clock": {"displayValue": clock}, "scoringPlay": type_id == "505",
+        "strength": {"id": "701"}
+    });
+    if let Some(team) = team {
+        play["team"] = serde_json::json!({"id": team});
+    }
+    play
+}
+
+#[test]
+fn a_goalie_less_unit_whose_count_fits_no_pull_is_an_omitted_goalie() {
+    let (_, report) = summary_report("goalie_omitted");
+    assert_eq!(report.summary.strength, strength(StrengthKind::Even, 5, 5));
+    assert_eq!(report.quirks.0, vec![]);
+}
+
+#[test]
+fn a_goalie_less_unit_with_no_deficit_and_no_pending_penalty_is_an_omitted_goalie() {
+    // Six FLA attackers, tied, the newest play their own goal: context fails.
+    let (_, report) = summary_report("stale_after_tying_goal");
+    assert_eq!(report.summary.strength, strength(StrengthKind::Even, 5, 5));
+    assert_eq!(report.quirks.0, vec![]);
+}
+
+#[test]
+fn a_pending_opponent_penalty_makes_six_attackers_a_pull() {
+    let (_, report) = summary_report("pull_pending_penalty");
+    assert_eq!(
+        report.summary.strength,
+        strength(StrengthKind::EmptyNet(Side::Away), 6, 5)
+    );
+    assert_eq!(report.quirks.0, vec![]);
+}
+
+#[test]
+fn a_pending_penalty_ends_at_a_later_clock() {
+    let (extract, _) = pair("pull_pending_penalty");
+    let text = pending_then(row("401892511000009990", "503", "14:40", Some("13")));
+    let report = summarize(&text, extract.summary_context());
+    assert_eq!(report.summary.strength, strength(StrengthKind::Even, 5, 5));
+    assert_eq!(report.quirks.0, vec![]);
+}
+
+#[test]
+fn a_pending_penalty_ends_at_a_face_off() {
+    // The face-off at the penalty's own clock is play resuming all the same.
+    let (extract, _) = pair("pull_pending_penalty");
+    let text = pending_then(row("401892511000009990", "502", "14:37", Some("11")));
+    let report = summarize(&text, extract.summary_context());
+    assert_eq!(report.summary.strength, strength(StrengthKind::Even, 5, 5));
+    // So are a goal and a period boundary.
+    for type_id in ["505", "518", "519", "522", "3003"] {
+        let text = pending_then(row("401892511000009990", type_id, "14:37", None));
+        assert_eq!(
+            summarize(&text, extract.summary_context()).summary.strength,
+            strength(StrengthKind::Even, 5, 5),
+            "{type_id}"
+        );
+    }
+}
+
+#[test]
+fn a_pending_penalty_survives_a_same_clock_shot_row() {
+    let (extract, _) = pair("pull_pending_penalty");
+    let text = pending_then(row("401892511000009990", "506", "14:37", Some("13")));
+    let report = summarize(&text, extract.summary_context());
+    assert_eq!(
+        report.summary.strength,
+        strength(StrengthKind::EmptyNet(Side::Away), 6, 5)
+    );
+    // An earlier-clock row ESPN reordered behind it does not end it either.
+    let text = pending_then(row("401892511000009990", "503", "14:30", Some("13")));
+    assert_eq!(
+        summarize(&text, extract.summary_context()).summary.strength,
+        strength(StrengthKind::EmptyNet(Side::Away), 6, 5)
+    );
+}
+
+#[test]
+fn in_regular_season_overtime_a_pull_needs_more_entries_than_the_opponent_has_skaters() {
+    // TOR (away, 21) loses Bobrovsky (5571) from its 3-on-3 unit.
+    let base = parse(&summary_text("overtime").unwrap());
+    let on_ice: Vec<String> = base["onIce"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|b| b["entries"].as_array().unwrap().iter())
+        .map(|e| e["athleteid"].as_str().unwrap().to_string())
+        .collect();
+    let bench: String = base["boxscore"]["players"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["team"]["id"] == "21")
+        .unwrap()["statistics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["name"] == "forwards")
+        .unwrap()["athletes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["athlete"]["id"].as_str().unwrap().to_string())
+        .find(|id| !on_ice.contains(id))
+        .unwrap();
+    let goalie_less = |extra: bool| {
+        mutate(&summary_text("overtime").unwrap(), |v| {
+            let entries = unit(v, "21");
+            entries.retain(|e| e["athleteid"] != "5571");
+            if extra {
+                entries.push(serde_json::json!({"athleteid": bench}));
+            }
+        })
+    };
+    let event = fixture("overtime");
+    let tied = found(&wrap(&[&event]), &id_of(&event));
+    let trailing = found(
+        &wrap(&[&mutate(&event, |v| {
+            v["competitions"][0]["competitors"][0]["score"] = serde_json::json!("4");
+        })]),
+        &id_of(&event),
+    );
+    // Three entries against three skaters and a goalie: not more, so the
+    // goalie is presumed omitted — even when trailing.
+    assert_eq!(
+        summarize(&goalie_less(false), trailing.summary_context())
+            .summary
+            .strength,
+        strength(StrengthKind::Matched, 3, 3)
+    );
+    // Four entries fit the count; tied with nothing pending, the context
+    // still fails and the four skate as four.
+    assert_eq!(
+        summarize(&goalie_less(true), tied.summary_context())
+            .summary
+            .strength,
+        strength(StrengthKind::PowerPlay(Side::Away), 4, 3)
+    );
+    // Trailing, the four are the pull.
+    assert_eq!(
+        summarize(&goalie_less(true), trailing.summary_context())
+            .summary
+            .strength,
+        strength(StrengthKind::EmptyNet(Side::Away), 4, 3)
+    );
+}
+
+#[test]
+fn an_omitted_goalies_unit_is_capped_at_five_skaters() {
+    // Six frozen attackers read as five; so would seven.
+    let (_, summary) = pair("stale_after_tying_goal");
+    assert_eq!(
+        summary.unwrap().strength,
+        strength(StrengthKind::Even, 5, 5)
+    );
+    let (extract, _) = pair("goalie_omitted");
+    let base = parse(&summary_text("goalie_omitted").unwrap());
+    let on_ice: Vec<String> = base["onIce"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|b| b["entries"].as_array().unwrap().iter())
+        .map(|e| e["athleteid"].as_str().unwrap().to_string())
+        .collect();
+    let bench: Vec<String> = base["boxscore"]["players"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["team"]["id"] == "30")
+        .unwrap()["statistics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["name"] == "forwards")
+        .unwrap()["athletes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["athlete"]["id"].as_str().unwrap().to_string())
+        .filter(|id| !on_ice.contains(id))
+        .take(2)
+        .collect();
+    let text = mutate(&summary_text("goalie_omitted").unwrap(), |v| {
+        for id in &bench {
+            unit(v, "30").push(serde_json::json!({"athleteid": id}));
+        }
+    });
+    let report = summarize(&text, extract.summary_context());
+    assert_eq!(report.summary.strength, strength(StrengthKind::Even, 5, 5));
+    assert_eq!(report.quirks.0, vec![]);
+}
+
+#[test]
+fn five_entries_trailing_in_the_third_is_the_shorthanded_pull() {
+    // MIN's five goalie-less entries, with MIN now trailing: a pull in the
+    // 3rd, an omitted goalie in the 2nd.
+    let event = fixture("goalie_omitted");
+    let text = summary_text("goalie_omitted").unwrap();
+    let with = |period: u8| {
+        found(
+            &wrap(&[&mutate(&event, |v| {
+                v["competitions"][0]["status"]["period"] = serde_json::json!(period);
+                v["competitions"][0]["competitors"][1]["score"] = serde_json::json!("3");
+            })]),
+            &id_of(&event),
+        )
+    };
+    assert_eq!(
+        summarize(&text, with(3).summary_context()).summary.strength,
+        strength(StrengthKind::EmptyNet(Side::Home), 5, 5)
+    );
+    assert_eq!(
+        summarize(&text, with(2).summary_context()).summary.strength,
+        strength(StrengthKind::Even, 5, 5)
+    );
+    // And the real pull with six, trailing in the 3rd, still reads.
+    let (_, summary) = pair("empty_net");
+    assert_eq!(
+        summary.unwrap().strength,
+        strength(StrengthKind::EmptyNet(Side::Away), 6, 5)
+    );
 }
 
 // ------------------------------------------------------- §3.5 goals

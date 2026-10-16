@@ -165,6 +165,14 @@ const TYPE_PENALTY_2025: u16 = 509;
 const TYPE_PLACEHOLDER_PENALTY: u16 = 143;
 const TYPE_SHOOTOUT_END: u16 = 521;
 const TYPE_FAILED_ATTEMPT: u16 = 2010;
+/// The rows that end a pending penalty (§3.4 step 2b): play resumed at a
+/// face-off, a period boundary, a goal. 3003 is a boundary the spec lists;
+/// the corpus has none.
+const TYPE_FACE_OFF: u16 = 502;
+const TYPE_PERIOD_START: u16 = 518;
+const TYPE_PERIOD_END: u16 = 519;
+const TYPE_GAME_END: u16 = 522;
+const TYPE_PERIOD_BOUNDARY: u16 = 3003;
 /// `strength.id`, relative to the play's team; `shotInfo.id` shares 903.
 const STRENGTH_POWER_PLAY: u16 = 702;
 const STRENGTH_SHORT_HANDED: u16 = 703;
@@ -174,6 +182,11 @@ const SHOT_INFO_EMPTY_NET: u16 = 903;
 const SEASON_POSTSEASON: u8 = 3;
 /// Period 5 and up is the shootout — in the regular season only (§3.1).
 const FIRST_SHOOTOUT_PERIOD: u8 = 5;
+const LAST_REGULATION_PERIOD: u8 = 3;
+const FIRST_OVERTIME_PERIOD: u8 = 4;
+/// A full unit skates five; a pulled goalie's unit is six attackers.
+const FULL_SKATERS: u8 = 5;
+const PULLED_UNIT: u8 = 6;
 
 // ---------------------------------------------------------------- extracts
 
@@ -344,6 +357,13 @@ pub struct SummaryContext {
     /// boxscore group lists anyone and after a change it has not caught up
     /// with (§3.4 step 1).
     probable_goalies: [Option<AthleteId>; TEAMS],
+    /// `status.period`: the pull test reads it (§3.4 step 2a — the
+    /// shorthanded trailing pull needs period ≥ 3, overtime its own count).
+    period: u8,
+    /// The scoreboard's scores, `[away, home]`: a goalie-less unit is
+    /// believed pulled only when its team trails or a penalty is pending
+    /// against the other (§3.4 step 2b).
+    scores: [u32; TEAMS],
 }
 
 impl Extract {
@@ -367,12 +387,19 @@ impl Extract {
 
     /// What [`SummaryExtractor::new`] needs — the only way to build one.
     pub fn summary_context(&self) -> SummaryContext {
+        let (period, scores) = match &self.kind {
+            Kind::Live(live) => (live.period, [live.away.score, live.home.score]),
+            Kind::Final(game) => (game.periods_played, [game.away.score, game.home.score]),
+            Kind::Pregame(_) => (0, [0, 0]),
+        };
         SummaryContext {
             playoffs: self.playoffs,
             state: self.state(),
             live_shootout: self.live_shootout(),
             end_of_period: matches!(&self.kind, Kind::Live(live) if live.phase == LivePhase::EndOfPeriod),
             probable_goalies: self.probable_goalies.clone(),
+            period,
+            scores,
         }
     }
 
@@ -2085,6 +2112,16 @@ struct HeaderTeam {
     home_away: Option<HomeAway>,
 }
 
+/// A penalty pending against the team that took it (§3.4 step 2b): from
+/// its row until play resumes or the clock moves on. Keyed by team id — the
+/// side waits for the header (ruling 4).
+#[derive(Debug, Clone)]
+struct PendingPenalty {
+    team: Exact<ID_BYTES>,
+    period: u8,
+    elapsed: u16,
+}
+
 /// A per-team pool: the two blocks a game has, the one in progress, and
 /// whether a third ever arrived.
 #[derive(Debug, Clone, Default)]
@@ -2129,6 +2166,8 @@ struct SummarySink<Q: Quirks> {
     /// The latest team-bearing non-penalty play's team and strength code —
     /// §3.4's fallback.
     fallback: Option<(Exact<ID_BYTES>, Option<u16>)>,
+    /// One slot per team: the newest penalty still pending against it.
+    pending: [Option<PendingPenalty>; TEAMS],
     attempts: heapless::Vec<AttemptRec, ATTEMPT_MAX>,
     attempts_overflowed: bool,
     shootout_seen: bool,
@@ -2148,6 +2187,7 @@ impl<Q: Quirks> SummarySink<Q> {
             goals: heapless::Vec::new(),
             flash: None,
             fallback: None,
+            pending: [None, None],
             attempts: heapless::Vec::new(),
             attempts_overflowed: false,
             shootout_seen: false,
@@ -2200,6 +2240,51 @@ impl<Q: Quirks> SummarySink<Q> {
         // strength names no side (§3.4 step 4).
         if play.team_id.seen() && !penalty {
             self.fallback = Some((play.team_id.clone(), play.strength));
+        }
+
+        // §3.4 step 2b: a penalty is pending from its row until play resumes
+        // — a face-off, a period boundary, a goal — or any row at a later
+        // clock; rows at its own clock are the same whistle, reordered.
+        if matches!(
+            play.type_id,
+            Some(
+                TYPE_FACE_OFF
+                    | TYPE_PERIOD_START
+                    | TYPE_PERIOD_END
+                    | TYPE_GAME_END
+                    | TYPE_PERIOD_BOUNDARY
+                    | TYPE_GOAL
+            )
+        ) {
+            self.pending = [None, None];
+        } else if let Some(elapsed) = play.elapsed {
+            for slot in &mut self.pending {
+                if slot
+                    .as_ref()
+                    .is_some_and(|pending| (period, elapsed) > (pending.period, pending.elapsed))
+                {
+                    *slot = None;
+                }
+            }
+            if penalty && play.team_id.seen() {
+                let newest = PendingPenalty {
+                    team: play.team_id.clone(),
+                    period,
+                    elapsed,
+                };
+                let same_team = |slot: &Option<PendingPenalty>| {
+                    slot.as_ref()
+                        .is_some_and(|pending| same_id(&pending.team, &newest.team))
+                };
+                let slot = self
+                    .pending
+                    .iter()
+                    .position(same_team)
+                    .or_else(|| self.pending.iter().position(Option::is_none));
+                if let Some(slot) = slot {
+                    self.pending[slot] = Some(newest);
+                }
+            }
         }
 
         // §3.5's goals exclude the shootout; §3.6's are the same goals.
@@ -2292,6 +2377,7 @@ impl<Q: Quirks> SummarySink<Q> {
             goals: goal_recs,
             flash,
             fallback,
+            pending,
             attempts,
             shootout_seen,
             shootout_ended,
@@ -2345,6 +2431,12 @@ impl<Q: Quirks> SummarySink<Q> {
             }
         }
 
+        let mut pending_against = [false; TEAMS];
+        for penalty in pending.iter().flatten() {
+            if let Some(side) = side_of(&penalty.team, home, away) {
+                pending_against[slot(side)] = true;
+            }
+        }
         let strength = if context.state == GameState::Live && !context.live_shootout {
             resolve_strength(
                 &on_ice.items,
@@ -2353,6 +2445,7 @@ impl<Q: Quirks> SummarySink<Q> {
                 away,
                 &rosters,
                 &context,
+                pending_against,
                 &mut quirks,
             )
         } else {
@@ -2396,7 +2489,9 @@ fn header_ids(header: &[HeaderTeam]) -> (Option<Exact<ID_BYTES>>, Option<Exact<I
 /// §3.4 steps 1–5: `onIce` against the known goalies and the listed
 /// players, else the latest play's strength. Quiet in the one expected case
 /// — no `onIce` blocks, a period start — and a quirk for anything else
-/// that fails.
+/// that fails. `pending_against[k]` is whether a penalty is pending against
+/// side `k`'s team.
+#[allow(clippy::too_many_arguments)] // the resolve pass's facts, each already resolved to sides
 fn resolve_strength<Q: Quirks>(
     on_ice: &[OnIceBlock],
     fallback: Option<&(Exact<ID_BYTES>, Option<u16>)>,
@@ -2404,11 +2499,12 @@ fn resolve_strength<Q: Quirks>(
     away: Option<&str>,
     rosters: &[Option<&TeamRoster>; TEAMS],
     context: &SummaryContext,
+    pending_against: [bool; TEAMS],
     quirks: &mut Q,
 ) -> Option<Strength> {
     if !on_ice.is_empty() {
         if let Some(strength) =
-            on_ice_strength(on_ice, home, away, rosters, &context.probable_goalies)
+            on_ice_strength(on_ice, home, away, rosters, context, pending_against)
         {
             // Step 3: the intermission freezes the last unit, extra attacker
             // included, so a pulled net there is nothing to show; a power
@@ -2436,15 +2532,18 @@ fn resolve_strength<Q: Quirks>(
 
 /// §3.4 steps 1–2 and 4 over the two units; `None` is "not sane": a block
 /// that maps to no side or to a side already seen, a side without a block,
-/// a team with no known goalie, skaters outside 3–6, or both nets empty at
+/// a team with no known goalie, skaters outside 3–6, or two pulled nets at
 /// once — which is not hockey, only a feed that lost both goalies.
 fn on_ice_strength(
     on_ice: &[OnIceBlock],
     home: Option<&str>,
     away: Option<&str>,
     rosters: &[Option<&TeamRoster>; TEAMS],
-    probables: &[Option<AthleteId>; TEAMS],
+    context: &SummaryContext,
+    pending_against: [bool; TEAMS],
 ) -> Option<Strength> {
+    let probables = &context.probable_goalies;
+    // Who is on the ice, and whether the goalie is among them.
     let mut units: [Option<(u8, bool)>; TEAMS] = [None, None];
     for block in on_ice {
         let k = slot(side_of(&block.team_id, home, away)?);
@@ -2464,12 +2563,57 @@ fn on_ice_strength(
             roster.is_none_or(|roster| !roster.players_overflowed && !roster.lists(id))
         };
         let present = block.athletes.iter().any(|id| known(id) || unlisted(id));
-        let skaters = block.entries.saturating_sub(u8::from(present));
-        units[k] = Some((skaters, !present));
+        units[k] = Some((block.entries, present));
     }
-    let [Some((away_skaters, away_pulled)), Some((home_skaters, home_pulled))] = units else {
+    let [Some((away_entries, away_goalie)), Some((home_entries, home_goalie))] = units else {
         return None;
     };
+    let entries = [away_entries, home_entries];
+    let goalie = [away_goalie, home_goalie];
+
+    // A unit with its goalie skates entries − 1. A goalie-less unit is not
+    // yet a pull: ESPN leaves goalies out of `onIce` and keeps a pulled unit
+    // frozen after the goal that ended it (§3.4 step 2), so until the count
+    // and the context both fit a pull the goalie is presumed omitted and the
+    // unit capped at a full five. The overtime comparison reads the
+    // opponent's own pre-pull skaters, so a goalie-less opponent counts as
+    // omitted there — two pulls are insane either way.
+    let omitted = |k: usize| {
+        if goalie[k] {
+            entries[k].saturating_sub(1)
+        } else {
+            entries[k].min(FULL_SKATERS)
+        }
+    };
+    let mut skaters = [omitted(0), omitted(1)];
+    let mut pulled = [false; TEAMS];
+    for (k, &has_goalie) in goalie.iter().enumerate() {
+        if has_goalie {
+            continue;
+        }
+        let opponent = 1 - k;
+        let trails = context.scores[k] < context.scores[opponent];
+        // (a) The count: six attackers, five when trailing late, or — in
+        // the regular season's 3-on-3 overtime — more than the opponent
+        // has skaters.
+        let count_fits = if !context.playoffs && context.period == FIRST_OVERTIME_PERIOD {
+            entries[k] > omitted(opponent)
+        } else {
+            entries[k] >= PULLED_UNIT
+                || (entries[k] == FULL_SKATERS
+                    && trails
+                    && context.period >= LAST_REGULATION_PERIOD)
+        };
+        // (b) The context: a team pulls its goalie when it trails or when a
+        // delayed penalty against the other side lets it.
+        if count_fits && (trails || pending_against[opponent]) {
+            pulled[k] = true;
+            skaters[k] = entries[k];
+        }
+    }
+    let [away_skaters, home_skaters] = skaters;
+    let [away_pulled, home_pulled] = pulled;
+
     let known_goalie = |k: usize| {
         rosters[k].is_some_and(|roster| !roster.goalies.is_empty()) || probables[k].is_some()
     };

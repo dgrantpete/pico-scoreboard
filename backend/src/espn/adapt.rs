@@ -20,83 +20,70 @@ pub(crate) const SCRATCH_LEN: usize = 64 * 1024;
 /// The crate never formats or logs (ruling 6); this is the backend's half.
 pub(crate) struct TracingQuirks {
     sport: &'static str,
+    /// The event the quirks belong to, when the caller is extracting one:
+    /// a warn from one of sixteen games a night is untraceable without it.
+    event: Option<String>,
 }
 
 impl TracingQuirks {
     pub(crate) fn new(sport: &'static str) -> Self {
-        Self { sport }
+        Self { sport, event: None }
+    }
+
+    /// The bridge for one game's detail, naming the event on every line.
+    pub(crate) fn for_event(sport: &'static str, event_id: &str) -> Self {
+        Self {
+            sport,
+            event: Some(event_id.to_owned()),
+        }
     }
 }
 
 impl Quirks for TracingQuirks {
     fn quirk(&mut self, quirk: Quirk) {
-        let sport = self.sport;
-        match quirk {
-            Quirk::UnknownLivePhase => tracing::warn!(
-                sport,
-                "unknown live status description — treating as in-play"
-            ),
-            Quirk::UnknownBreakDescription => tracing::warn!(
-                sport,
+        let message = match quirk {
+            Quirk::UnknownLivePhase => "unknown live status description — treating as in-play",
+            Quirk::UnknownBreakDescription => {
                 "unknown live soccer status description — treating as active play"
-            ),
-            Quirk::UnknownFinalFlavor => tracing::warn!(
-                sport,
+            }
+            Quirk::UnknownFinalFlavor => {
                 "unknown post-state soccer description — defaulting to full-time flavor"
-            ),
-            Quirk::UnknownInningHalf => tracing::warn!(
-                sport,
+            }
+            Quirk::UnknownInningHalf => {
                 "ESPN shortDetail has non-inning prefix (delay/suspension?) — treating game as not displayable"
-            ),
-            Quirk::MalformedRecord => tracing::warn!(
-                sport,
-                "ESPN total record not in 'W-L' form — dropping record"
-            ),
-            Quirk::ClippedLineScore => tracing::warn!(
-                sport,
-                "line score longer than the wire's 255-entry cap — clipped"
-            ),
-            Quirk::WeatherDropped => tracing::warn!(
-                sport,
+            }
+            Quirk::MalformedRecord => "ESPN total record not in 'W-L' form — dropping record",
+            Quirk::ClippedLineScore => "line score longer than the wire's 255-entry cap — clipped",
+            Quirk::WeatherDropped => {
                 "ESPN weather block unusable (no non-numeric condition or no temperature) — dropping weather"
-            ),
-            Quirk::SituationDropped => tracing::warn!(
-                sport,
+            }
+            Quirk::SituationDropped => {
                 "football situation failed validation (down/yardLine/possession) — dropping situation"
-            ),
-            Quirk::DisplayClockFallback => tracing::warn!(
-                sport,
+            }
+            Quirk::DisplayClockFallback => {
                 "unparseable soccer displayClock; falling back to numeric status.clock"
-            ),
-            Quirk::PeriodOutOfRange => tracing::warn!(
-                sport,
-                "period outside the wire's decodable range — passing through"
-            ),
-            Quirk::BoundedOverflow => tracing::warn!(
-                sport,
+            }
+            Quirk::PeriodOutOfRange => "period outside the wire's decodable range — passing through",
+            Quirk::BoundedOverflow => {
                 "bounded extract buffer overflowed — excess dropped (wire bytes unaffected)"
-            ),
-            Quirk::OnIceInsane => tracing::warn!(
-                sport,
+            }
+            Quirk::OnIceInsane => {
                 "onIce gave no sane skater counts — strength from the latest play's strength"
-            ),
-            Quirk::FinalDetailMismatch => tracing::warn!(
-                sport,
+            }
+            Quirk::FinalDetailMismatch => {
                 "final altDetail disagrees with the period/season-derived label — serving the derived one"
-            ),
-            Quirk::UnknownStatusName => tracing::warn!(
-                sport,
-                "unknown status.type.name — following its state"
-            ),
-            Quirk::TiedFinal => tracing::warn!(sport, "FINAL with tied scores — served as stated"),
-            Quirk::UnplaceableAttempt => tracing::warn!(
-                sport,
+            }
+            Quirk::UnknownStatusName => "unknown status.type.name — following its state",
+            Quirk::TiedFinal => "FINAL with tied scores — served as stated",
+            Quirk::UnplaceableAttempt => {
                 "shootout attempt with no team, goalie participant or neighbour to place it — dropped"
-            ),
-            Quirk::UnplaceableGoal => tracing::warn!(
-                sport,
-                "goal whose team matched neither competitor — dropped"
-            ),
+            }
+            Quirk::UnplaceableGoal => "goal whose team matched neither competitor — dropped",
+        };
+        let sport = self.sport;
+        match &self.event {
+            Some(event) => tracing::warn!(sport, event = %event, "{message}"),
+            None => tracing::warn!(sport, "{message}"),
         }
     }
 }

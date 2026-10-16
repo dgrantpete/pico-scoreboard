@@ -298,7 +298,17 @@ lane, decided here so nobody relitigates it:
   the scoreboard's probable starting goalie, whose `athlete.id` rides the
   `SummaryContext`; a goalie is present when a known one is on the ice or
   when an on-ice id is not a listed player of its team (the relief goalie
-  before the boxscore lists him). An intermission's pulled reading is the
+  before the boxscore lists him). A goalie-less unit (2026-10-16) is not
+  yet a pull: ESPN omits on-ice goalies and freezes a pulled unit after
+  the goal that ended it, so it is believed pulled only when the count fits
+  (six attackers, five when trailing in period ≥ 3, more than the
+  opponent's skaters in the regular season's overtime) and the context
+  fits (the team trails, or a penalty is pending against the other side —
+  the opponent's newest penalty since the last face-off with no face-off,
+  period boundary, goal or later-clock row after it); otherwise the goalie
+  is presumed omitted and the unit capped at five. The pending penalties
+  are tracked per team id as the plays stream and resolved to sides at
+  finish, like everything else. An intermission's pulled reading is the
   frozen last unit and yields no strength.
 - **Quirks** (`common::Quirk`): `OnIceInsane`, `FinalDetailMismatch`,
   `UnknownStatusName`, `TiedFinal`, `UnplaceableAttempt`, `UnplaceableGoal`,
