@@ -1,0 +1,637 @@
+{
+  "id": "401892511",
+  "uid": "s:70~l:90~e:401892511",
+  "date": "2026-10-15T23:00Z",
+  "name": "New York Rangers at New Jersey Devils",
+  "shortName": "NYR @ NJ",
+  "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+  },
+  "competitions": [
+    {
+      "id": "401892511",
+      "uid": "s:70~l:90~e:401892511~c:401892511",
+      "date": "2026-10-15T23:00Z",
+      "attendance": 0,
+      "type": {
+        "id": "1",
+        "abbreviation": "STD"
+      },
+      "timeValid": true,
+      "neutralSite": false,
+      "playByPlayAvailable": true,
+      "recent": true,
+      "venue": {
+        "id": "1826",
+        "fullName": "Prudential Center",
+        "address": {
+          "city": "Newark",
+          "state": "NJ",
+          "country": "USA"
+        },
+        "indoor": true
+      },
+      "competitors": [
+        {
+          "id": "11",
+          "uid": "s:70~l:90~t:11",
+          "type": "team",
+          "order": 0,
+          "homeAway": "home",
+          "team": {
+            "id": "11",
+            "uid": "s:70~l:90~t:11",
+            "location": "New Jersey",
+            "name": "Devils",
+            "abbreviation": "NJ",
+            "displayName": "New Jersey Devils",
+            "shortDisplayName": "Devils",
+            "color": "e30b2b",
+            "alternateColor": "000000",
+            "isActive": true,
+            "venue": {
+              "id": "2562"
+            },
+            "links": [
+              {
+                "rel": [
+                  "clubhouse",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nhl/team/_/name/nj/new-jersey-devils",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "clubhouse",
+                  "mobile",
+                  "team"
+                ],
+                "href": "https://m.espn.com/nhl/clubhouse?teamId=11",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nhl/team/roster/_/name/nj/new-jersey-devils",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:70~l:90~t:11&section=roster",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nhl/team/stats/_/name/nj/new-jersey-devils",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:70~l:90~t:11&section=stats",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nhl/team/schedule/_/name/nj",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:70~l:90~t:11&section=scores",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              }
+            ],
+            "logo": "https://a.espncdn.com/i/teamlogos/nhl/500/scoreboard/nj.png",
+            "logoDark": "https://a.espncdn.com/i/teamlogos/nhl/500-dark/scoreboard/nj.png"
+          },
+          "score": "0",
+          "linescores": [
+            {
+              "value": 0.0,
+              "displayValue": "0",
+              "period": 1
+            }
+          ],
+          "statistics": [
+            {
+              "name": "saves",
+              "abbreviation": "SV",
+              "displayValue": "2"
+            },
+            {
+              "name": "savePct",
+              "abbreviation": "SV%",
+              "displayValue": "1.000"
+            },
+            {
+              "name": "goals",
+              "abbreviation": "G",
+              "displayValue": "0"
+            },
+            {
+              "name": "ytdGoals",
+              "abbreviation": "YTDG",
+              "displayValue": "28"
+            },
+            {
+              "name": "assists",
+              "abbreviation": "A",
+              "displayValue": "0"
+            },
+            {
+              "name": "points",
+              "abbreviation": "PTS",
+              "displayValue": "0"
+            }
+          ],
+          "probables": [
+            {
+              "name": "probableStartingGoalie",
+              "displayName": "Probable Starting Goalie",
+              "shortDisplayName": "Starter",
+              "abbreviation": "SG",
+              "playerId": 4697683,
+              "athlete": {
+                "id": "4697683",
+                "fullName": "Nico Daws",
+                "displayName": "Nico Daws",
+                "shortName": "N. Daws",
+                "links": [
+                  {
+                    "rel": [
+                      "playercard",
+                      "desktop",
+                      "athlete"
+                    ],
+                    "href": "https://www.espn.com/nhl/player/_/id/4697683"
+                  }
+                ],
+                "headshot": "https://a.espncdn.com/i/headshots/nhl/players/full/4697683.png",
+                "jersey": "50",
+                "position": "G",
+                "team": {
+                  "id": "11"
+                }
+              },
+              "status": {
+                "id": "102",
+                "name": "Confirmed",
+                "type": "confirmed",
+                "abbreviation": "Confirmed"
+              },
+              "statistics": [],
+              "record": ""
+            }
+          ],
+          "curatedRank": {
+            "current": 99
+          },
+          "records": [
+            {
+              "name": "overall",
+              "abbreviation": "TOTAL",
+              "type": "total",
+              "summary": "3-3-0"
+            },
+            {
+              "name": "Home",
+              "abbreviation": "HOME",
+              "type": "home",
+              "summary": "2-2-0"
+            },
+            {
+              "name": "Road",
+              "abbreviation": "AWAY",
+              "type": "road",
+              "summary": "1-1-0"
+            }
+          ]
+        },
+        {
+          "id": "13",
+          "uid": "s:70~l:90~t:13",
+          "type": "team",
+          "order": 1,
+          "homeAway": "away",
+          "team": {
+            "id": "13",
+            "uid": "s:70~l:90~t:13",
+            "location": "New York",
+            "name": "Rangers",
+            "abbreviation": "NYR",
+            "displayName": "New York Rangers",
+            "shortDisplayName": "Rangers",
+            "color": "0056ae",
+            "alternateColor": "e51937",
+            "isActive": true,
+            "venue": {
+              "id": "1830"
+            },
+            "links": [
+              {
+                "rel": [
+                  "clubhouse",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nhl/team/_/name/nyr/new-york-rangers",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "clubhouse",
+                  "mobile",
+                  "team"
+                ],
+                "href": "https://m.espn.com/nhl/clubhouse?teamId=13",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nhl/team/roster/_/name/nyr/new-york-rangers",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:70~l:90~t:13&section=roster",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nhl/team/stats/_/name/nyr/new-york-rangers",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:70~l:90~t:13&section=stats",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nhl/team/schedule/_/name/nyr",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:70~l:90~t:13&section=scores",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              }
+            ],
+            "logo": "https://a.espncdn.com/i/teamlogos/nhl/500/scoreboard/nyr.png",
+            "logoDark": "https://a.espncdn.com/i/teamlogos/nhl/500-dark/scoreboard/nyr.png"
+          },
+          "score": "0",
+          "linescores": [
+            {
+              "value": 0.0,
+              "displayValue": "0",
+              "period": 1
+            }
+          ],
+          "statistics": [
+            {
+              "name": "saves",
+              "abbreviation": "SV",
+              "displayValue": "4"
+            },
+            {
+              "name": "savePct",
+              "abbreviation": "SV%",
+              "displayValue": "1.000"
+            },
+            {
+              "name": "goals",
+              "abbreviation": "G",
+              "displayValue": "0"
+            },
+            {
+              "name": "ytdGoals",
+              "abbreviation": "YTDG",
+              "displayValue": "54"
+            },
+            {
+              "name": "assists",
+              "abbreviation": "A",
+              "displayValue": "0"
+            },
+            {
+              "name": "points",
+              "abbreviation": "PTS",
+              "displayValue": "0"
+            }
+          ],
+          "probables": [
+            {
+              "name": "probableStartingGoalie",
+              "displayName": "Probable Starting Goalie",
+              "shortDisplayName": "Starter",
+              "abbreviation": "SG",
+              "playerId": 4697705,
+              "athlete": {
+                "id": "4697705",
+                "fullName": "Dylan Garand",
+                "displayName": "Dylan Garand",
+                "shortName": "D. Garand",
+                "links": [
+                  {
+                    "rel": [
+                      "playercard",
+                      "desktop",
+                      "athlete"
+                    ],
+                    "href": "https://www.espn.com/nhl/player/_/id/4697705"
+                  }
+                ],
+                "headshot": "https://a.espncdn.com/i/headshots/nhl/players/full/4697705.png",
+                "jersey": "33",
+                "position": "G",
+                "team": {
+                  "id": "13"
+                }
+              },
+              "status": {
+                "id": "102",
+                "name": "Confirmed",
+                "type": "confirmed",
+                "abbreviation": "Confirmed"
+              },
+              "statistics": [],
+              "record": ""
+            }
+          ],
+          "curatedRank": {
+            "current": 99
+          },
+          "records": [
+            {
+              "name": "overall",
+              "abbreviation": "TOTAL",
+              "type": "total",
+              "summary": "6-2-0"
+            },
+            {
+              "name": "Home",
+              "abbreviation": "HOME",
+              "type": "home",
+              "summary": "5-0-0"
+            },
+            {
+              "name": "Road",
+              "abbreviation": "AWAY",
+              "type": "road",
+              "summary": "1-2-0"
+            }
+          ]
+        }
+      ],
+      "notes": [],
+      "situation": {
+        "lastPlay": {
+          "id": "401892511000000270",
+          "type": {
+            "id": "516",
+            "text": "Stoppage",
+            "abbreviation": "stoppage"
+          },
+          "text": "TV Timeout",
+          "scoreValue": 0
+        }
+      },
+      "status": {
+        "clock": 323.0,
+        "displayClock": "5:23",
+        "period": 1,
+        "type": {
+          "id": "2",
+          "name": "STATUS_IN_PROGRESS",
+          "state": "in",
+          "completed": false,
+          "description": "In Progress",
+          "detail": "5:23 - 1st Period",
+          "shortDetail": "5:23 - 1st"
+        }
+      },
+      "broadcasts": [
+        {
+          "market": "national",
+          "names": [
+            "ESPN+"
+          ]
+        },
+        {
+          "market": "away",
+          "names": [
+            "MSG"
+          ]
+        },
+        {
+          "market": "home",
+          "names": [
+            "MSG2"
+          ]
+        }
+      ],
+      "format": {
+        "regulation": {
+          "periods": 3
+        }
+      },
+      "startDate": "2026-10-15T23:00Z",
+      "broadcast": "ESPN+",
+      "geoBroadcasts": [
+        {
+          "type": {
+            "id": "4",
+            "shortName": "Streaming"
+          },
+          "market": {
+            "id": "1",
+            "type": "National"
+          },
+          "media": {
+            "shortName": "ESPN+",
+            "logo": "https://a.espncdn.com/guid/322a7e47-3cdb-3b5c-ab1b-678e1f2c27e5/logos/default.png",
+            "darkLogo": "https://a.espncdn.com/guid/322a7e47-3cdb-3b5c-ab1b-678e1f2c27e5/logos/default-dark.png"
+          },
+          "lang": "en",
+          "region": "us"
+        },
+        {
+          "type": {
+            "id": "1",
+            "shortName": "TV"
+          },
+          "market": {
+            "id": "3",
+            "type": "Away"
+          },
+          "media": {
+            "shortName": "MSG"
+          },
+          "lang": "en",
+          "region": "us"
+        },
+        {
+          "type": {
+            "id": "1",
+            "shortName": "TV"
+          },
+          "market": {
+            "id": "2",
+            "type": "Home"
+          },
+          "media": {
+            "shortName": "MSG2"
+          },
+          "lang": "en",
+          "region": "us"
+        }
+      ],
+      "highlights": []
+    }
+  ],
+  "links": [
+    {
+      "language": "en-US",
+      "rel": [
+        "live",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/nhl/game/_/gameId/401892511",
+      "text": "Gamecast",
+      "shortText": "Gamecast",
+      "isExternal": false,
+      "isPremium": false
+    },
+    {
+      "language": "en-US",
+      "rel": [
+        "boxscore",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/nhl/boxscore/_/gameId/401892511",
+      "text": "Box Score",
+      "shortText": "Box Score",
+      "isExternal": false,
+      "isPremium": false
+    },
+    {
+      "language": "en-US",
+      "rel": [
+        "pbp",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/nhl/playbyplay/_/gameId/401892511",
+      "text": "Play-by-Play",
+      "shortText": "Play-by-Play",
+      "isExternal": false,
+      "isPremium": false
+    }
+  ],
+  "status": {
+    "clock": 323.0,
+    "displayClock": "5:23",
+    "period": 1,
+    "type": {
+      "id": "2",
+      "name": "STATUS_IN_PROGRESS",
+      "state": "in",
+      "completed": false,
+      "description": "In Progress",
+      "detail": "5:23 - 1st Period",
+      "shortDetail": "5:23 - 1st"
+    }
+  }
+}

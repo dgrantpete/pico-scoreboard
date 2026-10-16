@@ -83,3 +83,17 @@ collector's current-season SO final.
 
 Each extra is a self-contained pair. Dropping one means deleting its two
 files and its row here.
+
+## Goalie-less units (§3.4 step 2, added 2026-10-16)
+
+From the 2026-10-15 night. In each, one side's `onIce` has no known goalie
+and no unlisted id. "Known goalies" are the boxscore goalies group plus the
+scoreboard event's probable. The truth comes from goalie time on ice in the
+event's final summary, the play-by-play and the next polls. "R6" is the rule
+shipped first; "§3.4" is the adopted rule.
+
+| Fixture | Event | Matchup | Game day | Scoreboard poll | Summary poll | Δ s | Sizes | Evidence |
+|---|---|---|---|---|---|---|---|---|
+| `goalie_omitted` | 401892514 | STL @ MIN | 20261015 | 2026-10-16T01:09:36.872 | 2026-10-16T01:09:40.900 | −4.0 | 174,452 / 36,840 / 255,698 | Both: p2 19:24, MIN 2-1. MIN's unit is 5 entries: Brodin, Eriksson Ek, Kaprizov, Q. Hughes, Boldy. All are listed MIN skaters. Wallstedt (MIN's goalies group and probable) is not among them. STL has 6 including Hofer. No penalty: the newest plays are the 2nd-period face-off at 0:00, a stoppage and a face-off at 0:11. **Truth: Wallstedt in net, even strength.** He is MIN's only goalie, with 59:35 TOI in the final. `onIce` dropped him for 28 consecutive collector polls (01:08:50–01:13:24, p2 19:49→17:57). R6: EmptyNet(home) 5/5, as the production soak served. §3.4: the count fails (5 entries, not trailing in p≥3), so the goalie is presumed omitted: Even 5v5. |
+| `pull_pending_penalty` | 401892511 | NYR @ NJ | 20261015 | 2026-10-15T23:38:24.018 | 2026-10-15T23:38:23.541 | +0.5 | 173,515 / 17,785 / 206,919 | Both: p1 5:23, 0-0, clock stopped at the whistle. NYR (away, tied) has 6 entries: Zibanejad, J.T. Miller, Fox, Kartye, Lafreniere, Cuylle. None is a NYR goalie. NJ has 5 skaters plus Daws. The newest plays are NJ's Tripping (type 55, Minor 2) at 14:37, then a Stoppage at 14:37. The penalty comes after the newest face-off, with only a stoppage behind it. **Truth: NYR's delayed-penalty pull.** NYR goalie TOI is 14 s short of game length. The summary shows this unit from 23:37:01, with the penalty already posted, until 23:39:04. At 23:39:04 the 14:37 face-off row appears and NYR reads 5 + goalie on the power play. R6 and §3.4 both: EmptyNet(away) 6v5 (count 6 entries; context: opponent penalty pending). |
+| `stale_after_tying_goal` | 401892510 | VAN @ FLA | 20261015 | 2026-10-16T01:39:57.219 | 2026-10-16T01:40:00.665 | −3.4 | 186,942 / 36,379 / 415,421 | Both: p3 0:11, 2-2. The newest play is FLA's goal at 19:47, which tied it. FLA's 6 entries (Verhaeghe, S. Jones, Reinhart, Bennett, M. Tkachuk, B. Tkachuk) are the extra-attacker unit on since p3 1:34, when FLA trailed 1-2. It is frozen after the goal; no penalty is anywhere near. VAN has 5 skaters plus Merilainen. **Truth: FLA's goalie back in, even strength.** The clock has already run from 0:13 to 0:11, and the goalie is back in `onIce` by the END_PERIOD poll at 01:40:52; the game went to OT. R6: EmptyNet(home). §3.4: count ok, context fails (tied, nothing pending), so the goalie is presumed omitted: skaters min(6, 5) = 5, Even 5v5. |

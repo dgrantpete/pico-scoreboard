@@ -271,8 +271,12 @@ is part of why D3 fetches the summary for finals too.
      opponent has *skaters* (4 against 3 + G) — and
    - (b) the context fits a pull — the team trails, or an opponent penalty
      is pending: the opponent's newest penalty play (the 143 placeholder
-     included) comes after the newest face-off in `plays`, and nothing but
-     penalties and stoppages follows it (play has not resumed).
+     included) comes after the newest face-off (502) in `plays`, and play has
+     not resumed since — no face-off, period boundary (518, 519, 522, 3003),
+     or goal (505) follows it, and nothing else at a later clock. Rows at the
+     penalty's own clock are the same whistle (ESPN reorders them within one
+     clock) and leave it pending. The summary can lag the whistle by ~30 s,
+     so a pending penalty may outlive it briefly; accepted.
 
    Then `skaters = entries`. Otherwise the goalie was omitted: he is present,
    and `skaters = min(entries, 5)` (a frozen six-man unit is not a power
