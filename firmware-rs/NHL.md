@@ -166,6 +166,10 @@ names each pair's polls and evidence.
   probable goalie was the starter in 180/180 captured team-games. No
   document names a dressed backup before he plays (no `rosters` block;
   `leaders`, `header`, `gameInfo` carry no players).
+- `onIce` sometimes **omits a goalie who is on the ice** (MIN 401892514,
+  2026-10-16: 28 consecutive polls; OTT, UTA, BUF the same night; 2 more
+  in the fortnight), and keeps an extra-attacker unit frozen after the goal
+  that ended the pull, until the next stoppage or the period's end.
 - `onIce[]`: entries carry only `athleteid`, `whereabouts` ("In Play") and a
   `projections` link — no position, and no ordering puts the goalie first.
   Entries **include the goalie**; counts give strength (6v6, 6v5
@@ -255,13 +259,31 @@ is part of why D3 fetches the summary for finals too.
    net (11 of 12 changes in the phase 6.0 fortnight).
 2. Per side from `onIce` (entries carry ids only — no position): the goalie
    is **present** if a known goalie is among the entries, or — the relief
-   goalie — if some entry is not a listed player of that team; otherwise the
-   side is **pulled**. `skaters = entries − (goalie present ? 1 : 0)`.
-   **Sane** iff the team has at least one known goalie, both sides have 3–6
-   skaters, and at most one side is pulled (two empty nets at once is not
-   hockey). Measured over the fortnight against the goalies who really
-   played: every one of 209 real goalie-less polls found, no false empty net
-   (the goalies-group-only rule produced 348).
+   goalie — if some entry is not a listed player of that team, and then
+   `skaters = entries − 1`. Otherwise the unit is **goalie-less**, which is
+   not the same as pulled: ESPN sometimes leaves a goalie out of `onIce`
+   (2026-10-15: MIN's starter missing for 4.5 min of a game he played 59:35
+   of), and keeps a pulled unit frozen after the goal that ended the pull.
+   A goalie-less unit is believed **pulled** only if both hold:
+   - (a) the count fits a pull — in regulation and playoff overtime, at least
+     6 entries, or 5 when the team trails in period ≥ 3 (the shorthanded
+     trailing pull); in the regular-season overtime, more entries than the
+     opponent has *skaters* (4 against 3 + G) — and
+   - (b) the context fits a pull — the team trails, or an opponent penalty
+     is pending: the opponent's newest penalty play (the 143 placeholder
+     included) comes after the newest face-off in `plays`, and nothing but
+     penalties and stoppages follows it (play has not resumed).
+
+   Then `skaters = entries`. Otherwise the goalie was omitted: he is present,
+   and `skaters = min(entries, 5)` (a frozen six-man unit is not a power
+   play). **Sane** iff the team has at least one known goalie, both sides
+   have 3–6 skaters, and at most one side is pulled. Measured 2026-10-16 over
+   the fortnight plus a night of 11 games, against goalie time on ice, empty
+   net goals and the penalties at each whistle: every confirmed omission and
+   stale unit (~75 side-polls that read EMPTY NET) is gone, and every real
+   pull is kept except a tied team's delayed-penalty pull before ESPN posts
+   the penalty (8 polls in two weeks), which reads even strength until it
+   does.
 3. During an intermission (`EndOfPeriod`) a pulled side is not believed:
    `onIce` freezes the last unit, including an extra attacker's, through the
    break. If either side reads pulled there, there is no strength (the group
