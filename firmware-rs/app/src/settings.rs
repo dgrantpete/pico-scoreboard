@@ -72,23 +72,62 @@ pub struct DisplayUpdate {
     pub blanking_time_ns: u32,
 }
 
-impl DisplayUpdate {
-    /// The update `config` describes, running the hooks `applied` names.
-    ///
-    /// **Core 0 only.** The gamma LUT is expanded here; see the field's docs.
-    pub fn new(config: &DeviceConfig, applied: Applied) -> DisplayUpdate {
+/// A [`DisplayUpdate`] whose gamma LUT is not yet expanded: everything that
+/// can be read out of the configuration in microseconds, so the read can
+/// happen under the config lock and the 27 ms `Power` expansion cannot.
+#[derive(Debug, Clone, Copy)]
+pub struct Planned {
+    applied: Applied,
+    render: RenderSettings,
+    data_clock_hz: u32,
+    target_refresh_rate_hz: f64,
+    gamma: Gamma,
+    blanking_time_ns: u32,
+}
+
+impl Planned {
+    /// Expand the gamma LUT and finish the update. **Core 0, under no lock.**
+    pub fn expand(self) -> DisplayUpdate {
         DisplayUpdate {
+            applied: self.applied,
+            render: self.render,
+            data_clock_hz: self.data_clock_hz,
+            target_refresh_rate_hz: self.target_refresh_rate_hz,
+            gamma: GammaTable::new(self.gamma),
+            blanking_time_ns: self.blanking_time_ns,
+        }
+    }
+}
+
+impl DisplayUpdate {
+    /// What `config` asks of core 1, running the hooks `applied` names — cheap
+    /// enough to call under the config lock, which is a critical section.
+    ///
+    /// Expanding the LUT is [`Planned::expand`], and keeping it out of the lock
+    /// is deliberate: 27 ms inside a critical section queues core 1 behind it,
+    /// which is what turned the flash-write deadlock BACKLOG 113 describes
+    /// from a rare race into a certainty on every `power` gamma save.
+    pub fn plan(config: &DeviceConfig, applied: Applied) -> Planned {
+        Planned {
             applied,
             render: config.render_settings(),
             data_clock_hz: config.display.data_frequency_khz.saturating_mul(1_000),
             target_refresh_rate_hz: config.display.target_refresh_rate,
-            gamma: GammaTable::new(match config.display.gamma.kind {
+            gamma: match config.display.gamma.kind {
                 GammaKind::Srgb => Gamma::Srgb,
                 GammaKind::None => Gamma::Identity,
                 GammaKind::Power => Gamma::Power(config.display.gamma.power_exponent()),
-            }),
+            },
             blanking_time_ns: config.display.blanking_time_ns,
         }
+    }
+
+    /// [`plan`](Self::plan) and [`expand`](Planned::expand) in one step, for a
+    /// caller that holds no lock — the boot.
+    ///
+    /// **Core 0 only.** The gamma LUT is expanded here; see the field's docs.
+    pub fn new(config: &DeviceConfig, applied: Applied) -> DisplayUpdate {
+        Self::plan(config, applied).expand()
     }
 
     /// The whole configuration, every hook on. What the boot sends once, before

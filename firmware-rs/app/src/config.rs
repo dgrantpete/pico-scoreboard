@@ -108,8 +108,29 @@ fn seed_from_build(config: &mut DeviceConfig) {
 /// finished a whole batch of changes — see [`crate::storage::save_config`] for
 /// why that matters and `config.py`'s `update_many` for where the rule comes
 /// from. Costs the panel a frame; BUDGET.md carries the measurement.
+///
+/// The document is serialized **under** the config lock and written **outside**
+/// it, and that order is load-bearing. The lock is a critical section, and a
+/// flash write parks core 1 through the SIO FIFO — which core 1 can only answer
+/// from an interrupt, which it can only take once it is out of its own critical
+/// sections, which it can only leave once this core lets go of the spinlock.
+/// Held across the write, the lock deadlocked both cores whenever core 1
+/// happened to be entering a critical section as the write began; a `power`
+/// gamma, whose LUT once took 27 ms inside this same lock, made that certain
+/// rather than rare (BACKLOG 113, found with the probe on 2026-11-07).
 pub fn persist() -> bool {
-    with(crate::storage::save_config)
+    let mut buffer = [0u8; crate::storage::BUFFER_BYTES];
+    let length = match with(|config| config.to_json(&mut buffer)) {
+        Ok(length) => length,
+        Err(_) => {
+            defmt::error!(
+                "config: the configuration did not fit {} B, not saved",
+                crate::storage::BUFFER_BYTES as u32
+            );
+            return false;
+        }
+    };
+    crate::storage::save_config(&mut buffer, length)
 }
 
 /// Read something out of the configuration.

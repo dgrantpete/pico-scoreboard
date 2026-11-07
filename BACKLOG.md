@@ -1254,10 +1254,9 @@ reviewed change.
     watching the panel), a one-off corruption of the packed frame or the
     fused pack tables at the handoff, PIO/DMA state, and a marginal B2
     connection on the adapter or ribbon that something at the handoff
-    disturbs. Same evening, the fresh board on the LED build also fell off
-    the network with its LED frozen dark (the radio command path wedged;
-    the standalone watchdog is off), once, after minutes in the enclosure
-    and never on the desk. Tooling now exists for this: the `diag` feature
+    disturbs. Same evening's two network drops on the fresh board, LED frozen dark,
+    were not the radio: they were BACKLOG 113, tripped by the gamma probes
+    this very investigation sent. Tooling now exists for this: the `diag` feature
     (SPEC §12, `app/src/diag.rs`, `tools/diag.py`). The first experiments
     to run, in order: boot into the harness, `pattern black` then
     `lanes black` (a non-zero B2 count with a black frame is the pack or
@@ -1281,3 +1280,22 @@ reviewed change.
     the toast icon too, it applies there as well. Cheap fix if it ever bites:
     nudge such a colour one step in `pack` (or reject it in the settings
     page), with a test that packs the key's neighbours.
+113. **FIXED on main 2026-11-07, unreleased — a config save could deadlock
+    both cores, and a `power` gamma did so every time.** `config::persist`
+    ran the flash write inside `config::with`, a critical-section mutex, so
+    core 0 held spinlock 31 for the whole write — including embassy-rp's
+    `pause_core1`, which parks core 1 through the SIO FIFO and waits for the
+    echo. Core 1 can only echo from its FIFO interrupt, can only take that
+    interrupt outside its own critical sections, and can only leave one once
+    the spinlock is free: if core 1 was entering a critical section as the
+    write began, both cores spun forever, no fault, no panic, no reset.
+    Selecting `power` made it certain because its 27 ms LUT was also built
+    inside the lock, queueing core 1 behind it so that it reached its next
+    `defmt` call exactly as the save started. Found with the probe: GDB showed
+    core 0 in `pause_core1` under `config::with` and core 1 in
+    `critical_section::acquire` under `apply_settings`, LOCK_OWNER = core 0.
+    Fix: `persist` serializes under the lock and writes outside it;
+    `DisplayUpdate::plan` reads under the lock and `Planned::expand` builds
+    the LUT after. The fleet has carried the rare form of this since the
+    Rust migration; a settings save that happened to land on one of core 1's
+    critical sections would have frozen the unit until a power cycle.

@@ -113,7 +113,7 @@ type MapError = sequential_storage::Error<embassy_rp::flash::Error>;
 /// live on core 0's stack for the length of one call rather than inside a
 /// handler's future, where picoserve's nested-router generics would instantiate
 /// them once per layer. `http::scratch`'s module docs measured that at 22×.
-const BUFFER_BYTES: usize = 3 * 1024;
+pub(crate) const BUFFER_BYTES: usize = 3 * 1024;
 
 /// What is stored, and what deliberately is not.
 ///
@@ -344,15 +344,12 @@ pub fn load_config(keep_alive: &mut impl FnMut()) -> Stored {
 /// on the part that wears out by the number of fields in the form. The batching
 /// is [`crate::http::routes::put_config`]'s — it merges everything first and
 /// calls this once — and this is the other half of that contract.
-pub fn save_config(config: &DeviceConfig) -> bool {
-    let mut buffer = [0u8; BUFFER_BYTES];
-    let Ok(length) = config.to_json(&mut buffer) else {
-        defmt::error!(
-            "storage: the configuration did not fit {} B, not saved",
-            BUFFER_BYTES as u32
-        );
-        return false;
-    };
+///
+/// The document arrives already serialized into the first `length` bytes of
+/// `buffer`, by [`crate::config::persist`] under the config lock, precisely so
+/// that this write runs **outside** that lock — see there for why the order is
+/// the whole point. The rest of `buffer` is the map's scratch.
+pub fn save_config(buffer: &mut [u8; BUFFER_BYTES], length: usize) -> bool {
     // Split so the document and the map's scratch are disjoint slices: the
     // value is borrowed for the length of the call, and `store_item` writes
     // headers into the buffer it is given.

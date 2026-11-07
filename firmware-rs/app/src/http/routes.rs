@@ -512,16 +512,18 @@ async fn put_config(body: ConfigBody) -> impl IntoResponse {
 
     let outcome = config::with_mut(|config| -> Result<_, config::Rejection> {
         let applied = config.apply(&patch)?;
-        // Built while the lock is held so the update describes exactly the
+        // Planned while the lock is held so the update describes exactly the
         // configuration that was just committed, not one a second request
-        // could have replaced in between.
-        let update = settings::DisplayUpdate::new(config, applied);
+        // could have replaced in between — and only planned: the lock is a
+        // critical section, and a `power` gamma's LUT takes 27 ms to expand.
+        // See `DisplayUpdate::plan`.
+        let planned = settings::DisplayUpdate::plan(config, applied);
         let colors = applied.ui_colors.then(|| config.ui_colors());
         let level = applied.log_level.then(|| config.log_level());
-        Ok((applied, update, colors, level))
+        Ok((applied, planned, colors, level))
     });
 
-    let (applied, update, colors, level) = match outcome {
+    let (applied, planned, colors, level) = match outcome {
         Ok(outcome) => outcome,
         Err(error) => {
             crate::error!(
@@ -539,6 +541,7 @@ async fn put_config(body: ConfigBody) -> impl IntoResponse {
         }
     };
 
+    let update = planned.expand();
     // Live-apply, outside the lock: none of these can be reached from a config
     // read, and holding a critical section across them would put the ring log's
     // lock inside the config lock.
