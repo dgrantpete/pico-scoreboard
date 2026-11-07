@@ -19,6 +19,7 @@
 //! | **PIO2** | **cyw43's `PioSpi`, SM0, IRQ0** | [`Irqs`] and `Peripherals` below |
 //! | DMA CH0 | **cyw43's `PioSpi`** | [`Peripherals::dma`] |
 //! | DMA CH12–15 | `hub75` | `hub75::driver`'s public channel constants |
+//! | CYW43 `WL_GPIO0` (the LED) | [`crate::led::run`], through `Control` | the handle moves there when [`bringup`] hands off |
 //!
 //! PIO2 exists only on the RP2350, which is one more thing the RP2040 ban in
 //! SPEC §1 buys: the radio gets a whole PIO block and never has to share
@@ -234,6 +235,9 @@ pub async fn bringup(
     let (device, mut control, runner) = cyw43::new(state, pwr, spi, FIRMWARE, NVRAM).await;
     spawner.spawn(defmt::unwrap!(cyw43_runner(runner)));
     control.init(CLM).await;
+    // The first instant the LED exists, and the most it can show until
+    // provisioning returns the handle: solid, "radio up, deciding".
+    crate::led::show_provisioning(&mut control).await;
 
     let credentials = Credentials::from_config();
 
@@ -257,6 +261,7 @@ pub async fn bringup(
     )
     .await;
 
+    let station = matches!(outcome, Provisioned::Station { .. });
     let hosts = match outcome {
         Provisioned::Station { ip } => {
             // `main.py` syncs the clock here, inside step 5, before it starts
@@ -367,10 +372,17 @@ pub async fn bringup(
 
     spawner.spawn(defmt::unwrap!(watch_link(stack)));
 
-    // The radio and `control` outlive this function either way — the runner
-    // task owns the hardware. What ends here is the *boot*, which is why this
-    // task returns instead of parking: the `Store` and the `Publisher` have
-    // moved to whoever owns them next, and nothing else it holds has a reader.
+    // The control handle's owner from here on. Nothing after provisioning
+    // asks the radio anything — a lost link is recovered by a reset, not a
+    // rejoin (see `watch_link`) — so the LED task takes the handle for life,
+    // and anything that later needs it has to come to the task that holds it.
+    spawner.spawn(defmt::unwrap!(crate::led::run(control, station)));
+
+    // The radio outlives this function either way — the runner task owns the
+    // hardware and `led::run` the handle. What ends here is the *boot*, which
+    // is why this task returns instead of parking: the `Store` and the
+    // `Publisher` have moved to whoever owns them next, and nothing else it
+    // holds has a reader.
 }
 
 /// Start the watchdog task, unless this is a bench build whose configuration

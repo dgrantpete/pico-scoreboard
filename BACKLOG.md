@@ -1207,3 +1207,27 @@ reviewed change.
     flips to the cycling final (the line score with a cycling stars line):
     the same line would serve MLB's W/L/SV pitchers, since ESPN's
     `featuredAthletes` exists there too.
+108. **An identify blink from the settings page (2026-11-06).** The LED
+    vocabulary (SPEC §12, `scoreboard_model::led`) encodes state; it has no
+    way to answer "which unit is this one" with several boards open on a
+    bench. The shape that fits the design: a `POST /api/identify` that
+    signals `led::run`, which plays a look none of the five states use for
+    ten seconds and then returns to the facts. One `Signal`, one look, and
+    no new owner of the control handle — the task already holds it. Worth
+    building the first time two boards are open at once, not before.
+109. **Core-1 stack high-water is 7,060 B of 8,192 with NHL content
+    (2026-11-06).** BUDGET's "Core-1 stack" row says 3,348 B (41 %),
+    measured in August over real MLB data before hockey existed. The first
+    board measured since the NHL release — a bare Pico 2 W on the standalone
+    dev build at main plus the LED change, which touches core 0 only —
+    reported `core1_stack_used` 7,060 B (86 %) within twenty minutes of
+    boot, stable across samples, with MLB off-season and a rotation of three
+    NHL games spanning live and pregame screens. That is 1,132 B of margin
+    on a core whose overflow faults at MSPLIM rather than corrupting the
+    framebuffers, so it is a crash waiting on a deeper frame, not silent
+    corruption — but the number nobody re-took after hockey. Find the deep
+    frame (the hockey live or pregame renderer is the obvious suspect; the
+    QR encoder's setup screen was already the known deepest and still is not
+    in that rotation), re-measure per screen on the bench by bisecting
+    enabled sports, and trim it before raising `CORE1_STACK_BYTES` — RAM
+    headroom is already under the 40 % rule (BUDGET 94).

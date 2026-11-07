@@ -3515,3 +3515,238 @@ mod setup_retry {
         );
     }
 }
+
+mod led {
+    use std::vec::Vec;
+
+    use crate::led::{Facts, Pattern, TICK_MS};
+
+    /// Every look the owner can play, including the one `choose` never picks.
+    const LOOKS: [Pattern; 5] = [
+        Pattern::Solid,
+        Pattern::FastBlink,
+        Pattern::InvertedHeartbeat,
+        Pattern::SlowBlink,
+        Pattern::Heartbeat,
+    ];
+
+    /// Station mode, polling happily, nothing in flight.
+    const QUIET: Facts = Facts {
+        ota_busy: false,
+        needs_confirm: false,
+        setup_mode: false,
+        healthy: true,
+    };
+
+    /// The waveform over `ticks` ticks, from tick 0.
+    fn waveform(pattern: Pattern, ticks: u32) -> Vec<bool> {
+        (0..ticks).map(|tick| pattern.level(tick)).collect()
+    }
+
+    /// A common period for every look, so sequences can be compared whole.
+    fn common_period() -> u32 {
+        LOOKS.iter().map(|look| look.period()).fold(1, lcm)
+    }
+
+    fn lcm(a: u32, b: u32) -> u32 {
+        fn gcd(a: u32, b: u32) -> u32 {
+            if b == 0 { a } else { gcd(b, a % b) }
+        }
+        a / gcd(a, b) * b
+    }
+
+    #[test]
+    fn a_quiet_station_heartbeats() {
+        assert_eq!(Pattern::choose(QUIET), Pattern::Heartbeat);
+    }
+
+    #[test]
+    fn an_update_outranks_everything() {
+        // Even a trial image in setup mode with a stalled render loop: if an
+        // update is in flight, the human must not pull the plug.
+        let busy = Facts {
+            ota_busy: true,
+            needs_confirm: true,
+            setup_mode: true,
+            healthy: false,
+        };
+        assert_eq!(Pattern::choose(busy), Pattern::FastBlink);
+        assert_eq!(
+            Pattern::choose(Facts {
+                ota_busy: true,
+                ..QUIET
+            }),
+            Pattern::FastBlink
+        );
+    }
+
+    #[test]
+    fn an_unconfirmed_image_outranks_health() {
+        let trial = Facts {
+            needs_confirm: true,
+            ..QUIET
+        };
+        assert_eq!(Pattern::choose(trial), Pattern::InvertedHeartbeat);
+        // Unhealthy as well: still the trial look. The reset that follows
+        // tells the rest of the story.
+        assert_eq!(
+            Pattern::choose(Facts {
+                healthy: false,
+                ..trial
+            }),
+            Pattern::InvertedHeartbeat
+        );
+        assert_eq!(
+            Pattern::choose(Facts {
+                setup_mode: true,
+                ..trial
+            }),
+            Pattern::InvertedHeartbeat
+        );
+    }
+
+    #[test]
+    fn setup_mode_and_an_unhappy_gate_share_the_attention_look() {
+        assert_eq!(
+            Pattern::choose(Facts {
+                setup_mode: true,
+                ..QUIET
+            }),
+            Pattern::SlowBlink
+        );
+        assert_eq!(
+            Pattern::choose(Facts {
+                healthy: false,
+                ..QUIET
+            }),
+            Pattern::SlowBlink
+        );
+        // Setup mode's own health is only the render loop's, and it does not
+        // change the look either way.
+        assert_eq!(
+            Pattern::choose(Facts {
+                setup_mode: true,
+                healthy: false,
+                ..QUIET
+            }),
+            Pattern::SlowBlink
+        );
+    }
+
+    #[test]
+    fn choose_never_picks_solid() {
+        // Solid means "provisioning", and provisioning is over before there
+        // are facts. Exhaustive over the sixteen fact combinations.
+        for bits in 0u8..16 {
+            let facts = Facts {
+                ota_busy: bits & 1 != 0,
+                needs_confirm: bits & 2 != 0,
+                setup_mode: bits & 4 != 0,
+                healthy: bits & 8 != 0,
+            };
+            assert_ne!(Pattern::choose(facts), Pattern::Solid, "{facts:?}");
+        }
+    }
+
+    #[test]
+    fn every_chosen_look_animates() {
+        // A static LED must never read as healthy — or as anything `choose`
+        // can return. Solid is the one exception and it is never chosen.
+        for look in LOOKS {
+            let wave = waveform(look, look.period());
+            let lit = wave.iter().filter(|&&on| on).count();
+            if look == Pattern::Solid {
+                assert_eq!(lit, wave.len(), "solid is on throughout");
+            } else {
+                assert!(
+                    lit > 0 && lit < wave.len(),
+                    "{look:?} must change level within one period"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_healthy_look_is_mostly_dark() {
+        // So a frozen LED most likely lands on "off", which is alarming, and
+        // never on a look that could be mistaken for a live heartbeat.
+        let wave = waveform(Pattern::Heartbeat, Pattern::Heartbeat.period());
+        let lit = wave.iter().filter(|&&on| on).count() as u32;
+        assert_eq!(lit * 100 / Pattern::Heartbeat.period(), 20, "20 % duty");
+        // Two separate blips, not one long one: both edges inside the period.
+        assert_eq!(
+            wave,
+            [
+                true, false, false, true, false, false, false, false, false, false
+            ]
+        );
+    }
+
+    #[test]
+    fn the_inverted_heartbeat_is_the_complement() {
+        let period = Pattern::Heartbeat.period();
+        assert_eq!(Pattern::InvertedHeartbeat.period(), period);
+        for tick in 0..period * 3 {
+            assert_eq!(
+                Pattern::InvertedHeartbeat.level(tick),
+                !Pattern::Heartbeat.level(tick),
+                "tick {tick}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_blinks_are_square_and_at_their_rates() {
+        // Slow: 1 s on, 1 s off. Fast: 5 Hz. Both 50 % duty.
+        let slow = waveform(Pattern::SlowBlink, Pattern::SlowBlink.period());
+        assert_eq!(slow.len() as u64 * TICK_MS, 2_000);
+        assert!(slow[..10].iter().all(|&on| on) && slow[10..].iter().all(|&on| !on));
+        let fast = waveform(Pattern::FastBlink, Pattern::FastBlink.period());
+        assert_eq!(fast.len() as u64 * TICK_MS, 200);
+        assert_eq!(fast, [true, false]);
+    }
+
+    #[test]
+    fn every_look_repeats_at_its_period() {
+        for look in LOOKS {
+            let period = look.period();
+            for tick in 0..period * 4 {
+                assert_eq!(
+                    look.level(tick),
+                    look.level(tick + period),
+                    "{look:?} at tick {tick}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_two_looks_coincide() {
+        // Shape, not rate: over a common period, every pair of looks differs
+        // somewhere, so a person watching for one period can name the look.
+        let period = common_period();
+        for (i, a) in LOOKS.iter().enumerate() {
+            for b in &LOOKS[i + 1..] {
+                assert_ne!(waveform(*a, period), waveform(*b, period), "{a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_wrapping_tick_count_is_harmless() {
+        // The owner's count is a wrapping u32; the waveform is a phase within
+        // the period, so the only effect of a wrap is one phase jump.
+        for look in LOOKS {
+            let _ = look.level(u32::MAX);
+            let _ = look.level(0);
+        }
+    }
+
+    #[test]
+    fn the_names_are_distinct() {
+        let mut names: Vec<&str> = LOOKS.iter().map(|look| look.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), LOOKS.len());
+    }
+}

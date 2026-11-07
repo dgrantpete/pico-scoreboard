@@ -49,6 +49,7 @@ mod display_core1;
 mod event;
 mod http;
 mod inputs;
+mod led;
 mod logos;
 mod net;
 mod poller;

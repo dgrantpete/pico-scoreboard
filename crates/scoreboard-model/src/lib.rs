@@ -25,6 +25,7 @@ extern crate std;
 pub mod channel;
 pub mod color;
 pub mod feed;
+pub mod led;
 pub mod poll;
 pub mod prefetch;
 pub mod slate;
