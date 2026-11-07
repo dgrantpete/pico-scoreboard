@@ -4,9 +4,9 @@
 	import type { ColorsConfig } from "$lib/api/types";
 
 	const COLOR_ROWS: { key: keyof ColorsConfig; label: string; description: string }[] = [
-		{ key: "primary", label: "Primary", description: "Dividers, status text, period display" },
-		{ key: "secondary", label: "Secondary", description: "Venue text, subtle elements" },
-		{ key: "accent", label: "Accent", description: "Highlights, start time" },
+		{ key: "primary", label: "Primary", description: "Scores, period and status text, counts" },
+		{ key: "secondary", label: "Secondary", description: "Venue text, dividers, subtle elements" },
+		{ key: "accent", label: "Accent", description: "Highlights, final labels, start time" },
 		{ key: "clock_normal", label: "Clock (Normal)", description: "Game clock when time remaining" },
 		{ key: "clock_warning", label: "Clock (Warning)", description: "Low time warning, errors" },
 	];

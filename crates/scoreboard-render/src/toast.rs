@@ -20,9 +20,9 @@ use crate::blit::{Canvas, FADE_TERMS};
 use crate::generated::layout;
 use crate::geometry::{HEIGHT, WIDTH};
 use crate::time::WallMs;
-use crate::{WHITE, pulse, rgb565};
+use crate::{pack_scaled, pulse};
 use scoreboard_model::snapshot::{TOAST_DISPLAY_MS, TOAST_STICKY_MAX_MS, ToastView};
-use scoreboard_model::{Millis, ScoreboardSnapshot, ToastKind};
+use scoreboard_model::{Millis, Rgb888, ScoreboardSnapshot, ToastKind};
 
 /// How long one rung of the dim ladder holds.
 ///
@@ -135,14 +135,6 @@ fn brightness(toast: &ToastView, now: WallMs) -> u8 {
     255
 }
 
-fn shade(brightness: u8) -> u16 {
-    if brightness == 255 {
-        WHITE
-    } else {
-        rgb565(brightness, brightness, brightness)
-    }
-}
-
 /// Draw an active icon toast over the finished frame.
 ///
 /// Called last in each game-facing render so nothing paints over it. `canvas`
@@ -168,10 +160,11 @@ pub fn overlay(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: Wall
     canvas.dim(FADE_TERMS[step]);
 
     let brightness = brightness(toast, now);
+    let primary = snapshot.ui_colors.primary;
     match toast.kind {
-        ToastKind::Spinner => spinner(canvas, elapsed, brightness),
-        ToastKind::Unlock => lock(canvas, shade(brightness), true),
-        ToastKind::Lock => lock(canvas, shade(brightness), false),
+        ToastKind::Spinner => spinner(canvas, elapsed, brightness, primary),
+        ToastKind::Unlock => lock(canvas, pack_scaled(primary, brightness.into(), 255), true),
+        ToastKind::Lock => lock(canvas, pack_scaled(primary, brightness.into(), 255), false),
     }
 }
 
@@ -184,7 +177,7 @@ pub fn overlay(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: Wall
 /// frame rate, since the ring is driven off the wall clock and simply gets
 /// three times as many samples per revolution. Dots outside the trail get the
 /// key as their color, so the blit skips them entirely.
-fn spinner(canvas: &mut Canvas<'_>, elapsed: Millis, dim: u8) {
+fn spinner(canvas: &mut Canvas<'_>, elapsed: Millis, dim: u8, primary: Rgb888) {
     let sprite = layout::toast_spinner::SPRITE;
     let mut palette = layout::toast_spinner::PALETTE;
     let key = sprite.key.unwrap_or(0);
@@ -204,7 +197,7 @@ fn spinner(canvas: &mut Canvas<'_>, elapsed: Millis, dim: u8) {
         if dim != 255 {
             value = (value * dim as u32) >> 8;
         }
-        palette[entry] = rgb565(value as u8, value as u8, value as u8);
+        palette[entry] = pack_scaled(primary, value, 255);
     }
     canvas.blit(&sprite.tinted(&palette), SPINNER_X, SPINNER_Y);
 }

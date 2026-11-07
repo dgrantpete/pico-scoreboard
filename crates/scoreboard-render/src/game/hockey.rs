@@ -34,7 +34,8 @@ use crate::geometry::{
 };
 use crate::time::WallMs;
 use crate::widgets::count_dots;
-use crate::{BLACK, DIM_GRAY, MAGENTA, WHITE, generated, pack, rgb565, toast};
+use crate::{BLACK, MAGENTA, WHITE, generated, pack, rgb565, toast};
+use scoreboard_model::UiColors;
 use scoreboard_model::snapshot::{
     BannerKind, GoalMark, HockeyLiveView, ShootoutRow, ShootoutView, ShotMark, Side,
 };
@@ -44,7 +45,7 @@ const LAMP: u16 = rgb565(255, 24, 24);
 /// How long the lamp burns after a goal (D4). A duration, so it is measured
 /// on the wall rail: a stalled frame spends lamp time like any other.
 const LAMP_MS: u64 = 20_000;
-/// One white ↔ lamp-red cycle — MLB's critical-count pulse, re-aimed.
+/// One primary ↔ lamp-red cycle — MLB's critical-count pulse, re-aimed.
 const LAMP_PULSE_MS: u64 = 1_000;
 /// While the lamp burns the newest goal's mark blinks opaque white, on for
 /// this long and off for as long.
@@ -79,11 +80,12 @@ fn ledger(canvas: &mut Canvas<'_>, scene: &Scene<'_>, table: HockeyLedgerGeometr
     if let Some(shootout) = &view.shootout {
         // No rule under the data column: the attempt rows sit level with the
         // crests, across where it would run.
-        super::column_dividers(canvas, scene.settings, Some(table.divider_x), None);
+        super::column_dividers(canvas, scene, Some(table.divider_x), None);
         super::both_logos(canvas, scene, table.logo_away, table.logo_home);
         identity(
             canvas,
             view,
+            pack(snapshot.ui_colors.primary),
             table.score_away,
             table.score_home,
             table.period,
@@ -94,12 +96,14 @@ fn ledger(canvas: &mut Canvas<'_>, scene: &Scene<'_>, table: HockeyLedgerGeometr
             table.shootout_away,
             &shootout.away,
             pack(view.away_color),
+            &snapshot.ui_colors,
         );
         shootout_row(
             canvas,
             table.shootout_home,
             &shootout.home,
             pack(view.home_color),
+            &snapshot.ui_colors,
         );
         super::chip(
             canvas,
@@ -112,14 +116,14 @@ fn ledger(canvas: &mut Canvas<'_>, scene: &Scene<'_>, table: HockeyLedgerGeometr
             table.shootout_tally,
             shootout,
             " - ",
-            Style::new(&generated::SPLEEN_5X8, WHITE),
+            Style::new(&generated::SPLEEN_5X8, pack(snapshot.ui_colors.primary)),
         );
         return;
     }
 
     super::column_dividers(
         canvas,
-        scene.settings,
+        scene,
         Some(table.divider_x),
         Some(table.separator_y),
     );
@@ -127,13 +131,14 @@ fn ledger(canvas: &mut Canvas<'_>, scene: &Scene<'_>, table: HockeyLedgerGeometr
     identity(
         canvas,
         view,
+        pack(snapshot.ui_colors.primary),
         table.score_away,
         table.score_home,
         table.period,
         Some(scene.now),
     );
     clock(canvas, scene, table.clock);
-    shots(canvas, view, table.shots, table.shots_bar_y);
+    shots(canvas, scene, table.shots, table.shots_bar_y);
 
     if super::bottom_strip(canvas, scene) == Strip::Free {
         ledger_strip(canvas, scene, view, &table);
@@ -150,11 +155,12 @@ fn ledger_strip(
     view: &HockeyLiveView,
     table: &HockeyLedgerGeometry,
 ) {
+    let colors = &scene.snapshot.ui_colors;
     if let Some(banner) = view.banner {
         let (title, color, side) = match banner.kind {
             BannerKind::PowerPlay(side) => ("POWER PLAY", side_color(view, side), Some(side)),
             BannerKind::EmptyNet(side) => ("EMPTY NET", side_color(view, side), Some(side)),
-            BannerKind::Matched => ("EVEN STRENGTH", DIM_GRAY, None),
+            BannerKind::Matched => ("EVEN STRENGTH", pack(colors.secondary), None),
         };
         line(
             canvas,
@@ -163,7 +169,11 @@ fn ledger_strip(
             &generated::SPLEEN_5X8,
             color,
         );
-        let count_color = if side.is_some() { color } else { WHITE };
+        let count_color = if side.is_some() {
+            color
+        } else {
+            pack(colors.primary)
+        };
         skater_count(
             canvas,
             table.strip_bottom,
@@ -206,7 +216,7 @@ fn ledger_strip(
             table.strip_empty,
             "NO GOALS",
             &generated::SPLEEN_5X8,
-            DIM_GRAY,
+            pack(colors.secondary),
         );
     }
 }
@@ -238,6 +248,7 @@ fn rink_screen(canvas: &mut Canvas<'_>, scene: &Scene<'_>, table: HockeyRinkGeom
         identity(
             canvas,
             view,
+            pack(snapshot.ui_colors.primary),
             table.score_away,
             table.score_home,
             table.period,
@@ -255,19 +266,21 @@ fn rink_screen(canvas: &mut Canvas<'_>, scene: &Scene<'_>, table: HockeyRinkGeom
             table.situation,
             "SHOOTOUT",
             &generated::SPLEEN_5X8,
-            DIM_GRAY,
+            pack(snapshot.ui_colors.secondary),
         );
         shootout_row(
             canvas,
             table.shootout_away,
             &shootout.away,
             pack(view.away_color),
+            &snapshot.ui_colors,
         );
         shootout_row(
             canvas,
             table.shootout_home,
             &shootout.home,
             pack(view.home_color),
+            &snapshot.ui_colors,
         );
         short_rink(canvas, view, table.shootout_rink_y);
         return;
@@ -277,6 +290,7 @@ fn rink_screen(canvas: &mut Canvas<'_>, scene: &Scene<'_>, table: HockeyRinkGeom
     identity(
         canvas,
         view,
+        pack(snapshot.ui_colors.primary),
         table.score_away,
         table.score_home,
         table.period,
@@ -284,7 +298,7 @@ fn rink_screen(canvas: &mut Canvas<'_>, scene: &Scene<'_>, table: HockeyRinkGeom
     );
     clock(canvas, scene, table.clock);
     situation(canvas, scene, view, table.situation);
-    shots(canvas, view, table.shots, table.shots_bar_y);
+    shots(canvas, scene, table.shots, table.shots_bar_y);
 
     if super::bottom_strip(canvas, scene) == Strip::Free {
         rink(canvas, scene, view);
@@ -349,7 +363,7 @@ fn situation(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &HockeyLiveView, 
                     slot,
                     banner.attackers,
                     banner.defenders,
-                    Style::new(face, WHITE),
+                    Style::new(face, pack(scene.snapshot.ui_colors.primary)),
                 );
                 return;
             }
@@ -520,6 +534,7 @@ fn short_rink(canvas: &mut Canvas<'_>, view: &HockeyLiveView, y: i32) {
 fn identity(
     canvas: &mut Canvas<'_>,
     view: &HockeyLiveView,
+    primary: u16,
     away: Slice,
     home: Slice,
     period: Slice,
@@ -531,14 +546,14 @@ fn identity(
     ] {
         let color = match lamp_at.and_then(|now| lamp(view, now)) {
             Some((lit, since)) if lit == side => {
-                mix(WHITE, LAMP, crate::pulse(since, LAMP_PULSE_MS))
+                mix(primary, LAMP, crate::pulse(since, LAMP_PULSE_MS))
             }
-            _ => WHITE,
+            _ => primary,
         };
         super::big_score(canvas, slot, score, color);
     }
     if !view.period_text.is_empty() {
-        super::chip(canvas, period, &view.period_text, WHITE);
+        super::chip(canvas, period, &view.period_text, primary);
     }
 }
 
@@ -567,7 +582,8 @@ fn clock(canvas: &mut Canvas<'_>, scene: &Scene<'_>, slot: Slice) {
 
 /// The shots ledger: each side's count at its end, the label between, and a
 /// bar under them split in proportion. Absent shots hide the row (§3.3).
-fn shots(canvas: &mut Canvas<'_>, view: &HockeyLiveView, slot: Slice, bar_y: i32) {
+fn shots(canvas: &mut Canvas<'_>, scene: &Scene<'_>, slot: Slice, bar_y: i32) {
+    let (view, colors) = (&scene.snapshot.hockey_live, &scene.snapshot.ui_colors);
     let Some(shots) = view.shots else {
         return;
     };
@@ -583,10 +599,10 @@ fn shots(canvas: &mut Canvas<'_>, view: &HockeyLiveView, slot: Slice, bar_y: i32
             slot.y,
             SHOTS_COUNT_WIDTH,
             Align::Center,
-            Style::new(face, WHITE),
+            Style::new(face, pack(colors.primary)),
         );
     }
-    line(canvas, slot, "SHOTS", face, DIM_GRAY);
+    line(canvas, slot, "SHOTS", face, pack(colors.secondary));
 
     let (away, home) = (shots.away as i32, shots.home as i32);
     // A pixel's gap at the split; level shots — 0-0 included — split evenly.
@@ -649,9 +665,15 @@ fn tally(
 }
 
 /// One side's attempts, oldest first: a solid square for a goal, a red X for
-/// a miss, a white ring around a pip for the side shooting next, and a gray
-/// ring for a round of the three still to come.
-fn shootout_row(canvas: &mut Canvas<'_>, slot: Slice, row: &ShootoutRow, color: u16) {
+/// a miss, a ring around a pip for the side shooting next, and a bare ring for
+/// a round of the three still to come.
+fn shootout_row(
+    canvas: &mut Canvas<'_>,
+    slot: Slice,
+    row: &ShootoutRow,
+    color: u16,
+    colors: &UiColors,
+) {
     let size = SHOOTOUT_MARK;
     for (index, mark) in row.marks.iter().enumerate() {
         let (x, y) = (slot.x + index as i32 * SHOOTOUT_PITCH, slot.y);
@@ -664,10 +686,11 @@ fn shootout_row(canvas: &mut Canvas<'_>, slot: Slice, row: &ShootoutRow, color: 
                 }
             }
             ShotMark::Next => {
-                canvas.rect(x, y, size, size, WHITE);
-                canvas.fill_rect(x + 2, y + 2, size - 4, size - 4, WHITE);
+                let next = pack(colors.primary);
+                canvas.rect(x, y, size, size, next);
+                canvas.fill_rect(x + 2, y + 2, size - 4, size - 4, next);
             }
-            ShotMark::Pending => canvas.rect(x, y, size, size, DIM_GRAY),
+            ShotMark::Pending => canvas.rect(x, y, size, size, pack(colors.secondary)),
         }
     }
 }
@@ -689,6 +712,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let shared = &snapshot.linescore_final;
     let view = &snapshot.hockey_final;
     let table = HOCKEY_FINAL;
+    let colors = &snapshot.ui_colors;
     let (away_color, home_color) = super::winner_colors(
         shared.home_won,
         pack(shared.away_color),
@@ -696,18 +720,19 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     );
 
     if scene.settings.show_dividers {
+        let rule = pack(colors.secondary);
         canvas.vline(
             table.divider_x,
             EDGE_INSET,
             geometry::HEIGHT - 2 * EDGE_INSET,
-            DIM_GRAY,
+            rule,
         );
         let start = table.divider_x + 1;
         canvas.hline(
             start,
             table.rule_y,
             geometry::WIDTH - EDGE_INSET - start,
-            DIM_GRAY,
+            rule,
         );
     }
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
@@ -717,7 +742,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         canvas,
         table.final_label,
         &shared.final_text,
-        pack(snapshot.ui_colors.accent),
+        pack(colors.accent),
     );
 
     let face = &generated::SPLEEN_5X8;
@@ -732,7 +757,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
                 let color = match line.side {
                     Some(Side::Away) => pack(shared.away_color),
                     Some(Side::Home) => pack(shared.home_color),
-                    None => WHITE,
+                    None => pack(colors.primary),
                 };
                 let mut region = canvas.slice(slot);
                 font::draw(
@@ -747,7 +772,11 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         }
         None => {
             for (slot, row, color) in [
-                (table.linescore_rows[0], &shared.header_row, DIM_GRAY),
+                (
+                    table.linescore_rows[0],
+                    &shared.header_row,
+                    pack(colors.secondary),
+                ),
                 (table.linescore_rows[1], &shared.away_row, away_color),
                 (table.linescore_rows[2], &shared.home_row, home_color),
             ] {
@@ -770,7 +799,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             series,
             Align::Center,
             scene.view.motion(),
-            Style::new(face, WHITE),
+            Style::new(face, pack(colors.secondary)),
             HOCKEY_STARS_SCROLL,
         );
     }
@@ -782,7 +811,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             shots.away as u16,
             "-",
             shots.home as u16,
-            Style::new(face, DIM_GRAY),
+            Style::new(face, pack(colors.secondary)),
         );
     }
 

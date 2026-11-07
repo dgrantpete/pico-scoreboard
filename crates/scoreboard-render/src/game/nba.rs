@@ -12,7 +12,7 @@ use super::Scene;
 use crate::blit::Canvas;
 use crate::font::{self, Align, Style};
 use crate::geometry::NBA_LIVE;
-use crate::{BLACK, WHITE, generated, pack, toast};
+use crate::{BLACK, generated, pack, toast};
 use scoreboard_model::UiColors;
 
 pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
@@ -20,20 +20,22 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let snapshot = scene.snapshot;
     let view = &snapshot.nba_live;
     let table = NBA_LIVE;
+    let colors = &snapshot.ui_colors;
+    let primary = pack(colors.primary);
 
     super::column_dividers(
         canvas,
-        scene.settings,
+        scene,
         Some(table.divider_x),
         Some(table.separator_y),
     );
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
-    super::big_score(canvas, table.score_away, view.away_score, WHITE);
-    super::big_score(canvas, table.score_home, view.home_score, WHITE);
+    super::big_score(canvas, table.score_away, view.away_score, primary);
+    super::big_score(canvas, table.score_home, view.home_score, primary);
 
     if !view.phase_text.is_empty() {
-        super::chip(canvas, table.phase, &view.phase_text, WHITE);
+        super::chip(canvas, table.phase, &view.phase_text, primary);
     }
 
     font::aligned_text(
@@ -45,7 +47,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         Align::Center,
         Style::new(
             &generated::UNSCII_16,
-            clock_color(&snapshot.ui_colors, view.clock_accent, view.clock_low),
+            clock_color(colors, view.clock_accent, view.clock_low),
         ),
     );
 

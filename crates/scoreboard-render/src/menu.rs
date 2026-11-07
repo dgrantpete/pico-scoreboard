@@ -27,7 +27,7 @@ use crate::blit::Canvas;
 use crate::font::{self, Align, Scroll, Style};
 use crate::geometry::{HEIGHT, WIDTH};
 use crate::time::WallMs;
-use crate::{BLACK, DIM_GRAY, generated, pack};
+use crate::{BLACK, generated, pack};
 use scoreboard_model::ScoreboardSnapshot;
 
 // Geometry, inset 1 px from every panel edge: the edge pixels on this panel are
@@ -67,6 +67,7 @@ const DONE_HIGHLIGHT: i8 = -1;
 pub fn render(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: WallMs) {
     let menu = &snapshot.menu;
     let color = pack(snapshot.ui_colors.primary);
+    let secondary = pack(snapshot.ui_colors.secondary);
     let elapsed = now.since(menu.updated_ms);
 
     canvas.fill(BLACK);
@@ -102,11 +103,11 @@ pub fn render(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: WallM
     }
 
     if menu.thumb_y >= 0 {
-        canvas.fill_rect(BAR_X, TOP, 2, SEPARATOR_Y - TOP - 1, DIM_GRAY);
+        canvas.fill_rect(BAR_X, TOP, 2, SEPARATOR_Y - TOP - 1, secondary);
         canvas.fill_rect(BAR_X, menu.thumb_y as i32, 2, menu.thumb_h as i32, color);
     }
 
-    canvas.hline(1, SEPARATOR_Y, WIDTH - 2, DIM_GRAY);
+    canvas.hline(1, SEPARATOR_Y, WIDTH - 2, secondary);
     let done_selected = menu.highlight == DONE_HIGHLIGHT;
     if done_selected {
         canvas.fill_rect(1, DONE_Y, WIDTH - 2, HEIGHT - 1 - DONE_Y, color);

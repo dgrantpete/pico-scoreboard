@@ -9,7 +9,7 @@ use crate::blit::{Canvas, Slice};
 use crate::font::{self, Align, Style};
 use crate::geometry::{EDGE_INSET, SOCCER_FINAL, SOCCER_SCROLL_PAUSE_MS};
 use crate::time::WallMs;
-use crate::{BLACK, DIM_GRAY, WHITE, generated, pack, toast};
+use crate::{BLACK, generated, pack, toast};
 use scoreboard_model::UiColors;
 use scoreboard_model::snapshot::SoccerLiveView;
 
@@ -26,28 +26,25 @@ pub fn render_live(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let snapshot = scene.snapshot;
     let view = &snapshot.soccer_live;
     let table = scene.settings.soccer_live_table();
+    let colors = &snapshot.ui_colors;
+    let primary = pack(colors.primary);
 
-    super::column_dividers(
-        canvas,
-        scene.settings,
-        table.divider_x,
-        Some(table.separator_y),
-    );
+    super::column_dividers(canvas, scene, table.divider_x, Some(table.separator_y));
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
-    super::big_score(canvas, table.score_away, view.away_score, WHITE);
-    super::big_score(canvas, table.score_home, view.home_score, WHITE);
+    super::big_score(canvas, table.score_away, view.away_score, primary);
+    super::big_score(canvas, table.score_home, view.home_score, primary);
 
     // The period, in whichever form this variant asks for: a short chip in the
     // identity column, or spelled out under the clock.
     if let Some(slot) = table.phase.filter(|_| !view.phase_text.is_empty()) {
-        super::chip(canvas, slot, &view.phase_text, WHITE);
+        super::chip(canvas, slot, &view.phase_text, primary);
     }
     if let Some(slot) = table.phase_long.filter(|_| !view.phase_long.is_empty()) {
-        super::chip(canvas, slot, &view.phase_long, DIM_GRAY);
+        super::chip(canvas, slot, &view.phase_long, pack(colors.secondary));
     }
 
-    clock(canvas, table.clock, view, &snapshot.ui_colors, scene.now);
+    clock(canvas, table.clock, view, colors, scene.now);
 
     if super::bottom_strip(canvas, scene) == Strip::Free {
         let scroll = scene.game_scroll(SOCCER_SCROLL_PAUSE_MS);
@@ -81,7 +78,7 @@ pub fn render_live(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
                 &mut empty,
                 "NO GOALS",
                 Align::Center,
-                Style::new(&generated::SPLEEN_5X8, DIM_GRAY),
+                Style::new(&generated::SPLEEN_5X8, pack(colors.secondary)),
             );
         }
     }
@@ -183,7 +180,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             table.divider_x,
             EDGE_INSET,
             crate::geometry::HEIGHT - 2 * EDGE_INSET,
-            DIM_GRAY,
+            pack(snapshot.ui_colors.secondary),
         );
     }
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);

@@ -18,7 +18,7 @@ use crate::blit::Canvas;
 use crate::font::{self, Align, Style};
 use crate::generated::layout;
 use crate::geometry::{self, FOOTBALL_LIVE};
-use crate::{BLACK, DIM_GRAY, WHITE, generated, pack, rgb565, toast};
+use crate::{BLACK, DIM_GRAY, generated, pack, rgb565, toast};
 use scoreboard_model::snapshot::Side;
 use scoreboard_model::snapshot::{FieldSituation, FootballLiveView};
 
@@ -57,6 +57,8 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let snapshot = scene.snapshot;
     let view = &snapshot.football_live;
     let table = FOOTBALL_LIVE;
+    let colors = &snapshot.ui_colors;
+    let primary = pack(colors.primary);
 
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
@@ -71,11 +73,11 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         }
     }
 
-    super::big_score(canvas, table.score_away, view.away_score, WHITE);
-    super::big_score(canvas, table.score_home, view.home_score, WHITE);
+    super::big_score(canvas, table.score_away, view.away_score, primary);
+    super::big_score(canvas, table.score_home, view.home_score, primary);
 
     if !view.phase_text.is_empty() {
-        super::chip(canvas, table.phase, &view.phase_text, WHITE);
+        super::chip(canvas, table.phase, &view.phase_text, primary);
     }
     font::aligned_text(
         canvas,
@@ -86,7 +88,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         Align::Center,
         Style::new(
             &generated::UNSCII_16,
-            super::nba::clock_color(&snapshot.ui_colors, view.clock_accent, view.clock_low),
+            super::nba::clock_color(colors, view.clock_accent, view.clock_low),
         ),
     );
 
@@ -106,11 +108,12 @@ fn situation(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &FootballLiveView
         return;
     }
     let table = FOOTBALL_LIVE;
+    let colors = &scene.snapshot.ui_colors;
     let red_zone = view.situation.is_some_and(|situation| situation.red_zone);
     let text_color = if red_zone {
-        pack(scene.snapshot.ui_colors.clock_warning)
+        pack(colors.clock_warning)
     } else {
-        WHITE
+        pack(colors.primary)
     };
 
     let mut region = canvas.slice(table.situation);

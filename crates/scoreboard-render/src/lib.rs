@@ -87,6 +87,22 @@ pub fn pack(color: scoreboard_model::Rgb888) -> u16 {
     rgb565(color.red(), color.green(), color.blue())
 }
 
+/// The snapshot's `Rgb888` dimmed to `num`/`den` of itself, then packed.
+///
+/// A palette color that has to step down — the toast's fade, overtime losses
+/// under the losses — scales its 8-bit channels before packing. Scaling the
+/// packed value instead would truncate through 5 and 6 bits first, and a white
+/// primary would no longer land on exactly the gray ramp the panel drew before
+/// these elements took their color from the palette.
+pub fn pack_scaled(color: scoreboard_model::Rgb888, num: u32, den: u32) -> u16 {
+    let scale = |channel: u8| (channel as u32 * num / den).min(255) as u8;
+    rgb565(
+        scale(color.red()),
+        scale(color.green()),
+        scale(color.blue()),
+    )
+}
+
 /// Transparency sentinel shared by `fonts.MAGENTA_RGB565`, the layout
 /// compiler's `_TRANSPARENT_RGB565`, and every sprite's `KEY`.
 ///

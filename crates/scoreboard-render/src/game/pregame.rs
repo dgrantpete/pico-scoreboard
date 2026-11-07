@@ -15,12 +15,8 @@ use crate::blit::Canvas;
 use crate::font::{self, Align, Style};
 use crate::geometry::{PREGAME, PREGAME_INFO_DWELL_MS, PREGAME_SCROLL};
 use crate::prepared::PregameLine;
-use crate::{BLACK, DIM_GRAY, WHITE, generated, pack, rgb565, toast};
+use crate::{BLACK, generated, pack, pack_scaled, toast};
 use scoreboard_model::Sport;
-
-/// Overtime losses, a step dimmer than the losses above them: the third
-/// column matters least, and the stack reads top-down by weight.
-const OT_LOSSES: u16 = rgb565(60, 60, 60);
 
 pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     canvas.fill(BLACK);
@@ -28,11 +24,12 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let view = &snapshot.pregame;
     let table = PREGAME;
     let elapsed = scene.view.0;
+    let colors = &snapshot.ui_colors;
 
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
     super::column_dividers(
         canvas,
-        scene.settings,
+        scene,
         Some(table.divider_x),
         Some(table.separator_y),
     );
@@ -63,10 +60,16 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             two_rows
         };
         let ot_losses = record.ot_losses.filter(|_| hockey);
+        // Overtime losses take the losses' color at 5/8, a step dimmer: the
+        // third column matters least, and the stack reads top-down by weight.
         for (slot, value, color) in [
-            (wins_slot, Some(record.wins), WHITE),
-            (losses_slot, Some(record.losses), DIM_GRAY),
-            (three_rows[2], ot_losses, OT_LOSSES),
+            (wins_slot, Some(record.wins), pack(colors.primary)),
+            (losses_slot, Some(record.losses), pack(colors.secondary)),
+            (
+                three_rows[2],
+                ot_losses,
+                pack_scaled(colors.secondary, 5, 8),
+            ),
         ] {
             let Some(value) = value else {
                 continue;
@@ -100,7 +103,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             &mut slot,
             big,
             Align::Center,
-            Style::new(&generated::UNSCII_16, WHITE),
+            Style::new(&generated::UNSCII_16, pack(colors.accent)),
         );
     }
 
@@ -117,7 +120,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             text,
             Align::Left,
             crate::time::Motion(phase_elapsed),
-            Style::new(&generated::SPLEEN_5X8, WHITE),
+            Style::new(&generated::SPLEEN_5X8, pack(colors.secondary)),
             PREGAME_SCROLL,
         );
     }

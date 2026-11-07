@@ -39,7 +39,7 @@ use crate::font::{self, Align, Scroll, Style};
 use crate::geometry::{PLAY_SCROLL_PAUSE_MS, RenderSettings};
 use crate::prepared::PreparedView;
 use crate::time::{FrameElapsed, WallMs};
-use crate::{DIM_GRAY, WHITE, generated, geometry};
+use crate::{DIM_GRAY, generated, geometry, pack};
 use scoreboard_model::ScoreboardSnapshot;
 use scoreboard_model::snapshot::LogoRef;
 
@@ -148,7 +148,10 @@ pub fn bottom_strip(canvas: &mut Canvas<'_>, scene: &Scene<'_>) -> Strip {
         // The scroll offset is motion, so it rides the frame rail: a stalled
         // frame holds position instead of jumping a handful of pixels.
         scene.play.motion(),
-        Style::new(&generated::UNSCII_16, WHITE),
+        Style::new(
+            &generated::UNSCII_16,
+            pack(scene.snapshot.ui_colors.primary),
+        ),
         scene.game_scroll(PLAY_SCROLL_PAUSE_MS),
     );
     Strip::Play
@@ -208,21 +211,22 @@ pub fn both_logos(canvas: &mut Canvas<'_>, scene: &Scene<'_>, away: Slice, home:
 /// consistently, so it is all or nothing.
 pub fn column_dividers(
     canvas: &mut Canvas<'_>,
-    settings: &RenderSettings,
+    scene: &Scene<'_>,
     divider_x: Option<i32>,
     separator_y: Option<i32>,
 ) {
-    if !settings.show_dividers {
+    if !scene.settings.show_dividers {
         return;
     }
+    let rule = pack(scene.snapshot.ui_colors.secondary);
     // Both rules stop at the 1 px border (BACKLOG 56).
     let inset = geometry::EDGE_INSET;
     if let Some(x) = divider_x {
-        canvas.vline(x, inset, geometry::HEIGHT - 2 * inset, DIM_GRAY);
+        canvas.vline(x, inset, geometry::HEIGHT - 2 * inset, rule);
     }
     if let Some(y) = separator_y {
         let start = divider_x.map_or(inset, |x| x + 1);
-        canvas.hline(start, y, geometry::WIDTH - inset - start, DIM_GRAY);
+        canvas.hline(start, y, geometry::WIDTH - inset - start, rule);
     }
 }
 

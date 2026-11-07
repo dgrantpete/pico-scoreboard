@@ -375,11 +375,12 @@ fn the_overlay_fades_out_after_the_toast_expires() {
     assert!(!toast::overlay_fading(&toast, WallMs(2_650)), "clean again");
 }
 
-/// Where the fully-bright head dot sits, as an average of its pixels.
+/// Where the fully-bright head dot sits, as an average of its pixels. The
+/// comet's ramp runs down from the primary color, so full brightness is it.
 fn spinner_head(frame: &Frame) -> (i32, i32) {
     let pixels: Vec<(i32, i32)> = (SPINNER_BOX.1..SPINNER_BOX.3)
         .flat_map(|y| (SPINNER_BOX.0..SPINNER_BOX.2).map(move |x| (x, y)))
-        .filter(|(x, y)| frame.pixel(*x, *y) == 0xFFFF)
+        .filter(|(x, y)| frame.pixel(*x, *y) == pack(PRIMARY))
         .collect();
     assert!(!pixels.is_empty(), "no dot at full brightness");
     let count = pixels.len() as i32;
@@ -438,9 +439,12 @@ fn the_spinner_leaves_a_gap_behind_its_tail() {
         .filter(|color| *color != background)
         .collect();
     assert!(!dots.is_empty(), "the comet drew nothing");
-    assert!(dots.contains(&0xFFFF), "the head is at full brightness");
     assert!(
-        dots.iter().any(|color| *color != 0xFFFF),
+        dots.contains(&pack(PRIMARY)),
+        "the head is at full brightness"
+    );
+    assert!(
+        dots.iter().any(|color| *color != pack(PRIMARY)),
         "the tail fades behind the head"
     );
 }
@@ -522,9 +526,5 @@ fn a_short_list_draws_no_scrollbar() {
     let scrolled = render(|canvas| menu::render(canvas, &snapshot, WallMs(0)));
     assert!(scrolled.lit_in(125..127, 1..51) > 0, "the track and thumb");
     assert_eq!(scrolled.pixel(125, 1), pack(PRIMARY), "the thumb");
-    assert_eq!(
-        scrolled.pixel(125, 40),
-        scoreboard_render::DIM_GRAY,
-        "track"
-    );
+    assert_eq!(scrolled.pixel(125, 40), pack(SECONDARY), "track");
 }

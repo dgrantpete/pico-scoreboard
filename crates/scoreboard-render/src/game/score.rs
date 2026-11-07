@@ -14,7 +14,7 @@ use super::Scene;
 use crate::blit::Canvas;
 use crate::font::{self, Align, Style};
 use crate::geometry::{EDGE_INSET, FINAL_LINESCORE_SCROLL, HEIGHT, WIDTH};
-use crate::{BLACK, DIM_GRAY, generated, pack, toast};
+use crate::{BLACK, generated, pack, toast};
 use scoreboard_model::Sport;
 
 pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
@@ -22,6 +22,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let snapshot = scene.snapshot;
     let view = &snapshot.linescore_final;
     let table = scene.settings.final_table(view.sport);
+    let secondary = pack(snapshot.ui_colors.secondary);
 
     let (away_color, home_color) =
         super::winner_colors(view.home_won, pack(view.away_color), pack(view.home_color));
@@ -34,9 +35,9 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     // panel's edge ring.
     if scene.settings.show_dividers {
         let top = table.separator_y.unwrap_or(EDGE_INSET);
-        canvas.vline(table.divider_x, top, HEIGHT - EDGE_INSET - top, DIM_GRAY);
+        canvas.vline(table.divider_x, top, HEIGHT - EDGE_INSET - top, secondary);
         if let Some(y) = table.separator_y {
-            canvas.hline(EDGE_INSET, y, WIDTH - 2 * EDGE_INSET, DIM_GRAY);
+            canvas.hline(EDGE_INSET, y, WIDTH - 2 * EDGE_INSET, secondary);
         }
     }
 
@@ -56,7 +57,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
 
     // One elapsed clock for all three rows: that is what keeps them locked.
     for (slot, row, color) in [
-        (table.linescore_header, &view.header_row, DIM_GRAY),
+        (table.linescore_header, &view.header_row, secondary),
         (table.linescore_away, &view.away_row, away_color),
         (table.linescore_home, &view.home_row, home_color),
     ] {
@@ -86,7 +87,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         &mut header,
         total_label(view.sport),
         Align::Center,
-        Style::new(&generated::SPLEEN_5X8, DIM_GRAY),
+        Style::new(&generated::SPLEEN_5X8, secondary),
     );
     for (slot, score, color) in [
         (table.total_away, view.away_score, away_color),

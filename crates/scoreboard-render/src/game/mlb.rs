@@ -11,7 +11,7 @@ use crate::font::{self, Align, Style};
 use crate::generated::layout;
 use crate::geometry::{MLB_LIVE, PLAY_SCROLL_PAUSE_MS};
 use crate::widgets::count_dots;
-use crate::{BLACK, DIM_GRAY, WHITE, generated, pack, rgb565, screens, toast};
+use crate::{BLACK, DIM_GRAY, generated, pack, rgb565, screens, toast};
 use scoreboard_model::Rgb888;
 use scoreboard_model::snapshot::InningHalf;
 use scoreboard_model::snapshot::MlbLiveView;
@@ -36,10 +36,12 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
 
     let view = &snapshot.mlb_live;
     let table = MLB_LIVE;
+    let colors = &snapshot.ui_colors;
+    let primary = pack(colors.primary);
 
     super::column_dividers(
         canvas,
-        scene.settings,
+        scene,
         Some(table.divider_x),
         Some(table.separator_y),
     );
@@ -70,9 +72,9 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
 
     count_block(canvas, scene, view);
 
-    super::big_score(canvas, table.score_away, view.away_score, WHITE);
-    super::big_score(canvas, table.score_home, view.home_score, WHITE);
-    super::chip(canvas, table.inning, &view.inning_text, WHITE);
+    super::big_score(canvas, table.score_away, view.away_score, primary);
+    super::big_score(canvas, table.score_home, view.home_score, primary);
+    super::chip(canvas, table.inning, &view.inning_text, primary);
 
     for (slot, label) in [
         (table.ball_label, "B"),
@@ -84,7 +86,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             &mut region,
             label,
             Align::Left,
-            Style::new(&generated::UNSCII_8, DIM_GRAY),
+            Style::new(&generated::UNSCII_8, pack(colors.secondary)),
         );
     }
 

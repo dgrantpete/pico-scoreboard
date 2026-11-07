@@ -1273,3 +1273,11 @@ reviewed change.
     save. `main` now seeds the `Store` from the stored config before the
     first publish. Ships with the next release; the friend's unit has been
     showing default colours on every boot since the Rust migration.
+112. **A palette colour that packs to the transparency key draws nothing
+    (2026-11-07).** `MAGENTA` (RGB565 `0xF81F`) is the blit transparency key,
+    so any configured colour that packs to it — red at or above 248, green
+    below 4, blue at or above 248 — vanishes wherever it is used as text or
+    sprite paint. That was always true of text; since the palette now colours
+    the toast icon too, it applies there as well. Cheap fix if it ever bites:
+    nudge such a colour one step in `pack` (or reject it in the settings
+    page), with a test that packs the key's neighbours.

@@ -74,7 +74,9 @@ impl Harness {
         let mut snapshot = ScoreboardSnapshot::new();
         snapshot.mode = mode;
         snapshot.commit_seq = 1;
-        snapshot.ui_colors.primary = Rgb888::new(255, 255, 255);
+        // No role is white, so an element that ignores the palette and draws
+        // a constant shows up as a mismatch.
+        snapshot.ui_colors.primary = Rgb888::new(255, 128, 0);
         snapshot.ui_colors.accent = Rgb888::new(0, 255, 0);
         snapshot.ui_colors.secondary = Rgb888::new(0, 0, 255);
         snapshot.ui_colors.clock_normal = Rgb888::new(200, 200, 200);
@@ -148,17 +150,19 @@ fn mlb() -> Harness {
 
 #[test]
 fn the_mlb_screen_draws_its_frame_sprites_and_crests() {
-    let frame = mlb().draw();
+    let mut harness = mlb();
+    let secondary = pack(harness.snapshot.ui_colors.secondary);
+    let frame = harness.draw();
     let table = geometry::MLB_LIVE;
 
     assert_eq!(
         frame.pixel(table.divider_x, 30),
-        DIM_GRAY,
+        secondary,
         "the column rule"
     );
     assert_eq!(
         frame.pixel(table.divider_x + 4, table.separator_y),
-        DIM_GRAY,
+        secondary,
         "the rule under the data column"
     );
     let (away, home) = (table.logo_away, table.logo_home);
@@ -1180,7 +1184,9 @@ const MISS_RED: u16 = rgb565(255, 10, 10);
 const ICE: u16 = rgb565(14, 22, 34);
 const BOARDS: u16 = rgb565(150, 160, 170);
 const CREASE: u16 = rgb565(70, 140, 255);
-const OT_LOSSES: u16 = rgb565(60, 60, 60);
+/// The harness's blue secondary at 5/8: overtime losses a step under the
+/// losses, restated rather than borrowed from the renderer.
+const OT_LOSSES: u16 = rgb565(0, 0, 159);
 
 fn nhl_team(abbreviation: &str, score: u16, primary: u32) -> TeamState<'_> {
     TeamState {
@@ -1309,10 +1315,12 @@ fn both_hockey_layouts_draw_their_crests_scores_clock_and_shots() {
         let mut harness = hockey(variant, &[nhl_live(&goals)]);
         let frame = harness.draw();
         let normal = pack(harness.snapshot.ui_colors.clock_normal);
+        let primary = pack(harness.snapshot.ui_colors.primary);
+        let secondary = pack(harness.snapshot.ui_colors.secondary);
         let (logos, scores, clock, shots) = match variant {
             HockeyLiveVariant::A => {
                 let table = HOCKEY_LIVE_A;
-                assert_eq!(frame.pixel(table.divider_x, 30), DIM_GRAY, "A's rule");
+                assert_eq!(frame.pixel(table.divider_x, 30), secondary, "A's rule");
                 (
                     [table.logo_away, table.logo_home],
                     [table.score_away, table.score_home],
@@ -1334,15 +1342,15 @@ fn both_hockey_layouts_draw_their_crests_scores_clock_and_shots() {
             assert_eq!(frame.pixel(slot.x, slot.y), CREST, "{variant:?}");
         }
         for slot in scores {
-            assert!(count_in_slot(&frame, slot, WHITE) > 0, "{variant:?}");
+            assert!(count_in_slot(&frame, slot, primary) > 0, "{variant:?}");
         }
         assert!(count_in_slot(&frame, clock, normal) > 0, "{variant:?}");
         assert!(
-            count_in_slot(&frame, shots, DIM_GRAY) > 0,
+            count_in_slot(&frame, shots, secondary) > 0,
             "{variant:?} SHOTS"
         );
         assert!(
-            count_in_slot(&frame, shots, WHITE) > 0,
+            count_in_slot(&frame, shots, primary) > 0,
             "{variant:?} counts"
         );
     }
@@ -1415,7 +1423,8 @@ fn the_lamp_pulses_the_scorer_for_twenty_seconds_on_the_wall_rail() {
         harness.now = WallMs(COMMIT_MS + 20_000);
         let frame = harness.draw();
         assert_eq!(count_in_slot(&frame, home_slot, LAMP_RED), 0, "{variant:?}");
-        assert!(count_in_slot(&frame, home_slot, WHITE) > 0, "{variant:?}");
+        let primary = pack(harness.snapshot.ui_colors.primary);
+        assert!(count_in_slot(&frame, home_slot, primary) > 0, "{variant:?}");
     }
 }
 
@@ -1546,9 +1555,13 @@ fn four_on_four_is_announced_without_a_side() {
     };
     let mut harness = hockey(HockeyLiveVariant::B, &[matched]);
     let (away, home) = sides(&harness);
+    let colors = harness.snapshot.ui_colors;
     let frame = harness.draw();
     let slot = HOCKEY_LIVE_B.situation;
-    assert!(count_in_slot(&frame, slot, WHITE) > 0, "4 ON 4");
+    assert!(
+        count_in_slot(&frame, slot, pack(colors.primary)) > 0,
+        "4 ON 4"
+    );
     assert_eq!(
         count_in_slot(&frame, slot, away),
         0,
@@ -1560,11 +1573,11 @@ fn four_on_four_is_announced_without_a_side() {
     let frame = hockey(HockeyLiveVariant::A, &[matched]).draw();
     let table = HOCKEY_LIVE_A;
     assert!(
-        count_in_slot(&frame, table.strip_top, DIM_GRAY) > 0,
+        count_in_slot(&frame, table.strip_top, pack(colors.secondary)) > 0,
         "EVEN STRENGTH"
     );
     assert!(
-        count_in_slot(&frame, table.strip_bottom, WHITE) > 0,
+        count_in_slot(&frame, table.strip_bottom, pack(colors.primary)) > 0,
         "4 ON 4"
     );
     assert_eq!(count_in_slot(&frame, table.strip_top, home), 0);
@@ -1611,6 +1624,7 @@ fn the_intermission_reads_int_in_the_accent_color() {
         let mut harness = hockey(variant, &[intermission]);
         assert_eq!(harness.snapshot.hockey_live.clock_text.as_str(), "INT");
         let accent = pack(harness.snapshot.ui_colors.accent);
+        let primary = pack(harness.snapshot.ui_colors.primary);
         let frame = harness.draw();
         let (clock, period) = match variant {
             HockeyLiveVariant::A => (HOCKEY_LIVE_A.clock, HOCKEY_LIVE_A.period),
@@ -1618,7 +1632,7 @@ fn the_intermission_reads_int_in_the_accent_color() {
         };
         assert!(count_in_slot(&frame, clock, accent) > 0, "{variant:?}");
         assert!(
-            count_in_slot(&frame, period, WHITE) > 0,
+            count_in_slot(&frame, period, primary) > 0,
             "the chip keeps 2ND"
         );
     }
@@ -1662,7 +1676,7 @@ fn the_shootout_takes_over_the_rink_layout() {
         0
     );
     assert!(
-        count_in_slot(&frame, table.situation, DIM_GRAY) > 0,
+        count_in_slot(&frame, table.situation, pack(colors.secondary)) > 0,
         "SHOOTOUT"
     );
 
@@ -1672,9 +1686,9 @@ fn the_shootout_takes_over_the_rink_layout() {
     assert_eq!(frame.pixel(x + 3, y + 3), MISS_RED);
     assert_eq!(frame.pixel(x + 20 + 3, y + 3), home);
     let (x, y) = (table.shootout_away.x + 20, table.shootout_away.y);
-    assert_eq!(frame.pixel(x, y), WHITE, "the ring");
+    assert_eq!(frame.pixel(x, y), pack(colors.primary), "the ring");
     assert_eq!(frame.pixel(x + 1, y + 1), BLACK);
-    assert_eq!(frame.pixel(x + 3, y + 3), WHITE, "the pip");
+    assert_eq!(frame.pixel(x + 3, y + 3), pack(colors.primary), "the pip");
 
     // The rink shrinks to nine rows under the attempts, rounded corners and
     // all, and nothing draws where the full one would start.
@@ -1691,15 +1705,15 @@ fn the_shootout_takes_over_the_rink_layout() {
 fn the_shootout_takes_over_the_ledger_layout() {
     let mut harness = hockey(HockeyLiveVariant::A, &[shootout(Some(Side::Away))]);
     let (_, home) = sides(&harness);
-    let accent = pack(harness.snapshot.ui_colors.accent);
-    let normal = pack(harness.snapshot.ui_colors.clock_normal);
+    let colors = harness.snapshot.ui_colors;
+    let (accent, normal) = (pack(colors.accent), pack(colors.clock_normal));
     let frame = harness.draw();
     let table = HOCKEY_LIVE_A;
     assert!(count_in_slot(&frame, table.shootout_label, accent) > 0);
-    assert!(count_in_slot(&frame, table.shootout_tally, WHITE) > 0);
+    assert!(count_in_slot(&frame, table.shootout_tally, pack(colors.primary)) > 0);
     let (x, y) = (table.shootout_home.x + 20, table.shootout_home.y);
     assert_eq!(frame.pixel(x + 3, y + 3), home);
-    assert_eq!(frame.pixel(table.divider_x, 30), DIM_GRAY);
+    assert_eq!(frame.pixel(table.divider_x, 30), pack(colors.secondary));
     assert_eq!(
         frame.pixel(100, table.separator_y),
         BLACK,
@@ -1715,13 +1729,15 @@ fn the_shootout_takes_over_the_ledger_layout() {
 #[test]
 fn a_finished_shootout_marks_no_next_shooter() {
     for variant in VARIANTS {
-        let frame = hockey(variant, &[shootout(None)]).draw();
+        let mut harness = hockey(variant, &[shootout(None)]);
+        let primary = pack(harness.snapshot.ui_colors.primary);
+        let frame = harness.draw();
         let rows = match variant {
             HockeyLiveVariant::A => [HOCKEY_LIVE_A.shootout_away, HOCKEY_LIVE_A.shootout_home],
             HockeyLiveVariant::B => [HOCKEY_LIVE_B.shootout_away, HOCKEY_LIVE_B.shootout_home],
         };
         for slot in rows {
-            assert_eq!(count_in_slot(&frame, slot, WHITE), 0, "{variant:?}");
+            assert_eq!(count_in_slot(&frame, slot, primary), 0, "{variant:?}");
             assert!(lit_in_slot(&frame, slot) > 0, "{variant:?}");
         }
     }
@@ -1771,9 +1787,11 @@ fn a_missing_summary_draws_no_banner_marks_or_scorer() {
         home: nhl_team("NYR", 0, 0x00_00FF),
         ..bare
     };
-    let frame = hockey(HockeyLiveVariant::A, &[scoreless]).draw();
+    let mut harness = hockey(HockeyLiveVariant::A, &[scoreless]);
+    let secondary = pack(harness.snapshot.ui_colors.secondary);
+    let frame = harness.draw();
     assert!(
-        count_in_slot(&frame, table.strip_empty, DIM_GRAY) > 0,
+        count_in_slot(&frame, table.strip_empty, secondary) > 0,
         "NO GOALS"
     );
 }
@@ -1865,7 +1883,8 @@ fn the_stars_final_colors_the_winner_and_names_the_stars() {
     let mut harness = nhl_final(true, true, true);
     let shared = &harness.snapshot.linescore_final;
     let (away, home) = (pack(shared.away_color), pack(shared.home_color));
-    let accent = pack(harness.snapshot.ui_colors.accent);
+    let colors = harness.snapshot.ui_colors;
+    let accent = pack(colors.accent);
     let frame = harness.draw();
     let table = HOCKEY_FINAL;
 
@@ -1892,14 +1911,16 @@ fn the_stars_final_colors_the_winner_and_names_the_stars() {
             assert_eq!(lit, count <= rank as i32, "rank {rank}, star {count}");
         }
     }
-    // Names in their own team's color, winner or not; an unknown side white.
+    // Names in their own team's color, winner or not; an unknown side in the
+    // primary.
     assert!(count_in_slot(&frame, table.star_rows[0], home) > 0);
     assert!(count_in_slot(&frame, table.star_rows[1], away) > 0);
-    assert!(count_in_slot(&frame, table.star_rows[2], WHITE) > 0);
+    assert!(count_in_slot(&frame, table.star_rows[2], pack(colors.primary)) > 0);
 
-    assert_eq!(frame.pixel(100, table.rule_y), DIM_GRAY);
-    assert!(count_in_slot(&frame, table.series, WHITE) > 0);
-    assert!(count_in_slot(&frame, table.shots, DIM_GRAY) > 0);
+    let secondary = pack(colors.secondary);
+    assert_eq!(frame.pixel(100, table.rule_y), secondary);
+    assert!(count_in_slot(&frame, table.series, secondary) > 0);
+    assert!(count_in_slot(&frame, table.shots, secondary) > 0);
 }
 
 /// The stars arrive minutes after the horn. Until then their band carries the
@@ -1908,12 +1929,13 @@ fn the_stars_final_colors_the_winner_and_names_the_stars() {
 fn a_final_without_its_stars_shows_the_line_score_in_their_place() {
     let mut harness = nhl_final(false, true, true);
     let home = pack(harness.snapshot.linescore_final.home_color);
+    let secondary = pack(harness.snapshot.ui_colors.secondary);
     let frame = harness.draw();
     let table = HOCKEY_FINAL;
     let gold = layout::star::PALETTE[1];
     assert_eq!(frame.count(49..127, 10..43, gold), 0);
     let [header, away_row, home_row] = table.linescore_rows;
-    assert!(count_in_slot(&frame, header, DIM_GRAY) > 0, " 1  2  3 OT");
+    assert!(count_in_slot(&frame, header, secondary) > 0, " 1  2  3 OT");
     assert!(
         count_in_slot(&frame, away_row, DIM_GRAY) > 0,
         "the loser's row"
@@ -1928,10 +1950,12 @@ fn a_final_without_its_stars_shows_the_line_score_in_their_place() {
 fn a_lone_series_or_shots_line_takes_the_middle_of_its_band() {
     let table = HOCKEY_FINAL;
     let below_rule = table.rule_y + 1..63;
-    for (series, shots, color) in [(false, true, DIM_GRAY), (true, false, WHITE)] {
-        let frame = nhl_final(true, series, shots).draw();
+    for (series, shots) in [(false, true), (true, false)] {
+        let mut harness = nhl_final(true, series, shots);
+        let secondary = pack(harness.snapshot.ui_colors.secondary);
+        let frame = harness.draw();
         let single = table.single_line;
-        assert!(count_in_slot(&frame, single, color) > 0);
+        assert!(count_in_slot(&frame, single, secondary) > 0);
         assert_eq!(
             frame.lit_in(49..127, below_rule.start..single.y),
             0,
@@ -1993,6 +2017,8 @@ fn a_hockey_pregame_stacks_three_record_rows_down_the_crest() {
     let mut harness = nhl_pregame(true, true);
     let pregame = &harness.snapshot.pregame;
     let (away, home) = (pack(pregame.away.color), pack(pregame.home.color));
+    let primary = pack(harness.snapshot.ui_colors.primary);
+    let secondary = pack(harness.snapshot.ui_colors.secondary);
     let frame = harness.draw();
     let table = geometry::PREGAME;
     for (rows, crest) in [
@@ -2005,8 +2031,8 @@ fn a_hockey_pregame_stacks_three_record_rows_down_the_crest() {
             crest.y + crest.height,
             "and ends with it"
         );
-        assert!(count_in_slot(&frame, rows[0], WHITE) > 0, "wins");
-        assert!(count_in_slot(&frame, rows[1], DIM_GRAY) > 0, "losses");
+        assert!(count_in_slot(&frame, rows[0], primary) > 0, "wins");
+        assert!(count_in_slot(&frame, rows[1], secondary) > 0, "losses");
         assert!(
             count_in_slot(&frame, rows[2], OT_LOSSES) > 0,
             "overtime losses"
