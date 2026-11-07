@@ -45,6 +45,8 @@
 
 mod brightness;
 mod config;
+#[cfg(feature = "diag")]
+mod diag;
 mod display_core1;
 mod event;
 mod http;

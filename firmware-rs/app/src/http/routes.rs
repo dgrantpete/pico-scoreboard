@@ -198,6 +198,35 @@ impl<State> picoserve::routing::PathRouterService<State> for Dispatch {
                 .call_method_handler(state, (), request, response_writer)
                 .await;
         }
+        #[cfg(feature = "diag")]
+        {
+            if path == "/api/diag/frame" {
+                return get(diag::get_frame)
+                    .put(diag::put_frame)
+                    .call_method_handler(state, (), request, response_writer)
+                    .await;
+            }
+            if path == "/api/diag/fill" {
+                return post(diag::post_fill)
+                    .call_method_handler(state, (), request, response_writer)
+                    .await;
+            }
+            if path == "/api/diag/exit" {
+                return post(diag::post_exit)
+                    .call_method_handler(state, (), request, response_writer)
+                    .await;
+            }
+            if path == "/api/diag/lanes" {
+                return get(diag::get_lanes)
+                    .call_method_handler(state, (), request, response_writer)
+                    .await;
+            }
+            if path == "/api/diag/led" {
+                return post(diag::post_led)
+                    .call_method_handler(state, (), request, response_writer)
+                    .await;
+            }
+        }
         catch_all(state, request, response_writer).await
     }
 }
@@ -989,6 +1018,242 @@ impl<A: IntoResponse, B: IntoResponse> IntoResponse for Either<A, B> {
         match self {
             Either::A(response) => response.write_to(connection, response_writer).await,
             Either::B(response) => response.write_to(connection, response_writer).await,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The bench harness: `/api/diag/*`, built only with `--features diag`
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "diag")]
+mod diag {
+    //! Handlers and extractors for [`crate::diag`]. Every answer is a JSON
+    //! literal with a status code, through one function, so a handler's arms
+    //! share a type.
+
+    use super::*;
+    use crate::diag as harness;
+
+    fn reply(
+        status: StatusCode,
+        body: &'static str,
+    ) -> Response<impl picoserve::response::HeadersIter, impl picoserve::response::Body> {
+        Response::new(status, StaticJson(body)).with_status_code(status)
+    }
+
+    /// `?key=<u32>`, parsed the way [`Since`] parses its cursor.
+    fn query_u32(parts: &picoserve::request::RequestParts<'_>, key: &str) -> Option<u32> {
+        let decoded = parts
+            .query()
+            .and_then(|query| query.try_into_string::<128>().ok())?;
+        decoded
+            .split('&')
+            .filter_map(|pair| pair.split_once('='))
+            .find(|(name, _)| *name == key)
+            .and_then(|(_, value)| value.parse::<u32>().ok())
+    }
+
+    /// `PUT /api/diag/frame?offset=N`, already applied to the stage.
+    pub(super) enum Chunk {
+        Written { complete: bool },
+        NoOffset,
+        Unreadable,
+        Refused(harness::Refused),
+    }
+
+    impl<'r, State> picoserve::extract::FromRequest<'r, State> for Chunk {
+        type Rejection = core::convert::Infallible;
+
+        async fn from_request<R: io::Read>(
+            _state: &'r State,
+            parts: picoserve::request::RequestParts<'r>,
+            body: picoserve::request::RequestBody<'r, R>,
+        ) -> Result<Chunk, Self::Rejection> {
+            let Some(offset) = query_u32(&parts, "offset") else {
+                return Ok(Chunk::NoOffset);
+            };
+            let Ok(bytes) = body.read_all().await else {
+                return Ok(Chunk::Unreadable);
+            };
+            Ok(match harness::write_chunk(offset as usize, bytes).await {
+                Ok(complete) => Chunk::Written { complete },
+                Err(refused) => Chunk::Refused(refused),
+            })
+        }
+    }
+
+    pub(super) async fn put_frame(chunk: Chunk) -> impl IntoResponse {
+        match chunk {
+            Chunk::Written { complete: true } => reply(StatusCode::OK, r#"{"status":"published"}"#),
+            Chunk::Written { complete: false } => reply(StatusCode::OK, r#"{"status":"staged"}"#),
+            Chunk::NoOffset => reply(StatusCode::BAD_REQUEST, r#"{"error":"offset_required"}"#),
+            Chunk::Unreadable => reply(StatusCode::BAD_REQUEST, r#"{"error":"body_unreadable"}"#),
+            Chunk::Refused(harness::Refused::OutOfBounds) => {
+                reply(StatusCode::BAD_REQUEST, r#"{"error":"out_of_bounds"}"#)
+            }
+            Chunk::Refused(harness::Refused::Busy) => reply(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                r#"{"error":"core1_not_taking_frames"}"#,
+            ),
+        }
+    }
+
+    /// `POST /api/diag/fill`'s body: a pattern name, or a rectangle.
+    #[derive(serde::Deserialize)]
+    struct FillBody<'a> {
+        #[serde(borrow)]
+        pattern: Option<&'a str>,
+        x: Option<u16>,
+        y: Option<u16>,
+        w: Option<u16>,
+        h: Option<u16>,
+        rgb: Option<[u8; 3]>,
+    }
+
+    pub(super) struct Fill(Option<harness::Command>);
+
+    impl<'r, State> picoserve::extract::FromRequest<'r, State> for Fill {
+        type Rejection = core::convert::Infallible;
+
+        async fn from_request<R: io::Read>(
+            _state: &'r State,
+            _parts: picoserve::request::RequestParts<'r>,
+            body: picoserve::request::RequestBody<'r, R>,
+        ) -> Result<Fill, Self::Rejection> {
+            let Ok(bytes) = body.read_all().await else {
+                return Ok(Fill(None));
+            };
+            let Ok((parsed, _)) = serde_json_core::from_slice::<FillBody>(bytes) else {
+                return Ok(Fill(None));
+            };
+            let command = match parsed {
+                FillBody {
+                    pattern: Some(name),
+                    ..
+                } => harness::Pattern::parse(name).map(harness::Command::Pattern),
+                FillBody {
+                    x: Some(x),
+                    y: Some(y),
+                    w: Some(w),
+                    h: Some(h),
+                    rgb: Some(rgb),
+                    ..
+                } => Some(harness::Command::Fill(harness::Rect { x, y, w, h, rgb })),
+                _ => None,
+            };
+            Ok(Fill(command))
+        }
+    }
+
+    pub(super) async fn post_fill(body: Fill) -> impl IntoResponse {
+        match body.0 {
+            None => reply(StatusCode::BAD_REQUEST, r#"{"error":"expected_pattern_or_rect"}"#),
+            Some(command) => match harness::draw(command).await {
+                Ok(()) => reply(StatusCode::OK, r#"{"status":"published"}"#),
+                Err(_) => reply(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    r#"{"error":"core1_not_taking_frames"}"#,
+                ),
+            },
+        }
+    }
+
+    pub(super) async fn post_exit() -> impl IntoResponse {
+        harness::exit();
+        ok_json(r#"{"status":"released"}"#)
+    }
+
+    pub(super) async fn get_lanes() -> impl IntoResponse {
+        let Some(counts) = harness::lanes().await else {
+            return Either::A(reply(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                r#"{"error":"core1_not_answering"}"#,
+            ));
+        };
+        Either::B(json(scratch::claim().and_then(|mut lease| {
+            let mut text: heapless::String<192> = heapless::String::new();
+            write!(
+                text,
+                "{{\"r1\":{},\"g1\":{},\"b1\":{},\"r2\":{},\"g2\":{},\"b2\":{},\"bytes\":{}}}",
+                counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6]
+            )
+            .ok()?;
+            let len = text.len();
+            lease.as_mut()[..len].copy_from_slice(text.as_bytes());
+            Some(JsonBody { lease, len })
+        })))
+    }
+
+    /// `POST /api/diag/led`'s body.
+    #[derive(serde::Deserialize)]
+    struct LedBody {
+        toggles: u16,
+        interval_ms: u16,
+    }
+
+    pub(super) struct Led(Option<harness::LedStorm>);
+
+    impl<'r, State> picoserve::extract::FromRequest<'r, State> for Led {
+        type Rejection = core::convert::Infallible;
+
+        async fn from_request<R: io::Read>(
+            _state: &'r State,
+            _parts: picoserve::request::RequestParts<'r>,
+            body: picoserve::request::RequestBody<'r, R>,
+        ) -> Result<Led, Self::Rejection> {
+            let storm = body.read_all().await.ok().and_then(|bytes| {
+                serde_json_core::from_slice::<LedBody>(bytes)
+                    .ok()
+                    .map(|(parsed, _)| harness::LedStorm {
+                        toggles: parsed.toggles,
+                        interval_ms: parsed.interval_ms,
+                    })
+            });
+            Ok(Led(storm))
+        }
+    }
+
+    pub(super) async fn post_led(body: Led) -> impl IntoResponse {
+        match body.0 {
+            None => reply(
+                StatusCode::BAD_REQUEST,
+                r#"{"error":"expected_toggles_and_interval_ms"}"#,
+            ),
+            Some(storm) => {
+                harness::request_led_storm(storm);
+                reply(StatusCode::OK, r#"{"status":"queued"}"#)
+            }
+        }
+    }
+
+    pub(super) async fn get_frame() -> impl IntoResponse {
+        chunked::ChunkedResponse::new(ShotChunks)
+    }
+
+    /// The 16 KB frame, in four chunks straight from the harness's buffer:
+    /// no lease, because the reader lock the capture holds is what keeps the
+    /// bytes still.
+    struct ShotChunks;
+
+    impl chunked::Chunks for ShotChunks {
+        fn content_type(&self) -> &'static str {
+            "application/octet-stream"
+        }
+
+        async fn write_chunks<W: io::Write>(
+            self,
+            mut writer: chunked::ChunkWriter<W>,
+        ) -> Result<chunked::ChunksWritten, W::Error> {
+            // No answer from core 1 is an empty body: shorter than a frame,
+            // which is how `tools/diag.py` tells it from a capture.
+            let Some(shot) = harness::capture().await else {
+                return writer.finalize().await;
+            };
+            for part in shot.bytes().chunks(4096) {
+                writer.write_chunk(part).await?;
+            }
+            writer.finalize().await
         }
     }
 }

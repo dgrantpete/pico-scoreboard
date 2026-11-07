@@ -1231,6 +1231,41 @@ reviewed change.
     in that rotation), re-measure per screen on the bench by bisecting
     enabled sports, and trim it before raising `CORE1_STACK_BYTES` — RAM
     headroom is already under the 40 % rule (BUDGET 94).
+110. **RESOLVED 2026-11-07 — the lower half of the bench panel flooded blue
+    at the handoff.** Root cause: a wrap wire on the Rev 3 bench adapter
+    landed the panel's B2 line on GP22 (header pin 29) instead of GP21 (pin
+    27), one position over with only GND between. GP22 is button B, whose
+    driver puts a pull-up on it the moment the station arm spawns it, so the
+    panel's blue input sat on the reset-default pull-down through boot and went
+    high exactly at the mode switch. Two Picos, the firmware A/B and the diag
+    harness (black frame, zero B2 bits in the planes, lower half still blue)
+    all pointed below the pack before the owner found the wire. Resoldered;
+    clean since. The original write-up follows for the method.
+    Originally: On the Rev 3 bench rig with one 64x64 panel, the lower
+    half (rows 32-63, the B2 lane on GP21) turns solid blue the moment the
+    network phase ends and stays blue, on two different Pico 2 Ws running
+    the same standalone LED build, while the boot screen before it renders
+    the same lane correctly. Ruled out so far: the Pico (two boards, same
+    symptom), the missing second panel (it only selects which half is
+    visible), and content (the boot screen's lower-half lines are white and
+    carry blue without flooding; the default palette is all white, see item
+    111). Not yet separated: this build versus main (the pre-change main
+    build ran on the first board for ten minutes reachable, but nobody was
+    watching the panel), a one-off corruption of the packed frame or the
+    fused pack tables at the handoff, PIO/DMA state, and a marginal B2
+    connection on the adapter or ribbon that something at the handoff
+    disturbs. Same evening, the fresh board on the LED build also fell off
+    the network with its LED frozen dark (the radio command path wedged;
+    the standalone watchdog is off), once, after minutes in the enclosure
+    and never on the desk. Tooling now exists for this: the `diag` feature
+    (SPEC §12, `app/src/diag.rs`, `tools/diag.py`). The first experiments
+    to run, in order: boot into the harness, `pattern black` then
+    `lanes black` (a non-zero B2 count with a black frame is the pack or
+    its buffer; zero with a blue panel is the wire); `pattern lower_blue`
+    then `shot`; `led 200 50` while watching the lower half (does radio
+    command traffic flood it?); and a long `pattern black` soak to see
+    whether the flood arrives on a timer rather than at the handoff. Then
+    the ribbon's B2 conductor and the adapter's GP21 joint, by hand.
 111. **Configured UI colours did not survive a reboot — FIXED on main
     2026-11-07, unreleased.** `DisplayUpdate::boot` sends `ui_colors:
     false` and only `PUT /api/config` ever published the palette, so every

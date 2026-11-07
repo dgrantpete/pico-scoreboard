@@ -157,6 +157,9 @@ jobs:
       - name: Check the net-probe bench feature
         working-directory: firmware-rs/app
         run: cargo clippy --release --locked --target "$DEVICE_TARGET" --features net-probe -- -D warnings
+      - name: Clippy — scoreboard-app with the bench harness (diag)
+        working-directory: firmware-rs/app
+        run: cargo clippy --release --locked --target "$DEVICE_TARGET" --features diag -- -D warnings
 
       # No signing key exists in CI and none is needed: the public half is a
       # source constant and the private half never leaves the machine that

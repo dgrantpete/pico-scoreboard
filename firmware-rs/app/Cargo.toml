@@ -39,6 +39,15 @@ direct = []
 # without waiting for the client in task #11 — see `net::probe`.
 net-probe = []
 
+# Bench harness, off in every shipped build: `/api/diag/*` puts any frame on
+# the panel over HTTP, reads back the frame core 1 drew and the bitplane
+# buffer's per-lane bit counts, and can storm the LED's radio IOCTLs — so a
+# panel, a ribbon, a supply or a pack bug is cornered one controlled frame at a
+# time, without a reflash per experiment. Costs 32 KB of RAM for two staged
+# frames, which is why it is a feature and not a route. See `diag.rs` and
+# `tools/diag.py`.
+diag = []
+
 # Bench instrument, off in every shipped build: adds `POST /api/induce-panic`,
 # which panics on purpose. It exists so the crash path — breadcrumb, reset,
 # `/api/logs/previous` — can be exercised without waiting for a real bug, and a

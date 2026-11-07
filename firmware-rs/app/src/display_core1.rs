@@ -279,6 +279,23 @@ pub async fn render_loop(
 
         state.rail.advance_and_latch(snapshot);
 
+        // The bench harness, when it is built in: a staged frame holds the
+        // panel until `POST /api/diag/exit`, and the scoreboard's own draw is
+        // held meanwhile. Before the scene exists, because a release
+        // invalidates what the scene would borrow. See `crate::diag`.
+        #[cfg(feature = "diag")]
+        let harness_owns_panel = match crate::diag::service(&mut display) {
+            crate::diag::Verdict::Owned => true,
+            crate::diag::Verdict::Released => {
+                state.prepared.invalidate();
+                state.memo.invalidate();
+                false
+            }
+            crate::diag::Verdict::Inactive => false,
+        };
+        #[cfg(not(feature = "diag"))]
+        let harness_owns_panel = false;
+
         // Before the skip check, and before the scene exists: a rebuilt
         // prepared view *is* what a new commit means, and the scene borrows it.
         let lap = Lap::start();
@@ -296,7 +313,9 @@ pub async fn render_loop(
             play: state.rail.play_elapsed(),
         };
 
-        match step.draw {
+        // `Hold` while the harness has the panel: the event player and the
+        // skip memo keep their own time regardless, so nothing else changes.
+        match if harness_owns_panel { Draw::Hold } else { step.draw } {
             Draw::Screen { redraw } => {
                 if redraw {
                     state.memo.invalidate();

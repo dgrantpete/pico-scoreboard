@@ -537,6 +537,18 @@ impl Hub75Driver {
     /// and not an app one, so it is written here as the inequality; BACKLOG 84
     /// carries the app-side number and the fact that it has never been observed
     /// rather than merely computed.
+    /// The bitplane buffer the DMA chain is scanning right now, read-only.
+    ///
+    /// For diagnostics — the app's `--features diag` counts set bits per data
+    /// lane over it, which is how "the pack is wrong" is told apart from "the
+    /// wire is wrong". Nothing on the render path reads it.
+    pub fn active_planes(&self) -> &[u8] {
+        // SAFETY: `&self` excludes every `&mut self` accessor for the
+        // borrow's lifetime, `load_rgb565` writes only the *other* buffer,
+        // `flip` only moves the index, and DMA is a reader.
+        unsafe { &(*FRAMEBUFFERS.0.get()).0[self.active_index] }
+    }
+
     pub fn flip(&mut self) {
         self.active_index = 1 - self.active_index;
         ACTIVE_BUFFER_PTR.store(buffer_addr(self.active_index), Ordering::Release);

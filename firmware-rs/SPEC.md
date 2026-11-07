@@ -399,7 +399,7 @@ target is stated against 520 KB per this table; BUDGET.md reports against both.
   | heartbeat, two blips a second | healthy per the supervisor, station mode, nothing in flight |
 
   The sequences are the point: a normal update reads heartbeat, fast, dark for the swap, solid for the rejoin, inverted heartbeat, heartbeat; a rejected trial reads the same until the inverted heartbeat gives way to a longer dark for the revert; an overnight link loss differs from a power cut only by the slow blink before the dark.
-- `hardware_diagnostic.py`'s role becomes a `--features diag` build of the app (test patterns, input echo) rather than a separate script.
+- **`hardware_diagnostic.py`'s role is the app's `--features diag` build (2026-11-07).** `app/src/diag.rs` plus `tools/diag.py`: the same radio, HTTP server and panel driver as the shipping image, but the panel shows whatever core 0 was told over `/api/diag/*` — a named test card, a rectangle, or any image pushed as RGB565 in 2 KB chunks — until `POST /api/diag/exit`. Two readbacks split a panel fault three ways without a reflash per experiment: `GET /api/diag/frame` is the 16 KB frame core 1 last drew, copied at a frame boundary, and `GET /api/diag/lanes` counts the set bits per data lane over the bitplane buffer the DMA is scanning, so "the frame is wrong", "the pack is wrong" and "the wire or panel is wrong" each have a different signature. `POST /api/diag/led` puts an IOCTL storm on the LED task for correlating radio command traffic with anything the panel does. It costs 32 KB of RAM for the two frames, which is why it is a feature and not a route, and it is absent from every shipped image. No input echo: the buttons' log line already says what they saw.
 
 ---
 
