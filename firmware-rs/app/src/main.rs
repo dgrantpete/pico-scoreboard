@@ -334,6 +334,12 @@ fn main() -> ! {
     settings::publish_display(settings::DisplayUpdate::boot(&boot_config));
 
     let store = STORE.init(Store::new());
+    // The stored palette, before the first frame is ever published. UI colours
+    // are model state, not render settings, so they ride the store rather than
+    // the `DisplayUpdate` above — and until 2026-11-06 nothing seeded them: a
+    // `PUT /api/config` handed them to the poller for the current power cycle
+    // and every boot came back up in `UiColors::new()`'s all-white defaults.
+    store.set_ui_colors(boot_config.ui_colors());
 
     let executor = EXECUTOR0.init(Executor::new());
     executor.run(|spawner| {

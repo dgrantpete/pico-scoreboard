@@ -1231,3 +1231,10 @@ reviewed change.
     in that rotation), re-measure per screen on the bench by bisecting
     enabled sports, and trim it before raising `CORE1_STACK_BYTES` — RAM
     headroom is already under the 40 % rule (BUDGET 94).
+111. **Configured UI colours did not survive a reboot — FIXED on main
+    2026-11-07, unreleased.** `DisplayUpdate::boot` sends `ui_colors:
+    false` and only `PUT /api/config` ever published the palette, so every
+    boot drew `UiColors::new()`'s all-white defaults until the next settings
+    save. `main` now seeds the `Store` from the stored config before the
+    first publish. Ships with the next release; the friend's unit has been
+    showing default colours on every boot since the Rust migration.

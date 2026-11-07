@@ -95,6 +95,9 @@ impl DisplayUpdate {
     /// anything has been changed — core 1 starts from `RenderSettings::new()`
     /// and the driver from `Config::defaults`, neither of which knows what is
     /// stored.
+    ///
+    /// `ui_colors` is off here on purpose: the palette is model state and
+    /// `main` seeds the `Store` with it directly, before the first publish.
     pub fn boot(config: &DeviceConfig) -> DisplayUpdate {
         DisplayUpdate::new(
             config,
