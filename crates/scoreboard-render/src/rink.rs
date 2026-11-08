@@ -20,9 +20,8 @@
 //!
 //! The boards are a one-pixel ring with rounded corners: on the row `n` in
 //! from the top or bottom they start [`CORNER`]`[n]` columns in from each end,
-//! and where the curve meets the straight end boards ([`JOINS`]) they run a
-//! pixel or two further in so the corner reads as a curve, not a stair. Inside
-//! them, ice; each team's end, from the boards to its goal line, in a colour
+//! and on the row next to the long boards they are [`CURVE`] pixels wide, so
+//! the corner reads as a curve rather than a stair. Inside them, ice; each team's end, from the boards to its goal line, in a colour
 //! the renderer picks per team (a third of the team's colour today, so the
 //! goals plotted there outshine it). Then the lines across the ice: the goal
 //! lines [`GOAL_LINE_FT`] in from each end in red, the blue lines
@@ -83,9 +82,9 @@ pub const CENTER_FT: i32 = LENGTH_FT / 2;
 /// The boards' inset from each end on the rows 0, 1 and 2 in from the top or
 /// bottom; every row further in starts at the end itself.
 pub const CORNER: [i32; 3] = [4, 2, 1];
-/// Where the corner meets the straight boards: on the row `.0` in from the
-/// top or bottom, the boards also fill columns `.1..=.2` in from each end.
-pub const JOINS: [(i32, i32, i32); 2] = [(1, 2, 3), (2, 1, 1)];
+/// The end boards' width on the row next to the long boards, where the
+/// corner steps furthest; one pixel on every other row.
+pub const CURVE: i32 = 2;
 
 pub const ICE: Rgb888 = Rgb888::new(14, 22, 34);
 pub const BOARDS: Rgb888 = Rgb888::new(150, 160, 170);
@@ -161,19 +160,17 @@ impl Rink {
         for y in [self.y, bottom] {
             canvas.hline(left + CORNER[0], y, self.width - 2 * CORNER[0], boards);
         }
-        // The end boards and the corners' curve, a pixel per row a side.
+        // The end boards and the corners' curve, inward from the inset on
+        // each side.
         for row in 1..self.height - 1 {
             let inset = self.inset(row);
-            canvas.pixel(left + inset, self.y + row, boards);
-            canvas.pixel(right - inset, self.y + row, boards);
-        }
-        for (edge, from, to) in JOINS {
-            for y in [self.y + edge, bottom - edge] {
-                for k in from..=to {
-                    canvas.pixel(left + k, y, boards);
-                    canvas.pixel(right - k, y, boards);
-                }
-            }
+            let run = if row == 1 || row == self.height - 2 {
+                CURVE
+            } else {
+                1
+            };
+            canvas.hline(left + inset, self.y + row, run, boards);
+            canvas.hline(right - inset - (run - 1), self.y + row, run, boards);
         }
 
         let away_goal = self.x_at(GOAL_LINE_FT);
