@@ -90,10 +90,9 @@
 //! compare keys at [`ID_BYTES`] and refuse to truncate (ruling 16).
 
 use crate::common::{
-    crest_path, linescore_byte, num_i16, num_u16, num_u32, num_u8, order_home_away, parse_hex_rgb,
+    linescore_byte, num_i16, num_u16, num_u32, num_u8, order_home_away, parse_hex_rgb,
     parse_live_phase, parse_record, parse_start_time, saturate_score, set_text, stable_sort_by_key,
-    wire_phase, CrestPath, Crests, EText, Exact, HomeAway, LivePhase, Market, OddsScratch, Quirk,
-    Quirks, WireText,
+    wire_phase, EText, Exact, HomeAway, LivePhase, Market, OddsScratch, Quirk, Quirks, WireText,
 };
 use crate::path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 use scoreboard_wire::nba::{
@@ -196,35 +195,33 @@ const P_LINESCORES: usize = 32;
 const P_LINESCORE: usize = 33;
 const P_LINESCORE_VALUE: usize = 34;
 const P_LINESCORE_PERIOD: usize = 35;
-/// Direct mode only: the crest artwork the backend used to resolve for the
-/// device. Appended rather than filed with the other `team.*` patterns so
-/// the indices above keep matching the inventory they were derived from.
-const P_TEAM_LOGO: usize = 36;
-/// The first sportsbook's closing lines (`common::OddsScratch`), appended for
-/// the same reason: the pregame team lines, served as the wire's `ext=1`.
-const P_ODDS_SPREAD_AWAY: usize = 37;
-const P_ODDS_SPREAD_HOME: usize = 38;
-const P_ODDS_MONEYLINE_AWAY: usize = 39;
-const P_ODDS_MONEYLINE_HOME: usize = 40;
+/// The first sportsbook's closing lines (`common::OddsScratch`), appended
+/// rather than filed by subject so the indices above keep matching the
+/// inventory they were derived from: the pregame team lines, served as the
+/// wire's `ext=1`.
+const P_ODDS_SPREAD_AWAY: usize = 36;
+const P_ODDS_SPREAD_HOME: usize = 37;
+const P_ODDS_MONEYLINE_AWAY: usize = 38;
+const P_ODDS_MONEYLINE_HOME: usize = 39;
 /// The court screens' fields (NBA.md §3.1, §3.7–3.9), appended likewise.
 /// None of them can fail an event.
-const P_SEASON_TYPE: usize = 41;
-const P_STATUS_NAME: usize = 42;
-const P_ALT_DETAIL: usize = 43;
-const P_SERIES: usize = 44;
-const P_HEADLINE: usize = 45;
-const P_LAST_PLAY_TYPE: usize = 46;
-const P_LEADER: usize = 47;
-const P_LEADER_NAME: usize = 48;
-const P_LEADER_VALUE: usize = 49;
-const P_LEADER_DISPLAY: usize = 50;
-const P_LEADER_ATHLETE: usize = 51;
+const P_SEASON_TYPE: usize = 40;
+const P_STATUS_NAME: usize = 41;
+const P_ALT_DETAIL: usize = 42;
+const P_SERIES: usize = 43;
+const P_HEADLINE: usize = 44;
+const P_LAST_PLAY_TYPE: usize = 45;
+const P_LEADER: usize = 46;
+const P_LEADER_NAME: usize = 47;
+const P_LEADER_VALUE: usize = 48;
+const P_LEADER_DISPLAY: usize = 49;
+const P_LEADER_ATHLETE: usize = 50;
 
 /// The NBA scoreboard path table. 18 wire-relevant leaves plus the
 /// parse-gating-only fields (`team.id`, `weather.*`, `shortDisplayName`) the
 /// backend's shared serde structs require to deserialize — rejection parity
 /// needs them even though nothing reads their values (ruling 1, inventory §6)
-/// — plus the crest, the betting lines and the court screens' fields.
+/// — plus the betting lines and the court screens' fields.
 ///
 /// Only `competitions[0]` is consulted, as in the backend
 /// (`fetch_game_parts` takes `competitions.into_iter().next()`).
@@ -269,7 +266,6 @@ pub static PATHS: &[Pattern] = &[
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("linescores"), AnyIndex],
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("linescores"), AnyIndex, Key("value")],
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("linescores"), AnyIndex, Key("period")],
-    &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("team"), Key("logo")],
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("odds"), Index(0), Key("pointSpread"), Key("away"), Key("close"), Key("line")],
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("odds"), Index(0), Key("pointSpread"), Key("home"), Key("close"), Key("line")],
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("odds"), Index(0), Key("moneyline"), Key("away"), Key("close"), Key("odds")],
@@ -296,10 +292,6 @@ pub static PATHS: &[Pattern] = &[
 #[derive(Debug, Clone, PartialEq)]
 pub struct Extract {
     pub game_id: EText,
-    /// Direct mode's crest sources. Outside the wire view by design — the
-    /// proxy resolved these itself, so nothing about them reaches `as_game`
-    /// and the parity gate is untouched.
-    pub crests: Crests,
     /// `season.type` 3: the series line is served and the pregame's second
     /// line carries it (§3.1). The play-in (5) is not the playoffs.
     pub playoffs: bool,
@@ -758,10 +750,6 @@ struct CompetitorScratch {
     /// transform. Capacity is the wire's `MAX_LINE_SCORE`.
     line: heapless::Vec<(u8, u8), MAX_LINE_SCORE>,
     line_clipped: bool,
-    /// `team.logo` as a CDN path. No `_bad` twin: the backend's games
-    /// pipeline never deserializes this field, so nothing about it can fail
-    /// an event without breaking parity.
-    crest: Option<CrestPath>,
     /// This competitor's `leaders[name=points|rebounds|assists].leaders[0]`,
     /// the first entry per category; the final arm picks between the two
     /// competitors' (§3.9).
@@ -1277,13 +1265,6 @@ impl<Q: Quirks> Sink for Extractor<'_, Q> {
             P_ODDS_SPREAD_HOME => s.odds.set(Market::Spread, HomeAway::Home, value),
             P_ODDS_MONEYLINE_AWAY => s.odds.set(Market::Moneyline, HomeAway::Away, value),
             P_ODDS_MONEYLINE_HOME => s.odds.set(Market::Moneyline, HomeAway::Home, value),
-            P_TEAM_LOGO => {
-                if let Some(competitor) = self.competitor(indices) {
-                    if let Value::Str(href) = value {
-                        competitor.crest = crest_path(href);
-                    }
-                }
-            }
             P_TEAM_ID => {
                 if let Some(competitor) = self.competitor(indices) {
                     match value {
@@ -1550,18 +1531,9 @@ fn transform<Q: Quirks>(
     };
     Ok(Extract {
         game_id: s.id.clone(),
-        crests: crests(home, away),
         playoffs,
         kind,
     })
-}
-
-/// Both crests, taken from the `homeAway`-ordered scratch pair.
-fn crests(home: &CompetitorScratch, away: &CompetitorScratch) -> Crests {
-    Crests {
-        away: away.crest.clone(),
-        home: home.crest.clone(),
-    }
 }
 
 fn colors(competitor: &CompetitorScratch) -> Result<TeamColors, TransformError> {

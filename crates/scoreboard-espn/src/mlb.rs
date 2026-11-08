@@ -68,9 +68,8 @@
 use core::mem;
 
 use crate::common::{
-    CrestPath, Crests, EText, HomeAway, Quirk, Quirks, crest_path, linescore_byte, num_i16, num_u8,
-    order_home_away, parse_hex_rgb, parse_record, parse_start_time, saturate_score, set_text,
-    stable_sort_by_key,
+    EText, HomeAway, Quirk, Quirks, linescore_byte, num_i16, num_u8, order_home_away,
+    parse_hex_rgb, parse_record, parse_start_time, saturate_score, set_text, stable_sort_by_key,
 };
 use crate::path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 use scoreboard_wire::mlb::{AtBat as WireAtBat, Bases, Count, Inning, InningHalf, Weather as WireWeather};
@@ -106,15 +105,6 @@ impl Extract {
         }
     }
 
-    /// The crest paths for this game's two teams.
-    pub fn crests(&self) -> &Crests {
-        match self {
-            Extract::Pregame(game) => &game.crests,
-            Extract::Live(game) => &game.crests,
-            Extract::Final(game) => &game.crests,
-        }
-    }
-
     pub fn state(&self) -> GameState {
         match self {
             Extract::Pregame(_) => GameState::Pregame,
@@ -123,11 +113,11 @@ impl Extract {
         }
     }
 
-    /// The borrowed wire-shaped view over the extract's own storage — the
-    /// S3 seam. Options stay options: the wire encoder does the zeroing of
-    /// unset numeric fields, and the score/temperature narrowing happens
-    /// here with the wire's own `saturate_score`/`clamp_temperature`,
-    /// exactly where the backend's `mlb/wire.rs` adapter does it.
+    /// The borrowed wire-shaped view over the extract's own storage. Options
+    /// stay options: the wire encoder does the zeroing of unset numeric
+    /// fields, and the score/temperature narrowing happens here with the
+    /// wire's own `saturate_score`/`clamp_temperature`, exactly where the
+    /// backend's `mlb/wire.rs` adapter does it.
     pub fn as_game(&self) -> wire_mlb::Game<'_> {
         match self {
             Extract::Pregame(game) => wire_mlb::Game::Pregame(wire_mlb::Pregame {
@@ -196,8 +186,6 @@ fn final_team_view(team: &FinalTeam) -> scoreboard_wire::FinalTeam<'_> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pregame {
     pub game_id: EText,
-    /// Direct mode's crest sources; outside the wire view by design.
-    pub crests: Crests,
     /// Unix epoch seconds, UTC (`parse_start_time`).
     pub start_time: u32,
     pub venue: EText,
@@ -228,8 +216,6 @@ pub struct PregameTeam {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Live {
     pub game_id: EText,
-    /// Direct mode's crest sources; outside the wire view by design.
-    pub crests: Crests,
     pub inning: Inning,
     pub count: Count,
     pub bases: Bases,
@@ -264,8 +250,6 @@ pub struct LastPlay {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Final {
     pub game_id: EText,
-    /// Direct mode's crest sources; outside the wire view by design.
-    pub crests: Crests,
     pub innings_played: u8,
     pub away: FinalTeam,
     pub home: FinalTeam,
@@ -369,10 +353,6 @@ const P_LINESCORES: usize = 38;
 const P_LINESCORE_ENTRY: usize = 39;
 const P_LINESCORE_VALUE: usize = 40;
 const P_LINESCORE_PERIOD: usize = 41;
-/// Direct mode only: the crest artwork the backend used to resolve for the
-/// device. Appended rather than filed with the other `team.*` patterns so
-/// the indices above keep matching the inventory they were derived from.
-const P_TEAM_LOGO: usize = 42;
 
 /// Everything the backend reads, relative to the scoreboard root. The bare
 /// container patterns (`weather`, `competitions`, `venue`, `situation`,
@@ -455,8 +435,6 @@ static PATHS: &[Pattern] = &[
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("linescores"), AnyIndex, Key("value")],
     /* P_LINESCORE_PERIOD */
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("linescores"), AnyIndex, Key("period")],
-    /* P_TEAM_LOGO       */
-    &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("team"), Key("logo")],
 ];
 
 // -------------------------------------------------------------- entry uses
@@ -610,10 +588,6 @@ struct LineScratch {
 #[derive(Debug, Default)]
 struct CompetitorScratch {
     home_away: Option<HomeAway>,
-    /// `team.logo` as a CDN path. No `_present` twin: the backend's games
-    /// pipeline never deserializes this field, so nothing about it can fail
-    /// an event without breaking parity.
-    crest: Option<CrestPath>,
     score_present: bool,
     score: Option<u32>,
     abbreviation: Option<EText>,
@@ -1080,15 +1054,6 @@ impl<L: ListSink, Q: Quirks> Sink for MlbSink<'_, L, Q> {
                 }
                 _ => event.veto(),
             },
-            // No veto arm: the field is invisible to the backend's parse,
-            // so a malformed one must cost the event nothing.
-            P_TEAM_LOGO => {
-                if let Value::Str(href) = value {
-                    if let Some(competitor) = event.comps.get_mut(competitor_index(indices)) {
-                        competitor.crest = crest_path(href);
-                    }
-                }
-            }
             P_COLOR | P_ALT_COLOR => match value {
                 Value::Str(text) => {
                     if let Some(competitor) = event.comps.get_mut(competitor_index(indices)) {
@@ -1169,7 +1134,6 @@ fn build_extract<Q: Quirks>(scratch: EventScratch, quirks: &mut Q) -> Result<Ext
                 .start_time
                 .ok_or(Fail::Transform(TransformError::Date))?;
             let (home_c, away_c) = ordered(first, second)?;
-            let crests = crests(&home_c, &away_c);
             let weather = resolve_weather(
                 scratch.weather_entered,
                 scratch.wx_display,
@@ -1181,7 +1145,6 @@ fn build_extract<Q: Quirks>(scratch: EventScratch, quirks: &mut Q) -> Result<Ext
             let away = pregame_team(away_c, quirks)?;
             Ok(Extract::Pregame(Pregame {
                 game_id,
-                crests,
                 start_time,
                 venue: scratch.venue.expect("venue was validated by parses()"),
                 weather,
@@ -1197,7 +1160,6 @@ fn build_extract<Q: Quirks>(scratch: EventScratch, quirks: &mut Q) -> Result<Ext
                 return Err(Fail::NotFound);
             };
             let (home_c, away_c) = ordered(first, second)?;
-            let crests = crests(&home_c, &away_c);
             let home = live_team(home_c)?;
             let away = live_team(away_c)?;
             let at_bat = match (scratch.pitcher, scratch.batter) {
@@ -1207,7 +1169,6 @@ fn build_extract<Q: Quirks>(scratch: EventScratch, quirks: &mut Q) -> Result<Ext
             };
             Ok(Extract::Live(Live {
                 game_id,
-                crests,
                 inning: Inning {
                     number: period,
                     half,
@@ -1233,12 +1194,10 @@ fn build_extract<Q: Quirks>(scratch: EventScratch, quirks: &mut Q) -> Result<Ext
         }
         State::Post => {
             let (home_c, away_c) = ordered(first, second)?;
-            let crests = crests(&home_c, &away_c);
             let home = final_team(home_c)?;
             let away = final_team(away_c)?;
             Ok(Extract::Final(Final {
                 game_id,
-                crests,
                 innings_played: period,
                 away,
                 home,
@@ -1257,14 +1216,6 @@ fn ordered(
     let second_side = second.home_away.expect("marker was validated by parses()");
     order_home_away((first_side, first), (second_side, second))
         .ok_or(Fail::Transform(TransformError::HomeAway))
-}
-
-/// Both crests, taken from the `homeAway`-ordered scratch pair.
-fn crests(home: &CompetitorScratch, away: &CompetitorScratch) -> Crests {
-    Crests {
-        away: away.crest.clone(),
-        home: home.crest.clone(),
-    }
 }
 
 fn team_colors(competitor: &CompetitorScratch) -> Result<TeamColors, Fail> {

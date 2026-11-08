@@ -2,7 +2,7 @@
 name = "scoreboard-espn"
 version = "0.1.0"
 edition = "2021"
-description = "Shared ESPN-JSON → game-model transform: streaming path tables over picojson (Phase S1)"
+description = "Shared ESPN-JSON → game-model transform: streaming path tables over picojson"
 
 # picojson resolves to the fork carrying the PR #98 lifetime fix via the
 # workspace-root [patch.crates-io] until an upstream release includes it.

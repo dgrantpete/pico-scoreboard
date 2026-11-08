@@ -95,9 +95,9 @@ use scoreboard_wire::{
 };
 
 use crate::common::{
-    compose, crest_path, linescore_byte, num_u16, num_u8, order_home_away, parse_hex_rgb,
-    parse_start_time, saturate_score, wire_phase, CrestPath, Crests, EText, Exact, HomeAway,
-    IgnoreQuirks, LivePhase, Quirk, Quirks, WireText,
+    compose, linescore_byte, num_u16, num_u8, order_home_away, parse_hex_rgb, parse_start_time,
+    saturate_score, wire_phase, EText, Exact, HomeAway, IgnoreQuirks, LivePhase, Quirk, Quirks,
+    WireText,
 };
 use crate::path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 
@@ -196,8 +196,6 @@ const PULLED_UNIT: u8 = 6;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Extract {
     pub game_id: EText,
-    /// Direct mode's crest sources; outside the wire view by design.
-    pub crests: Crests,
     /// `season.type` 3 — what tells a regular-season shootout from a playoff
     /// second overtime at period 5 (§3.1).
     pub playoffs: bool,
@@ -367,11 +365,6 @@ pub struct SummaryContext {
 }
 
 impl Extract {
-    /// The crest paths for this game's two teams.
-    pub fn crests(&self) -> &Crests {
-        &self.crests
-    }
-
     pub fn state(&self) -> GameState {
         match self.kind {
             Kind::Pregame(_) => GameState::Pregame,
@@ -828,19 +821,18 @@ const P_TEAM_ID: usize = 28;
 const P_TEAM_ABBR: usize = 29;
 const P_TEAM_COLOR: usize = 30;
 const P_TEAM_ALT: usize = 31;
-const P_TEAM_LOGO: usize = 32;
-const P_RECORD: usize = 33;
-const P_RECORD_TYPE: usize = 34;
-const P_RECORD_SUMMARY: usize = 35;
-const P_LINESCORE: usize = 36;
-const P_LINESCORE_VALUE: usize = 37;
-const P_STAT: usize = 38;
-const P_STAT_NAME: usize = 39;
-const P_STAT_VALUE: usize = 40;
-const P_PROBABLE: usize = 41;
-const P_PROBABLE_NAME: usize = 42;
-const P_PROBABLE_ATHLETE: usize = 43;
-const P_PROBABLE_ATHLETE_ID: usize = 44;
+const P_RECORD: usize = 32;
+const P_RECORD_TYPE: usize = 33;
+const P_RECORD_SUMMARY: usize = 34;
+const P_LINESCORE: usize = 35;
+const P_LINESCORE_VALUE: usize = 36;
+const P_STAT: usize = 37;
+const P_STAT_NAME: usize = 38;
+const P_STAT_VALUE: usize = 39;
+const P_PROBABLE: usize = 40;
+const P_PROBABLE_NAME: usize = 41;
+const P_PROBABLE_ATHLETE: usize = 42;
+const P_PROBABLE_ATHLETE_ID: usize = 43;
 
 #[rustfmt::skip]
 static SCOREBOARD_TABLE: &[Pattern] = &[
@@ -876,7 +868,6 @@ static SCOREBOARD_TABLE: &[Pattern] = &[
     /* P_TEAM_ABBR                */ &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("team"), Key("abbreviation")],
     /* P_TEAM_COLOR               */ &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("team"), Key("color")],
     /* P_TEAM_ALT                 */ &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("team"), Key("alternateColor")],
-    /* P_TEAM_LOGO                */ &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("team"), Key("logo")],
     /* P_RECORD                   */ &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("records"), AnyIndex],
     /* P_RECORD_TYPE              */ &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("records"), AnyIndex, Key("type")],
     /* P_RECORD_SUMMARY           */ &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("records"), AnyIndex, Key("summary")],
@@ -973,7 +964,6 @@ static SUMMARY_TABLE: &[Pattern] = &[
 #[derive(Debug, Clone, Default)]
 struct CompetitorScratch {
     home_away: Option<HomeAway>,
-    crest: Option<CrestPath>,
     score: Exact<SCORE_BYTES>,
     score_bad: bool,
     team_id: Exact<ID_BYTES>,
@@ -1249,10 +1239,6 @@ fn transform<Q: Quirks>(s: &EventScratch, quirks: &mut Q) -> Result<Extract, Tra
         order_home_away((marker_a, 0usize), (marker_b, 1usize)).ok_or(TransformError::Sides)?;
     let home = &s.competitors[home_idx];
     let away = &s.competitors[away_idx];
-    let crests = Crests {
-        away: away.crest.clone(),
-        home: home.crest.clone(),
-    };
 
     let playoffs = s.season_type == Some(SEASON_POSTSEASON);
     let period = s.period.unwrap_or(0); // required for live and final by du_ok
@@ -1324,7 +1310,6 @@ fn transform<Q: Quirks>(s: &EventScratch, quirks: &mut Q) -> Result<Extract, Tra
     };
     Ok(Extract {
         game_id: owned(s.id.as_str()),
-        crests,
         playoffs,
         probable_goalies: [athlete_id(&away.goalie_id), athlete_id(&home.goalie_id)],
         kind,
@@ -1670,8 +1655,7 @@ impl<Q: Quirks> Sink for ScoreboardSink<Q> {
                 s.competitor_count = s.competitor_count.saturating_add(1);
                 s.invalid = true;
             }
-            P_HOME_AWAY | P_SCORE | P_TEAM_ID | P_TEAM_ABBR | P_TEAM_COLOR | P_TEAM_ALT
-            | P_TEAM_LOGO => {
+            P_HOME_AWAY | P_SCORE | P_TEAM_ID | P_TEAM_ABBR | P_TEAM_COLOR | P_TEAM_ALT => {
                 let Some(competitor) = self.competitor(indices) else {
                     return Directive::Continue;
                 };
@@ -1689,10 +1673,7 @@ impl<Q: Quirks> Sink for ScoreboardSink<Q> {
                     (P_TEAM_COLOR, Value::Str(text)) => competitor.color.set(text),
                     (P_TEAM_ID | P_TEAM_ABBR | P_TEAM_COLOR, _) => invalid = true,
                     (P_TEAM_ALT, Value::Str(text)) => competitor.alternate.set(text),
-                    (P_TEAM_LOGO, Value::Str(href)) => competitor.crest = crest_path(href),
-                    // An alternate that is not a string reads as absent; a
-                    // malformed crest costs the event nothing, as in every
-                    // lane.
+                    // An alternate that is not a string reads as absent.
                     _ => {}
                 }
                 if invalid {

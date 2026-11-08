@@ -1,8 +1,9 @@
-//! Shared ESPN-JSON → game-model transform (Phase S1).
+//! Shared ESPN-JSON → game-model transform.
 //!
-//! One `no_std` implementation of the ESPN transform, shared by the backend
-//! and the firmware's direct feed — the `scoreboard-wire` move applied to
-//! the other half of the proxy. The ESPN-specific knowledge lives in one
+//! One `no_std` implementation of the ESPN transform, which the backend runs
+//! for every sport. It was built `no_std` in Phase S1 so the firmware's
+//! direct feed could share it; that feed was deleted on 2026-11-08, and the
+//! backend is the only consumer. The ESPN-specific knowledge lives in one
 //! declarative const path table per sport; a small streaming engine
 //! (`path`) drives them from picojson's push events.
 //!

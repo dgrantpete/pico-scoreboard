@@ -3310,27 +3310,3 @@ fn a_malformed_summary_region_degrades_only_what_depended_on_it() {
         .and_then(|()| extractor.finish().map(drop))
         .is_err());
 }
-
-// --------------------------------------------------------- crests
-
-#[test]
-fn every_fixture_exposes_both_crests_ordered_by_home_away() {
-    for name in FIXTURES {
-        let event = fixture(name);
-        let value = parse(&event);
-        let extract = found(&wrap(&[&event]), &id_of(&event));
-        for competitor in value["competitions"][0]["competitors"].as_array().unwrap() {
-            let href = competitor["team"]["logo"].as_str().unwrap();
-            let path = href.strip_prefix("https://a.espncdn.com").unwrap();
-            let crest = match competitor["homeAway"].as_str().unwrap() {
-                "away" => &extract.crests().away,
-                _ => &extract.crests().home,
-            };
-            assert_eq!(crest.as_ref().map(|c| c.as_str()), Some(path), "{name}");
-            assert!(
-                path.starts_with("/i/teamlogos/nhl/500/scoreboard/"),
-                "{name}: {path}"
-            );
-        }
-    }
-}
