@@ -13,7 +13,8 @@
 //! - [`Slate`] — the merged games list and the live-first rotation over it,
 //!   and [`WarmIndex`] over the top of it: which crest an idle poller should
 //!   fetch next, so a skip lands on a game whose logos are already in the pool.
-//! - [`GameFeed`] — the one seam upstream data arrives through.
+//! - [`WireFeed`] — decodes the backend's packed format, the one way upstream
+//!   data arrives.
 //!
 //! No hardware, no embassy, no allocator: everything here is `core` plus
 //! `heapless`, and every rule is exercised by host tests.
@@ -38,7 +39,7 @@ mod tests;
 
 pub use channel::{Publisher, Reader, SnapshotChannel};
 pub use color::{Rgb888, UiColors};
-pub use feed::{GameDetail, GameFeed, LeagueId, ListSink, Sport, WireFeed};
+pub use feed::{GameDetail, LeagueId, ListSink, Sport, WireFeed};
 pub use poll::{FailureTracker, PollError, SkipKind, SkipMachine, SkipVerdict, Transport};
 pub use prefetch::{Step, WarmIndex};
 pub use slate::Slate;

@@ -11,7 +11,7 @@ use std::{format, vec};
 use scoreboard_wire::{GameState, football, mlb, nba, soccer};
 
 use crate::color::Rgb888;
-use crate::feed::{GameDetail, GameFeed, LeagueId, ListSink, Sport, WireFeed};
+use crate::feed::{GameDetail, LeagueId, ListSink, Sport, WireFeed};
 use crate::prefetch::{Step, WarmIndex};
 use crate::slate::Slate;
 use crate::snapshot::{self, Mode, ScoreboardSnapshot, SetupReason, ToastKind};

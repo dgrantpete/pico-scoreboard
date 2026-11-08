@@ -1,10 +1,7 @@
-//! The data-source seam.
-//!
-//! Everything upstream of the state machine reaches it through [`GameFeed`].
-//! The firmware supplies [`WireFeed`], which decodes the backend's packed
-//! format — the backend is the only data path (SPEC §13). The trait is
-//! deliberately about *decoding bytes into games*, not about fetching: URLs,
-//! ETags, sockets and retry policy stay in the app, where the I/O is.
+//! Where games come from: [`WireFeed`] decodes the backend's packed format,
+//! the only data path (SPEC §13). It is deliberately about *decoding bytes
+//! into games*, not about fetching: URLs, ETags, sockets and retry policy stay
+//! in the app, where the I/O is.
 
 use scoreboard_wire::{DecodeError, GameState, football, hockey, list, mlb, nba, soccer};
 
@@ -207,36 +204,24 @@ impl GameDetail<'_> {
     }
 }
 
-/// Where decoded games come from.
-pub trait GameFeed {
-    type Error: core::fmt::Debug;
-
-    /// Decode one game-detail payload. The sport comes from the endpoint that
-    /// was polled, never from sniffing the bytes.
-    fn detail<'a>(&self, sport: Sport, payload: &'a [u8]) -> Result<GameDetail<'a>, Self::Error>;
-
-    /// Decode a games list, handing each entry to `sink` in feed order.
-    ///
-    /// A visitor rather than an iterator: the consumer is a fixed-capacity
-    /// slate that may stop early, and this keeps the trait free of associated
-    /// types that every implementation would have to invent.
-    fn list(&self, payload: &[u8], sink: &mut dyn ListSink) -> Result<(), Self::Error>;
-}
-
-/// Receives games-list entries from [`GameFeed::list`].
+/// Receives games-list entries from [`WireFeed::list`].
 pub trait ListSink {
     /// Returns false to stop the walk — the slate is full.
     fn entry(&mut self, state: GameState, id: &str) -> bool;
 }
 
-/// The parity feed: `scoreboard-wire` over the backend's packed format.
+/// `scoreboard-wire` over the backend's packed format.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WireFeed;
 
-impl GameFeed for WireFeed {
-    type Error = DecodeError;
-
-    fn detail<'a>(&self, sport: Sport, payload: &'a [u8]) -> Result<GameDetail<'a>, Self::Error> {
+impl WireFeed {
+    /// Decode one game-detail payload. The sport comes from the endpoint that
+    /// was polled, never from sniffing the bytes.
+    pub fn detail<'a>(
+        &self,
+        sport: Sport,
+        payload: &'a [u8],
+    ) -> Result<GameDetail<'a>, DecodeError> {
         Ok(match sport {
             Sport::Mlb => GameDetail::Mlb(mlb::decode(payload)?),
             Sport::Nba => GameDetail::Nba(nba::decode(payload)?),
@@ -246,7 +231,11 @@ impl GameFeed for WireFeed {
         })
     }
 
-    fn list(&self, payload: &[u8], sink: &mut dyn ListSink) -> Result<(), Self::Error> {
+    /// Decode a games list, handing each entry to `sink` in feed order.
+    ///
+    /// A visitor rather than an iterator: the consumer is a fixed-capacity
+    /// slate that may stop early.
+    pub fn list(&self, payload: &[u8], sink: &mut dyn ListSink) -> Result<(), DecodeError> {
         for entry in list::decode(payload)? {
             let entry = entry?;
             if !sink.entry(entry.state, entry.id) {

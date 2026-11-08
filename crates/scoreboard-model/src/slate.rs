@@ -118,7 +118,7 @@ impl Slate {
     pub const SIZE: usize = core::mem::size_of::<Self>();
 
     /// Replace one source's games: drop what it had, then take what
-    /// [`crate::GameFeed::list`] decodes into the returned sink. The rotation
+    /// [`crate::WireFeed::list`] decodes into the returned sink. The rotation
     /// only sees the result at the next [`Slate::rebuild`].
     ///
     /// A source that fails to refresh simply never calls this, so it keeps its

@@ -40,8 +40,8 @@ use hub75::geometry::{HEIGHT, RGB565_FRAME_BYTES, WIDTH};
 use hub75::sim::SimulatorSink;
 use scoreboard_model::snapshot::LogoRef;
 use scoreboard_model::{
-    GameFeed, LeagueId, LocalClock, Logos as CommitLogos, MenuRowInput, Millis, Mode, Rgb888,
-    SetupReason, Sport, Store, ToastKind, UiColors, WireFeed,
+    LeagueId, LocalClock, Logos as CommitLogos, MenuRowInput, Millis, Mode, Rgb888, SetupReason,
+    Sport, Store, ToastKind, UiColors, WireFeed,
 };
 use scoreboard_render::blit::Canvas;
 use scoreboard_render::frame;

@@ -108,7 +108,7 @@ use scoreboard_model::slate::MAX_SOURCES;
 use scoreboard_model::snapshot::{ABBR, GAME_ID, Millis};
 use scoreboard_model::store::Logos;
 use scoreboard_model::text::{Text, set_plain};
-use scoreboard_model::{GameFeed, LeagueId, Mode, Publisher, Slate, Sport, Store, WireFeed};
+use scoreboard_model::{LeagueId, Mode, Publisher, Slate, Sport, Store, WireFeed};
 
 use crate::logos::{CrestDirectory, WARM_GAMES, Warm};
 use crate::net::api_client::{ApiClient, Etag, ResponseBuffer, base_url, url};
