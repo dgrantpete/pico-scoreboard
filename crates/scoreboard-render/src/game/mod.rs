@@ -16,7 +16,7 @@
 //!
 //! The strip's rectangle is each live table's `strip`: the data column under
 //! its rule on the column screens, the full legal width on the corner screens
-//! (football, soccer C, hockey's rink), where nothing is left beside the flash.
+//! (football, hockey's rink), where nothing is left beside the flash.
 //!
 //! # Rails
 //!
@@ -126,11 +126,11 @@ pub enum Strip {
 ///
 /// The rectangle is per screen because what the strip may cover is: a column
 /// screen keeps its identity column beside the flash, a corner screen has
-/// nothing left beside it. It comes from [`RenderSettings::bottom_strip`] —
-/// the same selector the prepared view sizes the flash window with, so the
-/// window and the strip the text scrolls through cannot disagree.
+/// nothing left beside it. It comes from [`geometry::bottom_strip`] — the same
+/// selector the prepared view sizes the flash window with, so the window and
+/// the strip the text scrolls through cannot disagree.
 pub fn bottom_strip(canvas: &mut Canvas<'_>, scene: &Scene<'_>) -> Strip {
-    let slot = scene.settings.bottom_strip(scene.snapshot.mode);
+    let slot = geometry::bottom_strip(scene.snapshot.mode);
     let play = &scene.snapshot.play;
     // The visibility window is a duration, so it rides the wall rail: a stalled
     // frame really did spend that time and the flash must not outstay it.
@@ -206,28 +206,18 @@ pub fn both_logos(canvas: &mut Canvas<'_>, scene: &Scene<'_>, away: Slice, home:
 /// The column frame the live screens and the pregame screen share: a full-height
 /// rule down the identity/data split, and a rule under the data column only, so
 /// the bottom strip runs the full width beneath both.
-///
-/// A style-wide switch rather than a per-variant one: the screens have to read
-/// consistently, so it is all or nothing.
 pub fn column_dividers(
     canvas: &mut Canvas<'_>,
     scene: &Scene<'_>,
-    divider_x: Option<i32>,
-    separator_y: Option<i32>,
+    divider_x: i32,
+    separator_y: i32,
 ) {
-    if !scene.settings.show_dividers {
-        return;
-    }
     let rule = pack(scene.snapshot.ui_colors.secondary);
     // Both rules stop at the 1 px border (BACKLOG 56).
     let inset = geometry::EDGE_INSET;
-    if let Some(x) = divider_x {
-        canvas.vline(x, inset, geometry::HEIGHT - 2 * inset, rule);
-    }
-    if let Some(y) = separator_y {
-        let start = divider_x.map_or(inset, |x| x + 1);
-        canvas.hline(start, y, geometry::WIDTH - inset - start, rule);
-    }
+    canvas.vline(divider_x, inset, geometry::HEIGHT - 2 * inset, rule);
+    let start = divider_x + 1;
+    canvas.hline(start, separator_y, geometry::WIDTH - inset - start, rule);
 }
 
 /// Winner emphasis: the winning side keeps its team color, the losing side goes

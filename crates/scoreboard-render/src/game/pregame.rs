@@ -27,12 +27,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let colors = &snapshot.ui_colors;
 
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
-    super::column_dividers(
-        canvas,
-        scene,
-        Some(table.divider_x),
-        Some(table.separator_y),
-    );
+    super::column_dividers(canvas, scene, table.divider_x, table.separator_y);
 
     // Records stack wins over losses. A side with no record advertised leaves
     // both slots blank rather than rendering a fake 0-0. Hockey's records

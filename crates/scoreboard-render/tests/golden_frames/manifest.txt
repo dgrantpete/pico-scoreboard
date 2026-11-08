@@ -11,21 +11,6 @@ color secondary 128 128 128
 color accent 255 255 0
 color clock_normal 0 255 0
 color clock_warning 255 10 10
-variant football_final C
-variant football_live A
-variant football_pregame C
-variant hockey_final A
-variant hockey_live B
-variant mlb_final C
-variant mlb_live A
-variant mlb_pregame C
-variant nba_final C
-variant nba_live A
-variant nba_pregame C
-variant soccer_final A
-variant soccer_live A
-variant soccer_pregame C
-show_dividers 1
 scroll_px_per_sec 20
 logo_slots 33
 game football__college-football__pregame_ranked football college-football backend/testdata/wire/football/college-football/pregame_ranked.bin 0 1

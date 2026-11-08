@@ -472,7 +472,6 @@ fn the_soccer_clock_anchors_and_runs_in_the_first_half() {
     assert_eq!(view.clock_anchor_ms, 1_000);
     assert_eq!(view.base_min, 45);
     assert_eq!(view.phase_text.as_str(), "1ST");
-    assert_eq!(view.phase_long.as_str(), "1ST HALF");
     assert!(!view.on_break);
 }
 
@@ -483,7 +482,6 @@ fn a_break_stops_the_clock_and_leaves_the_phase_to_the_clock_slot() {
     assert!(view.on_break);
     assert!(!view.clock_running);
     assert_eq!(view.phase_text.as_str(), "");
-    assert_eq!(view.phase_long.as_str(), "");
 }
 
 #[test]
@@ -500,7 +498,6 @@ fn extra_time_keeps_its_stoppage_threshold() {
     let store = committed("soccer/fifa.world/overtime");
     let view = &store.snapshot().soccer_live;
     assert_eq!(view.phase_text.as_str(), "ET");
-    assert_eq!(view.phase_long.as_str(), "EXTRA TIME");
     assert!(matches!(view.base_min, 105 | 120));
 }
 

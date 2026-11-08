@@ -23,12 +23,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let colors = &snapshot.ui_colors;
     let primary = pack(colors.primary);
 
-    super::column_dividers(
-        canvas,
-        scene,
-        Some(table.divider_x),
-        Some(table.separator_y),
-    );
+    super::column_dividers(canvas, scene, table.divider_x, table.separator_y);
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
     super::big_score(canvas, table.score_away, view.away_score, primary);

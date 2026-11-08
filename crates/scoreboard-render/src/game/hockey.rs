@@ -1,11 +1,11 @@
 //! Live hockey and the three-stars final (NHL.md §6.5).
 //!
-//! Two live designs (D1): B "Rink", the default — football's broadcast corners
-//! over a top-down rink that carries every goal where it was scored — and A
-//! "Period ledger", the MLB/NBA silhouette. Each has a shootout form, which
-//! takes over whenever the model carries a shootout, and with it the clock's
-//! place for the tally (§3.2). The final is its own screen (D2), soccer's
-//! full-time silhouette with the three stars where the scorers would be.
+//! The live screen is the rink (D1): football's broadcast corners over a
+//! top-down rink that carries every goal where it was scored. It has a
+//! shootout form, which takes over whenever the model carries a shootout, and
+//! with it the clock's place for the tally (§3.2). The final is its own screen
+//! (D2), soccer's full-time silhouette with the three stars where the scorers
+//! would be.
 //!
 //! # Projection
 //!
@@ -28,9 +28,8 @@ use crate::blit::{Canvas, Slice};
 use crate::font::{self, Align, FontFace, Style};
 use crate::generated::layout;
 use crate::geometry::{
-    self, EDGE_INSET, HOCKEY_FINAL, HOCKEY_LIVE_A, HOCKEY_LIVE_B, HOCKEY_SCROLL_PAUSE_MS,
-    HOCKEY_STARS_SCROLL, HockeyLedgerGeometry, HockeyLiveVariant, HockeyRinkGeometry,
-    SHOOTOUT_MARK, SHOOTOUT_PITCH,
+    self, EDGE_INSET, HOCKEY_FINAL, HOCKEY_LIVE, HOCKEY_SCROLL_PAUSE_MS, HOCKEY_STARS_SCROLL,
+    HockeyLiveGeometry, SHOOTOUT_MARK, SHOOTOUT_PITCH,
 };
 use crate::time::WallMs;
 use crate::widgets::count_dots;
@@ -63,192 +62,21 @@ const MISS: u16 = rgb565(255, 10, 10);
 const SHOTS_COUNT_WIDTH: i32 = 14;
 
 pub fn render_live(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
-    match scene.settings.hockey_live {
-        HockeyLiveVariant::A => ledger(canvas, scene, HOCKEY_LIVE_A),
-        HockeyLiveVariant::B => rink_screen(canvas, scene, HOCKEY_LIVE_B),
-    }
-    toast::overlay(canvas, scene.snapshot, scene.now);
-}
-
-// -- A, "Period ledger" ---------------------------------------------------------
-
-fn ledger(canvas: &mut Canvas<'_>, scene: &Scene<'_>, table: HockeyLedgerGeometry) {
     canvas.fill(BLACK);
     let snapshot = scene.snapshot;
     let view = &snapshot.hockey_live;
-
-    if let Some(shootout) = &view.shootout {
-        // No rule under the data column: the attempt rows sit level with the
-        // crests, across where it would run.
-        super::column_dividers(canvas, scene, Some(table.divider_x), None);
-        super::both_logos(canvas, scene, table.logo_away, table.logo_home);
-        identity(
-            canvas,
-            view,
-            pack(snapshot.ui_colors.primary),
-            table.score_away,
-            table.score_home,
-            table.period,
-            None,
-        );
-        shootout_row(
-            canvas,
-            table.shootout_away,
-            &shootout.away,
-            pack(view.away_color),
-            &snapshot.ui_colors,
-        );
-        shootout_row(
-            canvas,
-            table.shootout_home,
-            &shootout.home,
-            pack(view.home_color),
-            &snapshot.ui_colors,
-        );
-        super::chip(
-            canvas,
-            table.shootout_label,
-            "SHOOTOUT",
-            pack(snapshot.ui_colors.accent),
-        );
-        tally(
-            canvas,
-            table.shootout_tally,
-            shootout,
-            " - ",
-            Style::new(&generated::SPLEEN_5X8, pack(snapshot.ui_colors.primary)),
-        );
-        return;
-    }
-
-    super::column_dividers(
-        canvas,
-        scene,
-        Some(table.divider_x),
-        Some(table.separator_y),
-    );
-    super::both_logos(canvas, scene, table.logo_away, table.logo_home);
-    identity(
-        canvas,
-        view,
-        pack(snapshot.ui_colors.primary),
-        table.score_away,
-        table.score_home,
-        table.period,
-        Some(scene.now),
-    );
-    clock(canvas, scene, table.clock);
-    shots(canvas, scene, table.shots, table.shots_bar_y);
-
-    if super::bottom_strip(canvas, scene) == Strip::Free {
-        ledger_strip(canvas, scene, view, &table);
-    }
-}
-
-/// The strength banner, else the newest goal over its scorer, else — only
-/// while the game is scoreless — a placeholder. A scored game whose goals are
-/// missing (the summary failed, ruling 3) leaves the strip dark rather than
-/// claim there are none.
-fn ledger_strip(
-    canvas: &mut Canvas<'_>,
-    scene: &Scene<'_>,
-    view: &HockeyLiveView,
-    table: &HockeyLedgerGeometry,
-) {
-    let colors = &scene.snapshot.ui_colors;
-    if let Some(banner) = view.banner {
-        let (title, color, side) = match banner.kind {
-            BannerKind::PowerPlay(side) => ("POWER PLAY", side_color(view, side), Some(side)),
-            BannerKind::EmptyNet(side) => ("EMPTY NET", side_color(view, side), Some(side)),
-            BannerKind::Matched => ("EVEN STRENGTH", pack(colors.secondary), None),
-        };
-        line(
-            canvas,
-            table.strip_top,
-            title,
-            &generated::SPLEEN_5X8,
-            color,
-        );
-        let count_color = if side.is_some() {
-            color
-        } else {
-            pack(colors.primary)
-        };
-        skater_count(
-            canvas,
-            table.strip_bottom,
-            banner.attackers,
-            banner.defenders,
-            Style::new(&generated::UNSCII_8, count_color),
-        );
-        if let Some(side) = side {
-            for x in table.banner_arrows_x {
-                pointer(canvas, x, table.banner_arrows_y, side == Side::Away, color);
-            }
-        }
-        return;
-    }
-
-    if let Some(side) = view.last_goal {
-        let color = side_color(view, side);
-        let scroll = scene.game_scroll(HOCKEY_SCROLL_PAUSE_MS);
-        for (slot, text, face) in [
-            (
-                table.strip_top,
-                view.goal_label.as_str(),
-                &generated::SPLEEN_5X8,
-            ),
-            (table.strip_bottom, view.scorer(), &generated::UNSCII_8),
-        ] {
-            let mut region = canvas.slice(slot);
-            font::draw(
-                &mut region,
-                text,
-                Align::Center,
-                scene.view.motion(),
-                Style::new(face, color),
-                scroll,
-            );
-        }
-    } else if view.away_score == 0 && view.home_score == 0 {
-        line(
-            canvas,
-            table.strip_empty,
-            "NO GOALS",
-            &generated::SPLEEN_5X8,
-            pack(colors.secondary),
-        );
-    }
-}
-
-/// One of the two arrows flanking a banner's count, pointing at the crest it
-/// is about: up to the away side's, down to the home side's.
-fn pointer(canvas: &mut Canvas<'_>, x: i32, y: i32, up: bool, color: u16) {
-    let (sprite, mut palette) = if up {
-        (layout::inning_top::SPRITE, layout::inning_top::PALETTE)
-    } else {
-        (
-            layout::inning_bottom::SPRITE,
-            layout::inning_bottom::PALETTE,
-        )
-    };
-    palette[1] = color;
-    canvas.blit(&sprite.tinted(&palette), x, y);
-}
-
-// -- B, "Rink" -----------------------------------------------------------------
-
-fn rink_screen(canvas: &mut Canvas<'_>, scene: &Scene<'_>, table: HockeyRinkGeometry) {
-    canvas.fill(BLACK);
-    let snapshot = scene.snapshot;
-    let view = &snapshot.hockey_live;
+    let table = HOCKEY_LIVE;
+    let primary = pack(snapshot.ui_colors.primary);
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
     if let Some(shootout) = &view.shootout {
+        // The shootout's form (§3.2): the tally in the clock's slot, its label
+        // on the situation line, each side's attempts level with its score,
+        // and the rink squashed under them.
         identity(
             canvas,
             view,
-            pack(snapshot.ui_colors.primary),
+            primary,
             table.score_away,
             table.score_home,
             table.period,
@@ -283,26 +111,27 @@ fn rink_screen(canvas: &mut Canvas<'_>, scene: &Scene<'_>, table: HockeyRinkGeom
             &snapshot.ui_colors,
         );
         short_rink(canvas, view, table.shootout_rink_y);
-        return;
+    } else {
+        skater_dots(canvas, scene, view, &table);
+        identity(
+            canvas,
+            view,
+            primary,
+            table.score_away,
+            table.score_home,
+            table.period,
+            Some(scene.now),
+        );
+        clock(canvas, scene, table.clock);
+        situation(canvas, scene, view, table.situation);
+        shots(canvas, scene, table.shots, table.shots_bar_y);
+
+        if super::bottom_strip(canvas, scene) == Strip::Free {
+            rink(canvas, scene, view);
+        }
     }
 
-    skater_dots(canvas, scene, view, &table);
-    identity(
-        canvas,
-        view,
-        pack(snapshot.ui_colors.primary),
-        table.score_away,
-        table.score_home,
-        table.period,
-        Some(scene.now),
-    );
-    clock(canvas, scene, table.clock);
-    situation(canvas, scene, view, table.situation);
-    shots(canvas, scene, table.shots, table.shots_bar_y);
-
-    if super::bottom_strip(canvas, scene) == Strip::Free {
-        rink(canvas, scene, view);
-    }
+    toast::overlay(canvas, snapshot, scene.now);
 }
 
 /// Up to six dots under each crest, the first `n` filled in the team's color
@@ -313,7 +142,7 @@ fn skater_dots(
     canvas: &mut Canvas<'_>,
     scene: &Scene<'_>,
     view: &HockeyLiveView,
-    table: &HockeyRinkGeometry,
+    table: &HockeyLiveGeometry,
 ) {
     let pitch = layout::dot::SPRITE.width + 1;
     let five = Slice {
@@ -527,7 +356,7 @@ fn short_rink(canvas: &mut Canvas<'_>, view: &HockeyLiveView, y: i32) {
     }
 }
 
-// -- What both layouts share ----------------------------------------------------
+// -- What the live screen's two forms share --------------------------------------
 
 /// The scores and the period chip. A lamp is passed only where it may burn:
 /// the shootout's tied score never lights.
@@ -719,22 +548,20 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         pack(shared.home_color),
     );
 
-    if scene.settings.show_dividers {
-        let rule = pack(colors.secondary);
-        canvas.vline(
-            table.divider_x,
-            EDGE_INSET,
-            geometry::HEIGHT - 2 * EDGE_INSET,
-            rule,
-        );
-        let start = table.divider_x + 1;
-        canvas.hline(
-            start,
-            table.rule_y,
-            geometry::WIDTH - EDGE_INSET - start,
-            rule,
-        );
-    }
+    let rule = pack(colors.secondary);
+    canvas.vline(
+        table.divider_x,
+        EDGE_INSET,
+        geometry::HEIGHT - 2 * EDGE_INSET,
+        rule,
+    );
+    let start = table.divider_x + 1;
+    canvas.hline(
+        start,
+        table.rule_y,
+        geometry::WIDTH - EDGE_INSET - start,
+        rule,
+    );
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
     super::big_score(canvas, table.score_away, shared.away_score, away_color);
     super::big_score(canvas, table.score_home, shared.home_score, home_color);

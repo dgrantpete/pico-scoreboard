@@ -171,9 +171,9 @@ impl Mode {
 }
 
 /// Which sport a shared screen (pregame, line-score final) is showing —
-/// the renderer's variant-table and column-header selector. Replaces
-/// `state.py`'s `variant_key` strings and its `total_label` field, both of
-/// which were this enum spelled out.
+/// the renderer's column-header selector ("R" or "T" over the totals).
+/// Replaces `state.py`'s `variant_key` strings and its `total_label` field,
+/// both of which were this enum spelled out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Sport {
     #[default]
@@ -513,8 +513,6 @@ pub struct SoccerLiveView {
     /// "1ST" / "2ND" / "ET" / "PENS"; empty during a break, where the clock
     /// slot announces the state instead.
     pub phase_text: Text<SHORT>,
-    /// The spelled-out form for the wider variant: "1ST HALF".
-    pub phase_long: Text<SHORT>,
     /// "GOAL 90'+3'" over the scorer's name, in the scoring side's color.
     pub event_top: Text<EVENT_LABEL>,
     pub event_name: Text<PLAYER>,
@@ -533,7 +531,6 @@ impl SoccerLiveView {
             base_min: 45,
             on_break: false,
             phase_text: Text::new(),
-            phase_long: Text::new(),
             event_top: Text::new(),
             event_name: Text::new(),
             event_color: Rgb888::WHITE,

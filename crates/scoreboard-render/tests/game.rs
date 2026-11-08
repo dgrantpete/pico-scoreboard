@@ -14,7 +14,7 @@ use scoreboard_model::{Mode, Rgb888, ScoreboardSnapshot, Sport, Text, ToastKind}
 use scoreboard_render::blit::Canvas;
 use scoreboard_render::game::football::Field;
 use scoreboard_render::game::{LOGO_BYTES, LogoSlot, Logos, Scene};
-use scoreboard_render::geometry::{self, FinalVariant, RenderSettings};
+use scoreboard_render::geometry::{self, RenderSettings};
 use scoreboard_render::prepared::{PregameLine, PreparedView};
 use scoreboard_render::time::{FrameElapsed, WallMs};
 use scoreboard_render::{BLACK, DIM_GRAY, SkipMemo, frame, pack};
@@ -352,8 +352,9 @@ fn the_play_window_is_sized_to_the_strip_the_flash_scrolls_in() {
     for (mode, window) in [
         (Mode::MlbLive, 1_000 + 36 * 1_000 / speed + 1_000),
         (Mode::NbaLive, 1_000 + 36 * 1_000 / speed + 1_000),
+        (Mode::SoccerLive, 1_000 + 36 * 1_000 / speed + 1_000),
         (Mode::FootballLive, 2_000),
-        // Hockey's default is the rink, whose strip is the full width.
+        // Hockey's rink gives up the full width, like football's field.
         (Mode::HockeyLive, 2_000),
     ] {
         let mut harness = Harness::new(mode);
@@ -363,9 +364,10 @@ fn the_play_window_is_sized_to_the_strip_the_flash_scrolls_in() {
         assert_eq!(harness.prepared.play_window_ms(), window, "{mode:?}");
     }
 
-    // Soccer's strip is the variant's, and a variant switch re-sizes the window
-    // once the prepared view is invalidated, as core 1 does on a settings update.
-    let mut harness = Harness::new(Mode::SoccerLive);
+    // A speed change re-sizes the window once the prepared view is
+    // invalidated, as core 1 does on a settings update: the rebuild keys on
+    // the commit alone, so without that nothing would notice.
+    let mut harness = Harness::new(Mode::MlbLive);
     harness.snapshot.play.text = text(play);
     harness.snapshot.play.updated_ms = 10_000;
     harness.prepared.sync(&harness.snapshot, &harness.settings);
@@ -373,20 +375,18 @@ fn the_play_window_is_sized_to_the_strip_the_flash_scrolls_in() {
         harness.prepared.play_window_ms(),
         1_000 + 36 * 1_000 / speed + 1_000
     );
-    harness.settings.apply_variant("soccer_live", "C");
-    harness.prepared.invalidate();
-    harness.prepared.sync(&harness.snapshot, &harness.settings);
-    assert_eq!(harness.prepared.play_window_ms(), 2_000);
-
-    // Hockey's period ledger keeps a column, so its flash scrolls.
-    let mut harness = Harness::new(Mode::HockeyLive);
-    harness.snapshot.play.text = text(play);
-    harness.snapshot.play.updated_ms = 10_000;
-    harness.settings.apply_variant("hockey_live", "A");
+    harness.settings.set_scroll_speed(10);
     harness.prepared.sync(&harness.snapshot, &harness.settings);
     assert_eq!(
         harness.prepared.play_window_ms(),
-        1_000 + 36 * 1_000 / speed + 1_000
+        1_000 + 36 * 1_000 / speed + 1_000,
+        "the same commit: nothing rebuilt"
+    );
+    harness.prepared.invalidate();
+    harness.prepared.sync(&harness.snapshot, &harness.settings);
+    assert_eq!(
+        harness.prepared.play_window_ms(),
+        1_000 + 36 * 1_000 / 10 + 1_000
     );
 }
 
@@ -544,7 +544,7 @@ fn linescore_final(sport: Sport) -> Harness {
 #[test]
 fn the_final_screen_colors_the_winner_and_grays_the_loser() {
     let frame = linescore_final(Sport::Mlb).draw();
-    let table = RenderSettings::new().final_table(Sport::Mlb);
+    let table = geometry::FINAL;
     let count_in = |slot: scoreboard_render::Slice, color| {
         frame.count(
             slot.x..slot.x + slot.width,
@@ -565,7 +565,7 @@ fn the_totals_header_names_the_sports_unit() {
     // "R" for runs, "T" for points. Same glyph count, different glyph.
     let mlb = linescore_final(Sport::Mlb).draw();
     let nba = linescore_final(Sport::Nba).draw();
-    let slot = RenderSettings::new().final_table(Sport::Mlb).total_header;
+    let slot = geometry::FINAL.total_header;
     assert_ne!(
         mlb.lit_in(slot.x..slot.x + slot.width, slot.y..slot.y + slot.height),
         nba.lit_in(slot.x..slot.x + slot.width, slot.y..slot.y + slot.height),
@@ -581,7 +581,7 @@ fn the_line_score_rows_scroll_in_lockstep() {
     harness.snapshot.linescore_final.away_row = text(long);
     harness.snapshot.linescore_final.home_row = text(long);
 
-    let table = RenderSettings::new().final_table(Sport::Mlb);
+    let table = geometry::FINAL;
     let column_of = |frame: &Frame, slot: scoreboard_render::Slice| {
         (slot.x..slot.x + slot.width)
             .find(|x| (slot.y..slot.y + slot.height).any(|y| frame.lit(*x, y)))
@@ -650,65 +650,59 @@ fn edge_ring(frame: &Frame) -> usize {
 const SCROLL_SAMPLES: [u64; 5] = [0, 2_000, 4_000, 7_000, 12_000];
 
 #[test]
-fn every_final_variant_keeps_a_basketball_total_whole_and_off_the_edge_ring() {
-    // Three-digit totals are every NBA final. Variant C carried them in a
-    // 20 px slot that ran the third digit off the panel; A and B inked
-    // column 127. The crest pool's crests are solid, so a crest on the ring
-    // shows up here too.
-    for variant in [FinalVariant::A, FinalVariant::B, FinalVariant::C] {
-        let mut harness = linescore_final(Sport::Nba);
-        harness.settings.nba_final = variant;
-        let view = &mut harness.snapshot.linescore_final;
-        view.away_score = 130;
-        view.home_score = 128;
-        view.header_row = text(" 1  2  3  4  5  6  7 ");
-        view.away_row = text("28 31 25 24 10 12  0 ");
-        view.home_row = text("30 27 22 29 10 10  0 ");
-        let table = variant.table();
+fn the_final_keeps_a_basketball_total_whole_and_off_the_edge_ring() {
+    // Three-digit totals are every NBA final. The totals column once carried
+    // them in a 20 px slot that ran the third digit off the panel. The crest
+    // pool's crests are solid, so a crest on the ring shows up here too.
+    let mut harness = linescore_final(Sport::Nba);
+    let view = &mut harness.snapshot.linescore_final;
+    view.away_score = 130;
+    view.home_score = 128;
+    view.header_row = text(" 1  2  3  4  5  6  7 ");
+    view.away_row = text("28 31 25 24 10 12  0 ");
+    view.home_row = text("30 27 22 29 10 10  0 ");
+    let table = geometry::FINAL;
 
-        for at in SCROLL_SAMPLES {
-            harness.view = FrameElapsed(at);
-            let frame = harness.draw();
-            assert_eq!(edge_ring(&frame), 0, "{variant:?} at {at} ms");
-            // A dark column between the rule and the widest total.
-            let gutter = table.divider_x + 1;
-            for slot in [table.total_away, table.total_home] {
-                assert_eq!(
-                    frame.lit_in(gutter..gutter + 1, slot.y..slot.y + slot.height),
-                    0,
-                    "{variant:?}: a three-digit total touches the rule"
-                );
-            }
+    for at in SCROLL_SAMPLES {
+        harness.view = FrameElapsed(at);
+        let frame = harness.draw();
+        assert_eq!(edge_ring(&frame), 0, "at {at} ms");
+        // A dark column between the rule and the widest total.
+        let gutter = table.divider_x + 1;
+        for slot in [table.total_away, table.total_home] {
+            assert_eq!(
+                frame.lit_in(gutter..gutter + 1, slot.y..slot.y + slot.height),
+                0,
+                "a three-digit total touches the rule"
+            );
         }
     }
 }
 
 #[test]
-fn a_four_quarter_line_score_holds_still_in_every_variant() {
-    // The rows end in a trailing space (the model's three-char columns). B's
-    // 54 px window once scrolled a 60 px row 6 px for nothing, sliding that
-    // blank into view and cutting the first quarter's tens digit off.
-    for variant in [FinalVariant::A, FinalVariant::B, FinalVariant::C] {
-        let mut harness = linescore_final(Sport::Nba);
-        harness.settings.nba_final = variant;
-        let view = &mut harness.snapshot.linescore_final;
-        view.away_score = 118;
-        view.home_score = 100;
-        view.header_row = text(" 1  2  3  4 ");
-        view.away_row = text("36 32 25 25 ");
-        view.home_row = text("30 35 25 10 ");
-        let slot = variant.table().linescore_away;
+fn a_four_quarter_line_score_holds_still() {
+    // The rows end in a trailing space (the model's three-char columns). A
+    // window narrower than a row with its space once scrolled a row that fit
+    // without it, sliding that blank into view and cutting the first quarter's
+    // tens digit off.
+    let mut harness = linescore_final(Sport::Nba);
+    let view = &mut harness.snapshot.linescore_final;
+    view.away_score = 118;
+    view.home_score = 100;
+    view.header_row = text(" 1  2  3  4 ");
+    view.away_row = text("36 32 25 25 ");
+    view.home_row = text("30 35 25 10 ");
+    let slot = geometry::FINAL.linescore_away;
 
-        let rest = harness.draw();
-        // The first column's tens digit is inked at the window's left edge.
-        assert!(
-            rest.lit_in(slot.x..slot.x + 4, slot.y..slot.y + slot.height) > 0,
-            "{variant:?}: the first quarter's tens digit is missing"
-        );
-        for at in SCROLL_SAMPLES {
-            harness.view = FrameElapsed(at);
-            assert!(harness.draw().0 == rest.0, "{variant:?} moved at {at} ms");
-        }
+    let rest = harness.draw();
+    // The first column's tens digit is inked at the window's left edge.
+    assert!(
+        rest.lit_in(slot.x..slot.x + 4, slot.y..slot.y + slot.height) > 0,
+        "the first quarter's tens digit is missing"
+    );
+    for at in SCROLL_SAMPLES {
+        harness.view = FrameElapsed(at);
+        assert!(harness.draw().0 == rest.0, "moved at {at} ms");
     }
 }
 
@@ -716,7 +710,6 @@ fn a_four_quarter_line_score_holds_still_in_every_variant() {
 fn a_row_too_long_even_without_its_trailing_space_still_scrolls() {
     // Nine innings never fit, so the fit rule must not freeze them.
     let mut harness = linescore_final(Sport::Mlb);
-    harness.settings.mlb_final = FinalVariant::B;
     let view = &mut harness.snapshot.linescore_final;
     view.header_row = text(" 1  2  3  4  5  6  7  8  9 ");
     view.away_row = text(" 0  1  0  2  0  0  1  0  0 ");
@@ -743,10 +736,10 @@ fn full_time_scorer_lists_scroll_without_touching_the_edge_ring() {
 
 #[test]
 fn pregame_crests_and_text_stay_off_the_edge_ring() {
-    // Dividers off: the pregame's rules come from `column_dividers`, which it
-    // shares with the live screens. This pins the pregame's own table.
+    // The pregame's rules come from `column_dividers`, which it shares with the
+    // live screens and which stops at the inset; the rest is the pregame's own
+    // table.
     let mut harness = pregame();
-    harness.settings.show_dividers = false;
     let view = &mut harness.snapshot.pregame;
     view.info_primary = text("Oriole Park at Camden Yards");
     view.info_secondary = text("58F MOSTLY CLOUDY");
@@ -770,13 +763,12 @@ fn soccer_live() -> Harness {
     view.clock_running = true;
     view.base_min = 45;
     view.phase_text = text("1ST");
-    view.phase_long = text("1ST HALF");
     harness
 }
 
 /// Which pixels the clock slot lit, as a compact signature.
 fn clock_signature(frame: &Frame) -> Vec<(i32, i32)> {
-    let slot = geometry::SOCCER_LIVE_A.clock;
+    let slot = geometry::SOCCER_LIVE.clock;
     (slot.x..slot.x + slot.width)
         .flat_map(|x| (slot.y..slot.y + slot.height).map(move |y| (x, y)))
         .filter(|(x, y)| frame.lit(*x, *y))
@@ -815,7 +807,7 @@ fn stoppage_time_holds_the_base_minute_and_counts_up() {
     harness.snapshot.soccer_live.clock_anchor_s = 47 * 60 + 30;
     harness.snapshot.soccer_live.clock_running = false;
     let frame = harness.draw();
-    let slot = geometry::SOCCER_LIVE_A.clock;
+    let slot = geometry::SOCCER_LIVE.clock;
     let warning = pack(harness.snapshot.ui_colors.clock_warning);
     assert!(
         frame.count(
@@ -859,7 +851,7 @@ fn a_break_announces_itself_in_the_clock_slot() {
 #[test]
 fn an_empty_ticker_shows_a_placeholder_rather_than_a_hole() {
     let mut harness = soccer_live();
-    let table = geometry::SOCCER_LIVE_A;
+    let table = geometry::SOCCER_LIVE;
     let empty_slot = table.event_empty;
     let frame = harness.draw();
     assert!(
@@ -886,21 +878,21 @@ fn an_empty_ticker_shows_a_placeholder_rather_than_a_hole() {
 }
 
 #[test]
-fn the_soccer_variants_place_the_period_differently() {
+fn the_period_chip_sits_in_the_identity_column_and_leaves_during_a_break() {
     let mut harness = soccer_live();
-    let chip = geometry::SOCCER_LIVE_A.phase.unwrap();
-    let a = harness.draw();
-    assert!(chip.width > 0 && a.lit_in(chip.x..chip.x + chip.width, chip.y..chip.y + 8) > 0);
+    let chip = geometry::SOCCER_LIVE.phase;
+    let frame = harness.draw();
+    assert!(frame.lit_in(chip.x..chip.x + chip.width, chip.y..chip.y + 8) > 0);
 
-    harness.settings.apply_variant("soccer_live", "B");
-    let b = harness.draw();
-    let long = geometry::SOCCER_LIVE_B.phase_long.unwrap();
+    // The clock slot announces a break, so the chip is not drawn twice.
+    harness.snapshot.soccer_live.on_break = true;
+    harness.snapshot.soccer_live.phase_text = Text::new();
+    harness.snapshot.commit_seq += 1;
+    let frame = harness.draw();
     assert_eq!(
-        b.lit_in(chip.x..chip.x + chip.width, chip.y..chip.y + 8),
-        0,
-        "B has no chip in the identity column"
+        frame.lit_in(chip.x..chip.x + chip.width, chip.y..chip.y + 8),
+        0
     );
-    assert!(b.lit_in(long.x..long.x + long.width, long.y..long.y + 8) > 0);
 }
 
 // -- NBA ---------------------------------------------------------------------
@@ -1135,29 +1127,24 @@ fn the_play_flash_replaces_the_field_strip() {
     );
 }
 
-/// The corner screens keep nothing beside the flash, so it starts at the first
-/// legal column rather than at the column screens' data margin.
+/// A corner screen keeps nothing beside the flash, so it starts at the first
+/// legal column rather than at the column screens' data margin. (Hockey's rink,
+/// the other corner screen, is checked with the hockey tests below.)
 #[test]
-fn the_corner_screens_flash_across_the_full_width() {
+fn the_football_flash_spans_the_full_width() {
     let column = geometry::COLUMN_STRIP;
-    let mut football = football();
-    let mut soccer = soccer_live();
-    soccer.settings.apply_variant("soccer_live", "C");
-    for (name, harness, strip) in [
-        ("football", &mut football, geometry::FOOTBALL_LIVE.strip),
-        ("soccer C", &mut soccer, geometry::SOCCER_LIVE_C.strip),
-    ] {
-        assert_eq!(strip.x, 1, "{name}");
-        assert_eq!(strip.x + strip.width, geometry::WIDTH - 1, "{name}");
-        harness.snapshot.play.text = text("MAHOMES PASS COMPLETE TO KELCE FOR 12 YARDS");
-        harness.snapshot.play.updated_ms = 10_000;
-        harness.snapshot.commit_seq += 1;
-        let frame = harness.draw();
-        assert!(
-            frame.lit_in(1..column.x, strip.y..strip.y + strip.height) > 0,
-            "{name}: the flash should start left of the column screens' margin"
-        );
-    }
+    let strip = geometry::FOOTBALL_LIVE.strip;
+    assert_eq!(strip.x, 1);
+    assert_eq!(strip.x + strip.width, geometry::WIDTH - 1);
+    let mut harness = football();
+    harness.snapshot.play.text = text("MAHOMES PASS COMPLETE TO KELCE FOR 12 YARDS");
+    harness.snapshot.play.updated_ms = 10_000;
+    harness.snapshot.commit_seq += 1;
+    let frame = harness.draw();
+    assert!(
+        frame.lit_in(1..column.x, strip.y..strip.y + strip.height) > 0,
+        "the flash should start left of the column screens' margin"
+    );
 }
 
 // -- Hockey ------------------------------------------------------------------
@@ -1170,7 +1157,7 @@ use scoreboard_model::snapshot::GoalMark;
 use scoreboard_model::{GameDetail, LeagueId, LocalClock, Logos as CommitLogos, Store};
 use scoreboard_render::game::hockey::{mark_at, mix};
 use scoreboard_render::generated::layout;
-use scoreboard_render::geometry::{HOCKEY_FINAL, HOCKEY_LIVE_A, HOCKEY_LIVE_B, HockeyLiveVariant};
+use scoreboard_render::geometry::{HOCKEY_FINAL, HOCKEY_LIVE};
 use scoreboard_render::{Slice, WHITE, rgb565};
 use scoreboard_wire::hockey as wire;
 use scoreboard_wire::{LivePhase, TeamColors, TeamState};
@@ -1248,7 +1235,7 @@ fn strength(kind: wire::StrengthKind, away: u8, home: u8) -> Option<wire::Streng
 
 /// Commit `games` five seconds apart, the last at [`COMMIT_MS`], and draw
 /// whatever the store ends up holding.
-fn hockey(variant: HockeyLiveVariant, games: &[wire::Live<'_>]) -> Harness {
+fn hockey(games: &[wire::Live<'_>]) -> Harness {
     let mut store = Store::new();
     let first = COMMIT_MS - (games.len() as u64 - 1) * 5_000;
     for (index, game) in games.iter().enumerate() {
@@ -1258,7 +1245,7 @@ fn hockey(variant: HockeyLiveVariant, games: &[wire::Live<'_>]) -> Harness {
             first + index as u64 * 5_000,
         );
     }
-    from_store(Mode::HockeyLive, &store, variant)
+    from_store(Mode::HockeyLive, &store)
 }
 
 fn commit(store: &mut Store, detail: GameDetail<'_>, now_ms: u64) {
@@ -1270,13 +1257,12 @@ fn commit(store: &mut Store, detail: GameDetail<'_>, now_ms: u64) {
     store.commit_detail(&league, &detail, logos, now_ms, LocalClock::default());
 }
 
-fn from_store(mode: Mode, store: &Store, variant: HockeyLiveVariant) -> Harness {
+fn from_store(mode: Mode, store: &Store) -> Harness {
     let mut harness = Harness::new(mode);
     let colors = harness.snapshot.ui_colors;
     harness.snapshot = store.snapshot().clone();
     harness.snapshot.ui_colors = colors;
     assert_eq!(harness.snapshot.mode, mode);
-    harness.settings.hockey_live = variant;
     harness
 }
 
@@ -1306,65 +1292,35 @@ fn scaled(color: u16, num: u32, den: u32) -> u16 {
     ((red as u16) << 11) | ((green as u16) << 5) | blue as u16
 }
 
-const VARIANTS: [HockeyLiveVariant; 2] = [HockeyLiveVariant::A, HockeyLiveVariant::B];
-
 #[test]
-fn both_hockey_layouts_draw_their_crests_scores_clock_and_shots() {
+fn the_hockey_screen_draws_its_crests_scores_clock_and_shots() {
     let goals = [AWAY_GOAL, HOME_GOAL];
-    for variant in VARIANTS {
-        let mut harness = hockey(variant, &[nhl_live(&goals)]);
-        let frame = harness.draw();
-        let normal = pack(harness.snapshot.ui_colors.clock_normal);
-        let primary = pack(harness.snapshot.ui_colors.primary);
-        let secondary = pack(harness.snapshot.ui_colors.secondary);
-        let (logos, scores, clock, shots) = match variant {
-            HockeyLiveVariant::A => {
-                let table = HOCKEY_LIVE_A;
-                assert_eq!(frame.pixel(table.divider_x, 30), secondary, "A's rule");
-                (
-                    [table.logo_away, table.logo_home],
-                    [table.score_away, table.score_home],
-                    table.clock,
-                    table.shots,
-                )
-            }
-            HockeyLiveVariant::B => {
-                let table = HOCKEY_LIVE_B;
-                (
-                    [table.logo_away, table.logo_home],
-                    [table.score_away, table.score_home],
-                    table.clock,
-                    table.shots,
-                )
-            }
-        };
-        for slot in logos {
-            assert_eq!(frame.pixel(slot.x, slot.y), CREST, "{variant:?}");
-        }
-        for slot in scores {
-            assert!(count_in_slot(&frame, slot, primary) > 0, "{variant:?}");
-        }
-        assert!(count_in_slot(&frame, clock, normal) > 0, "{variant:?}");
-        assert!(
-            count_in_slot(&frame, shots, secondary) > 0,
-            "{variant:?} SHOTS"
-        );
-        assert!(
-            count_in_slot(&frame, shots, primary) > 0,
-            "{variant:?} counts"
-        );
+    let mut harness = hockey(&[nhl_live(&goals)]);
+    let frame = harness.draw();
+    let normal = pack(harness.snapshot.ui_colors.clock_normal);
+    let primary = pack(harness.snapshot.ui_colors.primary);
+    let secondary = pack(harness.snapshot.ui_colors.secondary);
+    let table = HOCKEY_LIVE;
+    for slot in [table.logo_away, table.logo_home] {
+        assert_eq!(frame.pixel(slot.x, slot.y), CREST);
     }
+    for slot in [table.score_away, table.score_home] {
+        assert!(count_in_slot(&frame, slot, primary) > 0);
+    }
+    assert!(count_in_slot(&frame, table.clock, normal) > 0);
+    assert!(count_in_slot(&frame, table.shots, secondary) > 0, "SHOTS");
+    assert!(count_in_slot(&frame, table.shots, primary) > 0, "counts");
 }
 
 /// D9: a mark is 2 × 2, each pixel the team color at 141/256 over what is
 /// lit, so goals from one spot climb toward the team color instead of fusing.
 #[test]
 fn goal_marks_composite_over_the_rink_in_play_order() {
-    let bare = hockey(HockeyLiveVariant::B, &[nhl_live(&[])]).draw();
-    let mut one = hockey(HockeyLiveVariant::B, &[nhl_live(&[AWAY_GOAL])]);
+    let bare = hockey(&[nhl_live(&[])]).draw();
+    let mut one = hockey(&[nhl_live(&[AWAY_GOAL])]);
     let (away, _) = sides(&one);
     let one = one.draw();
-    let two = hockey(HockeyLiveVariant::B, &[nhl_live(&[AWAY_GOAL, AWAY_GOAL])]).draw();
+    let two = hockey(&[nhl_live(&[AWAY_GOAL, AWAY_GOAL])]).draw();
 
     let (x, y) = mark_at(GoalMark {
         side: Side::Away,
@@ -1397,35 +1353,27 @@ fn the_lamp_pulses_the_scorer_for_twenty_seconds_on_the_wall_rail() {
     };
     let goals = [AWAY_GOAL, HOME_GOAL];
     let after = nhl_live(&goals);
-    for variant in VARIANTS {
-        let mut harness = hockey(variant, &[before, after]);
-        let lamp = &harness.snapshot.hockey_live;
-        assert_eq!(
-            (lamp.lamp_side, lamp.lamp_ms),
-            (Some(Side::Home), COMMIT_MS)
-        );
-        let (away_slot, home_slot) = match variant {
-            HockeyLiveVariant::A => (HOCKEY_LIVE_A.score_away, HOCKEY_LIVE_A.score_home),
-            HockeyLiveVariant::B => (HOCKEY_LIVE_B.score_away, HOCKEY_LIVE_B.score_home),
-        };
+    let mut harness = hockey(&[before, after]);
+    let lamp = &harness.snapshot.hockey_live;
+    assert_eq!(
+        (lamp.lamp_side, lamp.lamp_ms),
+        (Some(Side::Home), COMMIT_MS)
+    );
+    let (away_slot, home_slot) = (HOCKEY_LIVE.score_away, HOCKEY_LIVE.score_home);
 
-        // Half a pulse in, the scorer's number is all lamp red.
-        harness.now = WallMs(COMMIT_MS + 500);
-        let frame = harness.draw();
-        assert!(
-            count_in_slot(&frame, home_slot, LAMP_RED) > 0,
-            "{variant:?}"
-        );
-        assert_eq!(count_in_slot(&frame, away_slot, LAMP_RED), 0, "{variant:?}");
+    // Half a pulse in, the scorer's number is all lamp red.
+    harness.now = WallMs(COMMIT_MS + 500);
+    let frame = harness.draw();
+    assert!(count_in_slot(&frame, home_slot, LAMP_RED) > 0);
+    assert_eq!(count_in_slot(&frame, away_slot, LAMP_RED), 0);
 
-        // The window is a duration: twenty seconds of wall time end it,
-        // whatever the frame rail did.
-        harness.now = WallMs(COMMIT_MS + 20_000);
-        let frame = harness.draw();
-        assert_eq!(count_in_slot(&frame, home_slot, LAMP_RED), 0, "{variant:?}");
-        let primary = pack(harness.snapshot.ui_colors.primary);
-        assert!(count_in_slot(&frame, home_slot, primary) > 0, "{variant:?}");
-    }
+    // The window is a duration: twenty seconds of wall time end it, whatever
+    // the frame rail did.
+    harness.now = WallMs(COMMIT_MS + 20_000);
+    let frame = harness.draw();
+    assert_eq!(count_in_slot(&frame, home_slot, LAMP_RED), 0);
+    let primary = pack(harness.snapshot.ui_colors.primary);
+    assert!(count_in_slot(&frame, home_slot, primary) > 0);
 }
 
 #[test]
@@ -1435,7 +1383,7 @@ fn the_newest_mark_blinks_white_while_the_lamp_burns() {
         ..nhl_live(&[AWAY_GOAL])
     };
     let goals = [AWAY_GOAL, HOME_GOAL];
-    let mut harness = hockey(HockeyLiveVariant::B, &[before, nhl_live(&goals)]);
+    let mut harness = hockey(&[before, nhl_live(&goals)]);
     let (x, y) = mark_at(GoalMark {
         side: Side::Home,
         x: -75,
@@ -1463,10 +1411,10 @@ fn a_power_play_glows_the_attacking_zone_and_points_at_the_advantage() {
         strength: strength(wire::StrengthKind::PowerPlay(Side::Away), 5, 4),
         ..nhl_live(&[])
     };
-    let mut harness = hockey(HockeyLiveVariant::B, &[pp]);
+    let mut harness = hockey(&[pp]);
     let (away, home) = sides(&harness);
     let frame = harness.draw();
-    let even = hockey(HockeyLiveVariant::B, &[nhl_live(&[])]).draw();
+    let even = hockey(&[nhl_live(&[])]).draw();
 
     // The away side attacks right: its zone, from inside the far blue line to
     // short of the goal line, glows a quarter of its color at the pulse's
@@ -1480,7 +1428,7 @@ fn a_power_play_glows_the_attacking_zone_and_points_at_the_advantage() {
     assert_eq!(frame.pixel(63, 50), even.pixel(63, 50));
 
     // The banner, with an arrow on its left — toward the away crest.
-    let slot = HOCKEY_LIVE_B.situation;
+    let slot = HOCKEY_LIVE.situation;
     assert!(count_in_slot(&frame, slot, away) > 0);
     let title =
         scoreboard_render::font::measure("POWER PLAY", &scoreboard_render::generated::SPLEEN_5X8);
@@ -1489,23 +1437,10 @@ fn a_power_play_glows_the_attacking_zone_and_points_at_the_advantage() {
 
     // Five dots for the away side, four and an empty slot for the home side.
     let unfilled = layout::dot::PALETTE[2];
-    let row = HOCKEY_LIVE_B.skaters_y;
+    let row = HOCKEY_LIVE.skaters_y;
     assert_eq!(frame.count(1..26, row..row + 4, unfilled), 0);
     assert!(frame.count(103..127, row..row + 4, unfilled) > 0);
     assert!(frame.count(103..127, row..row + 4, home) > 0);
-
-    // A: the banner in the strip, the count under it, arrows up to the away
-    // crest on both sides of it.
-    let mut harness = hockey(HockeyLiveVariant::A, &[pp]);
-    let frame = harness.draw();
-    let table = HOCKEY_LIVE_A;
-    assert!(count_in_slot(&frame, table.strip_top, away) > 0);
-    assert!(count_in_slot(&frame, table.strip_bottom, away) > 0);
-    for x in table.banner_arrows_x {
-        // inning_top: the apex is the top row's middle pixel.
-        assert_eq!(frame.pixel(x + 2, table.banner_arrows_y), away);
-        assert_eq!(frame.pixel(x, table.banner_arrows_y), BLACK);
-    }
 }
 
 #[test]
@@ -1515,17 +1450,17 @@ fn an_empty_net_counts_the_extra_attacker_in_the_accent_color() {
         strength: strength(wire::StrengthKind::EmptyNet(Side::Home), 5, 6),
         ..nhl_live(&[])
     };
-    let mut harness = hockey(HockeyLiveVariant::B, &[en]);
+    let mut harness = hockey(&[en]);
     let (_, home) = sides(&harness);
     let accent = pack(harness.snapshot.ui_colors.accent);
     let frame = harness.draw();
-    let row = HOCKEY_LIVE_B.skaters_y;
+    let row = HOCKEY_LIVE.skaters_y;
     // The sixth dot sits outermost on the home row, at the panel's last
     // legal column.
     assert!(frame.count(123..127, row..row + 4, accent) > 0);
     assert_eq!(frame.count(1..30, row..row + 4, accent), 0);
     // "EMPTY NET", pointing right — at the home crest.
-    let slot = HOCKEY_LIVE_B.situation;
+    let slot = HOCKEY_LIVE.situation;
     let title =
         scoreboard_render::font::measure("EMPTY NET", &scoreboard_render::generated::SPLEEN_5X8);
     let text_end = slot.x + (slot.width - title) / 2 + title;
@@ -1533,18 +1468,6 @@ fn an_empty_net_counts_the_extra_attacker_in_the_accent_color() {
     // The home side's goalie is out, so the zone it attacks — the left — glows.
     assert_ne!(frame.pixel(30, 50), ICE);
     assert_eq!(frame.pixel(100, 50), ICE);
-
-    let frame = hockey(HockeyLiveVariant::A, &[en]).draw();
-    let table = HOCKEY_LIVE_A;
-    assert!(count_in_slot(&frame, table.strip_top, home) > 0);
-    assert!(
-        count_in_slot(&frame, table.strip_bottom, home) > 0,
-        "6 ON 5"
-    );
-    for x in table.banner_arrows_x {
-        // inning_bottom: the apex is the bottom row's middle pixel.
-        assert_eq!(frame.pixel(x + 2, table.banner_arrows_y + 2), home);
-    }
 }
 
 #[test]
@@ -1553,11 +1476,11 @@ fn four_on_four_is_announced_without_a_side() {
         strength: strength(wire::StrengthKind::Matched, 4, 4),
         ..nhl_live(&[AWAY_GOAL])
     };
-    let mut harness = hockey(HockeyLiveVariant::B, &[matched]);
-    let (away, home) = sides(&harness);
+    let mut harness = hockey(&[matched]);
+    let (away, _) = sides(&harness);
     let colors = harness.snapshot.ui_colors;
     let frame = harness.draw();
-    let slot = HOCKEY_LIVE_B.situation;
+    let slot = HOCKEY_LIVE.situation;
     assert!(
         count_in_slot(&frame, slot, pack(colors.primary)) > 0,
         "4 ON 4"
@@ -1569,18 +1492,6 @@ fn four_on_four_is_announced_without_a_side() {
     );
     assert_eq!(frame.pixel(100, 50), ICE, "and no zone glows");
     assert_eq!(frame.pixel(30, 50), ICE);
-
-    let frame = hockey(HockeyLiveVariant::A, &[matched]).draw();
-    let table = HOCKEY_LIVE_A;
-    assert!(
-        count_in_slot(&frame, table.strip_top, pack(colors.secondary)) > 0,
-        "EVEN STRENGTH"
-    );
-    assert!(
-        count_in_slot(&frame, table.strip_bottom, pack(colors.primary)) > 0,
-        "4 ON 4"
-    );
-    assert_eq!(count_in_slot(&frame, table.strip_top, home), 0);
 }
 
 #[test]
@@ -1592,23 +1503,16 @@ fn three_on_three_overtime_is_play_as_usual_with_the_clock_running_out() {
         strength: strength(wire::StrengthKind::Matched, 3, 3),
         ..nhl_live(&goals)
     };
-    for variant in VARIANTS {
-        let mut harness = hockey(variant, &[overtime]);
-        let (_, home) = sides(&harness);
-        let warning = pack(harness.snapshot.ui_colors.clock_warning);
-        let frame = harness.draw();
-        let (clock, line) = match variant {
-            HockeyLiveVariant::A => (HOCKEY_LIVE_A.clock, HOCKEY_LIVE_A.strip_top),
-            HockeyLiveVariant::B => (HOCKEY_LIVE_B.clock, HOCKEY_LIVE_B.situation),
-        };
-        assert!(count_in_slot(&frame, clock, warning) > 0, "{variant:?}");
-        // No banner: the newest goal, in its scorer's color.
-        assert!(count_in_slot(&frame, line, home) > 0, "{variant:?}");
-    }
+    let mut harness = hockey(&[overtime]);
+    let (_, home) = sides(&harness);
+    let warning = pack(harness.snapshot.ui_colors.clock_warning);
+    let frame = harness.draw();
+    assert!(count_in_slot(&frame, HOCKEY_LIVE.clock, warning) > 0);
+    // No banner: the newest goal, in its scorer's color.
+    assert!(count_in_slot(&frame, HOCKEY_LIVE.situation, home) > 0);
     // Three filled dots and two empty slots a side.
-    let frame = hockey(HockeyLiveVariant::B, &[overtime]).draw();
     let unfilled = layout::dot::PALETTE[2];
-    let row = HOCKEY_LIVE_B.skaters_y;
+    let row = HOCKEY_LIVE.skaters_y;
     assert!(frame.count(1..26, row..row + 4, unfilled) > 0);
     assert!(frame.count(103..127, row..row + 4, unfilled) > 0);
 }
@@ -1620,22 +1524,16 @@ fn the_intermission_reads_int_in_the_accent_color() {
         clock: "0:00",
         ..nhl_live(&[AWAY_GOAL])
     };
-    for variant in VARIANTS {
-        let mut harness = hockey(variant, &[intermission]);
-        assert_eq!(harness.snapshot.hockey_live.clock_text.as_str(), "INT");
-        let accent = pack(harness.snapshot.ui_colors.accent);
-        let primary = pack(harness.snapshot.ui_colors.primary);
-        let frame = harness.draw();
-        let (clock, period) = match variant {
-            HockeyLiveVariant::A => (HOCKEY_LIVE_A.clock, HOCKEY_LIVE_A.period),
-            HockeyLiveVariant::B => (HOCKEY_LIVE_B.clock, HOCKEY_LIVE_B.period),
-        };
-        assert!(count_in_slot(&frame, clock, accent) > 0, "{variant:?}");
-        assert!(
-            count_in_slot(&frame, period, primary) > 0,
-            "the chip keeps 2ND"
-        );
-    }
+    let mut harness = hockey(&[intermission]);
+    assert_eq!(harness.snapshot.hockey_live.clock_text.as_str(), "INT");
+    let accent = pack(harness.snapshot.ui_colors.accent);
+    let primary = pack(harness.snapshot.ui_colors.primary);
+    let frame = harness.draw();
+    assert!(count_in_slot(&frame, HOCKEY_LIVE.clock, accent) > 0);
+    assert!(
+        count_in_slot(&frame, HOCKEY_LIVE.period, primary) > 0,
+        "the chip keeps 2ND"
+    );
 }
 
 /// DAL at FLA, tied 3-3: FLA scored its third attempt and DAL shoots next.
@@ -1662,12 +1560,12 @@ fn shootout(next_shooter: Option<Side>) -> wire::Live<'static> {
 }
 
 #[test]
-fn the_shootout_takes_over_the_rink_layout() {
-    let mut harness = hockey(HockeyLiveVariant::B, &[shootout(Some(Side::Away))]);
+fn the_shootout_takes_over_the_live_screen() {
+    let mut harness = hockey(&[shootout(Some(Side::Away))]);
     let (_, home) = sides(&harness);
     let colors = harness.snapshot.ui_colors;
     let frame = harness.draw();
-    let table = HOCKEY_LIVE_B;
+    let table = HOCKEY_LIVE;
 
     // The tally takes the clock's slot; the clock string never shows.
     assert!(count_in_slot(&frame, table.clock, pack(colors.accent)) > 0);
@@ -1702,44 +1600,13 @@ fn the_shootout_takes_over_the_rink_layout() {
 }
 
 #[test]
-fn the_shootout_takes_over_the_ledger_layout() {
-    let mut harness = hockey(HockeyLiveVariant::A, &[shootout(Some(Side::Away))]);
-    let (_, home) = sides(&harness);
-    let colors = harness.snapshot.ui_colors;
-    let (accent, normal) = (pack(colors.accent), pack(colors.clock_normal));
-    let frame = harness.draw();
-    let table = HOCKEY_LIVE_A;
-    assert!(count_in_slot(&frame, table.shootout_label, accent) > 0);
-    assert!(count_in_slot(&frame, table.shootout_tally, pack(colors.primary)) > 0);
-    let (x, y) = (table.shootout_home.x + 20, table.shootout_home.y);
-    assert_eq!(frame.pixel(x + 3, y + 3), home);
-    assert_eq!(frame.pixel(table.divider_x, 30), pack(colors.secondary));
-    assert_eq!(
-        frame.pixel(100, table.separator_y),
-        BLACK,
-        "no rule across the rows"
-    );
-    assert_eq!(
-        count_in_slot(&frame, table.clock, normal),
-        0,
-        "no clock string"
-    );
-}
-
-#[test]
 fn a_finished_shootout_marks_no_next_shooter() {
-    for variant in VARIANTS {
-        let mut harness = hockey(variant, &[shootout(None)]);
-        let primary = pack(harness.snapshot.ui_colors.primary);
-        let frame = harness.draw();
-        let rows = match variant {
-            HockeyLiveVariant::A => [HOCKEY_LIVE_A.shootout_away, HOCKEY_LIVE_A.shootout_home],
-            HockeyLiveVariant::B => [HOCKEY_LIVE_B.shootout_away, HOCKEY_LIVE_B.shootout_home],
-        };
-        for slot in rows {
-            assert_eq!(count_in_slot(&frame, slot, primary), 0, "{variant:?}");
-            assert!(lit_in_slot(&frame, slot) > 0, "{variant:?}");
-        }
+    let mut harness = hockey(&[shootout(None)]);
+    let primary = pack(harness.snapshot.ui_colors.primary);
+    let frame = harness.draw();
+    for slot in [HOCKEY_LIVE.shootout_away, HOCKEY_LIVE.shootout_home] {
+        assert_eq!(count_in_slot(&frame, slot, primary), 0);
+        assert!(lit_in_slot(&frame, slot) > 0);
     }
 }
 
@@ -1754,8 +1621,8 @@ fn a_missing_summary_draws_no_banner_marks_or_scorer() {
         last_scorer: "",
         ..nhl_live(&[])
     };
-    let frame = hockey(HockeyLiveVariant::B, &[bare]).draw();
-    let table = HOCKEY_LIVE_B;
+    let frame = hockey(&[bare]).draw();
+    let table = HOCKEY_LIVE;
     assert_eq!(lit_in_slot(&frame, table.situation), 0);
     assert_eq!(
         frame.lit_in(26..102, table.shots.y..table.shots_bar_y + 2),
@@ -1768,36 +1635,16 @@ fn a_missing_summary_draws_no_banner_marks_or_scorer() {
         "no dots"
     );
     // The rink is the bare art.
-    let plain = hockey(HockeyLiveVariant::B, &[nhl_live(&[])]).draw();
+    let plain = hockey(&[nhl_live(&[])]).draw();
     for py in 47..62 {
         for px in 1..127 {
             assert_eq!(frame.pixel(px, py), plain.pixel(px, py), "({px}, {py})");
         }
     }
-
-    // A scored game with its goals missing leaves the ledger's strip dark
-    // rather than claim there are none.
-    let frame = hockey(HockeyLiveVariant::A, &[bare]).draw();
-    let table = HOCKEY_LIVE_A;
-    assert_eq!(frame.lit_in(51..127, 38..63), 0);
-    assert_eq!(lit_in_slot(&frame, table.shots), 0);
-    // A scoreless one says so.
-    let scoreless = wire::Live {
-        away: nhl_team("TB", 0, 0xFF_0000),
-        home: nhl_team("NYR", 0, 0x00_00FF),
-        ..bare
-    };
-    let mut harness = hockey(HockeyLiveVariant::A, &[scoreless]);
-    let secondary = pack(harness.snapshot.ui_colors.secondary);
-    let frame = harness.draw();
-    assert!(
-        count_in_slot(&frame, table.strip_empty, secondary) > 0,
-        "NO GOALS"
-    );
 }
 
 #[test]
-fn the_hockey_flash_takes_each_layouts_own_strip() {
+fn the_hockey_flash_takes_the_whole_band_under_the_shots() {
     let flashing = wire::Live {
         last_play: Some(scoreboard_wire::LastPlay {
             id: "p9",
@@ -1805,29 +1652,17 @@ fn the_hockey_flash_takes_each_layouts_own_strip() {
         }),
         ..nhl_live(&[AWAY_GOAL])
     };
-    // B gives up the whole band under the shots, rink and all.
-    let mut harness = hockey(HockeyLiveVariant::B, &[flashing]);
+    // The rink is a corner screen: the flash starts at the first legal column,
+    // left of the column screens' margin, and the rink is not drawn under it.
+    let mut harness = hockey(&[flashing]);
     let frame = harness.draw();
-    let strip = HOCKEY_LIVE_B.strip;
+    let strip = HOCKEY_LIVE.strip;
     assert!(frame.lit_in(1..geometry::COLUMN_STRIP.x, strip.y..strip.y + strip.height) > 0);
     assert_eq!(
         frame.count(1..127, 47..63, BOARDS),
         0,
         "the rink is skipped"
     );
-
-    // A keeps its identity column and gives up the data column's strip.
-    let mut harness = hockey(HockeyLiveVariant::A, &[flashing]);
-    let (away, _) = sides(&harness);
-    let frame = harness.draw();
-    let strip = geometry::COLUMN_STRIP;
-    assert!(
-        frame.lit_in(
-            strip.x..strip.x + strip.width,
-            strip.y..strip.y + strip.height
-        ) > 0
-    );
-    assert_eq!(count_in_slot(&frame, HOCKEY_LIVE_A.strip_top, away), 0);
 }
 
 fn nhl_final(stars: bool, series: bool, shots: bool) -> Harness {
@@ -1875,7 +1710,7 @@ fn nhl_final(stars: bool, series: bool, shots: bool) -> Harness {
         GameDetail::Hockey(wire::Game::Final(game)),
         COMMIT_MS,
     );
-    from_store(Mode::HockeyFinal, &store, HockeyLiveVariant::B)
+    from_store(Mode::HockeyFinal, &store)
 }
 
 #[test]
@@ -2009,7 +1844,7 @@ fn nhl_pregame(records: bool, goalies: bool) -> Harness {
         GameDetail::Hockey(wire::Game::Pregame(game)),
         COMMIT_MS,
     );
-    from_store(Mode::Pregame, &store, HockeyLiveVariant::B)
+    from_store(Mode::Pregame, &store)
 }
 
 #[test]
@@ -2088,10 +1923,8 @@ fn every_hockey_screen_keeps_off_the_edge_ring() {
         },
     ];
     let mut harnesses: Vec<(String, Harness)> = Vec::new();
-    for variant in VARIANTS {
-        for (index, state) in states.iter().enumerate() {
-            harnesses.push((format!("{variant:?} {index}"), hockey(variant, &[*state])));
-        }
+    for (index, state) in states.iter().enumerate() {
+        harnesses.push((format!("live {index}"), hockey(&[*state])));
     }
     for (stars, series) in [(true, true), (false, true), (true, false)] {
         harnesses.push((

@@ -2,12 +2,13 @@
 //!
 //! The live screen shares the MLB silhouette; what changes is the data column,
 //! because soccer is a running-clock sport. The full-time screen borrows the
-//! final-C silhouette and puts goal scorers where a line score would be.
+//! line-score final's silhouette and puts goal scorers where a line score
+//! would be.
 
 use super::{Scene, Strip};
 use crate::blit::{Canvas, Slice};
 use crate::font::{self, Align, Style};
-use crate::geometry::{EDGE_INSET, SOCCER_FINAL, SOCCER_SCROLL_PAUSE_MS};
+use crate::geometry::{EDGE_INSET, SOCCER_FINAL, SOCCER_LIVE, SOCCER_SCROLL_PAUSE_MS};
 use crate::time::WallMs;
 use crate::{BLACK, generated, pack, toast};
 use scoreboard_model::UiColors;
@@ -25,23 +26,20 @@ pub fn render_live(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     canvas.fill(BLACK);
     let snapshot = scene.snapshot;
     let view = &snapshot.soccer_live;
-    let table = scene.settings.soccer_live_table();
+    let table = SOCCER_LIVE;
     let colors = &snapshot.ui_colors;
     let primary = pack(colors.primary);
 
-    super::column_dividers(canvas, scene, table.divider_x, Some(table.separator_y));
+    super::column_dividers(canvas, scene, table.divider_x, table.separator_y);
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
     super::big_score(canvas, table.score_away, view.away_score, primary);
     super::big_score(canvas, table.score_home, view.home_score, primary);
 
-    // The period, in whichever form this variant asks for: a short chip in the
-    // identity column, or spelled out under the clock.
-    if let Some(slot) = table.phase.filter(|_| !view.phase_text.is_empty()) {
-        super::chip(canvas, slot, &view.phase_text, primary);
-    }
-    if let Some(slot) = table.phase_long.filter(|_| !view.phase_long.is_empty()) {
-        super::chip(canvas, slot, &view.phase_long, pack(colors.secondary));
+    // The period chip in the identity column: empty during a break, which the
+    // clock slot announces instead.
+    if !view.phase_text.is_empty() {
+        super::chip(canvas, table.phase, &view.phase_text, primary);
     }
 
     clock(canvas, table.clock, view, colors, scene.now);
@@ -175,14 +173,12 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         super::winner_colors(view.home_won, pack(view.away_color), pack(view.home_color))
     };
 
-    if scene.settings.show_dividers {
-        canvas.vline(
-            table.divider_x,
-            EDGE_INSET,
-            crate::geometry::HEIGHT - 2 * EDGE_INSET,
-            pack(snapshot.ui_colors.secondary),
-        );
-    }
+    canvas.vline(
+        table.divider_x,
+        EDGE_INSET,
+        crate::geometry::HEIGHT - 2 * EDGE_INSET,
+        pack(snapshot.ui_colors.secondary),
+    );
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
     super::big_score(canvas, table.score_away, view.away_score, away_color);

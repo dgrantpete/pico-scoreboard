@@ -1,10 +1,8 @@
-//! Screen geometry: the panel pin, variant selection, and the scroll-speed set.
+//! Screen geometry: the panel pin, the slot tables, and the scroll-speed set.
 
-use scoreboard_model::Sport;
 use scoreboard_render::geometry::{
-    self, DEFAULT_SCROLL_SPEED, FINAL_A, FINAL_B, FINAL_C, FinalVariant, HOCKEY_FINAL,
-    HOCKEY_LIVE_A, HOCKEY_LIVE_B, HockeyLiveVariant, RenderSettings, SCROLL_SPEEDS,
-    SHOOTOUT_ROW_WIDTH, SoccerLiveVariant, is_smooth,
+    self, DEFAULT_SCROLL_SPEED, FINAL, HOCKEY_FINAL, HOCKEY_LIVE, RenderSettings, SCROLL_SPEEDS,
+    SHOOTOUT_ROW_WIDTH, SOCCER_LIVE, is_smooth,
 };
 use scoreboard_render::menu::thumb;
 
@@ -14,85 +12,6 @@ const _: () = {
     assert!(geometry::WIDTH == hub75::geometry::WIDTH as i32);
     assert!(geometry::HEIGHT == hub75::geometry::HEIGHT as i32);
 };
-
-#[test]
-fn variant_selection_ignores_unknown_keys_and_letters() {
-    let mut settings = RenderSettings::new();
-    assert!(settings.apply_variant("mlb_final", "A"));
-    assert_eq!(settings.mlb_final, FinalVariant::A);
-
-    // A letter the table does not have leaves the selection alone — a
-    // hand-edited config cannot select a design that does not exist.
-    assert!(!settings.apply_variant("mlb_final", "Z"));
-    assert_eq!(settings.mlb_final, FinalVariant::A);
-
-    // Nor can a key that does not exist, including a pre-rename one.
-    assert!(!settings.apply_variant("final", "B"));
-    assert!(!settings.apply_variant("baseball_final", "B"));
-    assert_eq!(settings.mlb_final, FinalVariant::A);
-}
-
-#[test]
-fn each_sports_final_is_selected_independently() {
-    let mut settings = RenderSettings::new();
-    settings.apply_variant("mlb_final", "A");
-    settings.apply_variant("nba_final", "B");
-    assert_eq!(settings.final_table(Sport::Mlb), FINAL_A);
-    assert_eq!(settings.final_table(Sport::Nba), FINAL_B);
-    assert_eq!(
-        settings.final_table(Sport::Football),
-        FINAL_C,
-        "untouched keys keep the default"
-    );
-}
-
-#[test]
-fn single_design_screens_accept_only_their_one_letter() {
-    let mut settings = RenderSettings::new();
-    assert!(settings.apply_variant("mlb_pregame", "C"));
-    assert!(!settings.apply_variant("mlb_pregame", "A"));
-    assert!(settings.apply_variant("nba_live", "A"));
-    assert!(!settings.apply_variant("nba_live", "C"));
-    assert!(settings.apply_variant("hockey_final", "A"));
-    assert!(!settings.apply_variant("hockey_final", "B"));
-}
-
-/// D1: the rink is the default, the period ledger the variant.
-#[test]
-fn hockey_live_defaults_to_the_rink_and_can_move_to_the_ledger() {
-    let mut settings = RenderSettings::new();
-    assert_eq!(settings.hockey_live, HockeyLiveVariant::B);
-    assert_eq!(HockeyLiveVariant::default(), HockeyLiveVariant::B);
-    assert!(settings.apply_variant("hockey_live", "A"));
-    assert_eq!(settings.hockey_live, HockeyLiveVariant::A);
-    assert!(!settings.apply_variant("hockey_live", "C"));
-    assert_eq!(settings.hockey_live, HockeyLiveVariant::A);
-    assert!(settings.apply_variant("hockey_live", "B"));
-    assert_eq!(settings.hockey_live, HockeyLiveVariant::B);
-}
-
-#[test]
-fn soccer_live_defaults_to_a_and_can_move() {
-    let mut settings = RenderSettings::new();
-    assert_eq!(settings.soccer_live, SoccerLiveVariant::A);
-    assert!(settings.apply_variant("soccer_live", "C"));
-    let table = settings.soccer_live_table();
-    assert!(
-        table.divider_x.is_none(),
-        "C deliberately breaks the column frame"
-    );
-    assert!(table.phase.is_some());
-    assert!(table.phase_long.is_none());
-}
-
-#[test]
-fn the_b_variant_spells_the_period_out_instead_of_chipping_it() {
-    let mut settings = RenderSettings::new();
-    settings.apply_variant("soccer_live", "B");
-    let table = settings.soccer_live_table();
-    assert!(table.phase.is_none());
-    assert!(table.phase_long.is_some());
-}
 
 #[test]
 fn illegal_scroll_speeds_degrade_to_the_default() {
@@ -141,20 +60,11 @@ fn the_smoothness_test_rejects_non_divisors() {
 }
 
 #[test]
-fn only_the_a_final_has_a_full_width_rule() {
-    assert!(FINAL_A.separator_y.is_some());
-    assert!(FINAL_B.separator_y.is_none());
-    assert!(FINAL_C.separator_y.is_none());
-}
-
-#[test]
-fn the_line_score_forward_final_puts_the_totals_in_the_r_column() {
-    // C has no separate score slots: the pinned R column carries them, in the
-    // taller font.
-    assert!(FINAL_C.score_away.is_none());
-    assert_eq!(FINAL_C.total_away.height, 16);
-    assert_eq!(FINAL_A.total_away.height, 8);
-    assert!(FINAL_A.score_away.is_some());
+fn the_final_puts_the_headline_totals_in_the_r_column() {
+    // No score slots beside the crests: the pinned R column carries the
+    // headline totals, in the taller font.
+    assert_eq!(FINAL.total_away.height, 16);
+    assert_eq!(FINAL.total_home.height, 16);
 }
 
 #[test]
@@ -162,7 +72,6 @@ fn every_slot_fits_on_the_panel() {
     // A rectangle that escapes the panel is a table bug that would panic the
     // first time its screen drew; catch it here instead.
     let mut slots = vec![];
-    let settings = RenderSettings::new();
     let pregame = geometry::PREGAME;
     slots.extend([
         pregame.logo_away,
@@ -174,41 +83,30 @@ fn every_slot_fits_on_the_panel() {
         pregame.team_line_away,
         pregame.team_line_home,
     ]);
-    for variant in [FinalVariant::A, FinalVariant::B, FinalVariant::C] {
-        let table = variant.table();
-        slots.extend([
-            table.logo_away,
-            table.logo_home,
-            table.final_label,
-            table.linescore_header,
-            table.linescore_away,
-            table.linescore_home,
-            table.total_header,
-            table.total_away,
-            table.total_home,
-        ]);
-        slots.extend(table.score_away);
-        slots.extend(table.score_home);
-    }
-    for variant in [
-        SoccerLiveVariant::A,
-        SoccerLiveVariant::B,
-        SoccerLiveVariant::C,
-    ] {
-        let table = variant.table();
-        slots.extend([
-            table.logo_away,
-            table.logo_home,
-            table.score_away,
-            table.score_home,
-            table.clock,
-            table.event_top,
-            table.event_name,
-            table.event_empty,
-        ]);
-        slots.extend(table.phase);
-        slots.extend(table.phase_long);
-    }
+    let fin = FINAL;
+    slots.extend([
+        fin.logo_away,
+        fin.logo_home,
+        fin.final_label,
+        fin.linescore_header,
+        fin.linescore_away,
+        fin.linescore_home,
+        fin.total_header,
+        fin.total_away,
+        fin.total_home,
+    ]);
+    let soccer = SOCCER_LIVE;
+    slots.extend([
+        soccer.logo_away,
+        soccer.logo_home,
+        soccer.score_away,
+        soccer.score_home,
+        soccer.phase,
+        soccer.clock,
+        soccer.event_top,
+        soccer.event_name,
+        soccer.event_empty,
+    ]);
     let mlb = geometry::MLB_LIVE;
     slots.extend([
         mlb.logo_away,
@@ -230,44 +128,30 @@ fn every_slot_fits_on_the_panel() {
         football.clock,
         football.situation,
     ]);
-    let (a, b, fin) = (HOCKEY_LIVE_A, HOCKEY_LIVE_B, HOCKEY_FINAL);
+    let (hockey, hockey_final) = (HOCKEY_LIVE, HOCKEY_FINAL);
     slots.extend([
-        a.logo_away,
-        a.logo_home,
-        a.score_away,
-        a.score_home,
-        a.period,
-        a.clock,
-        a.shots,
-        a.strip_top,
-        a.strip_bottom,
-        a.strip_empty,
-        a.shootout_away,
-        a.shootout_home,
-        a.shootout_label,
-        a.shootout_tally,
-        b.logo_away,
-        b.logo_home,
-        b.score_away,
-        b.score_home,
-        b.period,
-        b.clock,
-        b.situation,
-        b.shots,
-        b.shootout_away,
-        b.shootout_home,
-        b.strip,
-        fin.logo_away,
-        fin.logo_home,
-        fin.score_away,
-        fin.score_home,
-        fin.final_label,
-        fin.series,
-        fin.shots,
-        fin.single_line,
+        hockey.logo_away,
+        hockey.logo_home,
+        hockey.score_away,
+        hockey.score_home,
+        hockey.period,
+        hockey.clock,
+        hockey.situation,
+        hockey.shots,
+        hockey.shootout_away,
+        hockey.shootout_home,
+        hockey.strip,
+        hockey_final.logo_away,
+        hockey_final.logo_home,
+        hockey_final.score_away,
+        hockey_final.score_home,
+        hockey_final.final_label,
+        hockey_final.series,
+        hockey_final.shots,
+        hockey_final.single_line,
     ]);
-    slots.extend(fin.star_rows);
-    slots.extend(fin.linescore_rows);
+    slots.extend(hockey_final.star_rows);
+    slots.extend(hockey_final.linescore_rows);
     let pregame_rows = [
         geometry::PREGAME.hockey_record_away,
         geometry::PREGAME.hockey_record_home,
@@ -284,9 +168,7 @@ fn every_slot_fits_on_the_panel() {
         mlb.strip,
         nba.strip,
         football.strip,
-        geometry::SOCCER_LIVE_A.strip,
-        geometry::SOCCER_LIVE_B.strip,
-        geometry::SOCCER_LIVE_C.strip,
+        soccer.strip,
     ]);
 
     for slot in slots {
@@ -300,7 +182,6 @@ fn every_slot_fits_on_the_panel() {
             "{slot:?} runs past the bottom edge"
         );
     }
-    assert!(settings.show_dividers);
 }
 
 /// Whether `slot` keeps off the unreliable outer ring: row 0, row 63, column 0
@@ -313,13 +194,13 @@ fn inside_the_edge_ring(slot: scoreboard_render::Slice) -> bool {
         && slot.y + slot.height < geometry::HEIGHT
 }
 
-/// The two corner screens are the edge-rule-compliant ones; this keeps them so.
-/// The column screens are not yet (BACKLOG 56), so they are not listed.
+/// Football is the edge-rule-compliant corner screen; this keeps it so. The
+/// column screens are not yet (BACKLOG 56), so they are not listed, and the
+/// hockey screens have their own test below.
 #[test]
-fn the_corner_screens_keep_off_the_edge_ring() {
+fn the_football_screen_keeps_off_the_edge_ring() {
     let football = geometry::FOOTBALL_LIVE;
-    let soccer = geometry::SOCCER_LIVE_C;
-    let mut slots = vec![
+    for slot in [
         football.logo_away,
         football.logo_home,
         football.score_away,
@@ -329,54 +210,27 @@ fn the_corner_screens_keep_off_the_edge_ring() {
         football.situation,
         football.strip,
         scoreboard_render::generated::layout::football_field::POSITION,
-        soccer.logo_away,
-        soccer.logo_home,
-        soccer.score_away,
-        soccer.score_home,
-        soccer.clock,
-        soccer.event_top,
-        soccer.event_name,
-        soccer.event_empty,
-        soccer.strip,
-    ];
-    slots.extend(soccer.phase);
-    for slot in slots {
+    ] {
         assert!(inside_the_edge_ring(slot), "{slot:?} touches the edge ring");
     }
 }
 
-/// Every hockey screen was born under the edge rule, column screen included
-/// (NHL.md §6.5).
+/// Every hockey screen was born under the edge rule (NHL.md §6.5).
 #[test]
 fn the_hockey_screens_keep_off_the_edge_ring() {
-    let (a, b, fin) = (HOCKEY_LIVE_A, HOCKEY_LIVE_B, HOCKEY_FINAL);
+    let (live, fin) = (HOCKEY_LIVE, HOCKEY_FINAL);
     let mut slots = vec![
-        a.logo_away,
-        a.logo_home,
-        a.score_away,
-        a.score_home,
-        a.period,
-        a.clock,
-        a.shots,
-        a.strip_top,
-        a.strip_bottom,
-        a.strip_empty,
-        a.shootout_away,
-        a.shootout_home,
-        a.shootout_label,
-        a.shootout_tally,
-        a.strip,
-        b.logo_away,
-        b.logo_home,
-        b.score_away,
-        b.score_home,
-        b.period,
-        b.clock,
-        b.situation,
-        b.shots,
-        b.shootout_away,
-        b.shootout_home,
-        b.strip,
+        live.logo_away,
+        live.logo_home,
+        live.score_away,
+        live.score_home,
+        live.period,
+        live.clock,
+        live.situation,
+        live.shots,
+        live.shootout_away,
+        live.shootout_home,
+        live.strip,
         scoreboard_render::generated::layout::rink::POSITION,
         fin.logo_away,
         fin.logo_home,
@@ -394,57 +248,39 @@ fn the_hockey_screens_keep_off_the_edge_ring() {
     }
     // The skater rows end at the last legal column, and the shootout's short
     // rink stops above the bottom row.
-    assert_eq!(b.skaters_home_end, geometry::WIDTH - 2);
-    assert!(b.shootout_rink_y + 9 < geometry::HEIGHT - 1);
-    // Seven attempts fit beside the crests in both layouts.
-    assert!(a.shootout_away.x + SHOOTOUT_ROW_WIDTH < geometry::WIDTH - 1);
-    assert!(b.shootout_away.x + SHOOTOUT_ROW_WIDTH < b.logo_home.x);
+    assert_eq!(live.skaters_home_end, geometry::WIDTH - 2);
+    assert!(live.shootout_rink_y + 9 < geometry::HEIGHT - 1);
+    // Seven attempts fit between the crests.
+    assert!(live.shootout_away.x + SHOOTOUT_ROW_WIDTH < live.logo_home.x);
 }
 
 /// Both claimants of the bottom strip draw into the slot the selector names,
 /// and every live screen's strip sits in the bottom band of the panel.
 #[test]
 fn every_live_screen_has_its_own_bottom_strip() {
+    use geometry::bottom_strip;
     use scoreboard_model::Mode;
-    let mut settings = RenderSettings::new();
+    assert_eq!(bottom_strip(Mode::MlbLive), geometry::MLB_LIVE.strip);
+    assert_eq!(bottom_strip(Mode::NbaLive), geometry::NBA_LIVE.strip);
     assert_eq!(
-        settings.bottom_strip(Mode::MlbLive),
-        geometry::MLB_LIVE.strip
-    );
-    assert_eq!(
-        settings.bottom_strip(Mode::NbaLive),
-        geometry::NBA_LIVE.strip
-    );
-    assert_eq!(
-        settings.bottom_strip(Mode::FootballLive),
+        bottom_strip(Mode::FootballLive),
         geometry::FOOTBALL_LIVE.strip
     );
-    for (letter, table) in [
-        ("A", geometry::SOCCER_LIVE_A),
-        ("B", geometry::SOCCER_LIVE_B),
-        ("C", geometry::SOCCER_LIVE_C),
-    ] {
-        assert!(settings.apply_variant("soccer_live", letter));
-        assert_eq!(settings.bottom_strip(Mode::SoccerLive), table.strip);
-        // The strip holds one `unscii_16` line, below the rule.
-        assert_eq!(table.strip.height, 16);
-        assert!(table.strip.y > table.separator_y, "soccer {letter}");
-    }
-    // Hockey's ledger keeps its column; the rink gives up the full width
-    // under the shots bar. `unscii_16` inks from its cell's second row, so
-    // four dark rows separate the bar's last row from the text.
-    assert!(settings.apply_variant("hockey_live", "A"));
-    assert_eq!(
-        settings.bottom_strip(Mode::HockeyLive),
-        geometry::COLUMN_STRIP
-    );
-    assert!(settings.apply_variant("hockey_live", "B"));
-    let strip = settings.bottom_strip(Mode::HockeyLive);
-    assert_eq!(strip, HOCKEY_LIVE_B.strip);
+    // Soccer keeps its column: the strip holds one `unscii_16` line, below the
+    // rule.
+    let soccer = SOCCER_LIVE;
+    assert_eq!(bottom_strip(Mode::SoccerLive), soccer.strip);
+    assert_eq!(soccer.strip.height, 16);
+    assert!(soccer.strip.y > soccer.separator_y);
+    // Hockey's rink gives up the full width under the shots bar. `unscii_16`
+    // inks from its cell's second row, so four dark rows separate the bar's
+    // last row from the text.
+    let strip = bottom_strip(Mode::HockeyLive);
+    assert_eq!(strip, HOCKEY_LIVE.strip);
     assert_eq!((strip.x, strip.width), (1, geometry::WIDTH - 2));
-    let (bar_bottom, ink_top) = (HOCKEY_LIVE_B.shots_bar_y + 1, strip.y + 1);
+    let (bar_bottom, ink_top) = (HOCKEY_LIVE.shots_bar_y + 1, strip.y + 1);
     assert_eq!(ink_top - bar_bottom - 1, 4);
-    assert_eq!(settings.bottom_strip(Mode::Final), geometry::COLUMN_STRIP);
+    assert_eq!(bottom_strip(Mode::Final), geometry::COLUMN_STRIP);
 }
 
 #[test]

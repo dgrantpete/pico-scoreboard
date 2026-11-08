@@ -10,18 +10,18 @@
 //! art's own positions and places every string from a table below; the pregame
 //! and final screens carry no sprites at all.
 //!
-//! # Variants
+//! # One design per screen
 //!
-//! Selection is scoped per sport × screen, so any sport's screen can diverge
-//! without touching the others. In MicroPython the tables were dicts, several
-//! keys pointed at the same dict object, and `display.Regions` deduplicated by
-//! `id()`. Here each design is one `const` struct and a key selects one by
-//! value — sharing is what `const` copies already are, and a field that a
-//! variant does not have is an `Option` instead of a missing dict key.
+//! Each screen has exactly one table, a `const` struct below. Through
+//! 2026-11-08 the final, soccer-live and hockey-live screens carried two or
+//! three selectable designs behind a `display.variants` config key; the
+//! gallery-review defaults (the "line-score forward" final, soccer's "phase
+//! ledger", hockey's rink) were the only ones anyone ran, so they are now the
+//! only ones there are, and the selector went with the alternatives.
 
 use crate::blit::Slice;
 use crate::font::Scroll;
-use scoreboard_model::{Mode, Sport};
+use scoreboard_model::Mode;
 
 /// Panel width in pixels.
 pub const WIDTH: i32 = 128;
@@ -186,15 +186,15 @@ const _: () = assert!(
     "the three stars scroll at a speed that stutters at this frame rate"
 );
 
-/// The bottom strip of the column-frame live screens — MLB, NBA, soccer A and
-/// B, hockey A: the data column under its rule, from the column's text margin
-/// to the last legal column. The play flash draws here.
+/// The bottom strip of the column-frame live screens — MLB, NBA and soccer:
+/// the data column under its rule, from the column's text margin to the last
+/// legal column. The play flash draws here.
 ///
 /// It is not every live screen's strip. The bottom strip is whatever the screen
 /// gives up while the flash shows, so it is a per-screen slot (`strip` on each
 /// live table): the column screens keep their identity column drawn and give
-/// up only this, while football, soccer C and hockey B have no column and give
-/// up the full width. [`RenderSettings::bottom_strip`] selects one by mode.
+/// up only this, while football and hockey have no column and give up the full
+/// width. [`bottom_strip`] selects one by mode.
 pub const COLUMN_STRIP: Slice = Slice {
     x: 51,
     y: 43,
@@ -303,74 +303,26 @@ pub const PREGAME: PregameGeometry = PregameGeometry {
 pub struct FinalGeometry {
     pub logo_away: Slice,
     pub logo_home: Slice,
-    /// Big scores beside the logos. `None` on C, where the pinned R column
-    /// carries the totals in `unscii_16` instead.
-    pub score_away: Option<Slice>,
-    pub score_home: Option<Slice>,
     pub final_label: Slice,
     pub linescore_header: Slice,
     pub linescore_away: Slice,
     pub linescore_home: Slice,
     /// Rule separating the line score from the pinned R column.
     pub divider_x: i32,
-    /// Full-width rule under the top band. Only A has one.
-    pub separator_y: Option<i32>,
-    /// The pinned totals column. Sized for two digits; a basketball total
-    /// overhangs it evenly, so every variant leaves the room a three-digit
-    /// total needs between the rule and column 126 — that is what places the
-    /// rule. Three `spleen_5x8` digits ink 14 px, three `unscii_16` digits 23.
+    /// The pinned totals column, which carries the headline score in
+    /// `unscii_16`. Sized for two digits; a basketball total overhangs it
+    /// evenly, so the table leaves the room a three-digit total needs between
+    /// the rule and column 126 — that is what places the rule. Three
+    /// `unscii_16` digits ink 23 px.
     pub total_header: Slice,
     pub total_away: Slice,
     pub total_home: Slice,
 }
 
-/// A "Marquee + boxscore": logos in the top corners, scores inboard, a
-/// full-width bottom band of three lockstep-scrolling line-score rows.
-///
-/// The line-score window is 107 px: seven periods (105 px) fit, nine innings
-/// scroll either way, and no real row measures 106–108.
-pub const FINAL_A: FinalGeometry = FinalGeometry {
-    logo_away: rect(1, 2, 24, 24),
-    logo_home: rect(103, 2, 24, 24),
-    score_away: Some(rect(26, 4, 34, 16)),
-    score_home: Some(rect(68, 4, 34, 16)),
-    final_label: rect(44, 20, 40, 8),
-    linescore_header: rect(2, 32, 107, 8),
-    linescore_away: rect(2, 42, 107, 8),
-    linescore_home: rect(2, 52, 107, 8),
-    divider_x: 111,
-    separator_y: Some(30),
-    total_header: rect(114, 32, 13, 8),
-    total_away: rect(114, 42, 13, 8),
-    total_home: rect(114, 52, 13, 8),
-};
-
-/// B "Stacked ledger": the live-game silhouette — logos stacked left, big
-/// scores beside — with the line score in a narrower window on the right.
-///
-/// The window is 55 px: four periods without the last column's trailing
-/// space, so a basketball or football final holds still. Its right edge stays
-/// at 109, leaving a dark column before the rule at 111; the score slots end
-/// at 54 so the two never share a column.
-pub const FINAL_B: FinalGeometry = FinalGeometry {
-    logo_away: rect(1, 1, 24, 24),
-    logo_home: rect(1, 39, 24, 24),
-    score_away: Some(rect(26, 5, 29, 16)),
-    score_home: Some(rect(26, 43, 29, 16)),
-    final_label: rect(2, 26, 54, 8),
-    linescore_header: rect(55, 1, 55, 8),
-    linescore_away: rect(55, 11, 55, 8),
-    linescore_home: rect(55, 49, 55, 8),
-    divider_x: 111,
-    separator_y: None,
-    total_header: rect(114, 1, 13, 8),
-    total_away: rect(114, 11, 13, 8),
-    total_home: rect(114, 49, 13, 8),
-};
-
-/// C "Line-score forward": the line score is the hero, rows aligned to the
-/// stacked logos, totals in `unscii_16` pinned right. The default since the
-/// 2026-07-07 gallery review.
+/// "Line-score forward": the line score is the hero, rows aligned to the
+/// stacked logos, totals in `unscii_16` pinned right. Chosen at the 2026-07-07
+/// gallery review over a marquee and a stacked-ledger design, and the only
+/// final since 2026-11-08.
 ///
 /// Horizontally this is packed to the pixel: crest 1..=24, a 2 px gutter, the
 /// 75 px line-score window (five periods, trailing space included) at
@@ -378,49 +330,18 @@ pub const FINAL_B: FinalGeometry = FinalGeometry {
 /// 104..=126. The window may meet the rule because a row that scrolls keeps
 /// its trailing space (only a row that fits is drawn without it), so its ink
 /// passes column 95 only while the scroll is in progress.
-pub const FINAL_C: FinalGeometry = FinalGeometry {
+pub const FINAL: FinalGeometry = FinalGeometry {
     logo_away: rect(1, 2, 24, 24),
     logo_home: rect(1, 36, 24, 24),
-    score_away: None,
-    score_home: None,
     final_label: rect(27, 30, 75, 8),
     linescore_header: rect(27, 2, 75, 8),
     linescore_away: rect(27, 14, 75, 8),
     linescore_home: rect(27, 48, 75, 8),
     divider_x: 102,
-    separator_y: None,
     total_header: rect(105, 2, 22, 8),
     total_away: rect(105, 10, 22, 16),
     total_home: rect(105, 44, 22, 16),
 };
-
-/// Which final-screen design a sport shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FinalVariant {
-    A,
-    B,
-    #[default]
-    C,
-}
-
-impl FinalVariant {
-    pub const fn table(self) -> FinalGeometry {
-        match self {
-            FinalVariant::A => FINAL_A,
-            FinalVariant::B => FINAL_B,
-            FinalVariant::C => FINAL_C,
-        }
-    }
-
-    fn from_letter(letter: &str) -> Option<Self> {
-        match letter {
-            "A" => Some(FinalVariant::A),
-            "B" => Some(FinalVariant::B),
-            "C" => Some(FinalVariant::C),
-            _ => None,
-        }
-    }
-}
 
 // =============================================================================
 // Soccer live
@@ -432,13 +353,9 @@ pub struct SoccerLiveGeometry {
     pub logo_home: Slice,
     pub score_away: Slice,
     pub score_home: Slice,
-    /// Short period chip ("1ST"). `None` on B, which spells it out under the
-    /// clock instead.
-    pub phase: Option<Slice>,
-    /// Spelled-out period ("1ST HALF"). Only B has one.
-    pub phase_long: Option<Slice>,
-    /// Column rule. `None` on C, which deliberately breaks the column frame.
-    pub divider_x: Option<i32>,
+    /// Short period chip ("1ST") in the identity column.
+    pub phase: Slice,
+    pub divider_x: i32,
     pub separator_y: i32,
     pub clock: Slice,
     pub event_top: Slice,
@@ -451,16 +368,17 @@ pub struct SoccerLiveGeometry {
     pub strip: Slice,
 }
 
-/// A "Phase ledger": the exact MLB-live silhouette, with the big clock alone in
-/// the data column. The default.
-pub const SOCCER_LIVE_A: SoccerLiveGeometry = SoccerLiveGeometry {
+/// "Phase ledger": the exact MLB-live silhouette, with the big clock alone in
+/// the data column. The only soccer live design since 2026-11-08 — a
+/// clock-over-spelled-out-period design and a broadcast-corners one were
+/// offered beside it and never picked (BACKLOG 32, closed by deleting them).
+pub const SOCCER_LIVE: SoccerLiveGeometry = SoccerLiveGeometry {
     logo_away: rect(1, 1, 24, 24),
     score_away: rect(24, 7, 22, 16),
-    phase: Some(rect(2, 29, 42, 8)),
-    phase_long: None,
+    phase: rect(2, 29, 42, 8),
     logo_home: rect(1, 39, 24, 24),
     score_home: rect(24, 47, 22, 16),
-    divider_x: Some(45),
+    divider_x: 45,
     separator_y: 36,
     clock: rect(46, 10, 81, 16),
     event_top: rect(51, 41, 76, 8),
@@ -468,79 +386,6 @@ pub const SOCCER_LIVE_A: SoccerLiveGeometry = SoccerLiveGeometry {
     event_empty: rect(51, 47, 76, 8),
     strip: COLUMN_STRIP,
 };
-
-/// B "Clock + phase stacked": no chip in the identity column; the data column
-/// carries the clock over the spelled-out period.
-pub const SOCCER_LIVE_B: SoccerLiveGeometry = SoccerLiveGeometry {
-    logo_away: rect(1, 1, 24, 24),
-    score_away: rect(24, 7, 22, 16),
-    phase: None,
-    phase_long: Some(rect(46, 25, 81, 8)),
-    logo_home: rect(1, 39, 24, 24),
-    score_home: rect(24, 47, 22, 16),
-    divider_x: Some(45),
-    separator_y: 36,
-    clock: rect(46, 5, 81, 16),
-    event_top: rect(51, 41, 76, 8),
-    event_name: rect(51, 53, 76, 8),
-    event_empty: rect(51, 47, 76, 8),
-    strip: COLUMN_STRIP,
-};
-
-/// C "Broadcast corners": logos in the top corners with scores inboard, period
-/// chip between them, full-width clock beneath.
-///
-/// Inset to the 1 px edge rule (BACKLOG 56): the logos sit in football's
-/// corners, the scores and chip move down with them, and the two event rows
-/// moved up so the name line's descenders stop at row 62. The rule under the
-/// clock still runs edge to edge — it is [`crate::game::column_dividers`]'s,
-/// shared with the column screens.
-///
-/// No column frame means nothing survives beside the bottom strip, so the flash
-/// and toast get every legal column, in the band under the rule: row 45 is left
-/// clear, and `unscii_16`'s descenders (glyph row 15) land on row 61.
-pub const SOCCER_LIVE_C: SoccerLiveGeometry = SoccerLiveGeometry {
-    logo_away: rect(1, 1, 24, 24),
-    score_away: rect(26, 5, 22, 16),
-    phase: Some(rect(48, 9, 32, 8)),
-    phase_long: None,
-    score_home: rect(80, 5, 22, 16),
-    logo_home: rect(103, 1, 24, 24),
-    divider_x: None,
-    clock: rect(1, 26, 126, 16),
-    separator_y: 44,
-    event_top: rect(2, 46, 124, 8),
-    event_name: rect(2, 55, 124, 8),
-    event_empty: rect(2, 50, 124, 8),
-    strip: rect(1, 46, 126, 16),
-};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SoccerLiveVariant {
-    #[default]
-    A,
-    B,
-    C,
-}
-
-impl SoccerLiveVariant {
-    pub const fn table(self) -> SoccerLiveGeometry {
-        match self {
-            SoccerLiveVariant::A => SOCCER_LIVE_A,
-            SoccerLiveVariant::B => SOCCER_LIVE_B,
-            SoccerLiveVariant::C => SOCCER_LIVE_C,
-        }
-    }
-
-    fn from_letter(letter: &str) -> Option<Self> {
-        match letter {
-            "A" => Some(SoccerLiveVariant::A),
-            "B" => Some(SoccerLiveVariant::B),
-            "C" => Some(SoccerLiveVariant::C),
-            _ => None,
-        }
-    }
-}
 
 // =============================================================================
 // Single-design screens
@@ -597,7 +442,7 @@ pub const MLB_LIVE: MlbLiveGeometry = MlbLiveGeometry {
     strip: COLUMN_STRIP,
 };
 
-/// NBA live, "quarter + clock ledger" — the soccer-A silhouette, with the
+/// NBA live, "quarter + clock ledger" — the soccer-live silhouette, with the
 /// identity column 4 px wider because NBA scores reach three digits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NbaLiveGeometry {
@@ -626,8 +471,8 @@ pub const NBA_LIVE: NbaLiveGeometry = NbaLiveGeometry {
     strip: COLUMN_STRIP,
 };
 
-/// Soccer full time, "FT + scorers" — the final-C silhouette with the line
-/// score replaced by what soccer actually has.
+/// Soccer full time, "FT + scorers" — the line-score final's silhouette with
+/// the line score replaced by what soccer actually has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SoccerFinalGeometry {
     pub logo_away: Slice,
@@ -696,77 +541,16 @@ pub const FOOTBALL_LIVE: FootballLiveGeometry = FootballLiveGeometry {
 // =============================================================================
 //
 // Ported from the decided mockups (data/nhl-design, D1/D2), whose geometry
-// was drawn by this crate over real ESPN captures. The two live layouts share
-// almost nothing past the crests, so each is its own type rather than one
-// table with half its fields optional.
+// was drawn by this crate over real ESPN captures.
 
-/// Hockey live A, "Period ledger": the MLB/NBA/soccer-A silhouette. Crests,
-/// scores and the period chip in the identity column; the clock over the
-/// shots ledger in the data column; the strength banner, else the last goal,
-/// in the bottom strip.
+/// Hockey live, "Rink" (D1): football's broadcast corners with a top-down
+/// rink where the field was. Skater dots under each crest carry the strength;
+/// one line over the shots ledger carries the banner or the last goal; the
+/// rink carries every goal where it was scored. The only live design since
+/// 2026-11-08 — a "period ledger" on the MLB/NBA silhouette shipped beside it
+/// as the `hockey_live` variant and went with the variant system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HockeyLedgerGeometry {
-    pub logo_away: Slice,
-    pub logo_home: Slice,
-    pub score_away: Slice,
-    pub score_home: Slice,
-    pub period: Slice,
-    pub divider_x: i32,
-    pub separator_y: i32,
-    pub clock: Slice,
-    /// The shots ledger: each side's count at its end, "SHOTS" centered, and
-    /// a 2 px share bar from `shots_bar_y`.
-    pub shots: Slice,
-    pub shots_bar_y: i32,
-    /// The strip's two lines: a banner's title or the goal label, over the
-    /// skater count or the scorer.
-    pub strip_top: Slice,
-    pub strip_bottom: Slice,
-    /// "NO GOALS", one line centered between the two.
-    pub strip_empty: Slice,
-    /// The arrows flanking a banner's count, pointing at the side it is
-    /// about: up to the away crest, down to the home one.
-    pub banner_arrows_x: [i32; 2],
-    pub banner_arrows_y: i32,
-    /// The shootout: each side's attempt row level with its crest, and the
-    /// label over the tally in the data column.
-    pub shootout_away: Slice,
-    pub shootout_home: Slice,
-    pub shootout_label: Slice,
-    pub shootout_tally: Slice,
-    /// The bottom strip the play flash takes over: the strip's two lines.
-    pub strip: Slice,
-}
-
-pub const HOCKEY_LIVE_A: HockeyLedgerGeometry = HockeyLedgerGeometry {
-    logo_away: rect(1, 1, 24, 24),
-    score_away: rect(26, 5, 20, 16),
-    period: rect(1, 28, 46, 8),
-    logo_home: rect(1, 39, 24, 24),
-    score_home: rect(26, 43, 20, 16),
-    divider_x: 47,
-    separator_y: 36,
-    clock: rect(48, 3, 79, 16),
-    shots: rect(51, 22, 74, 8),
-    shots_bar_y: 31,
-    strip_top: rect(51, 41, 76, 8),
-    strip_bottom: rect(51, 52, 76, 8),
-    strip_empty: rect(51, 46, 76, 8),
-    banner_arrows_x: [55, 118],
-    banner_arrows_y: 54,
-    shootout_away: rect(53, 9, SHOOTOUT_ROW_WIDTH, SHOOTOUT_MARK),
-    shootout_home: rect(53, 47, SHOOTOUT_ROW_WIDTH, SHOOTOUT_MARK),
-    shootout_label: rect(48, 24, 79, 8),
-    shootout_tally: rect(48, 33, 79, 8),
-    strip: COLUMN_STRIP,
-};
-
-/// Hockey live B, "Rink" — the default (D1): football's broadcast corners
-/// with a top-down rink where the field was. Skater dots under each crest
-/// carry the strength; one line over the shots ledger carries the banner or
-/// the last goal; the rink carries every goal where it was scored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HockeyRinkGeometry {
+pub struct HockeyLiveGeometry {
     pub logo_away: Slice,
     pub logo_home: Slice,
     /// The skater dots' row, under the crests: the away row runs right from
@@ -798,7 +582,7 @@ pub struct HockeyRinkGeometry {
     pub strip: Slice,
 }
 
-pub const HOCKEY_LIVE_B: HockeyRinkGeometry = HockeyRinkGeometry {
+pub const HOCKEY_LIVE: HockeyLiveGeometry = HockeyLiveGeometry {
     logo_away: rect(1, 1, 24, 24),
     logo_home: rect(103, 1, 24, 24),
     skaters_y: 26,
@@ -823,31 +607,6 @@ pub const SHOOTOUT_PITCH: i32 = 10;
 /// A full row: [`scoreboard_model::snapshot::SHOOTOUT_SLOTS`] marks.
 pub const SHOOTOUT_ROW_WIDTH: i32 =
     (scoreboard_model::snapshot::SHOOTOUT_SLOTS as i32 - 1) * SHOOTOUT_PITCH + SHOOTOUT_MARK;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum HockeyLiveVariant {
-    A,
-    #[default]
-    B,
-}
-
-impl HockeyLiveVariant {
-    /// The bottom strip the play flash takes over under this design.
-    pub const fn strip(self) -> Slice {
-        match self {
-            HockeyLiveVariant::A => HOCKEY_LIVE_A.strip,
-            HockeyLiveVariant::B => HOCKEY_LIVE_B.strip,
-        }
-    }
-
-    fn from_letter(letter: &str) -> Option<Self> {
-        match letter {
-            "A" => Some(HockeyLiveVariant::A),
-            "B" => Some(HockeyLiveVariant::B),
-            _ => None,
-        }
-    }
-}
 
 /// Hockey's final, "Three stars" (D2): soccer's full-time silhouette, with the
 /// stars where soccer lists its scorers, and a rule over the series and shots.
@@ -902,26 +661,19 @@ pub const HOCKEY_FINAL: HockeyFinalGeometry = HockeyFinalGeometry {
 };
 
 // =============================================================================
-// Selection
+// Settings
 // =============================================================================
 
-/// The configured design per sport × screen, plus the display switches that
-/// live in the same config section.
+/// What the renderer reads out of the configuration: the game-description
+/// scroll speed.
 ///
-/// In MicroPython these were module globals that `set_variants` /
-/// `set_scroll_speed` / `set_show_dividers` mutated, read back by renderers on
-/// every frame. Nothing in this crate mutates a `static`, so they are a value
-/// core 0 owns and hands to the render loop.
+/// In MicroPython this was a module global that `set_scroll_speed` mutated,
+/// read back by renderers on every frame. Nothing in this crate mutates a
+/// `static`, so it is a value core 0 owns and hands to the render loop — one
+/// field, and a type rather than a bare integer because it crosses that seam
+/// as a message and is borrowed by every [`crate::game::Scene`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderSettings {
-    pub mlb_final: FinalVariant,
-    pub nba_final: FinalVariant,
-    pub football_final: FinalVariant,
-    pub soccer_live: SoccerLiveVariant,
-    pub hockey_live: HockeyLiveVariant,
-    /// Draw the dividers on every game-facing screen. All-or-nothing, not
-    /// per-variant: the screens have to read consistently.
-    pub show_dividers: bool,
     /// The game-description scroll speed, already degraded to the legal set.
     pub scroll_px_per_second: i32,
 }
@@ -929,57 +681,7 @@ pub struct RenderSettings {
 impl RenderSettings {
     pub const fn new() -> Self {
         RenderSettings {
-            mlb_final: FinalVariant::C,
-            nba_final: FinalVariant::C,
-            football_final: FinalVariant::C,
-            soccer_live: SoccerLiveVariant::A,
-            hockey_live: HockeyLiveVariant::B,
-            show_dividers: true,
             scroll_px_per_second: DEFAULT_SCROLL_SPEED,
-        }
-    }
-
-    /// Apply one `display.variants` entry.
-    ///
-    /// Unknown keys and unknown letters are ignored, leaving the current
-    /// selection, so a hand-edited or pre-rename config cannot select a table
-    /// that does not exist. Returns whether the entry named something real —
-    /// the four pregame keys and the single-design screens' keys count as
-    /// real and select the only design they have.
-    pub fn apply_variant(&mut self, key: &str, letter: &str) -> bool {
-        match key {
-            "mlb_final" | "nba_final" | "football_final" => {
-                let Some(variant) = FinalVariant::from_letter(letter) else {
-                    return false;
-                };
-                match key {
-                    "mlb_final" => self.mlb_final = variant,
-                    "nba_final" => self.nba_final = variant,
-                    _ => self.football_final = variant,
-                }
-                true
-            }
-            "soccer_live" => match SoccerLiveVariant::from_letter(letter) {
-                Some(variant) => {
-                    self.soccer_live = variant;
-                    true
-                }
-                None => false,
-            },
-            "hockey_live" => match HockeyLiveVariant::from_letter(letter) {
-                Some(variant) => {
-                    self.hockey_live = variant;
-                    true
-                }
-                None => false,
-            },
-            // Single-design screens: registered so a config naming them is
-            // honored rather than silently dropped, with nothing to store.
-            "mlb_pregame" | "nba_pregame" | "football_pregame" | "soccer_pregame" => letter == "C",
-            "soccer_final" | "mlb_live" | "nba_live" | "football_live" | "hockey_final" => {
-                letter == "A"
-            }
-            _ => false,
         }
     }
 
@@ -997,46 +699,28 @@ impl RenderSettings {
             pixels_per_second: self.scroll_px_per_second,
         }
     }
-
-    /// The line-score final table for one sport.
-    ///
-    /// Soccer's full-time screen and hockey's three stars are their own shapes
-    /// ([`SOCCER_FINAL`], [`HOCKEY_FINAL`]) and never reach here; the arms
-    /// exist because [`Sport`] has five values.
-    pub const fn final_table(&self, sport: Sport) -> FinalGeometry {
-        match sport {
-            Sport::Mlb => self.mlb_final.table(),
-            Sport::Nba => self.nba_final.table(),
-            Sport::Football => self.football_final.table(),
-            Sport::Soccer | Sport::Hockey => FINAL_C,
-        }
-    }
-
-    pub const fn soccer_live_table(&self) -> SoccerLiveGeometry {
-        self.soccer_live.table()
-    }
-
-    /// The bottom strip the play flash draws into under `mode`: the live
-    /// screen's own `strip`. The other screens draw no flash; they get
-    /// [`COLUMN_STRIP`] so the prepared view always has a width to size by.
-    ///
-    /// One selector so the renderer and the prepared view's flash window
-    /// cannot disagree about how wide the strip is.
-    pub const fn bottom_strip(&self, mode: Mode) -> Slice {
-        match mode {
-            Mode::MlbLive => MLB_LIVE.strip,
-            Mode::NbaLive => NBA_LIVE.strip,
-            Mode::FootballLive => FOOTBALL_LIVE.strip,
-            Mode::SoccerLive => self.soccer_live.table().strip,
-            Mode::HockeyLive => self.hockey_live.strip(),
-            _ => COLUMN_STRIP,
-        }
-    }
 }
 
 impl Default for RenderSettings {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The bottom strip the play flash draws into under `mode`: the live screen's
+/// own `strip`. The other screens draw no flash; they get [`COLUMN_STRIP`] so
+/// the prepared view always has a width to size by.
+///
+/// One selector so the renderer and the prepared view's flash window cannot
+/// disagree about how wide the strip is.
+pub const fn bottom_strip(mode: Mode) -> Slice {
+    match mode {
+        Mode::MlbLive => MLB_LIVE.strip,
+        Mode::NbaLive => NBA_LIVE.strip,
+        Mode::FootballLive => FOOTBALL_LIVE.strip,
+        Mode::SoccerLive => SOCCER_LIVE.strip,
+        Mode::HockeyLive => HOCKEY_LIVE.strip,
+        _ => COLUMN_STRIP,
     }
 }
 

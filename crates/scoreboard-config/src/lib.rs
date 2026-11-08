@@ -15,9 +15,9 @@
 //! can be tested on a desktop (SPEC §2's crate-boundary rule) and the firmware
 //! keeps only the flash writes and the driver calls.
 //!
-//! The shape is not ours to redesign: `frontend/src/lib/api/types.ts` and the
-//! settings page read these key names as they ship today, and the parity
-//! release replaces the firmware under an unchanged SPA.
+//! `frontend/src/lib/api/types.ts` and the settings page read these key names,
+//! so the two move together: a key added or dropped here is added or dropped
+//! there in the same change, and the SPA ships embedded in the same image.
 //!
 //! # The merge is serde's, not a dict walk
 //!
@@ -68,8 +68,6 @@ pub const MAX_LEAGUE: usize = 24;
 /// Leagues configurable per sport. Football has two slugs today and soccer
 /// four; eight leaves room without making the config struct a budget problem.
 pub const MAX_LEAGUES: usize = 8;
-/// A screen-variant letter (`"A"`, `"B"`, `"C"`).
-pub const MAX_VARIANT: usize = 4;
 /// An OTA channel name: `stable` or `dev`, with room for one more.
 pub const MAX_CHANNEL: usize = 8;
 
@@ -149,10 +147,10 @@ pub struct DisplayConfig {
     pub gamma: GammaConfig,
     #[serde(default)]
     pub blanking_time_ns: u32,
-    #[serde(default)]
-    pub variants: VariantsConfig,
-    #[serde(default = "defaults::show_dividers")]
-    pub show_dividers: bool,
+    /// The game-description scroll speed. A document stored before 2026-11-08
+    /// also carries `variants` and `show_dividers` beside it; both keys went
+    /// with the layout variants, so serde skips them like any other unknown
+    /// field and `GET /api/config` no longer echoes them.
     #[serde(default = "defaults::scroll_speed")]
     pub scroll_speed_px_per_sec: i32,
 }
@@ -204,35 +202,6 @@ impl GammaConfig {
     pub fn power_exponent(&self) -> f64 {
         self.value.unwrap_or(2.2)
     }
-}
-
-/// The configured design per sport × screen.
-///
-/// The four keys `_DEFAULTS` carries, plus hockey's two. `screen_geometry`
-/// registers more names than these (the pregame and single-design live
-/// screens), and it already ignores both unknown keys and unknown letters — so
-/// an unmodelled key in a stored config selected nothing before and selects
-/// nothing now. What changes is that it no longer round-trips back out of `GET
-/// /api/config`; PARITY.md records that.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct VariantsConfig {
-    #[serde(default = "defaults::variant_c")]
-    pub mlb_final: String<MAX_VARIANT>,
-    #[serde(default = "defaults::variant_c")]
-    pub nba_final: String<MAX_VARIANT>,
-    #[serde(default = "defaults::variant_c")]
-    pub football_final: String<MAX_VARIANT>,
-    #[serde(default = "defaults::variant_a")]
-    pub soccer_live: String<MAX_VARIANT>,
-    /// A "Period ledger" or B "Rink", B by default (NHL.md D1).
-    #[serde(default = "defaults::variant_b")]
-    pub hockey_live: String<MAX_VARIANT>,
-    /// "Three stars" is the only design today (D2), so `A` is the only letter
-    /// that selects anything. Modelled anyway: NHL.md §3.10 keeps the
-    /// box-score final one `apply_variant` away should D2 flip, and this key
-    /// is what would select it.
-    #[serde(default = "defaults::variant_a")]
-    pub hockey_final: String<MAX_VARIANT>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -428,22 +397,12 @@ impl DeviceConfig {
             .clamp(WATCHDOG_TIMEOUT_MIN_MS, WATCHDOG_TIMEOUT_MAX_MS)
     }
 
-    /// The renderer's view of this config: variants, dividers, scroll speed.
+    /// The renderer's view of this config: the scroll speed.
     ///
-    /// The scroll speed degrades to the default if it is not one of the smooth
-    /// set, and an unknown variant letter leaves that screen's selection alone
-    /// — both inside `RenderSettings`, which is where `screen_geometry`'s
-    /// validation lived.
+    /// It degrades to the default if it is not one of the smooth set — inside
+    /// `RenderSettings`, which is where `screen_geometry`'s validation lived.
     pub fn render_settings(&self) -> scoreboard_render::RenderSettings {
         let mut settings = scoreboard_render::RenderSettings::new();
-        let variants = &self.display.variants;
-        settings.apply_variant("mlb_final", &variants.mlb_final);
-        settings.apply_variant("nba_final", &variants.nba_final);
-        settings.apply_variant("football_final", &variants.football_final);
-        settings.apply_variant("soccer_live", &variants.soccer_live);
-        settings.apply_variant("hockey_live", &variants.hockey_live);
-        settings.apply_variant("hockey_final", &variants.hockey_final);
-        settings.show_dividers = self.display.show_dividers;
         settings.set_scroll_speed(self.display.scroll_speed_px_per_sec);
         settings
     }

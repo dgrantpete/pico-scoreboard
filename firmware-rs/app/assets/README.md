@@ -62,6 +62,6 @@ every build of a month; before that, 56,607 B (`496aa1b6…`), the Advanced
 card's watchdog row reading the device's `watchdog_always_on`; and before
 that, 56,305 B (`e436e643…`), built 2026-08-19 from the `frontend/` of
 commit `3259128` — a bake that followed its frontend change in a commit of
-its own, the failure mode the rule above warns about. The tree before this
-change rebuilt to `610bb724…` byte for byte, and this one rebuilds to the
-same SHA-1 twice running.
+its own, the failure mode the rule above warns about. The tree before the
+layout-variant change rebuilt to `f442728d…` byte for byte, and this one
+rebuilds to the same SHA-1 twice running.

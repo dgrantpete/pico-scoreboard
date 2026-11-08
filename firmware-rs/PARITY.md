@@ -97,9 +97,11 @@ pulse went unverified.
 
 Everything else that could differ is **emitted into the manifest rather than
 agreed by hand**: the UI palette comes from `config.Config()`'s defaults, the
-layout variants and scroll speed from `screen_geometry`'s module state, and the
-crest pixels from `LogoProvider`'s placeholder builder. A change to any of them
-moves both sides on the next regeneration instead of silently disagreeing.
+scroll speed from `screen_geometry`'s module state, and the crest pixels from
+`LogoProvider`'s placeholder builder. A change to any of them moves both sides
+on the next regeneration instead of silently disagreeing. (The manifest also
+carried the layout-variant selections until 2026-11-08, when the variants were
+deleted and the defaults became the only designs; the frames did not move.)
 
 ### The 60 FPS move did not disturb any of this
 
@@ -291,12 +293,15 @@ whatever it was given and left the defensive accessors to cope, so
 Here it is `400 {"error":"invalid_json"}`. Rejecting at the boundary is the
 better answer and the SPA never sends one.
 
-**2. Unmodelled `display.variants` keys do not round-trip.** MicroPython's
-variants dict was free-form, so an unknown key was stored and echoed back
-(while still selecting nothing, because `screen_geometry.set_variants` ignored
-it). Only the four keys `_DEFAULTS` carries are modelled here, and an unknown
-one is dropped rather than echoed. Nothing reads them, and both firmwares
-render identically.
+**2. `display.variants` and `display.show_dividers` are gone (2026-11-08).**
+MicroPython selects a layout per screen from a free-form variants dict and
+draws its dividers behind a switch; the Rust firmware has one design per
+screen — the defaults both firmwares shipped with (the line-score-forward
+final, soccer's phase ledger, hockey's rink) — and always draws the dividers.
+A stored document still carrying either key loads, because serde skips fields
+the struct does not have, and `GET /api/config` no longer echoes them. A unit
+whose owner had picked another letter or switched the dividers off renders the
+defaults after the upgrade.
 
 **3. The ETag is quoted, and `If-None-Match` accepts more forms.** `main.py`
 sent `ETag: 1a2b3c4d5e6f7788` — a bare hex string, which RFC 9110 §8.8.3 does

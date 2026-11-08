@@ -122,7 +122,7 @@ struct LoopState {
     /// Slowest clip-frame decode of the current play, for the one line logged
     /// when it ends — how a bench run answers "does this fit the frame".
     clip_decode_max_us: u32,
-    /// The configured variants, dividers and scroll speed.
+    /// The configured scroll speed.
     ///
     /// Cross-frame state, so it lives here and nowhere else — the mutation
     /// contract's first bucket. `Scene` borrows it for the length of one frame
@@ -144,8 +144,9 @@ struct LoopState {
 ///
 /// Both invalidations are needed and for different reasons: the prepared view
 /// caches a scroll window measured against the old speed, and the skip memo
-/// would otherwise let a static screen keep showing the old dividers until the
-/// next commit — which, on an idle scoreboard, could be minutes.
+/// would otherwise let a static screen keep showing frames packed through the
+/// old gamma table until the next commit — which, on an idle scoreboard, could
+/// be minutes.
 ///
 /// Every branch here is a store or a small register restamp. The one that was
 /// not is gamma: expanding a `Power` LUT is 27.6 ms, which does not fit a

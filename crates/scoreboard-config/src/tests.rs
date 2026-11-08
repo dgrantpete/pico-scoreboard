@@ -27,11 +27,6 @@ fn defaults_match_the_micropython_defaults_dict() {
     assert_eq!(config.display.target_refresh_rate, 120.0);
     assert_eq!(config.display.gamma.kind, GammaKind::Srgb);
     assert_eq!(config.display.blanking_time_ns, 0);
-    assert_eq!(config.display.variants.mlb_final.as_str(), "C");
-    assert_eq!(config.display.variants.soccer_live.as_str(), "A");
-    assert_eq!(config.display.variants.hockey_live.as_str(), "B");
-    assert_eq!(config.display.variants.hockey_final.as_str(), "A");
-    assert!(config.display.show_dividers);
     assert_eq!(
         config.display.scroll_speed_px_per_sec,
         scoreboard_render::geometry::DEFAULT_SCROLL_SPEED
@@ -68,12 +63,6 @@ fn the_serialized_shape_carries_every_key_the_spa_reads() {
         "\"gamma\"",
         "\"type\"",
         "\"blanking_time_ns\"",
-        "\"variants\"",
-        "\"mlb_final\"",
-        "\"soccer_live\"",
-        "\"hockey_live\"",
-        "\"hockey_final\"",
-        "\"show_dividers\"",
         "\"scroll_speed_px_per_sec\"",
         "\"colors\"",
         "\"primary\"",
@@ -130,7 +119,6 @@ fn a_partial_stored_document_takes_defaults_for_everything_absent() {
     assert_eq!(complaint, None);
     assert_eq!(config.display.brightness, 25);
     assert_eq!(config.display.poll_interval_seconds, 30);
-    assert_eq!(config.display.variants.mlb_final.as_str(), "C");
     assert_eq!(config.network.ssid.as_str(), "HOME");
     assert_eq!(config.network.device_name.as_str(), "scoreboard");
     assert_eq!(config.server.cache_max_age_seconds, 600);
@@ -200,13 +188,10 @@ fn a_config_stored_before_hockey_loads_with_the_nhl_on() {
     // `sports` is present and `nhl` is not: the per-key default, not the
     // section's, is what has to answer — and it answers D5's "on".
     assert!(config.sports.nhl.enabled);
-    assert_eq!(config.display.variants.hockey_live.as_str(), "B");
-    assert_eq!(config.display.variants.hockey_final.as_str(), "A");
 
     // Everything the document did say survives.
     assert_eq!(config.network.ssid.as_str(), "HOME-NETWORK-5G");
     assert!(config.sports.mlb.enabled && config.sports.nba.enabled);
-    assert_eq!(config.display.variants.nba_final.as_str(), "A");
 
     // The key now goes out on `GET /api/config`, which is how the settings
     // page learns this firmware has hockey (D7).
@@ -224,6 +209,36 @@ fn a_config_stored_before_hockey_loads_with_the_nhl_on() {
             "soccer/eng.1",
         ]
     );
+}
+
+/// Every unit in the field stored `display.variants` and `display.show_dividers`
+/// before 2026-11-08, when the layout variants and the divider toggle went.
+/// Serde skips fields the struct does not have, so the document still loads;
+/// the keys are dropped on the way through rather than echoed back.
+#[test]
+fn a_stored_document_still_carrying_the_layout_keys_loads_without_them() {
+    assert!(STORED_BEFORE_HOCKEY.contains(r#""variants":{"#));
+    assert!(STORED_BEFORE_HOCKEY.contains(r#""show_dividers":true"#));
+    let (config, complaint) = DeviceConfig::from_json(STORED_BEFORE_HOCKEY.as_bytes());
+    assert_eq!(complaint, None);
+    assert_eq!(config.network.ssid.as_str(), "HOME-NETWORK-5G");
+    assert_eq!(config.display.scroll_speed_px_per_sec, 30);
+    assert_eq!(config.render_settings().scroll_px_per_second, 30);
+
+    let text = json(&config);
+    assert!(!text.contains("variants"), "{text}");
+    assert!(!text.contains("show_dividers"), "{text}");
+
+    // And a `PUT` from a settings page that still sends them is an ordinary
+    // request whose unknown keys are ignored.
+    let mut config = DeviceConfig::new();
+    let applied = config
+        .apply(&patch(
+            r#"{"display":{"variants":{"soccer_live":"B"},"show_dividers":false,"brightness":40}}"#,
+        ))
+        .unwrap();
+    assert_eq!(config.display.brightness, 40);
+    assert!(!applied.any());
 }
 
 #[test]
@@ -501,7 +516,7 @@ fn live_apply_flags_track_which_keys_the_request_named() {
     assert_eq!(config.colors.accent, Rgb::new(1, 2, 3));
 
     let applied = config
-        .apply(&patch(r#"{"display":{"show_dividers":false}}"#))
+        .apply(&patch(r#"{"display":{"scroll_speed_px_per_sec":10}}"#))
         .unwrap();
     assert!(applied.render_settings);
     assert!(!applied.gamma);
@@ -523,41 +538,6 @@ fn live_apply_flags_track_which_keys_the_request_named() {
     let applied = config.apply(&patch(r#"{"log":{"level":"error"}}"#)).unwrap();
     assert!(applied.log_level);
     assert_eq!(config.log_level(), LogLevel::Error);
-}
-
-#[test]
-fn a_variants_patch_reapplies_render_settings_even_when_it_names_one_screen() {
-    let mut config = DeviceConfig::new();
-    let applied = config
-        .apply(&patch(r#"{"display":{"variants":{"soccer_live":"B"}}}"#))
-        .unwrap();
-    assert!(applied.render_settings);
-    assert_eq!(config.display.variants.soccer_live.as_str(), "B");
-    // The screens the patch did not name keep their stored letters.
-    assert_eq!(config.display.variants.mlb_final.as_str(), "C");
-}
-
-#[test]
-fn the_hockey_layouts_reach_the_render_settings() {
-    use scoreboard_render::geometry::HockeyLiveVariant;
-
-    let mut config = DeviceConfig::new();
-    assert_eq!(config.render_settings().hockey_live, HockeyLiveVariant::B);
-
-    let applied = config
-        .apply(&patch(r#"{"display":{"variants":{"hockey_live":"A"}}}"#))
-        .unwrap();
-    assert!(applied.render_settings);
-    assert_eq!(config.display.variants.hockey_live.as_str(), "A");
-    assert_eq!(config.display.variants.hockey_final.as_str(), "A");
-    assert_eq!(config.render_settings().hockey_live, HockeyLiveVariant::A);
-
-    // A letter hockey has no design for leaves the screen as it was, as an
-    // unknown final letter does.
-    config
-        .apply(&patch(r#"{"display":{"variants":{"hockey_live":"C"}}}"#))
-        .unwrap();
-    assert_eq!(config.render_settings().hockey_live, HockeyLiveVariant::B);
 }
 
 #[test]
@@ -593,18 +573,8 @@ fn a_wrongly_typed_value_is_rejected_rather_than_stored() {
 #[test]
 fn render_settings_come_out_of_the_config() {
     let mut config = DeviceConfig::new();
-    config.display.show_dividers = false;
     config.display.scroll_speed_px_per_sec = 10;
-    config.display.variants.soccer_live.clear();
-    let _ = config.display.variants.soccer_live.push_str("B");
-
-    let settings = config.render_settings();
-    assert!(!settings.show_dividers);
-    assert_eq!(settings.scroll_px_per_second, 10);
-    assert_ne!(
-        settings.soccer_live_table(),
-        scoreboard_render::RenderSettings::new().soccer_live_table()
-    );
+    assert_eq!(config.render_settings().scroll_px_per_second, 10);
 }
 
 #[test]
@@ -632,18 +602,6 @@ fn the_speed_the_parity_release_stored_survives_the_upgrade_as_the_default() {
     assert_eq!(
         config.render_settings().scroll_px_per_second,
         scoreboard_render::geometry::DEFAULT_SCROLL_SPEED
-    );
-}
-
-#[test]
-fn an_unknown_variant_letter_leaves_that_screen_alone() {
-    let mut config = DeviceConfig::new();
-    config.display.variants.mlb_final.clear();
-    let _ = config.display.variants.mlb_final.push_str("Z");
-    let settings = config.render_settings();
-    assert_eq!(
-        settings.final_table(scoreboard_model::Sport::Mlb),
-        scoreboard_render::RenderSettings::new().final_table(scoreboard_model::Sport::Mlb)
     );
 }
 
@@ -707,16 +665,6 @@ fn a_maximally_full_config_fits_the_storage_and_response_buffers() {
         kind: GammaKind::Power,
         value: Some(2.2222222),
     };
-    for variant in [
-        &mut config.display.variants.mlb_final,
-        &mut config.display.variants.nba_final,
-        &mut config.display.variants.football_final,
-        &mut config.display.variants.soccer_live,
-        &mut config.display.variants.hockey_live,
-        &mut config.display.variants.hockey_final,
-    ] {
-        fill(variant);
-    }
     for sport in [&mut config.sports.football, &mut config.sports.soccer] {
         while sport.leagues.len() < MAX_LEAGUES {
             let mut slug = heapless::String::new();

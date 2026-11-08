@@ -21,22 +21,22 @@ use serde::Deserialize;
 
 use crate::{
     CadenceError, DeviceConfig, GammaConfig, MAX_API_KEY, MAX_CHANNEL, MAX_LEAGUE, MAX_LEAGUES,
-    MAX_PASSWORD, MAX_SSID, MAX_URL, MAX_VARIANT, Rgb, check_cadence,
+    MAX_PASSWORD, MAX_SSID, MAX_URL, Rgb, check_cadence,
 };
 
 /// Which live-apply hooks a [`DeviceConfig::apply`] needs run.
 ///
 /// One bool per thing `api_routes.py` re-applied, and it is a *set*, not a
-/// diff: a request that sets `show_dividers` to the value it already had still
-/// reports it, exactly as `if 'show_dividers' in data['display']` did. Chasing
-/// no-op writes would be a behaviour change, and the hooks are all idempotent.
+/// diff: a request that sets `scroll_speed_px_per_sec` to the value it already
+/// had still reports it, exactly as `if 'scroll_speed_px_per_sec' in
+/// data['display']` did. Chasing no-op writes would be a behaviour change, and
+/// the hooks are all idempotent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Applied {
     /// `update_ui_colors` — the snapshot's UI palette.
     pub ui_colors: bool,
-    /// `update_screen_variants` / `update_show_dividers` / `update_scroll_speed`
-    /// — everything the renderer reads out of `RenderSettings`. One flag,
-    /// because they travel to core 1 in one message.
+    /// `update_scroll_speed` — what the renderer reads out of `RenderSettings`,
+    /// which travels to core 1 as one message.
     pub render_settings: bool,
     /// `update_display_frequency` — the PIO data clock.
     pub data_clock: bool,
@@ -115,20 +115,7 @@ pub struct DisplayPatch {
     pub target_refresh_rate: Option<f64>,
     pub gamma: Option<GammaConfig>,
     pub blanking_time_ns: Option<u32>,
-    pub variants: Option<VariantsPatch>,
-    pub show_dividers: Option<bool>,
     pub scroll_speed_px_per_sec: Option<i32>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct VariantsPatch {
-    pub mlb_final: Option<String<MAX_VARIANT>>,
-    pub nba_final: Option<String<MAX_VARIANT>>,
-    pub football_final: Option<String<MAX_VARIANT>>,
-    pub soccer_live: Option<String<MAX_VARIANT>>,
-    pub hockey_live: Option<String<MAX_VARIANT>>,
-    pub hockey_final: Option<String<MAX_VARIANT>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -272,26 +259,11 @@ impl DeviceConfig {
             if set(&mut self.display.gamma, &display.gamma) {
                 applied.gamma = true;
             }
-            if set(&mut self.display.blanking_time_ns, &display.blanking_time_ns) {
+            if set(
+                &mut self.display.blanking_time_ns,
+                &display.blanking_time_ns,
+            ) {
                 applied.blanking_time = true;
-            }
-            if let Some(variants) = &display.variants {
-                set(&mut self.display.variants.mlb_final, &variants.mlb_final);
-                set(&mut self.display.variants.nba_final, &variants.nba_final);
-                set(
-                    &mut self.display.variants.football_final,
-                    &variants.football_final,
-                );
-                set(&mut self.display.variants.soccer_live, &variants.soccer_live);
-                set(&mut self.display.variants.hockey_live, &variants.hockey_live);
-                set(
-                    &mut self.display.variants.hockey_final,
-                    &variants.hockey_final,
-                );
-                applied.render_settings = true;
-            }
-            if set(&mut self.display.show_dividers, &display.show_dividers) {
-                applied.render_settings = true;
             }
             if set(
                 &mut self.display.scroll_speed_px_per_sec,

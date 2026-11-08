@@ -29,7 +29,7 @@
 //! ```
 //!
 //! The manifest beside the frames — fixtures, crest slots, time points, palette,
-//! variants — is hand-maintained input; the frames are the only output.
+//! scroll speed — is hand-maintained input; the frames are the only output.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -75,8 +75,8 @@ struct GameCase {
 }
 
 /// Everything both stacks were pinned to. Read rather than restated: the
-/// palette, the layout variants and the scroll speed are the firmware's own
-/// defaults, and a change to any of them moves both sides together.
+/// palette and the scroll speed are the firmware's own defaults, and a change
+/// to either moves both sides together.
 struct Manifest {
     commit_ms: Millis,
     now_epoch_s: u32,
@@ -148,15 +148,6 @@ fn parse_manifest(text: &str) -> Manifest {
                     other => panic!("manifest names an unknown color: {other}"),
                 }
             }
-            "variant" => {
-                let (key, letter) = (next().to_string(), next().to_string());
-                assert!(
-                    settings.apply_variant(&key, &letter),
-                    "the Rust settings do not know the variant {key}={letter} \
-                     that screen_geometry selects"
-                );
-            }
-            "show_dividers" => settings.show_dividers = next() == "1",
             "scroll_px_per_sec" => {
                 let requested: i32 = next().parse().expect("scroll speed");
                 assert_eq!(

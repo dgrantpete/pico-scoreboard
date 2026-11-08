@@ -35,11 +35,11 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     modeled (schema/presence/spec/discover under data/espn/generated/,
     incl. a pooled nba+wnba discover for contract comparison). The
     conventions from the overhaul are exactly what it lands on: registry
-    rows in poller/SportsCard, its own module pair, variant keys. Plus,
-    from the consistency pass (2026-07-19): prefixed wire symbols
+    rows in poller/SportsCard, its own module pair. Plus, from the
+    consistency pass (2026-07-19): prefixed wire symbols
     (`encode_<sport>_game`, `<SPORT>_FLAG_*`), `{Sport}PregameTeam`
-    naming, shared enums/handlers from `shared/`, testdata nested per
-    ESPN league slug, and a `_TABLES`/`_ACTIVE` registry key per screen.
+    naming, shared enums/handlers from `shared/`, and testdata nested per
+    ESPN league slug.
 52. **The league registry is written down five times** (recounted
     2026-10-15, with the NHL). Three copies are maintained: the backend's
     `espn/league.rs` (which slugs exist, `VALID_LEAGUES`; it holds no
@@ -317,16 +317,13 @@ league-namespaced logo keys and the soccer stale-clock guard; config gained
 `sports.mlb.enabled` + `sports.soccer.leagues`; a second preview golden pins
 the soccer live frame.
 
-32. **Soccer live variant pick** — soccer-A ("phase ledger", default) vs
-    soccer-B ("clock + phase stacked") vs soccer-C ("broadcast corners")
-    are all in the preview gallery; lock the winner into
-    `screen_geometry.SOCCER_LIVE_VARIANT` after a gallery review (same
-    ritual as the 2026-07-07 pregame/final picks). Possible polish items
-    after the pick: goal score-flash (NFL-era `should_flash` pattern),
-    red-card count chips, aggregate/penalty shootout states (ESPN
-    descriptions for ET/shootout not yet observed — backend warns and
-    degrades to in-play; extra-time periods 3/4 already render as "ET"
-    with 105/120 stoppage bases).
+32. **Soccer live polish** — the layout pick closed 2026-11-08: A ("phase
+    ledger") is the only design, B and C were deleted with the whole
+    layout-variant system. Still open from the original item: goal
+    score-flash (NFL-era `should_flash` pattern), red-card count chips,
+    aggregate/penalty shootout states (ESPN descriptions for ET/shootout
+    not yet observed — backend warns and degrades to in-play; extra-time
+    periods 3/4 already render as "ET" with 105/120 stoppage bases).
 
 33. **Sports config hot-reload** — the Sports settings card landed
     2026-07-09 but league changes are reboot-required (the poller builds

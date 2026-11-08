@@ -630,6 +630,8 @@ snapshot anchors and the wall rail; no renderer state.
 - `scoreboard-config`: `SportsConfig.nhl: SportToggle` (default **on**, D5),
   `SportsPatch.nhl`, `VariantsConfig.hockey_live` (default `B`) and
   `hockey_final`, defaults, patch + tests.
+  *2026-11-08: both variant keys are gone — `display.variants` went with the
+  layout-variant system, and B "Rink" is the only live design.*
 - `scoreboard-input` menu tests gain the NHL row; label from `LeagueId`.
 - The poll sources moved from the app's `sources_from_config` to
   `DeviceConfig::league_sources()` (D6 order, host-tested), and the slate

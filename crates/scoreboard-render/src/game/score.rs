@@ -13,7 +13,7 @@
 use super::Scene;
 use crate::blit::Canvas;
 use crate::font::{self, Align, Style};
-use crate::geometry::{EDGE_INSET, FINAL_LINESCORE_SCROLL, HEIGHT, WIDTH};
+use crate::geometry::{EDGE_INSET, FINAL, FINAL_LINESCORE_SCROLL, HEIGHT};
 use crate::{BLACK, generated, pack, toast};
 use scoreboard_model::Sport;
 
@@ -21,7 +21,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     canvas.fill(BLACK);
     let snapshot = scene.snapshot;
     let view = &snapshot.linescore_final;
-    let table = scene.settings.final_table(view.sport);
+    let table = FINAL;
     let secondary = pack(snapshot.ui_colors.secondary);
 
     let (away_color, home_color) =
@@ -29,24 +29,14 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
 
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
-    // The vertical rule separates the line score from the pinned totals; it
-    // starts at the top-band separator when there is one, so it does not cut
-    // through a logo sitting in a top corner. Both rules stop short of the
-    // panel's edge ring.
-    if scene.settings.show_dividers {
-        let top = table.separator_y.unwrap_or(EDGE_INSET);
-        canvas.vline(table.divider_x, top, HEIGHT - EDGE_INSET - top, secondary);
-        if let Some(y) = table.separator_y {
-            canvas.hline(EDGE_INSET, y, WIDTH - 2 * EDGE_INSET, secondary);
-        }
-    }
-
-    // The variants that carry big scores beside the logos; C puts the totals
-    // in the pinned column instead.
-    if let (Some(away_slot), Some(home_slot)) = (table.score_away, table.score_home) {
-        super::big_score(canvas, away_slot, view.away_score, away_color);
-        super::big_score(canvas, home_slot, view.home_score, home_color);
-    }
+    // The vertical rule separates the line score from the pinned totals, and
+    // stops short of the panel's edge ring at both ends.
+    canvas.vline(
+        table.divider_x,
+        EDGE_INSET,
+        HEIGHT - 2 * EDGE_INSET,
+        secondary,
+    );
 
     super::chip(
         canvas,
@@ -89,26 +79,13 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         Align::Center,
         Style::new(&generated::SPLEEN_5X8, secondary),
     );
+    // The totals column carries the headline score, so it takes the big-score
+    // font.
     for (slot, score, color) in [
         (table.total_away, view.away_score, away_color),
         (table.total_home, view.home_score, home_color),
     ] {
-        // A 16 px slot is asking for the taller font: that is variant C, where
-        // the totals column carries the headline score.
-        let font = if slot.height >= 16 {
-            &generated::UNSCII_16
-        } else {
-            &generated::SPLEEN_5X8
-        };
-        font::integer(
-            canvas,
-            score,
-            slot.x,
-            slot.y,
-            slot.width,
-            Align::Center,
-            Style::new(font, color),
-        );
+        super::big_score(canvas, slot, score, color);
     }
 
     toast::overlay(canvas, snapshot, scene.now);

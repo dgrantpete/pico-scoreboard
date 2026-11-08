@@ -11,8 +11,7 @@ use heapless::String;
 
 use crate::{
     ApiConfig, ColorsConfig, DisplayConfig, GammaConfig, LogConfig, MAX_CHANNEL, NetworkConfig,
-    OtaConfig, Rgb, ServerConfig, SportLeagues, SportToggle, SportsConfig, VariantsConfig,
-    WatchdogConfig,
+    OtaConfig, Rgb, ServerConfig, SportLeagues, SportToggle, SportsConfig, WatchdogConfig,
 };
 
 fn text<const N: usize>(value: &str) -> String<N> {
@@ -51,27 +50,11 @@ pub(crate) fn target_refresh_rate() -> f64 {
     120.0
 }
 
-pub(crate) fn show_dividers() -> bool {
-    true
-}
-
 /// Deliberately the render crate's own degrade target rather than a repeated
 /// literal: a fresh device and a device whose stored speed is illegal have no
 /// business scrolling at different rates.
 pub(crate) fn scroll_speed() -> i32 {
     scoreboard_render::geometry::DEFAULT_SCROLL_SPEED
-}
-
-pub(crate) fn variant_a() -> String<{ crate::MAX_VARIANT }> {
-    text("A")
-}
-
-pub(crate) fn variant_b() -> String<{ crate::MAX_VARIANT }> {
-    text("B")
-}
-
-pub(crate) fn variant_c() -> String<{ crate::MAX_VARIANT }> {
-    text("C")
 }
 
 pub(crate) fn white() -> Rgb {
@@ -162,8 +145,6 @@ impl Default for DisplayConfig {
             target_refresh_rate: target_refresh_rate(),
             gamma: GammaConfig::default(),
             blanking_time_ns: 0,
-            variants: VariantsConfig::default(),
-            show_dividers: show_dividers(),
             scroll_speed_px_per_sec: scroll_speed(),
         }
     }
@@ -174,19 +155,6 @@ impl Default for GammaConfig {
         GammaConfig {
             kind: crate::GammaKind::Srgb,
             value: None,
-        }
-    }
-}
-
-impl Default for VariantsConfig {
-    fn default() -> VariantsConfig {
-        VariantsConfig {
-            mlb_final: variant_c(),
-            nba_final: variant_c(),
-            football_final: variant_c(),
-            soccer_live: variant_a(),
-            hockey_live: variant_b(),
-            hockey_final: variant_a(),
         }
     }
 }

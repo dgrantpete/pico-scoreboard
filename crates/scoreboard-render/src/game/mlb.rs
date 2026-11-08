@@ -39,12 +39,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let colors = &snapshot.ui_colors;
     let primary = pack(colors.primary);
 
-    super::column_dividers(
-        canvas,
-        scene,
-        Some(table.divider_x),
-        Some(table.separator_y),
-    );
+    super::column_dividers(canvas, scene, table.divider_x, table.separator_y);
 
     let field = layout::field::SPRITE;
     canvas.blit(

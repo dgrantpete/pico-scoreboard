@@ -709,13 +709,10 @@ impl Store {
         view.on_break = game.on_break;
 
         view.phase_text.clear();
-        view.phase_long.clear();
         if !game.on_break {
             // The break label lives in the clock region; announcing the state
-            // twice is worse than leaving these empty.
-            let (short, long) = soccer_phase(game.half);
-            set_plain(&mut view.phase_text, short);
-            set_plain(&mut view.phase_long, long);
+            // twice is worse than leaving this empty.
+            set_plain(&mut view.phase_text, soccer_phase(game.half));
         }
 
         view.has_event = game.last_event.is_some();
@@ -891,14 +888,8 @@ fn base_minutes(half: u8) -> u8 {
 }
 
 /// Short and spelled-out period labels. Both extra-time halves read "ET".
-fn soccer_phase(half: u8) -> (&'static str, &'static str) {
-    const PHASES: [(&str, &str); 5] = [
-        ("", ""),
-        ("1ST", "1ST HALF"),
-        ("2ND", "2ND HALF"),
-        ("ET", "EXTRA TIME"),
-        ("PENS", "SHOOTOUT"),
-    ];
+fn soccer_phase(half: u8) -> &'static str {
+    const PHASES: [&str; 5] = ["", "1ST", "2ND", "ET", "PENS"];
     let index = match half {
         0..=2 => half,
         3..=4 => 3,

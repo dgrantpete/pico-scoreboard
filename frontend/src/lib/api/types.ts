@@ -22,26 +22,9 @@ export type GammaConfig =
 	| { type: "srgb" }
 	| { type: "none" };
 
-// Display configuration
-// Screen layout variant letters, keyed per sport × screen (see the Rust
-// renderer's tables, crates/scoreboard-render/src/geometry.rs, and
-// RenderSettings::apply_variant there). Applied live on save — no reboot.
-// Screens with a single design (pregame — "Big time" locked in 2026-07-15 —
-// soccer final, NBA live, football live) gain a key here only once a second
-// design exists. hockey_final is the exception: the firmware keeps the key so
-// a box-score final stays one letter away (NHL.md §3.10), and the settings
-// page offers no picker for it.
-export interface VariantsConfig {
-	mlb_final: string;
-	nba_final: string;
-	football_final: string;
-	soccer_live: string;
-	// Absent on firmware without hockey (the frozen MicroPython); see
-	// SportsConfig.nhl.
-	hockey_live?: string;
-	hockey_final?: string;
-}
-
+// Display configuration. Every screen has one design: the per-screen layout
+// variants and the divider-lines toggle went on 2026-11-08, and the firmware
+// ignores those keys if an older page still sends them.
 export interface DisplayConfig {
 	brightness: number; // 0-100
 	poll_interval_seconds: number; // min: 1
@@ -50,8 +33,6 @@ export interface DisplayConfig {
 	target_refresh_rate: number; // 30-240 Hz
 	gamma: GammaConfig;
 	blanking_time_ns: number; // 0-3000 nanoseconds
-	variants: VariantsConfig;
-	show_dividers: boolean; // divider lines on game screens; applied live
 	scroll_speed_px_per_sec: number; // 5 | 10 | 20 | 30 | 60; applied live
 }
 
