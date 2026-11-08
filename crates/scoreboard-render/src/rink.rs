@@ -113,33 +113,49 @@ impl Rink {
         -(feet * (self.height - 3) / WIDTH_FT)
     }
 
-    /// The boards' inset from each end on `row` of the strip.
-    const fn inset(&self, row: i32) -> i32 {
-        let edge = if row < self.height - 1 - row {
-            row
-        } else {
-            self.height - 1 - row
-        };
-        if edge < CORNER.len() as i32 {
-            CORNER[edge as usize]
-        } else {
-            0
+    /// The whole rink: ice, each end in its tint, then [`Rink::draw_lines`].
+    ///
+    /// The surface goes down in bands of rows that share a boards inset: one
+    /// row at a time through the rounded corners, then the straight middle in
+    /// one go.
+    pub fn draw(&self, canvas: &mut Canvas<'_>, away_end: Rgb888, home_end: Rgb888) {
+        let corner = CORNER.len() as i32;
+        for edge in 1..corner {
+            for top in [self.y + edge, self.y + self.height - 1 - edge] {
+                let inset = CORNER[edge as usize];
+                self.surface(canvas, top, 1, inset, away_end, home_end);
+            }
         }
+        let middle = self.height - 2 * corner;
+        self.surface(canvas, self.y + corner, middle, 0, away_end, home_end);
+        self.draw_lines(canvas);
     }
 
-    /// The whole rink: ice, each end in its tint, then [`Rink::draw_lines`].
-    pub fn draw(&self, canvas: &mut Canvas<'_>, away_end: Rgb888, home_end: Rgb888) {
+    /// `rows` rows of the surface from `top`, inside boards `inset` columns
+    /// in from each end: ice, with each team's end from the boards to its goal
+    /// line over it.
+    fn surface(
+        &self,
+        canvas: &mut Canvas<'_>,
+        top: i32,
+        rows: i32,
+        inset: i32,
+        away_end: Rgb888,
+        home_end: Rgb888,
+    ) {
+        let (left, right) = (self.x + inset, self.x + self.width - 1 - inset);
         let away_goal = self.x_at(GOAL_LINE_FT);
         let home_goal = self.x_at(LENGTH_FT - GOAL_LINE_FT);
-        for row in 1..self.height - 1 {
-            let y = self.y + row;
-            let left = self.x + self.inset(row);
-            let right = self.x + self.width - 1 - self.inset(row);
-            canvas.hline(left + 1, y, right - left - 1, ICE);
-            canvas.hline(left + 1, y, away_goal - left - 1, away_end);
-            canvas.hline(home_goal + 1, y, right - home_goal - 1, home_end);
-        }
-        self.draw_lines(canvas);
+        fill(canvas, left + 1, top, right - left - 1, rows, ICE);
+        fill(canvas, left + 1, top, away_goal - left - 1, rows, away_end);
+        fill(
+            canvas,
+            home_goal + 1,
+            top,
+            right - home_goal - 1,
+            rows,
+            home_end,
+        );
     }
 
     /// The boards, the lines across the ice and the creases, and nothing
@@ -147,58 +163,88 @@ impl Rink {
     pub fn draw_lines(&self, canvas: &mut Canvas<'_>) {
         let (left, right) = (self.x, self.x + self.width - 1);
         let bottom = self.y + self.height - 1;
+        let corner = CORNER.len() as i32;
         // The long boards, top and bottom, between the corners.
         for y in [self.y, bottom] {
-            canvas.hline(left + CORNER[0], y, self.width - 2 * CORNER[0], BOARDS);
+            fill(
+                canvas,
+                left + CORNER[0],
+                y,
+                self.width - 2 * CORNER[0],
+                1,
+                BOARDS,
+            );
         }
-        // The end boards and the corners' curve, inward from the inset on
-        // each side.
-        for row in 1..self.height - 1 {
-            let inset = self.inset(row);
-            let run = if row == 1 || row == self.height - 2 {
-                CURVE
-            } else {
-                1
-            };
-            canvas.hline(left + inset, self.y + row, run, BOARDS);
-            canvas.hline(right - inset - (run - 1), self.y + row, run, BOARDS);
+        // The end boards, straight between the corners...
+        for x in [left, right] {
+            fill(
+                canvas,
+                x,
+                self.y + corner,
+                1,
+                self.height - 2 * corner,
+                BOARDS,
+            );
+        }
+        // ...and through each corner, a row at a time, inward from its inset.
+        for edge in 1..corner {
+            let inset = CORNER[edge as usize];
+            let run = if edge == 1 { CURVE } else { 1 };
+            for y in [self.y + edge, bottom - edge] {
+                fill(canvas, left + inset, y, run, 1, BOARDS);
+                fill(canvas, right - inset - (run - 1), y, run, 1, BOARDS);
+            }
         }
 
         let away_goal = self.x_at(GOAL_LINE_FT);
         let home_goal = self.x_at(LENGTH_FT - GOAL_LINE_FT);
         let (away_blue, home_blue) = (self.x_at(BLUE_LINE_FT), self.x_at(LENGTH_FT - BLUE_LINE_FT));
         let center = self.x_at(CENTER_FT);
-        for (x, color) in [
-            (away_goal, RED_LINE),
-            (home_goal, RED_LINE),
-            // Each blue line widens toward centre ice.
-            (away_blue, BLUE_LINE),
-            (away_blue + 1, BLUE_LINE),
-            (home_blue - 1, BLUE_LINE),
-            (home_blue, BLUE_LINE),
-            (center - 1, RED_LINE),
-            (center, RED_LINE),
+        for (x, width, color) in [
+            (away_goal, 1, RED_LINE),
+            (home_goal, 1, RED_LINE),
+            // Each blue line widens toward centre ice, and the centre line
+            // toward the away end.
+            (away_blue, 2, BLUE_LINE),
+            (home_blue - 1, 2, BLUE_LINE),
+            (center - 1, 2, RED_LINE),
         ] {
-            self.across(canvas, x, color);
+            self.across(canvas, x, width, color);
         }
 
         // Each crease: a bar against the goal line, toward centre ice, and a
         // pixel in front of the bar's middle.
         let mid = self.mid();
         for (goal_line, toward_center) in [(away_goal, 1), (home_goal, -1)] {
-            canvas.vline(goal_line + toward_center, mid - 1, 3, CREASE);
-            canvas.pixel(goal_line + 2 * toward_center, mid, CREASE);
+            fill(canvas, goal_line + toward_center, mid - 1, 1, 3, CREASE);
+            fill(canvas, goal_line + 2 * toward_center, mid, 1, 1, CREASE);
         }
     }
 
-    /// A one-pixel line across the ice at column `x`, inside the boards on
-    /// every row — so a line near an end would stop short of the corners.
-    fn across(&self, canvas: &mut Canvas<'_>, x: i32, color: Rgb888) {
-        for row in 1..self.height - 1 {
-            let inset = self.inset(row);
-            if x > self.x + inset && x < self.x + self.width - 1 - inset {
-                canvas.pixel(x, self.y + row, color);
+    /// A line `width` columns wide across the ice from column `x`, inside
+    /// the boards on every row: through a corner whose inset reaches it, the
+    /// line stops short.
+    fn across(&self, canvas: &mut Canvas<'_>, x: i32, width: i32, color: Rgb888) {
+        let reach = (x - self.x).min(self.x + self.width - 1 - (x + width - 1));
+        if reach <= 0 {
+            return;
+        }
+        let mut short = 0;
+        for edge in 1..CORNER.len() as i32 {
+            if CORNER[edge as usize] >= reach {
+                short = edge;
             }
         }
+        let rows = self.height - 2 - 2 * short;
+        fill(canvas, x, self.y + 1 + short, width, rows, color);
     }
+}
+
+/// Every rectangle the rink draws goes through this one call. Inlined at each
+/// of its call sites, the canvas's clipped fill cost kilobytes of flash for a
+/// strip drawn once a frame; out of line it is one copy, and the rink stays a
+/// list of rectangles.
+#[inline(never)]
+fn fill(canvas: &mut Canvas<'_>, x: i32, y: i32, width: i32, height: i32, color: Rgb888) {
+    canvas.fill_rect(x, y, width, height, color);
 }
