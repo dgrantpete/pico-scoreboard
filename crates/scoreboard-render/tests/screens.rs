@@ -391,17 +391,16 @@ fn spinner_head(frame: &Frame) -> (i32, i32) {
     )
 }
 
-/// The spinner sprite's footprint, centered on the panel.
+/// The spinner ring's footprint, centered on the panel.
 const SPINNER_BOX: (i32, i32, i32, i32) = (52, 20, 77, 45);
 
 #[test]
 fn the_spinner_head_walks_the_ring_in_angular_order() {
-    // This is the test for the palette-index inversion. `gen_toast_icons.py`
-    // bakes dot k's color so its value is k + 1, but `compile_layout.py` assigns
-    // palette indices in row-major first-seen order — which is not angular
-    // order. Get the inversion wrong and the comet still draws twelve dots, it
-    // just lights them in a scrambled sequence. So: half a revolution apart, the
-    // head must be diametrically opposite.
+    // The ring's dots must be lit in angular order (`spinner::RING`, which
+    // replaced a compiled sprite whose palette had to be inverted to find
+    // that order). Get it wrong and the comet still draws twelve dots, it
+    // just lights them in a scrambled sequence. So: half a revolution apart,
+    // the head must be diametrically opposite.
     let mut snapshot = snapshot();
     snapshot.toast = toast_view(ToastKind::Spinner, 1_000);
 
