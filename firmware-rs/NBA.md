@@ -798,7 +798,7 @@ defaults table). The device's `Accept` becomes `ext=2` (`api_client.rs`).
 Nothing, unless D12 changes the NBA row's default copy. No rebuild of
 `index.html.gz` otherwise.
 
-### 6.8 Mock, staging, release
+### 6.8 Mock, staging, release — released 2026-11-08
 `tools/espn/mock.example.yml` + `infra/fly/mock.staging.yml` replace
 `nba-in-july` with an `nba-demo` slate of 6.0's pairs (pregame → run →
 bonus → halftime → overtime → final with leaders → playoff final); a local
@@ -809,6 +809,15 @@ staging board is offline since 2026-10-12; releases go to stable from the
 bench), then `stable`. **Deploy the backend before any firmware channel**: a device
 asking `ext=2` of an older backend draws a bare court. Watch the friend's
 unit's first NBA rotation in the Fly logs.
+
+**Released 2026-11-08 as stable 2026.11.08-10dcb11.** `publish-fw
+--channel stable` from a clean checkout, then a prod deploy: backend
+release v69 (16:14 UTC) carried the `ext=2` summary lane and the
+image together, so no device could ask `ext=2` of an older backend. The
+served manifest's sha256 matches the local `fw_dist/stable/image.bin`. The
+owner waived the dev-channel bench night ("I don't care about testing it
+after the fact"), so it never ran and BACKLOG 41 closed at release. The
+`nba-demo` mock slate is in `mock.example.yml` and `mock.staging.yml`.
 
 ### 6.9 Docs — in progress 2026-11-08
 Done with 6.2: DESIGN.md's NBA summary lane. Done after 6.5: SPEC.md (§3's
@@ -822,8 +831,8 @@ repo.
 SPEC.md (§6's screens list, §4/§11's measured snapshot), BUDGET.md (§5's
 numbers), `scoreboard-espn/DESIGN.md` (the NBA summary lane beside
 hockey's), PARITY.md (the NBA live and final screens leave the parity set:
-Rust-only designs, like hockey's), BACKLOG: close 41 (validated on live
-games), note 104's NBA half (the line-score fallback still says "5"),
+Rust-only designs, like hockey's), BACKLOG: close 41 (closed at release, the
+bench night waived), note 104's NBA half (the line-score fallback still says "5"),
 cross-reference 103, 115 and 116 (§7), add the injury line and any 6.0
 finding. ARCHITECTURE.md is gitignored and updated outside the repo.
 

@@ -412,36 +412,6 @@ the soccer live frame.
       display.py's run_display_thread, and the mock rig notes (the mock
       lives in the session scratchpad, nothing in-repo).
 
-## NBA (wiring landed 2026-07-12; the court screens 2026-11-08 — `firmware-rs/NBA.md`)
-
-Landed 2026-07-12, both slices: inbound (`backend/src/nba/` types +
-transforms on the `status.type.state` DU, `LivePhase` from
-`status.type.description`, clock as display string only — a stop-clock
-can't be extrapolated; 7 live-captured fixtures + transform tests;
-combined spec promoted, genuinely mlb+nba+world-cup) and outbound
-(`nba/handler.rs` + `/basketball/nba/games[/{id}]` routes + OpenAPI
-entries; NBA wire encodings + goldens, cross-checked against the
-firmware parser; firmware `nba.py` parser, `sports.nba.enabled`
-config (default off) + poller source + play-flash commit; `nba_live`
-screen (single design, soccer-A silhouette widened for 3-digit
-scores, HT/END accent breaks, sub-minute warning clock) and the final
-screen reused sport-agnostically (quarter columns, "T" totals,
-"F/OT"); preview scenarios + an `nba-live` golden; NBA toggle in the
-settings Sports card). Same change unified the outbound enum style
-(all sports now MLB-style newtype variants) and moved
-`Record`/`GameListEntry`/`GameState`/`parse_start_time` to
-`shared/`/`espn/`. NBA logos were already served by the generic route.
-
-41. **NBA court screens — the on-hardware shakedown.** The corpus
-    (twenty-one real fixtures, overtime included — the playoff-only April
-    corpus is gone), the summary extractor, the `ext=2` wire, the model and
-    both screens landed 2026-11-08 (NBA.md phases 6.0–6.5). What the bench
-    still owes the release, as soccer's item 34 did: rotation with the other
-    sports, the flash cadence under the §3.7 filter (stoppages only), the
-    news window and the mark's blink on a live game, the ledger through a
-    quarter change, the clock across 30 s polls. Delete when the bench has
-    watched a live NBA night on the stable build.
-
 ## Football (end-to-end wiring landed 2026-07-18; live validation remaining)
 
 Landed 2026-07-18 as a full sibling sport (NFL + NCAAF, soccer-style
