@@ -27,6 +27,7 @@
 //! a `&mut` to one, which nothing can: they are not `static mut` and this crate
 //! forbids `unsafe`.
 
+pub mod art;
 pub mod layout;
 pub mod spleen_5x8;
 pub mod unscii_16;
