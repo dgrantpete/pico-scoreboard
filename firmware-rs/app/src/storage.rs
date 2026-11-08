@@ -149,7 +149,7 @@ pub(crate) const BUFFER_BYTES: usize = 3 * 1024;
 ///
 /// # The fourth key, and why it is not config either
 ///
-/// Phase S added [`Key::Timezone`] — the browser-seeded UTC offset schedule
+/// [`Key::Timezone`] is the browser-seeded UTC offset schedule
 /// ([`crate::timezone`]). The OTA argument above transfers almost unchanged: a
 /// different writer on a different cadence. The settings page writes the
 /// configuration when a person presses Save; it writes this in the background

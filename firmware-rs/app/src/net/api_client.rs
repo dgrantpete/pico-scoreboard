@@ -164,13 +164,6 @@ pub struct Fetched<'buf> {
 
 /// The backend clock. `main.py:453-488`.
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(
-    feature = "direct",
-    allow(
-        dead_code,
-        reason = "the direct build's clock comes from `net::sntp`, not from a backend"
-    )
-)]
 pub struct BackendTime {
     /// Unix seconds, UTC.
     pub unix_seconds: u32,
@@ -194,18 +187,6 @@ impl ApiClient {
             stack,
             state: TCP_STATE.take(),
         }
-    }
-
-    /// The stack this client was built over.
-    ///
-    /// One caller, `direct` only: [`timesync`](crate::net::timesync)'s SNTP
-    /// path needs a `Stack` and the poller does not keep one — it hands the
-    /// stack to [`ApiClient::new`] and lets the client own it from there. A
-    /// `Stack` is a `Copy` handle rather than a resource, so lending it out
-    /// gives away nothing this client is holding.
-    #[cfg(feature = "direct")]
-    pub fn stack(&self) -> Stack<'static> {
-        self.stack
     }
 
     /// A league's games list, with the conditional request `poller.py` sends on
@@ -279,13 +260,6 @@ impl ApiClient {
     }
 
     /// `GET /time`. JSON, not the struct format — the endpoint predates it.
-    #[cfg_attr(
-        feature = "direct",
-        allow(
-            dead_code,
-            reason = "the direct build's clock comes from `net::sntp`, not from a backend"
-        )
-    )]
     pub async fn time(&mut self, url: &str, buf: &mut [u8]) -> Result<BackendTime, PollError> {
         let fetched = self
             .get(url, &[("Accept", "application/json")], buf)

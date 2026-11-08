@@ -1,11 +1,10 @@
 //! What time it is *here*: the browser-seeded UTC offset schedule.
 //!
 //! ESPN does not know what timezone a living room is in, and neither does a
-//! device with no timezone database and no way to ask. The backend answered it
+//! device with no timezone database and no way to ask. The backend answers it
 //! with a GeoIP lookup on the request's source address (`backend/src/clock.rs`,
-//! `/time`'s `utc_offset`) — a guess from an IP, and one more reason the
-//! MaxMind database has to be deployed somewhere. Phase S removes the backend,
-//! so the question needs an answer that does not come from a server.
+//! `/time`'s `utc_offset`) — a guess from an IP. A better answer does not come
+//! from a server at all.
 //!
 //! It comes from the browser. The settings SPA runs on a phone or a laptop
 //! sitting in the same household as the scoreboard, and its `Date` object
@@ -139,13 +138,9 @@ pub fn stored() -> Option<Record> {
 /// [`crate::net::timesync::local_clock`], which resolves the two rungs above
 /// and falls through to the backend's GeoIP answer when this returns `None`.
 /// The full chain is documented there; this function owns the first two rungs
-/// of it and nothing else.
-///
-/// It is deliberately **not** gated behind `direct`, because a browser in the
-/// same household is better evidence than a GeoIP lookup on the request's
-/// source address in *both* worlds — so in a default build the seed simply
-/// outranks the backend, and in a `direct` build it is the only answer there
-/// is.
+/// of it and nothing else. The seed outranks the backend because a browser in
+/// the same household is better evidence than a GeoIP lookup on the request's
+/// source address.
 ///
 /// The other caller is `GET /api/timezone`'s `effective_offset_minutes`, which
 /// reports what this returns rather than re-deriving it, so that what the

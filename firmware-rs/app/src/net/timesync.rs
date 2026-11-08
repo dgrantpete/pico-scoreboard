@@ -17,11 +17,10 @@
 //!
 //! Both values therefore need an *unset* state that is not a plausible reading,
 //! and neither can use zero: [`UNSYNCED`] for the epoch, [`OFFSET_UNKNOWN`] for
-//! the offset. The epoch has had one since Phase 3; the offset did not until
-//! Phase S, because until then the epoch and the offset arrived in the same
-//! response and having one implied having the other. SNTP broke that — it
-//! carries UTC and no timezone — and the two are now separately sourced, which
-//! is what [`local_clock`]'s chain describes.
+//! the offset. The epoch has had one since Phase 3; the offset gained one when
+//! it stopped having a single source — the browser-seeded schedule in
+//! [`crate::timezone`] outranks the backend's answer — which is what
+//! [`local_clock`]'s chain describes.
 //!
 //! # Why this is a phase of the poll loop and not a task of its own
 //!
@@ -38,9 +37,7 @@ use embassy_time::{Duration, Instant};
 use scoreboard_model::poll::PollError;
 use scoreboard_model::sports::LocalClock;
 
-use crate::net::api_client::ApiClient;
-#[cfg(not(feature = "direct"))]
-use crate::net::api_client::url;
+use crate::net::api_client::{ApiClient, url};
 
 /// Between successful syncs.
 ///
@@ -58,10 +55,8 @@ static EPOCH_AT_BOOT: AtomicU32 = AtomicU32::new(UNSYNCED);
 
 /// The backend's GeoIP answer, or [`OFFSET_UNKNOWN`] until there has been one.
 ///
-/// **Only the backend fetch path writes this.** SNTP carries UTC and no
-/// timezone, so a `direct` device leaves it at the sentinel forever and the
-/// offset comes from [`crate::timezone`] instead — see [`local_clock`] for the
-/// chain that arranges both.
+/// A stronger answer from [`crate::timezone`] outranks it — see
+/// [`local_clock`] for the chain that arranges both.
 static UTC_OFFSET_S: AtomicI32 = AtomicI32::new(OFFSET_UNKNOWN);
 
 /// `EPOCH_AT_BOOT` before a successful sync. Zero would be a real, if absurd,
@@ -73,11 +68,10 @@ const UNSYNCED: u32 = 0;
 /// **Zero cannot mean this**, which is the whole reason a sentinel exists: UTC
 /// is a legitimate offset that the backend genuinely serves, so a device
 /// holding `0` has to be distinguishable from one that has been told nothing.
-/// Initialising to `0` instead made a `direct` device — which has no backend to
-/// tell it anything — claim to be in UTC from its first SNTP sync, rendering
-/// every pregame time in the wrong timezone rather than omitting it. That is
-/// exactly what the module docs' "`None` is not `Some(0)`" section exists to
-/// prevent, and it was found in review rather than on a panel.
+/// Initialising to `0` instead would let a device whose epoch is anchored but
+/// whose offset has not been written claim to be in UTC, rendering pregame
+/// times in the wrong timezone rather than omitting them. That is exactly what
+/// the module docs' "`None` is not `Some(0)`" section exists to prevent.
 ///
 /// `i32::MIN` is unreachable as a real value by a wide margin: offsets live
 /// within ±14 h, which is ±50,400.
@@ -92,8 +86,7 @@ const OFFSET_UNKNOWN: i32 = i32::MIN;
 /// 2. **The browser-seeded schedule**, flipping at its stored DST transition.
 /// 3. **The backend's GeoIP answer**, which is a guess from the request's
 ///    source address and is therefore the weakest evidence here — a browser in
-///    the same household beats it. A `direct` build has no backend and never
-///    reaches this rung.
+///    the same household beats it.
 /// 4. **`None`**, and the model omits the start time.
 ///
 /// Rungs 1 and 2 are [`crate::timezone`]'s and resolved inside
@@ -138,7 +131,6 @@ pub async fn sync(client: &mut ApiClient, buffer: &mut [u8], base: &str) -> Dura
     }
 }
 
-#[cfg(not(feature = "direct"))]
 async fn fetch(client: &mut ApiClient, buffer: &mut [u8], base: &str) -> Result<(), PollError> {
     let endpoint = url(base, format_args!("/time"))?;
     let time = client.time(&endpoint, buffer).await?;
@@ -152,36 +144,9 @@ async fn fetch(client: &mut ApiClient, buffer: &mut [u8], base: &str) -> Result<
     Ok(())
 }
 
-/// The same phase with no backend behind it: the epoch comes from the NTP pool
-/// (S3-DESIGN decision 7) and the offset does not come at all.
-///
-/// The signature is the backend path's, unchanged, because the call site is the
-/// poller's and the poller belongs to another lane — `buffer` and `base` are a
-/// receive buffer and a base URL, and SNTP wants neither.
-///
-/// **`UTC_OFFSET_S` is deliberately not written here, and no offset is
-/// invented.** NTP carries UTC and no timezone, so there is nothing honest to
-/// put in it; the offset comes from [`crate::timezone`]'s browser-seeded
-/// schedule, under its own storage key and on its own cadence. The
-/// `Some(0)`-from-nothing hazard an earlier revision of this comment left
-/// open is closed by [`OFFSET_UNKNOWN`] — its doc carries the story.
-#[cfg(feature = "direct")]
-async fn fetch(client: &mut ApiClient, _buffer: &mut [u8], _base: &str) -> Result<(), PollError> {
-    let unix_seconds = super::sntp::epoch(client.stack()).await?;
-    anchor(unix_seconds);
-    crate::debug!(
-        "time: synced from {}, unix {}",
-        super::sntp::POOL_HOST,
-        unix_seconds
-    );
-    Ok(())
-}
-
 /// Pin the Unix second to [`Instant`] zero.
 ///
-/// Shared by both fetch paths rather than written twice, so the two can never
-/// disagree about what a synced clock means — the arithmetic below is the whole
-/// of SPEC §7.4's "there is no RTC here".
+/// The arithmetic below is the whole of SPEC §7.4's "there is no RTC here".
 fn anchor(unix_seconds: u32) {
     let uptime = Instant::now().as_secs() as u32;
     EPOCH_AT_BOOT.store(
