@@ -1,6 +1,6 @@
-//! RGB565/RGB888 → BCM bitplane conversion (port of the native
-//! `bitplanes.c` kernels, identity row map — the production panel's
-//! shift-register order matches the logical top-half/bottom-half layout).
+//! RGB888 → BCM bitplane conversion (port of the native `bitplanes.c`
+//! kernels, identity row map — the production panel's shift-register order
+//! matches the logical top-half/bottom-half layout).
 //!
 //! Output layout, dictated by the DMA/PIO consumption order: plane-major
 //! (LSB plane first, so plane *i* lines up with the timing stream's
@@ -9,126 +9,113 @@
 //! six data pins, lowest pin = bit 0. The data SM consumes 8 bits per pixel
 //! (`out pins, 8`); the top two bits are padding.
 //!
-//! The RGB565 path goes through [`FusedTables`], which folds the channel
-//! expansion, the gamma LUT, and the spread of the eight plane bits into one
-//! table lookup per channel (BACKLOG 63). The RGB888 path keeps the scalar
-//! per-plane pluck: nothing on the render path loads RGB888, so it is not
-//! worth tables of its own. `tests/packing.rs` pins the RGB565 path
-//! byte-identical to the pre-table implementation it keeps as an oracle.
+//! The pack goes through [`FusedTables`], which folds the gamma LUT and the
+//! spread of the eight plane bits into one table lookup per channel — BACKLOG
+//! 63's technique, re-derived for eight-bit channels when the drawing surface
+//! left RGB565 (BACKLOG 115).
+//! `tests/packing.rs` pins it byte-identical to the scalar implementation it
+//! keeps as an oracle, and to the scalar RGB565 pack that ran on silicon for
+//! every frame before that, over bit-replicated 565 input.
 
-use crate::geometry::{
-    BITPLANE_BUFFER_BYTES, BITPLANE_BYTES, COLOR_BIT_DEPTH, RGB565_FRAME_BYTES,
-    RGB888_FRAME_BYTES, ROW_ADDRESS_COUNT, SHIFT_REGISTER_DEPTH,
-};
+use crate::geometry::{BITPLANE_BUFFER_BYTES, BITPLANE_BYTES, COLOR_BIT_DEPTH, RGB888_FRAME_BYTES};
 
-/// Fused gamma + bit-spread lookup tables for the RGB565 pack: one `u64`
-/// per raw channel value whose LE byte *i* carries that channel's
-/// post-gamma plane-*i* bit, already positioned at the channel's top-half
-/// data-pin lane (R1, G1, B1 = bits 0, 1, 2). ORing three entries yields
-/// all eight output bytes of a top-half pixel at once; the bottom-half
-/// pixel uses the same tables and one `<< 3`, because the bottom lanes are
-/// the top lanes shifted by three.
+/// Fused gamma + bit-spread lookup table: for every 8-bit channel value, that
+/// value's eight post-gamma plane bits, interleaved so that byte `i` of the
+/// entry carries plane `i` in bit 0 and plane `i + 4` in bit 4.
 ///
-/// Indices are the *raw* framebuffer channels — 5-bit R/B, 6-bit G — with
-/// the MSB-replicating 8-bit expansion folded into construction, so the
-/// pack touches neither the expansion nor the 256-entry gamma LUT.
+/// A pixel's word is three lookups — R, then G shifted one, then B shifted
+/// two — which leaves each byte holding that pixel's R/G/B lanes for plane
+/// `i` in bits 0–2 and for plane `i + 4` in bits 4–6. Its pair-mate in the
+/// bottom half builds the same word. The eight output bytes then fall out of
+/// two masks and two shifts:
 ///
-/// Three tables plus a shift rather than six pre-shifted tables: on the
-/// host the two are within noise of each other, and on thumbv8m the six
-/// bases (twelve, once each `u64` load splits into a register-offset word
-/// pair) spill — 86.5 instructions per pixel pair against 78 for this
-/// shape under the app's actual codegen. The asm comparison lives with the
-/// decision record in `benches/pack.rs`; a paired-channel 17 KiB variant
-/// measured only 5 % better and was rejected outright. 1,024 B total,
-/// living wherever the driver does (the core-1 task arena on the device).
+/// ```text
+/// planes 0–3 = (top        & 0x07070707) | ((bottom << 3) & 0x38383838)
+/// planes 4–7 = ((top >> 4) & 0x07070707) | ((bottom >> 1) & 0x38383838)
+/// ```
+///
+/// One table serves every lane because the lanes differ only by a shift that
+/// never carries out of its nibble, and every shift folds into the `orr` or
+/// `and` that consumes it on thumbv8m. 1,024 B — the size of the RGB565
+/// pack's three tables it replaced — living wherever the driver does (the
+/// core-1 task arena on the device). The shapes it was chosen over, and their
+/// instruction counts, are the decision record in `benches/pack.rs`.
 ///
 /// Derived from the active gamma LUT, so it must be rebuilt whenever that
-/// changes — [`Hub75Driver::set_gamma`] does, in microseconds (128 entries
-/// of shift-and-mask; nothing like the 27.6 ms `Power` LUT expansion that
+/// changes — [`Hub75Driver::set_gamma`] does, in microseconds (256 entries of
+/// shift-and-mask; nothing like the 27.6 ms `Power` LUT expansion that
 /// [`GammaTable`](crate::gamma::GammaTable) exists to keep off core 1).
 ///
 /// [`Hub75Driver::set_gamma`]: crate::driver::Hub75Driver::set_gamma
 pub struct FusedTables {
-    r: [u64; 32],
-    g: [u64; 64],
-    b: [u64; 32],
+    planes: [u32; 256],
 }
 
 impl FusedTables {
-    /// Build the tables for one gamma LUT.
+    /// Build the table for one gamma LUT.
     pub fn new(gamma_lut: &[u8; 256]) -> FusedTables {
-        let mut tables = FusedTables {
-            r: [0; 32],
-            g: [0; 64],
-            b: [0; 32],
-        };
-        for raw in 0..32 {
-            // R and B share the 5-bit expansion, so one gamma read feeds
-            // both tables; only the lane position differs.
-            let expanded = (raw << 3) | (raw >> 2);
-            let spread = spread_planes(gamma_lut[expanded]);
-            tables.r[raw] = spread;
-            tables.b[raw] = spread << 2;
-        }
-        for raw in 0..64 {
-            let expanded = (raw << 2) | (raw >> 4);
-            tables.g[raw] = spread_planes(gamma_lut[expanded]) << 1;
+        let mut tables = FusedTables { planes: [0; 256] };
+        for (entry, &corrected) in tables.planes.iter_mut().zip(gamma_lut) {
+            *entry = interleave_planes(corrected);
         }
         tables
     }
 }
 
-/// LE byte `i` of the result carries bit `i` of `value` in its bit 0: the
-/// post-gamma channel byte, spread across the eight plane slots.
-fn spread_planes(value: u8) -> u64 {
-    let mut spread = 0u64;
+/// Bit `p` of `value` at bit `8 * (p % 4) + 4 * (p / 4)`: planes 0–3 in the
+/// low nibble of bytes 0–3, planes 4–7 in their high nibble.
+fn interleave_planes(value: u8) -> u32 {
+    let mut entry = 0u32;
     for plane in 0..COLOR_BIT_DEPTH {
-        spread |= (((value >> plane) & 1) as u64) << (8 * plane);
+        let bit = ((value >> plane) & 1) as u32;
+        entry |= bit << (8 * (plane % 4) + 4 * (plane / 4));
     }
-    spread
+    entry
 }
 
-/// Convert an RGB565 frame (little-endian, `framebuf.RGB565` layout: low
-/// byte `GGGBBBBB`, high byte `RRRRRGGG`) into bitplanes.
+/// Lanes R1, G1, B1 of planes `i` and `i + 4`, in byte `i`'s two nibbles.
+const LANES_LOW: u32 = 0x0707_0707;
+/// Lanes R2, G2, B2 once a bottom-half word is shifted onto bits 3–5.
+const LANES_HIGH: u32 = 0x3838_3838;
+
+/// Convert an RGB888 frame (three bytes per pixel: R, G, B, row-major) into
+/// bitplanes.
 ///
-/// Per pixel pair: four byte loads, six [`FusedTables`] lookups, five ORs
-/// and a shift, eight byte stores — where the scalar version did six gamma
-/// lookups and then plucked and placed 48 bits one at a time.
+/// Per pixel pair: six byte loads, six [`FusedTables`] lookups, four ORs, the
+/// four masks and two ORs that split the pair into its two plane quads, and
+/// eight byte stores — about 47 instructions on thumbv8m against the RGB565
+/// pack's 78.
 ///
 /// The flat loop walks pixel pairs directly: pair row `p`, column `x` is
-/// output byte `p * 128 + x` in every plane, and the matching input bytes
-/// sit at exactly twice that offset into each half of the frame — the
+/// output byte `p * 128 + x` in every plane, and the matching input pixel
+/// sits at exactly that pixel offset into each half of the frame — the
 /// top-half rows are the frame's first half, the bottom-half rows its
 /// second.
 ///
 /// Placed in RAM on the device (`.data.*` is copied out of flash by the
 /// cortex-m-rt startup, and every device binary here links its script):
-/// this loop runs every drawn frame and BACKLOG 63 measured its time moving
-/// 5.07 → 5.25 ms between builds that differed by 120 B of unrelated code —
-/// XIP cache placement, not the loop. RAM residency removes that variance
-/// (and the XIP miss cost itself); `inline(never)` keeps LTO from folding
-/// the body back into a flash-resident caller.
+/// this loop runs every drawn frame and BACKLOG 63 measured its RGB565
+/// predecessor moving 5.07 → 5.25 ms between builds that differed by 120 B
+/// of unrelated code — XIP cache placement, not the loop. RAM residency
+/// removes that variance (and the XIP miss cost itself); `inline(never)`
+/// keeps LTO from folding the body back into a flash-resident caller.
 #[cfg_attr(target_os = "none", unsafe(link_section = ".data.hub75_pack"))]
 #[inline(never)]
-pub fn pack_rgb565(
-    input: &[u8; RGB565_FRAME_BYTES],
+pub fn pack_rgb888(
+    input: &[u8; RGB888_FRAME_BYTES],
     tables: &FusedTables,
     output: &mut [u8; BITPLANE_BUFFER_BYTES],
 ) {
-    let (top, bottom) = input.split_at(RGB565_FRAME_BYTES / 2);
-    for index in 0..BITPLANE_BYTES {
-        let lo1 = top[2 * index] as usize;
-        let hi1 = top[2 * index + 1] as usize;
-        let lo2 = bottom[2 * index] as usize;
-        let hi2 = bottom[2 * index + 1] as usize;
-        let top_word = tables.r[hi1 >> 3]
-            | tables.g[((hi1 << 3) | (lo1 >> 5)) & 0b11_1111]
-            | tables.b[lo1 & 0b1_1111];
-        let bottom_word = tables.r[hi2 >> 3]
-            | tables.g[((hi2 << 3) | (lo2 >> 5)) & 0b11_1111]
-            | tables.b[lo2 & 0b1_1111];
-        let word = top_word | (bottom_word << 3);
-        let [p0, p1, p2, p3, p4, p5, p6, p7] = word.to_le_bytes();
+    let (top, bottom) = input.split_at(RGB888_FRAME_BYTES / 2);
+    let (top, bottom) = (top.as_chunks::<3>().0, bottom.as_chunks::<3>().0);
+    for (index, (&[r1, g1, b1], &[r2, g2, b2])) in top.iter().zip(bottom).enumerate() {
+        let table = &tables.planes;
+        let upper = table[r1 as usize] | (table[g1 as usize] << 1) | (table[b1 as usize] << 2);
+        let lower = table[r2 as usize] | (table[g2 as usize] << 1) | (table[b2 as usize] << 2);
+        let low = (upper & LANES_LOW) | ((lower << 3) & LANES_HIGH);
+        let high = ((upper >> 4) & LANES_LOW) | ((lower >> 1) & LANES_HIGH);
+        let [p0, p1, p2, p3] = low.to_le_bytes();
+        let [p4, p5, p6, p7] = high.to_le_bytes();
         output[index] = p0;
         output[BITPLANE_BYTES + index] = p1;
         output[2 * BITPLANE_BYTES + index] = p2;
@@ -137,49 +124,5 @@ pub fn pack_rgb565(
         output[5 * BITPLANE_BYTES + index] = p5;
         output[6 * BITPLANE_BYTES + index] = p6;
         output[7 * BITPLANE_BYTES + index] = p7;
-    }
-}
-
-/// Convert an RGB888 frame (three bytes per pixel: R, G, B) into bitplanes.
-///
-/// Stays in flash and on the scalar path: nothing on the render path loads
-/// RGB888 (the display buffer is RGB565), so it is worth neither RAM nor
-/// tables.
-pub fn pack_rgb888(
-    input: &[u8; RGB888_FRAME_BYTES],
-    gamma_lut: &[u8; 256],
-    output: &mut [u8; BITPLANE_BUFFER_BYTES],
-) {
-    for pair in 0..ROW_ADDRESS_COUNT {
-        let top = pair * SHIFT_REGISTER_DEPTH * 3;
-        let bottom = (pair + ROW_ADDRESS_COUNT) * SHIFT_REGISTER_DEPTH * 3;
-        for x in 0..SHIFT_REGISTER_DEPTH {
-            let t = top + 3 * x;
-            let b = bottom + 3 * x;
-            write_pair(
-                [
-                    gamma_lut[input[t] as usize],
-                    gamma_lut[input[t + 1] as usize],
-                    gamma_lut[input[t + 2] as usize],
-                    gamma_lut[input[b] as usize],
-                    gamma_lut[input[b + 1] as usize],
-                    gamma_lut[input[b + 2] as usize],
-                ],
-                output,
-                pair * SHIFT_REGISTER_DEPTH + x,
-            );
-        }
-    }
-}
-
-/// Scatter one gamma-corrected pixel pair (`[r1, g1, b1, r2, g2, b2]`)
-/// across all bitplanes at byte `index` within each plane.
-fn write_pair(channels: [u8; 6], output: &mut [u8; BITPLANE_BUFFER_BYTES], index: usize) {
-    for plane in 0..COLOR_BIT_DEPTH {
-        let mut packed = 0u8;
-        for (lane, &value) in channels.iter().enumerate() {
-            packed |= ((value >> plane) & 1) << lane;
-        }
-        output[plane * BITPLANE_BYTES + index] = packed;
     }
 }

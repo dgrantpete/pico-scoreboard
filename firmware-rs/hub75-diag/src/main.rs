@@ -18,12 +18,11 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Ticker, Timer};
 use hub75::display::{FrameBytes, Hub75Display};
 use hub75::driver::{Config, Hub75Driver};
-use hub75::geometry::{HEIGHT, RGB565_FRAME_BYTES, WIDTH};
-use hub75::rgb565;
+use hub75::geometry::{HEIGHT, RGB888_FRAME_BYTES, WIDTH};
 use panic_probe as _;
 use static_cell::ConstStaticCell;
 
-static FRAME: ConstStaticCell<FrameBytes> = ConstStaticCell::new([0; RGB565_FRAME_BYTES]);
+static FRAME: ConstStaticCell<FrameBytes> = ConstStaticCell::new([0; RGB888_FRAME_BYTES]);
 
 type Display = Hub75Display<'static, Hub75Driver>;
 
@@ -53,10 +52,10 @@ async fn main(_spawner: Spawner) {
 
 async fn solid_colors(display: &mut Display) {
     let colors = [
-        ("red", rgb565(255, 0, 0)),
-        ("green", rgb565(0, 255, 0)),
-        ("blue", rgb565(0, 0, 255)),
-        ("white", rgb565(255, 255, 255)),
+        ("red", [255, 0, 0]),
+        ("green", [0, 255, 0]),
+        ("blue", [0, 0, 255]),
+        ("white", [255, 255, 255]),
     ];
     for (name, color) in colors {
         info!("pattern: solid {}", name);
@@ -73,12 +72,7 @@ async fn gradient_ramps(display: &mut Display) {
     info!("pattern: gradient ramps (white / R / G / B)");
     for x in 0..WIDTH {
         let v = (x * 255 / (WIDTH - 1)) as u8;
-        let band = [
-            rgb565(v, v, v),
-            rgb565(v, 0, 0),
-            rgb565(0, v, 0),
-            rgb565(0, 0, v),
-        ];
+        let band = [[v, v, v], [v, 0, 0], [0, v, 0], [0, 0, v]];
         for y in 0..HEIGHT {
             display.pixel(x as i32, y as i32, band[y / (HEIGHT / 4)]);
         }
@@ -92,11 +86,11 @@ async fn gradient_ramps(display: &mut Display) {
 async fn moving_bar(display: &mut Display) {
     info!("pattern: moving bar at 20 FPS");
     let mut ticker = Ticker::every(Duration::from_millis(50));
-    let white = rgb565(255, 255, 255);
-    let red = rgb565(255, 0, 0);
+    let white = [255, 255, 255];
+    let red = [255, 0, 0];
     for step in 0..200usize {
         let bar_x = (step * 2) % WIDTH;
-        display.fill(0);
+        display.fill([0, 0, 0]);
         for dx in 0..4 {
             let x = ((bar_x + dx) % WIDTH) as i32;
             for y in 0..HEIGHT as i32 {
@@ -112,7 +106,7 @@ async fn moving_bar(display: &mut Display) {
 /// monotonic; flicker or refresh-rate shifts mean OE timing is off.
 async fn brightness_sweep(display: &mut Display) {
     info!("pattern: brightness sweep");
-    display.fill(rgb565(255, 255, 255));
+    display.fill([255, 255, 255]);
     display.show();
     for step in 0..=120u32 {
         let level = if step <= 60 { step } else { 120 - step } as f64 / 60.0;
@@ -130,13 +124,13 @@ async fn geometry_markers(display: &mut Display) {
     info!("pattern: geometry markers");
     let right = WIDTH as i32 - 1;
     let bottom = HEIGHT as i32 - 1;
-    display.fill(0);
-    display.pixel(0, 0, rgb565(255, 0, 0));
-    display.pixel(right, 0, rgb565(0, 255, 0));
-    display.pixel(0, bottom, rgb565(0, 0, 255));
-    display.pixel(right, bottom, rgb565(255, 255, 255));
+    display.fill([0, 0, 0]);
+    display.pixel(0, 0, [255, 0, 0]);
+    display.pixel(right, 0, [0, 255, 0]);
+    display.pixel(0, bottom, [0, 0, 255]);
+    display.pixel(right, bottom, [255, 255, 255]);
 
-    let yellow = rgb565(255, 255, 0);
+    let yellow = [255, 255, 0];
     let (cx, cy) = (WIDTH as i32 / 2, HEIGHT as i32 / 2);
     for offset in -2..=2 {
         display.pixel(cx + offset, cy, yellow);

@@ -1243,7 +1243,7 @@ mod diag {
         chunked::ChunkedResponse::new(ShotChunks)
     }
 
-    /// The 16 KB frame, in four chunks straight from the harness's buffer:
+    /// The 24 KB frame, in six chunks straight from the harness's buffer:
     /// no lease, because the reader lock the capture holds is what keeps the
     /// bytes still.
     struct ShotChunks;

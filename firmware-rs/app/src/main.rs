@@ -73,7 +73,7 @@ use embassy_rp::multicore::{Stack, spawn_core1};
 use embassy_rp::watchdog::Watchdog;
 use hub75::display::{FrameBytes, Hub75Display};
 use hub75::driver::{Config, Hub75Driver};
-use hub75::geometry::RGB565_FRAME_BYTES;
+use hub75::geometry::RGB888_FRAME_BYTES;
 use scoreboard_model::{SnapshotChannel, Store};
 use static_cell::{ConstStaticCell, StaticCell};
 
@@ -109,11 +109,11 @@ static CORE1_STACK: Core1Stack = Core1Stack(UnsafeCell::new(Stack::new()));
 static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
 static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
-/// The RGB565 drawing surface core 1 renders into — 16,384 B. App-owned, not a
+/// The RGB888 drawing surface core 1 renders into — 24,576 B. App-owned, not a
 /// driver static: the driver never allocates the drawing surface, and putting
 /// it in a static means constructing the display never moves a frame through
 /// anybody's stack.
-static FRAME: ConstStaticCell<FrameBytes> = ConstStaticCell::new([0; RGB565_FRAME_BYTES]);
+static FRAME: ConstStaticCell<FrameBytes> = ConstStaticCell::new([0; RGB888_FRAME_BYTES]);
 
 /// The core-0 → core-1 handoff: three snapshot slots and an atomic index.
 static CHANNEL: SnapshotChannel = SnapshotChannel::new();

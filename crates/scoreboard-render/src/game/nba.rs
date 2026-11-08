@@ -37,14 +37,14 @@ use crate::geometry::{
     NBA_LIVE, NbaLiveGeometry,
 };
 use crate::widgets::{arrow, count_dots, timeout_blocks};
-use crate::{BLACK, WHITE, generated, mix, pack, rgb565, toast};
+use crate::{BLACK, Rgb888, WHITE, generated, mix, toast};
 use scoreboard_model::UiColors;
 use scoreboard_model::snapshot::{CourtMark, NbaLiveView, Record, Side};
 
 /// A side's timeouts at the tip, and so the blocks in its row.
 const TIMEOUTS: u8 = 7;
 /// A burned timeout's block.
-const BURNED: u16 = rgb565(40, 40, 40);
+const BURNED: Rgb888 = Rgb888::new(40, 40, 40);
 /// The dots a foul row shows: the fifth team foul of a quarter is the one
 /// that puts the other side in the bonus.
 const FOUL_DOTS: u8 = 5;
@@ -72,7 +72,7 @@ pub fn render_live(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let view = &snapshot.nba_live;
     let table = NBA_LIVE;
     let colors = &snapshot.ui_colors;
-    let primary = pack(colors.primary);
+    let primary = colors.primary;
 
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
     ledger(canvas, view, colors, &table);
@@ -102,13 +102,13 @@ pub fn render_live(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
 /// The clock's color: accent while the game is between periods, warning when
 /// the clock is about to run out, normal otherwise. Shared with football and
 /// hockey, which follow the same conventions.
-pub fn clock_color(colors: &UiColors, accent: bool, low: bool) -> u16 {
+pub fn clock_color(colors: &UiColors, accent: bool, low: bool) -> Rgb888 {
     if accent {
-        pack(colors.accent)
+        colors.accent
     } else if low {
-        pack(colors.clock_warning)
+        colors.clock_warning
     } else {
-        pack(colors.clock_normal)
+        colors.clock_normal
     }
 }
 
@@ -122,7 +122,7 @@ fn ledger(canvas: &mut Canvas<'_>, view: &NbaLiveView, colors: &UiColors, table:
     let Some(ledger) = view.ledger else {
         return;
     };
-    let warning = pack(colors.clock_warning);
+    let warning = colors.clock_warning;
     for (side, opponent, dots, blocks, color) in [
         (
             ledger.away,
@@ -139,7 +139,6 @@ fn ledger(canvas: &mut Canvas<'_>, view: &NbaLiveView, colors: &UiColors, table:
             view.home_color,
         ),
     ] {
-        let color = pack(color);
         let tint = if opponent.in_bonus { warning } else { color };
         count_dots(canvas, dots, side.fouls.min(FOUL_DOTS), Some(tint));
         timeout_blocks(
@@ -160,7 +159,7 @@ fn scores(
     canvas: &mut Canvas<'_>,
     scene: &Scene<'_>,
     view: &NbaLiveView,
-    primary: u16,
+    primary: Rgb888,
     table: &NbaLiveGeometry,
 ) {
     let since = scene.now.since(scene.snapshot.animation_start_ms).0;
@@ -181,7 +180,7 @@ fn scores(
         let color = match view.run {
             Some(run) if run.side == side && run.points >= RUN_GLOW => mix(
                 primary,
-                pack(team),
+                team,
                 crate::pulse(since, GLOW_PULSE_MS) * GLOW_DEPTH / 256,
             ),
             _ => primary,
@@ -194,7 +193,7 @@ fn scores(
 /// blinking while its score is news, then the caption.
 fn court(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &NbaLiveView, table: &NbaLiveGeometry) {
     let court = table.court;
-    let (away, home) = (pack(view.away_color), pack(view.home_color));
+    let (away, home) = (view.away_color, view.home_color);
     court.draw(canvas, away, home);
     for mark in &view.marks {
         let color = match mark.side {
@@ -266,11 +265,9 @@ fn caption(
 ) {
     let slot = table.caption;
     let face = &generated::SPLEEN_5X8;
-    let team = |side| {
-        pack(match side {
-            Side::Away => view.away_color,
-            Side::Home => view.home_color,
-        })
+    let team = |side| match side {
+        Side::Away => view.away_color,
+        Side::Home => view.home_color,
     };
     if let Some(run) = view.run {
         wood_box(canvas, table);
@@ -317,7 +314,7 @@ fn caption(
     let color = match (away, home) {
         (true, false) => team(Side::Away),
         (false, true) => team(Side::Home),
-        _ => pack(scene.snapshot.ui_colors.primary),
+        _ => scene.snapshot.ui_colors.primary,
     };
     let mut region = canvas.slice(slot);
     font::draw_unscrolled(&mut region, "BONUS", Align::Center, Style::new(face, color));
@@ -337,7 +334,7 @@ fn wood_box(canvas: &mut Canvas<'_>, table: &NbaLiveGeometry) {
 
 /// Football's 3 × 5 triangle at the slot's edge nearest `side`'s crest,
 /// pointing at it.
-fn edge_arrow(canvas: &mut Canvas<'_>, slot: Slice, side: Side, color: u16) {
+fn edge_arrow(canvas: &mut Canvas<'_>, slot: Slice, side: Side, color: Rgb888) {
     let (x, right) = match side {
         Side::Away => (slot.x, false),
         Side::Home => (slot.x + slot.width - 3, true),
@@ -364,13 +361,10 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let view = &snapshot.nba_final;
     let table = NBA_FINAL;
     let colors = &snapshot.ui_colors;
-    let (away_color, home_color) = super::winner_colors(
-        shared.home_won,
-        pack(shared.away_color),
-        pack(shared.home_color),
-    );
+    let (away_color, home_color) =
+        super::winner_colors(shared.home_won, shared.away_color, shared.home_color);
 
-    let rule = pack(colors.secondary);
+    let rule = colors.secondary;
     canvas.vline(
         table.divider_x,
         EDGE_INSET,
@@ -387,12 +381,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
     super::big_score(canvas, table.score_away, shared.away_score, away_color);
     super::big_score(canvas, table.score_home, shared.home_score, home_color);
-    super::chip(
-        canvas,
-        table.final_label,
-        &shared.final_text,
-        pack(colors.accent),
-    );
+    super::chip(canvas, table.final_label, &shared.final_text, colors.accent);
 
     let face = &generated::SPLEEN_5X8;
     match &view.leaders {
@@ -407,8 +396,8 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
                 );
                 // A leader's line is in their own team's colour, winner or not.
                 let color = match line.side {
-                    Side::Away => pack(shared.away_color),
-                    Side::Home => pack(shared.home_color),
+                    Side::Away => shared.away_color,
+                    Side::Home => shared.home_color,
                 };
                 let mut region = canvas.slice(slot);
                 font::draw(
@@ -461,13 +450,13 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             series,
             Align::Center,
             scene.view.motion(),
-            Style::new(face, pack(colors.primary)),
+            Style::new(face, colors.primary),
             HOCKEY_STARS_SCROLL,
         );
     }
     if let Some([away, home]) = view.records {
-        record(canvas, records_slot, away, false, pack(shared.away_color));
-        record(canvas, records_slot, home, true, pack(shared.home_color));
+        record(canvas, records_slot, away, false, shared.away_color);
+        record(canvas, records_slot, home, true, shared.home_color);
     }
 
     toast::overlay(canvas, snapshot, scene.now);
@@ -475,7 +464,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
 
 /// "W-L" at the start of the records' row, or at its end for the home side,
 /// in the team's colour — the numbers drawn in place, no string built.
-fn record(canvas: &mut Canvas<'_>, slot: Slice, record: Record, at_end: bool, color: u16) {
+fn record(canvas: &mut Canvas<'_>, slot: Slice, record: Record, at_end: bool, color: Rgb888) {
     let face = &generated::SPLEEN_5X8;
     let style = Style::new(face, color);
     let dash = "-";

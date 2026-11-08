@@ -6,7 +6,7 @@ description = "CPU-free HUB75 LED-matrix driver for the RP2350: two-SM PIO, self
 
 [features]
 # Host-side display backend: same drawing API, frames land in a plain
-# in-memory RGB565 buffer instead of the panel (scoreboard-render pixel tests).
+# in-memory RGB888 buffer instead of the panel (scoreboard-render pixel tests).
 simulator = []
 
 [dependencies]

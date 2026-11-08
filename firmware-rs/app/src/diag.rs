@@ -6,7 +6,7 @@
 //! frame at a time, without a reflash per experiment, and with two readbacks
 //! that split the question three ways:
 //!
-//! * `GET /api/diag/frame` returns the 16 KB RGB565 frame core 1 last drew,
+//! * `GET /api/diag/frame` returns the 24 KB RGB888 frame core 1 last drew,
 //!   copied at a frame boundary. If that is right and the panel is wrong, the
 //!   fault is below the renderer.
 //! * `GET /api/diag/lanes` counts the set bits per data lane — R1, G1, B1,
@@ -18,10 +18,10 @@
 //!
 //! | Route | Body | Effect |
 //! |---|---|---|
-//! | `PUT /api/diag/frame?offset=N` | raw RGB565, little-endian | Written at byte N of the staged frame. The chunk that reaches the end publishes it and takes the panel |
+//! | `PUT /api/diag/frame?offset=N` | raw RGB888, three bytes a pixel | Written at byte N of the staged frame. The chunk that reaches the end publishes it and takes the panel |
 //! | `POST /api/diag/fill` | `{"pattern":"black"}` or `{"x","y","w","h","rgb":[r,g,b]}` | Painted onto the staged frame, then published |
 //! | `POST /api/diag/exit` | — | The panel goes back to the scoreboard |
-//! | `GET /api/diag/frame` | — | The last drawn frame, 16,384 B |
+//! | `GET /api/diag/frame` | — | The last drawn frame, 24,576 B |
 //! | `GET /api/diag/lanes` | — | `{"r1":n,…,"b2":n,"bytes":N}` |
 //! | `POST /api/diag/led` | `{"toggles":N,"interval_ms":M}` | The LED task fires N on/off IOCTL pairs at that spacing |
 //!
@@ -31,7 +31,7 @@
 //!
 //! # Ownership across the cores
 //!
-//! Two 16 KB frames live here, and the atomics say whose they are at every
+//! Two 24 KB frames live here, and the atomics say whose they are at every
 //! instant — the same shape as the snapshot channel, without the slots:
 //!
 //! * [`STAGE`] belongs to core 0 while [`PENDING`] is false — its writers take
@@ -54,8 +54,7 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer, with_timeout};
 use hub75::display::{FrameBytes, Hub75Display};
 use hub75::driver::Hub75Driver;
-use hub75::geometry::{HEIGHT, RGB565_FRAME_BYTES, WIDTH};
-use hub75::rgb565;
+use hub75::geometry::{HEIGHT, RGB888_FRAME_BYTES, WIDTH};
 
 struct Frame(UnsafeCell<FrameBytes>);
 // SAFETY: every access is arbitrated by the atomics in the module docs —
@@ -63,8 +62,8 @@ struct Frame(UnsafeCell<FrameBytes>);
 // hold a reference to the same frame at once.
 unsafe impl Sync for Frame {}
 
-static STAGE: Frame = Frame(UnsafeCell::new([0; RGB565_FRAME_BYTES]));
-static SHOT: Frame = Frame(UnsafeCell::new([0; RGB565_FRAME_BYTES]));
+static STAGE: Frame = Frame(UnsafeCell::new([0; RGB888_FRAME_BYTES]));
+static SHOT: Frame = Frame(UnsafeCell::new([0; RGB888_FRAME_BYTES]));
 
 /// `STAGE` is core 1's to copy. Set by a writer, cleared by core 1.
 static PENDING: AtomicBool = AtomicBool::new(false);
@@ -121,7 +120,7 @@ fn publish() {
 pub async fn write_chunk(offset: usize, bytes: &[u8]) -> Result<bool, Refused> {
     let end = offset
         .checked_add(bytes.len())
-        .filter(|&end| end <= RGB565_FRAME_BYTES)
+        .filter(|&end| end <= RGB888_FRAME_BYTES)
         .ok_or(Refused::OutOfBounds)?;
     let _writer = WRITER.lock().await;
     await_stage().await?;
@@ -129,7 +128,7 @@ pub async fn write_chunk(offset: usize, bytes: &[u8]) -> Result<bool, Refused> {
     // and this is its only writer until the guard drops.
     let stage = unsafe { &mut *STAGE.0.get() };
     stage[offset..end].copy_from_slice(bytes);
-    let complete = end == RGB565_FRAME_BYTES;
+    let complete = end == RGB888_FRAME_BYTES;
     if complete {
         publish();
     }
@@ -201,23 +200,21 @@ pub async fn draw(command: Command) -> Result<(), Refused> {
     Ok(())
 }
 
-fn solid(stage: &mut FrameBytes, color: u16) {
-    let bytes = color.to_le_bytes();
-    for pixel in stage.as_chunks_mut::<2>().0 {
-        *pixel = bytes;
+fn solid(stage: &mut FrameBytes, rgb: [u8; 3]) {
+    for pixel in stage.as_chunks_mut::<3>().0 {
+        *pixel = rgb;
     }
 }
 
 fn fill(stage: &mut FrameBytes, rect: Rect) {
-    let color = rgb565(rect.rgb[0], rect.rgb[1], rect.rgb[2]).to_le_bytes();
     let x1 = (rect.x as usize).min(WIDTH);
     let y1 = (rect.y as usize).min(HEIGHT);
     let x2 = (rect.x as usize + rect.w as usize).min(WIDTH);
     let y2 = (rect.y as usize + rect.h as usize).min(HEIGHT);
     for y in y1..y2 {
         for x in x1..x2 {
-            let index = (y * WIDTH + x) * 2;
-            stage[index..index + 2].copy_from_slice(&color);
+            let index = (y * WIDTH + x) * 3;
+            stage[index..index + 3].copy_from_slice(&rect.rgb);
         }
     }
 }
@@ -232,21 +229,21 @@ fn paint(stage: &mut FrameBytes, pattern: Pattern) {
         rgb: [0; 3],
     };
     match pattern {
-        Pattern::Black => solid(stage, 0),
-        Pattern::White => solid(stage, rgb565(255, 255, 255)),
-        Pattern::Red => solid(stage, rgb565(255, 0, 0)),
-        Pattern::Green => solid(stage, rgb565(0, 255, 0)),
-        Pattern::Blue => solid(stage, rgb565(0, 0, 255)),
+        Pattern::Black => solid(stage, [0, 0, 0]),
+        Pattern::White => solid(stage, [255, 255, 255]),
+        Pattern::Red => solid(stage, [255, 0, 0]),
+        Pattern::Green => solid(stage, [0, 255, 0]),
+        Pattern::Blue => solid(stage, [0, 0, 255]),
         Pattern::LowerBlue => {
-            solid(stage, 0);
+            solid(stage, [0, 0, 0]);
             fill(stage, Rect { y: half, h: half, rgb: [0, 0, 255], ..full });
         }
         Pattern::UpperBlue => {
-            solid(stage, 0);
+            solid(stage, [0, 0, 0]);
             fill(stage, Rect { h: half, rgb: [0, 0, 255], ..full });
         }
         Pattern::Halves => {
-            solid(stage, 0);
+            solid(stage, [0, 0, 0]);
             fill(stage, Rect { h: half, rgb: [255, 255, 255], ..full });
         }
         Pattern::Bars => {

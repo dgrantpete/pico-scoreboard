@@ -7,7 +7,7 @@
 //! This is the port of `firmware/src/scoreboard/display.py`,
 //! `screen_geometry.py`, `menu.py` and `fonts/__init__.py`. It owns no state
 //! that survives a call and touches no hardware — the caller hands it a
-//! [`Canvas`] over an RGB565 buffer and a snapshot to read.
+//! [`Canvas`] over an RGB888 buffer and a snapshot to read.
 //!
 //! [`ScoreboardSnapshot`]: scoreboard_model::ScoreboardSnapshot
 //!
@@ -32,7 +32,7 @@
 //! | MicroPython bucket | Rust form | What enforces it |
 //! |---|---|---|
 //! | `LoopState` — all cross-frame state | the app's loop-local struct (Phase 3), holding a [`FrameRail`] | it is a local; renderers take `WallMs`/`FrameElapsed` **values**, never the struct, so they cannot reach it |
-//! | Registered scratch (`scratch_buffers()`, `SCRATCH_PALETTE_ENTRIES`) | plain locals: a `[u16; 2]` palette in [`font::text_into`], a copied sprite palette in [`toast::overlay`] | a local cannot outlive the call, so "scratch silently promoted to cross-frame state" is not expressible |
+//! | Registered scratch (`scratch_buffers()`, `SCRATCH_PALETTE_ENTRIES`) | plain locals: a two-entry palette in [`font::text_into`], a copied sprite palette in [`toast::overlay`] | a local cannot outlive the call, so "scratch silently promoted to cross-frame state" is not expressible |
 //! | Draw targets | [`Canvas`], holding `&mut [u8]` | the borrow checker: exactly one canvas over a given region at a time |
 //! | `ThreadHealth.frame_seq` | an `AtomicU32` the app owns (Phase 3) | not this crate's business |
 //!
@@ -51,6 +51,22 @@
 //! They are committed (unlike their MicroPython counterparts, which are
 //! gitignored) so that regenerating needs Python, freetype and the Aseprite
 //! CLI but *building* needs only cargo. Same pattern as `hub75`'s goldens.
+//!
+//! # Colour
+//!
+//! Every colour on the drawing surface is the snapshot's own [`Rgb888`]: eight
+//! bits a channel from the configured palette and the team colours, through
+//! the blends, to the three bytes a pixel occupies and the driver packs
+//! (BACKLOG 115). Nothing is rounded to fewer bits on the way; the driver's
+//! gamma table is the only quantiser. Sprite palettes say where a sprite is
+//! see-through with `None` entries rather than a reserved colour, so every
+//! colour the palette can hold is drawable.
+//!
+//! Two content formats stay RGB565: crests, as the backend serves them and the
+//! pool holds them, and event clips' palettes. Both are widened by bit
+//! replication where they are drawn ([`blit::expand_rgb565`]) — the expansion
+//! the panel always applied to them — so they light exactly the LEDs they lit
+//! when the surface was RGB565.
 
 pub mod blit;
 pub mod court;
@@ -76,88 +92,46 @@ pub use geometry::{HEIGHT, RenderSettings, WIDTH};
 pub use prepared::PreparedView;
 pub use time::{FrameElapsed, FrameRail, WallMs};
 
-/// Pack 8-bit channels into RGB565 — `fonts.rgb565`, and the same expression
-/// as [`hub75::rgb565`](https://docs.rs/hub75) so a color computed here and a
-/// color packed by the driver are one value.
-pub const fn rgb565(red: u8, green: u8, blue: u8) -> u16 {
-    ((red as u16 & 0xF8) << 8) | ((green as u16 & 0xFC) << 3) | (blue as u16 >> 3)
-}
+pub use scoreboard_model::Rgb888;
 
-/// The snapshot's `Rgb888`, packed for the panel.
-pub fn pack(color: scoreboard_model::Rgb888) -> u16 {
-    rgb565(color.red(), color.green(), color.blue())
-}
+pub const BLACK: Rgb888 = Rgb888::new(0, 0, 0);
+pub const WHITE: Rgb888 = Rgb888::WHITE;
+pub const DIM_GRAY: Rgb888 = Rgb888::new(96, 96, 96);
 
-/// The snapshot's `Rgb888` dimmed to `num`/`den` of itself, then packed.
+/// A colour's brightness scaled by `num`/`den`, per 8-bit channel.
 ///
-/// A palette color that has to step down — the toast's fade, overtime losses
-/// under the losses — scales its 8-bit channels before packing. Scaling the
-/// packed value instead would truncate through 5 and 6 bits first, and a white
-/// primary would no longer land on exactly the gray ramp the panel drew before
-/// these elements took their color from the palette.
-pub fn pack_scaled(color: scoreboard_model::Rgb888, num: u32, den: u32) -> u16 {
-    let scale = |channel: u8| (channel as u32 * num / den).min(255) as u8;
-    rgb565(
-        scale(color.red()),
-        scale(color.green()),
-        scale(color.blue()),
+/// The step-downs that derive one colour from another — the toast's fade and
+/// its spinner trail, overtime losses under the losses, a team's end of the
+/// rink, the court's lane lines, the power-play glow — all go through here.
+/// Channels saturate at 255, so `num > den` brightens without wrapping.
+pub const fn scale(color: Rgb888, num: u32, den: u32) -> Rgb888 {
+    const fn channel(value: u8, num: u32, den: u32) -> u8 {
+        let scaled = value as u32 * num / den;
+        if scaled > 255 { 255 } else { scaled as u8 }
+    }
+    Rgb888::new(
+        channel(color.red(), num, den),
+        channel(color.green(), num, den),
+        channel(color.blue(), num, den),
     )
 }
 
-/// A packed color's brightness scaled by `num`/`den`, per 565 channel.
-///
-/// The counterpart of [`pack_scaled`] for a color that is already on the
-/// panel's side of the pack — a team's end of the rink, the court's lane
-/// lines, the power-play glow — where the 5- and 6-bit truncation has already
-/// happened and there is no 8-bit value left to be faithful to.
-pub fn scale(color: u16, num: u32, den: u32) -> u16 {
-    let red = ((color >> 11) & 0x1F) as u32 * num / den;
-    let green = ((color >> 5) & 0x3F) as u32 * num / den;
-    let blue = (color & 0x1F) as u32 * num / den;
-    ((red.min(0x1F) as u16) << 11) | ((green.min(0x3F) as u16) << 5) | blue.min(0x1F) as u16
-}
-
-/// `over` composited onto `under` at `alpha`/256, through 8-bit channels.
+/// `over` composited onto `under` at `alpha`/256, per 8-bit channel.
 ///
 /// The one blend in the crate: hockey's goal marks and the court's makes read
 /// the pixel under them back from the canvas and write this over it, so marks
-/// from one spot climb toward the team color instead of fusing (NHL.md D9,
-/// NBA.md D5). The channels are widened to 8 bits for the arithmetic and
-/// packed again on the way out; the stair that quantisation puts in the
-/// climb is BACKLOG 115's.
-pub fn mix(under: u16, over: u16, alpha: u32) -> u16 {
-    let ([under_r, under_g, under_b], [over_r, over_g, over_b]) = (expand(under), expand(over));
-    let blend = |under: u32, over: u32| ((under * (256 - alpha) + over * alpha) / 256) as u8;
-    rgb565(
-        blend(under_r, over_r),
-        blend(under_g, over_g),
-        blend(under_b, over_b),
+/// from one spot climb toward the team colour instead of fusing (NHL.md D9,
+/// NBA.md D5); the goal lamp and the NBA run glow pulse through it.
+pub const fn mix(under: Rgb888, over: Rgb888, alpha: u32) -> Rgb888 {
+    const fn channel(under: u8, over: u8, alpha: u32) -> u8 {
+        ((under as u32 * (256 - alpha) + over as u32 * alpha) / 256) as u8
+    }
+    Rgb888::new(
+        channel(under.red(), over.red(), alpha),
+        channel(under.green(), over.green(), alpha),
+        channel(under.blue(), over.blue(), alpha),
     )
 }
-
-/// A packed color's channels widened back to 8 bits, by scaling — the inverse
-/// of [`rgb565`]'s truncation as nearly as the lost bits allow.
-fn expand(color: u16) -> [u32; 3] {
-    let (red, green, blue) = (
-        (color >> 11) as u32 & 0x1F,
-        (color >> 5) as u32 & 0x3F,
-        color as u32 & 0x1F,
-    );
-    [red * 255 / 31, green * 255 / 63, blue * 255 / 31]
-}
-
-/// Transparency sentinel shared by `fonts.MAGENTA_RGB565`, the layout
-/// compiler's `_TRANSPARENT_RGB565`, and every sprite's `KEY`.
-///
-/// It is the *mapped* color, not a palette index, because `framebuf.blit()`
-/// looks the source pixel up through the palette **before** comparing against
-/// the key — so a paletted sprite and an RGB565 sprite carry the same key.
-/// [`blit`] reproduces that ordering.
-pub const MAGENTA: u16 = 0xF81F;
-
-pub const BLACK: u16 = 0;
-pub const WHITE: u16 = rgb565(255, 255, 255);
-pub const DIM_GRAY: u16 = rgb565(96, 96, 96);
 
 /// Triangle wave in `0..=256`, cycling every `period_ms` (`display.pulse`).
 ///

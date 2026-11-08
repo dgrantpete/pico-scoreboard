@@ -5,13 +5,14 @@
 //! caption arrow, and football's timeout bars became the NBA's timeout blocks.
 //! No sport keeps a private copy.
 
+use crate::Rgb888;
 use crate::blit::{Canvas, Slice};
 use crate::generated::layout;
 
 /// A 3×5 solid triangle, top-left corner at `(x, y)`, pointing the way
 /// `points_right` says — the possession arrow, hockey's strength banner's, the
 /// court caption's.
-pub fn arrow(canvas: &mut Canvas<'_>, x: i32, y: i32, points_right: bool, color: u16) {
+pub fn arrow(canvas: &mut Canvas<'_>, x: i32, y: i32, points_right: bool, color: Rgb888) {
     for step in 0..3 {
         let column = if points_right { x + step } else { x + 2 - step };
         canvas.vline(column, y + step, 5 - 2 * step, color);
@@ -21,7 +22,13 @@ pub fn arrow(canvas: &mut Canvas<'_>, x: i32, y: i32, points_right: bool, color:
 /// A horizontal progress bar: a one-pixel border with the fill inside it.
 ///
 /// `progress` is a percentage. `display.draw_progress_bar`.
-pub fn progress_bar(canvas: &mut Canvas<'_>, rect: Slice, progress: u8, border: u16, fill: u16) {
+pub fn progress_bar(
+    canvas: &mut Canvas<'_>,
+    rect: Slice,
+    progress: u8,
+    border: Rgb888,
+    fill: Rgb888,
+) {
     canvas.rect(rect.x, rect.y, rect.width, rect.height, border);
     let fill_width = (rect.width - 2) * progress.min(100) as i32 / 100;
     if fill_width > 0 {
@@ -43,8 +50,8 @@ pub fn timeout_blocks(
     rect: Slice,
     total: u8,
     remaining: u8,
-    color: u16,
-    dark: u16,
+    color: Rgb888,
+    dark: Rgb888,
 ) {
     let total = total as i32;
     let Some(block) = (rect.width - (total - 1)).checked_div(total) else {
@@ -75,10 +82,10 @@ pub fn timeout_blocks(
 /// throwing blit could not leave later frames pulsed. Here the palette is
 /// copied into a local first, which is the same guarantee with nothing to
 /// restore.
-pub fn count_dots(canvas: &mut Canvas<'_>, rect: Slice, filled: u8, tint: Option<u16>) {
+pub fn count_dots(canvas: &mut Canvas<'_>, rect: Slice, filled: u8, tint: Option<Rgb888>) {
     let sprite = layout::dot::SPRITE;
     let mut palette = layout::dot::PALETTE;
-    let outline = tint.unwrap_or(palette[1]);
+    let outline = tint.or(palette[1]);
     let unfilled = palette[2];
     palette[1] = outline;
 

@@ -19,14 +19,14 @@ use crate::font::{self, Align, Style};
 use crate::generated::layout;
 use crate::geometry::{self, FOOTBALL_LIVE};
 use crate::widgets::{arrow, timeout_blocks};
-use crate::{BLACK, DIM_GRAY, generated, pack, rgb565, toast};
+use crate::{BLACK, DIM_GRAY, Rgb888, generated, toast};
 use scoreboard_model::snapshot::Side;
 use scoreboard_model::snapshot::{FieldSituation, FootballLiveView};
 
 /// Scrimmage navy, from the pre-rewrite palette.
-const SCRIMMAGE: u16 = rgb565(0, 0, 140);
+const SCRIMMAGE: Rgb888 = Rgb888::new(0, 0, 140);
 /// First-down yellow. It wins where the two lines meet, by drawing second.
-const FIRST_DOWN: u16 = rgb565(255, 255, 0);
+const FIRST_DOWN: Rgb888 = Rgb888::new(255, 255, 0);
 /// A side's timeouts per half, and so the blocks in its row.
 const TIMEOUTS: u8 = 3;
 
@@ -35,14 +35,16 @@ const TIMEOUTS: u8 = 3;
 /// indices in first-seen order and an art edit can reorder them. MicroPython
 /// discovered them at import and raised there; a `const fn` moves that to build
 /// time, so drifted art fails `cargo build` rather than a boot.
-const AWAY_ENDZONE: usize = endzone_index(rgb565(255, 0, 0));
-const HOME_ENDZONE: usize = endzone_index(rgb565(0, 0, 255));
+const AWAY_ENDZONE: usize = endzone_index(Rgb888::new(255, 0, 0));
+const HOME_ENDZONE: usize = endzone_index(Rgb888::new(0, 0, 255));
 
-const fn endzone_index(placeholder: u16) -> usize {
+const fn endzone_index(placeholder: Rgb888) -> usize {
     let palette = &layout::football_field::PALETTE;
     let mut index = 0;
     while index < palette.len() {
-        if palette[index] == placeholder {
+        if let Some(color) = palette[index]
+            && color.0 == placeholder.0
+        {
             return index;
         }
         index += 1;
@@ -61,7 +63,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let view = &snapshot.football_live;
     let table = FOOTBALL_LIVE;
     let colors = &snapshot.ui_colors;
-    let primary = pack(colors.primary);
+    let primary = colors.primary;
 
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
@@ -72,7 +74,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         // `None` means the feed did not advertise timeouts, so the bars stay
         // undrawn rather than showing a fake three.
         if let Some(remaining) = timeouts {
-            timeout_blocks(canvas, row, TIMEOUTS, remaining, pack(color), DIM_GRAY);
+            timeout_blocks(canvas, row, TIMEOUTS, remaining, color, DIM_GRAY);
         }
     }
 
@@ -114,9 +116,9 @@ fn situation(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &FootballLiveView
     let colors = &scene.snapshot.ui_colors;
     let red_zone = view.situation.is_some_and(|situation| situation.red_zone);
     let text_color = if red_zone {
-        pack(colors.clock_warning)
+        colors.clock_warning
     } else {
-        pack(colors.primary)
+        colors.primary
     };
 
     let mut region = canvas.slice(table.situation);
@@ -136,9 +138,9 @@ fn situation(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &FootballLiveView
     let text_x = table.situation.x + (table.situation.width - text_width) / 2;
     let points_right = situation.possession == Side::Home;
     let (x, color) = if points_right {
-        (text_x + text_width + 3, pack(view.home_color))
+        (text_x + text_width + 3, view.home_color)
     } else {
-        (text_x - 6, pack(view.away_color))
+        (text_x - 6, view.away_color)
     };
     let color = if red_zone { text_color } else { color };
     arrow(canvas, x, table.situation.y + 1, points_right, color);
@@ -149,8 +151,8 @@ fn situation(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &FootballLiveView
 fn field(canvas: &mut Canvas<'_>, view: &FootballLiveView) {
     let sprite = layout::football_field::SPRITE;
     let mut palette = layout::football_field::PALETTE;
-    palette[AWAY_ENDZONE] = pack(view.away_color);
-    palette[HOME_ENDZONE] = pack(view.home_color);
+    palette[AWAY_ENDZONE] = Some(view.away_color);
+    palette[HOME_ENDZONE] = Some(view.home_color);
     let at = layout::football_field::POSITION;
     canvas.blit(&sprite.tinted(&palette), at.x, at.y);
 

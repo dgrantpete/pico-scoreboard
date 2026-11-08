@@ -1,18 +1,19 @@
 //! Bitplane packing vs hand-computed cases (layout per bitplanes.c and
 //! INVENTORY.md §3: plane-major, LSB plane first, one byte per pixel pair
-//! packing R1,G1,B1,R2,G2,B2 in bits 0..=5), plus the property that the
-//! fused-table pack is byte-identical to the scalar implementation it
-//! replaced (`reference/mod.rs`) over full-coverage inputs.
+//! packing R1,G1,B1,R2,G2,B2 in bits 0..=5), plus two properties over
+//! full-coverage inputs: the fused-table pack is byte-identical to the scalar
+//! RGB888 pack it replaced, and to the scalar RGB565 pack that ran on silicon
+//! before it, over bit-replicated 565 frames (`reference/mod.rs`).
 
 mod reference;
 
 use hub75::gamma::Gamma;
 use hub75::geometry::{
-    BITPLANE_BUFFER_BYTES, BITPLANE_BYTES, RGB565_FRAME_BYTES, RGB888_FRAME_BYTES,
-    ROW_ADDRESS_COUNT, SHIFT_REGISTER_DEPTH, WIDTH,
+    BITPLANE_BUFFER_BYTES, BITPLANE_BYTES, RGB888_FRAME_BYTES, ROW_ADDRESS_COUNT,
+    SHIFT_REGISTER_DEPTH, WIDTH,
 };
-use hub75::packing::{FusedTables, pack_rgb565, pack_rgb888};
-use reference::pack_rgb565_reference;
+use hub75::packing::{FusedTables, pack_rgb888};
+use reference::{RGB565_FRAME_BYTES, pack_rgb565_reference, pack_rgb888_reference};
 
 const IDENTITY: [u8; 256] = {
     let mut lut = [0u8; 256];
@@ -24,9 +25,9 @@ const IDENTITY: [u8; 256] = {
     lut
 };
 
-fn set_rgb565(frame: &mut [u8; RGB565_FRAME_BYTES], x: usize, y: usize, color: u16) {
-    let index = (y * WIDTH + x) * 2;
-    frame[index..index + 2].copy_from_slice(&color.to_le_bytes());
+fn set_rgb888(frame: &mut [u8; RGB888_FRAME_BYTES], x: usize, y: usize, color: [u8; 3]) {
+    let index = (y * WIDTH + x) * 3;
+    frame[index..index + 3].copy_from_slice(&color);
 }
 
 /// Expected byte index of pixel-pair `(pair_row, x)` in plane `plane`.
@@ -34,13 +35,18 @@ fn plane_byte(plane: usize, pair_row: usize, x: usize) -> usize {
     plane * BITPLANE_BYTES + pair_row * SHIFT_REGISTER_DEPTH + x
 }
 
+fn pack(frame: &[u8; RGB888_FRAME_BYTES], lut: &[u8; 256]) -> Box<[u8; BITPLANE_BUFFER_BYTES]> {
+    let mut out = Box::new([0u8; BITPLANE_BUFFER_BYTES]);
+    pack_rgb888(frame, &FusedTables::new(lut), &mut out);
+    out
+}
+
 #[test]
 fn single_top_half_pixel_sets_r1_lane() {
-    let mut frame = [0u8; RGB565_FRAME_BYTES];
-    // Pure red, full scale: R5 = 31 expands to 255 -> bit set in all planes.
-    set_rgb565(&mut frame, 0, 0, 0xF800);
-    let mut out = [0u8; BITPLANE_BUFFER_BYTES];
-    pack_rgb565(&frame, &FusedTables::new(&IDENTITY), &mut out);
+    let mut frame = [0u8; RGB888_FRAME_BYTES];
+    // Pure red, full scale -> bit set in all planes.
+    set_rgb888(&mut frame, 0, 0, [255, 0, 0]);
+    let out = pack(&frame, &IDENTITY);
 
     for plane in 0..8 {
         assert_eq!(out[plane_byte(plane, 0, 0)], 0b000001, "plane {plane}");
@@ -50,12 +56,11 @@ fn single_top_half_pixel_sets_r1_lane() {
 
 #[test]
 fn bottom_half_pixel_lands_in_same_byte_upper_lanes() {
-    let mut frame = [0u8; RGB565_FRAME_BYTES];
+    let mut frame = [0u8; RGB888_FRAME_BYTES];
     // (x=5, y=40): bottom half, pair row 40 - 32 = 8. Full-scale green +
     // blue -> lanes G2 (bit 4) and B2 (bit 5) in every plane.
-    set_rgb565(&mut frame, 5, 40, 0x07FF);
-    let mut out = [0u8; BITPLANE_BUFFER_BYTES];
-    pack_rgb565(&frame, &FusedTables::new(&IDENTITY), &mut out);
+    set_rgb888(&mut frame, 5, 40, [0, 255, 255]);
+    let out = pack(&frame, &IDENTITY);
 
     for plane in 0..8 {
         assert_eq!(out[plane_byte(plane, 8, 5)], 0b110000, "plane {plane}");
@@ -63,47 +68,11 @@ fn bottom_half_pixel_lands_in_same_byte_upper_lanes() {
 }
 
 #[test]
-fn rgb565_expansion_replicates_msbs() {
-    let mut frame = [0u8; RGB565_FRAME_BYTES];
-    // R5=1, G6=1, B5=1: expand to r=0b00001000, g=0b00000100, b=0b00001000
-    // (no replication reaches the low bits for these small values).
-    set_rgb565(&mut frame, 0, 0, (1 << 11) | (1 << 5) | 1);
-    let mut out = [0u8; BITPLANE_BUFFER_BYTES];
-    pack_rgb565(&frame, &FusedTables::new(&IDENTITY), &mut out);
-
-    for plane in 0..8 {
-        let mut expected = 0u8;
-        if (8 >> plane) & 1 == 1 {
-            expected |= 0b000001; // R1 carries bit 3
-            expected |= 0b000100; // B1 carries bit 3
-        }
-        if (4 >> plane) & 1 == 1 {
-            expected |= 0b000010; // G1 carries bit 2
-        }
-        assert_eq!(out[plane_byte(plane, 0, 0)], expected, "plane {plane}");
-    }
-
-    // Full-scale channels replicate to exactly 255: every plane lit in the
-    // top-half lanes (the paired bottom-half pixel stays black).
-    let mut frame = [0u8; RGB565_FRAME_BYTES];
-    set_rgb565(&mut frame, 3, 2, 0xFFFF);
-    let mut out = [0u8; BITPLANE_BUFFER_BYTES];
-    pack_rgb565(&frame, &FusedTables::new(&IDENTITY), &mut out);
-    for plane in 0..8 {
-        assert_eq!(out[plane_byte(plane, 2, 3)], 0b000111, "plane {plane}");
-    }
-}
-
-#[test]
 fn rgb888_pixel_pair_packs_both_halves() {
     let mut frame = [0u8; RGB888_FRAME_BYTES];
-    let top = (10 * WIDTH + 100) * 3; // y=10 (top half of pair 10)
-    let bottom = ((10 + ROW_ADDRESS_COUNT) * WIDTH + 100) * 3; // y=42
-    frame[top..top + 3].copy_from_slice(&[0x80, 0x01, 0x00]); // r1=128, g1=1
-    frame[bottom..bottom + 3].copy_from_slice(&[0x00, 0x00, 0xFF]); // b2=255
-
-    let mut out = [0u8; BITPLANE_BUFFER_BYTES];
-    pack_rgb888(&frame, &IDENTITY, &mut out);
+    set_rgb888(&mut frame, 100, 10, [0x80, 0x01, 0x00]); // r1=128, g1=1
+    set_rgb888(&mut frame, 100, 10 + ROW_ADDRESS_COUNT, [0x00, 0x00, 0xFF]); // b2=255
+    let out = pack(&frame, &IDENTITY);
 
     for plane in 0..8 {
         let mut expected = 0u8;
@@ -119,54 +88,40 @@ fn rgb888_pixel_pair_packs_both_halves() {
 }
 
 #[test]
+fn every_lane_carries_every_plane_independently() {
+    // One pixel pair, each of its six channels a different single-bit value,
+    // so a lane shift that bled into its neighbour or a plane byte that landed
+    // one slot off shows up as a wrong bit rather than a coincidental match.
+    let mut frame = [0u8; RGB888_FRAME_BYTES];
+    set_rgb888(&mut frame, 7, 3, [1 << 0, 1 << 1, 1 << 2]);
+    set_rgb888(
+        &mut frame,
+        7,
+        3 + ROW_ADDRESS_COUNT,
+        [1 << 5, 1 << 6, 1 << 7],
+    );
+    let out = pack(&frame, &IDENTITY);
+
+    let expected = [
+        0b000001, 0b000010, 0b000100, 0, 0, 0b001000, 0b010000, 0b100000,
+    ];
+    for (plane, &want) in expected.iter().enumerate() {
+        assert_eq!(out[plane_byte(plane, 3, 7)], want, "plane {plane}");
+    }
+}
+
+#[test]
 fn gamma_lut_applies_during_packing() {
     let mut lut = IDENTITY;
     lut[255] = 0b1010_1010;
-    let mut frame = [0u8; RGB565_FRAME_BYTES];
-    set_rgb565(&mut frame, 0, 0, 0xF800); // r1 -> lut[255]
-    let mut out = [0u8; BITPLANE_BUFFER_BYTES];
-    pack_rgb565(&frame, &FusedTables::new(&lut), &mut out);
+    let mut frame = [0u8; RGB888_FRAME_BYTES];
+    set_rgb888(&mut frame, 0, 0, [255, 0, 0]); // r1 -> lut[255]
+    let out = pack(&frame, &lut);
 
     for plane in 0..8 {
         let expected = if plane % 2 == 1 { 0b000001 } else { 0 };
         assert_eq!(out[plane_byte(plane, 0, 0)], expected, "plane {plane}");
     }
-}
-
-/// Cross-check the two loaders: an RGB888 frame built from the documented
-/// RGB565 channel expansion must pack identically to the RGB565 original,
-/// including through a non-trivial LUT. Doubles as an oracle independent of
-/// `reference/mod.rs`, since the RGB888 loader kept the scalar path.
-#[test]
-fn rgb888_and_rgb565_loaders_agree() {
-    let mut rgb565 = [0u8; RGB565_FRAME_BYTES];
-    let mut state = 0x12345678u32;
-    for byte in rgb565.iter_mut() {
-        // xorshift32: deterministic full-coverage noise
-        state ^= state << 13;
-        state ^= state >> 17;
-        state ^= state << 5;
-        *byte = state as u8;
-    }
-
-    let mut rgb888 = [0u8; RGB888_FRAME_BYTES];
-    for pixel in 0..rgb565.len() / 2 {
-        let lo = rgb565[pixel * 2] as u32;
-        let hi = rgb565[pixel * 2 + 1] as u32;
-        let r = (hi & 0b1111_1000) as u8;
-        let g = (((hi << 5) | (lo >> 3)) & 0b1111_1100) as u8;
-        let b = ((lo << 3) & 0b1111_1000) as u8;
-        rgb888[pixel * 3] = r | (r >> 5);
-        rgb888[pixel * 3 + 1] = g | (g >> 6);
-        rgb888[pixel * 3 + 2] = b | (b >> 5);
-    }
-
-    let lut = Gamma::Srgb.build_lut();
-    let mut out_565 = [0u8; BITPLANE_BUFFER_BYTES];
-    let mut out_888 = [0u8; BITPLANE_BUFFER_BYTES];
-    pack_rgb565(&rgb565, &FusedTables::new(&lut), &mut out_565);
-    pack_rgb888(&rgb888, &lut, &mut out_888);
-    assert_eq!(out_565, out_888);
 }
 
 /// The gamma tables the property tests sweep: the two shipped const tables,
@@ -191,48 +146,97 @@ fn property_luts() -> Vec<(&'static str, [u8; 256])> {
     ]
 }
 
-fn assert_packs_match(frame: &[u8; RGB565_FRAME_BYTES], case: &str) {
+fn assert_matches_rgb888_reference(frame: &[u8; RGB888_FRAME_BYTES], case: &str) {
     for (lut_name, lut) in property_luts() {
-        let mut fused_out = [0u8; BITPLANE_BUFFER_BYTES];
-        let mut reference_out = [0u8; BITPLANE_BUFFER_BYTES];
-        pack_rgb565(frame, &FusedTables::new(&lut), &mut fused_out);
-        pack_rgb565_reference(frame, &lut, &mut reference_out);
+        let mut reference_out = Box::new([0u8; BITPLANE_BUFFER_BYTES]);
+        pack_rgb888_reference(frame, &lut, &mut reference_out);
         assert_eq!(
-            fused_out, reference_out,
-            "fused pack diverged from reference: {case}, gamma {lut_name}"
+            pack(frame, &lut),
+            reference_out,
+            "fused pack diverged from the scalar RGB888 pack: {case}, gamma {lut_name}"
         );
     }
 }
 
-/// Byte-identical to the reference over every representable RGB565 value:
-/// a frame holds 8,192 pixels, so eight frames enumerate all 65,536 values,
-/// each visiting every pixel-pair position (and both halves of the panel)
-/// across the sweep.
+/// Every channel value in every lane: frame `k` gives pixel `p` the channels
+/// `(p + k, p + 85 + 3k, p + 170 + 7k)` mod 256, so across the sweep each lane
+/// — R, G, B, in both halves of the panel — sees all 256 values at many
+/// pixel-pair positions, and no two lanes of a pair move in lockstep.
 #[test]
-fn fused_pack_matches_reference_for_all_rgb565_values() {
-    for chunk in 0..8u32 {
-        let mut frame = [0u8; RGB565_FRAME_BYTES];
-        for pixel in 0..RGB565_FRAME_BYTES / 2 {
-            let value = (chunk * 8192 + pixel as u32) as u16;
-            frame[pixel * 2..pixel * 2 + 2].copy_from_slice(&value.to_le_bytes());
+fn fused_pack_matches_the_scalar_rgb888_pack_for_every_channel_value() {
+    for k in 0..4usize {
+        let mut frame = [0u8; RGB888_FRAME_BYTES];
+        for (p, pixel) in frame.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+            *pixel = [
+                (p + k) as u8,
+                (p + 85 + 3 * k) as u8,
+                (p + 170 + 7 * k) as u8,
+            ];
         }
-        assert_packs_match(&frame, &format!("value sweep chunk {chunk}"));
+        assert_matches_rgb888_reference(&frame, &format!("value sweep {k}"));
     }
 }
 
-/// Byte-identical to the reference over unstructured noise frames, where
+/// Byte-identical to the scalar pack over unstructured noise frames, where
 /// adjacent bytes share no structure the value sweep might mask.
 #[test]
-fn fused_pack_matches_reference_on_random_frames() {
+fn fused_pack_matches_the_scalar_rgb888_pack_on_random_frames() {
     let mut state = 0xDEADBEEFu32;
     for case in 0..6 {
-        let mut frame = [0u8; RGB565_FRAME_BYTES];
+        let mut frame = [0u8; RGB888_FRAME_BYTES];
         for byte in frame.iter_mut() {
             state ^= state << 13;
             state ^= state >> 17;
             state ^= state << 5;
             *byte = state as u8;
         }
-        assert_packs_match(&frame, &format!("xorshift frame {case}"));
+        assert_matches_rgb888_reference(&frame, &format!("xorshift frame {case}"));
+    }
+}
+
+/// An RGB565 frame widened the way the panel always widened it: each field's
+/// top bits replicated into the low ones.
+fn bit_replicated(rgb565: &[u8; RGB565_FRAME_BYTES]) -> Box<[u8; RGB888_FRAME_BYTES]> {
+    let mut rgb888 = Box::new([0u8; RGB888_FRAME_BYTES]);
+    for (pixel, out) in rgb565
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .zip(rgb888.as_chunks_mut::<3>().0)
+    {
+        let value = u16::from_le_bytes(*pixel);
+        let (r, g, b) = (value >> 11, (value >> 5) & 0x3F, value & 0x1F);
+        *out = [
+            ((r << 3) | (r >> 2)) as u8,
+            ((g << 2) | (g >> 4)) as u8,
+            ((b << 3) | (b >> 2)) as u8,
+        ];
+    }
+    rgb888
+}
+
+/// Every one of the 65,536 RGB565 values, bit-replicated, lights exactly the
+/// LEDs the scalar RGB565 pack lit — under every gamma table. A frame holds
+/// 8,192 pixels, so eight frames enumerate them all, each visiting every
+/// pixel-pair position and both halves of the panel. This is the pin that
+/// keeps a 565 crest, and every colour the old surface could hold, unchanged
+/// on the panel across the move to an eight-bit surface.
+#[test]
+fn fused_pack_of_bit_replicated_rgb565_matches_the_scalar_rgb565_pack() {
+    for chunk in 0..8u32 {
+        let mut frame = [0u8; RGB565_FRAME_BYTES];
+        for (pixel, out) in frame.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+            *out = ((chunk * 8192 + pixel as u32) as u16).to_le_bytes();
+        }
+        let widened = bit_replicated(&frame);
+        for (lut_name, lut) in property_luts() {
+            let mut reference_out = Box::new([0u8; BITPLANE_BUFFER_BYTES]);
+            pack_rgb565_reference(&frame, &lut, &mut reference_out);
+            assert_eq!(
+                pack(&widened, &lut),
+                reference_out,
+                "565 value sweep chunk {chunk}, gamma {lut_name}"
+            );
+        }
     }
 }

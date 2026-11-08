@@ -11,7 +11,7 @@ use crate::font::{self, Align, Style};
 use crate::generated::layout;
 use crate::geometry::{MLB_LIVE, PLAY_SCROLL_PAUSE_MS};
 use crate::widgets::count_dots;
-use crate::{BLACK, DIM_GRAY, generated, pack, rgb565, screens, toast};
+use crate::{BLACK, DIM_GRAY, generated, screens, toast};
 use scoreboard_model::Rgb888;
 use scoreboard_model::snapshot::InningHalf;
 use scoreboard_model::snapshot::MlbLiveView;
@@ -37,7 +37,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let view = &snapshot.mlb_live;
     let table = MLB_LIVE;
     let colors = &snapshot.ui_colors;
-    let primary = pack(colors.primary);
+    let primary = colors.primary;
 
     super::column_dividers(canvas, scene, table.divider_x, table.separator_y);
 
@@ -81,13 +81,13 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             &mut region,
             label,
             Align::Left,
-            Style::new(&generated::UNSCII_8, pack(colors.secondary)),
+            Style::new(&generated::UNSCII_8, colors.secondary),
         );
     }
 
     // Between halves there is no batting side, so both slots go gray.
-    let pitch_color = view.pitch_color.map_or(DIM_GRAY, pack);
-    let bat_color = view.bat_color.map_or(DIM_GRAY, pack);
+    let pitch_color = view.pitch_color.unwrap_or(DIM_GRAY);
+    let bat_color = view.bat_color.unwrap_or(DIM_GRAY);
 
     if super::bottom_strip(canvas, scene) == Strip::Free {
         if view.has_at_bat {
@@ -149,17 +149,18 @@ fn count_block(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &MlbLiveView) {
     }
 }
 
-/// Hue 0 at the given saturation and value, packed for the panel.
+/// Hue 0 at the given saturation and value.
 ///
 /// The port of `hub75.native.pack_hsv_to_rgb565(0, s, v)`, which ships as an
-/// opaque `.mpy`. At hue 0 the general conversion collapses: red keeps the full
-/// value and the other two channels drop to `v * (255 - s) / 255`, rounded. The
-/// rounding has no ties to break — the divisor is odd, so `2 * remainder` can
-/// never equal it — which is why plain round-half-up is exact here rather than
-/// merely close.
-fn warm_red(saturation: u32, value: u32) -> u16 {
+/// opaque `.mpy`, without its final RGB565 packing, which the eight-bit
+/// surface does not need (BACKLOG 115). At hue 0 the general conversion
+/// collapses: red keeps the full value and the other two channels drop to
+/// `v * (255 - s) / 255`, rounded. The rounding has no ties to break — the
+/// divisor is odd, so `2 * remainder` can never equal it — which is why plain
+/// round-half-up is exact here rather than merely close.
+fn warm_red(saturation: u32, value: u32) -> Rgb888 {
     let dim = (value * (255 - saturation) + 127) / 255;
-    rgb565(value as u8, dim as u8, dim as u8)
+    Rgb888::new(value as u8, dim as u8, dim as u8)
 }
 
 /// Occupied-base markers, tinted to the batting side.
@@ -173,9 +174,9 @@ fn base_markers(canvas: &mut Canvas<'_>, view: &MlbLiveView) {
     let mut palette = layout::base_marker::PALETTE;
     if let Some(color) = view.bat_color {
         let (body, highlight, shade) = marker_shades(color);
-        palette[1] = body;
-        palette[2] = highlight;
-        palette[3] = shade;
+        palette[1] = Some(body);
+        palette[2] = Some(highlight);
+        palette[3] = Some(shade);
     }
     let source = sprite.tinted(&palette);
 
@@ -198,7 +199,7 @@ fn base_markers(canvas: &mut Canvas<'_>, view: &MlbLiveView) {
 /// because `state.py` kept a second unbrightened copy for exactly this. The
 /// model brightens once and stores the result, so this starts from the color
 /// the panel will actually show.
-fn marker_shades(color: Rgb888) -> (u16, u16, u16) {
+fn marker_shades(color: Rgb888) -> (Rgb888, Rgb888, Rgb888) {
     let (red, green, blue) = (
         color.red() as u16,
         color.green() as u16,
@@ -207,8 +208,8 @@ fn marker_shades(color: Rgb888) -> (u16, u16, u16) {
     let toward_white = |channel: u16| (channel + (((255 - channel) * 7) >> 3)) as u8;
     let toward_black = |channel: u16| ((channel * 7) >> 3) as u8;
     (
-        rgb565(red as u8, green as u8, blue as u8),
-        rgb565(toward_white(red), toward_white(green), toward_white(blue)),
-        rgb565(toward_black(red), toward_black(green), toward_black(blue)),
+        color,
+        Rgb888::new(toward_white(red), toward_white(green), toward_white(blue)),
+        Rgb888::new(toward_black(red), toward_black(green), toward_black(blue)),
     )
 }

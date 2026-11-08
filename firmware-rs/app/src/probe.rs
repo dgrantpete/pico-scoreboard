@@ -23,7 +23,7 @@
 //!   Per-commit work, not per-frame; it is in the budget only because it lands
 //!   inside a frame.
 //! * `render` — the whole screen draw. This is the number the thesis is about.
-//! * `show` — `load_rgb565` + `flip`: repacking 8,192 RGB565 pixels into eight
+//! * `show` — `load_rgb888` + `flip`: repacking 8,192 RGB888 pixels into eight
 //!   BCM bitplanes. Pure driver cost, unaffected by what was drawn, and the
 //!   floor under every frame.
 //! * `brightness` — re-deriving the OE timing stream when core 0 moves the

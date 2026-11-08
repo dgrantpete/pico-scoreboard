@@ -3,7 +3,7 @@
 //! the device, minus the panel.
 
 use hub75::display::{FrameBytes, Hub75Display};
-use hub75::geometry::{HEIGHT, RGB565_FRAME_BYTES, WIDTH};
+use hub75::geometry::{HEIGHT, RGB888_FRAME_BYTES, WIDTH};
 use hub75::sim::SimulatorSink;
 use scoreboard_model::snapshot::{MenuRow, MenuView, ToastView};
 use scoreboard_model::{Millis, Rgb888, ScoreboardSnapshot, SetupReason, Text, ToastKind};
@@ -11,7 +11,7 @@ use scoreboard_render::blit::Canvas;
 use scoreboard_render::geometry::RenderSettings;
 use scoreboard_render::prepared::PreparedView;
 use scoreboard_render::time::{WallMs, frame_ms};
-use scoreboard_render::{BLACK, menu, pack, qr, screens, toast};
+use scoreboard_render::{BLACK, WHITE, menu, qr, screens, toast};
 
 const PRIMARY: Rgb888 = Rgb888::new(255, 0, 0);
 const ACCENT: Rgb888 = Rgb888::new(0, 255, 0);
@@ -22,9 +22,9 @@ const WARNING: Rgb888 = Rgb888::new(255, 255, 0);
 struct Frame(Vec<u8>);
 
 impl Frame {
-    fn pixel(&self, x: i32, y: i32) -> u16 {
-        let index = (y as usize * WIDTH + x as usize) * 2;
-        u16::from_le_bytes([self.0[index], self.0[index + 1]])
+    fn pixel(&self, x: i32, y: i32) -> Rgb888 {
+        let index = (y as usize * WIDTH + x as usize) * 3;
+        Rgb888::new(self.0[index], self.0[index + 1], self.0[index + 2])
     }
 
     fn lit(&self, x: i32, y: i32) -> bool {
@@ -41,7 +41,7 @@ impl Frame {
 /// Draw with the crate, push through `Hub75Display::show`, and read back what
 /// the sink got.
 fn render(draw: impl FnOnce(&mut Canvas<'_>)) -> Frame {
-    let mut buffer: Box<FrameBytes> = Box::new([0; RGB565_FRAME_BYTES]);
+    let mut buffer: Box<FrameBytes> = Box::new([0; RGB888_FRAME_BYTES]);
     let mut display = Hub75Display::new(&mut buffer, SimulatorSink::new());
     {
         let mut canvas = Canvas::new(display.buffer_mut(), WIDTH as i32, HEIGHT as i32);
@@ -94,7 +94,7 @@ fn the_startup_bar_tracks_the_step() {
     snapshot.startup.total_steps = 5;
     let frame = render(|canvas| screens::startup(canvas, &snapshot));
 
-    let fill = pack(ACCENT);
+    let fill = ACCENT;
     assert_eq!(frame.pixel(25, 27), fill, "the first fill column");
     assert_eq!(
         frame.pixel(25 + 14, 27),
@@ -102,7 +102,7 @@ fn the_startup_bar_tracks_the_step() {
         "the last of 15 fill columns"
     );
     assert_eq!(frame.pixel(25 + 15, 27), BLACK, "one past the fill");
-    assert_eq!(frame.pixel(24, 24), pack(SECONDARY), "the border");
+    assert_eq!(frame.pixel(24, 24), SECONDARY, "the border");
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn the_setup_screen_blits_its_qr_in_the_top_right() {
     let frame = render(|canvas| screens::setup(canvas, &snapshot, &prepared, WallMs(0)));
     let qr_x = WIDTH as i32 - size - 2;
     // The quiet zone is white, and the top-left module of the symbol is dark.
-    assert_eq!(frame.pixel(qr_x, 2), 0xFFFF, "quiet zone");
+    assert_eq!(frame.pixel(qr_x, 2), WHITE, "quiet zone");
     assert_eq!(
         frame.pixel(qr_x + qr::QUIET_ZONE, 2 + qr::QUIET_ZONE),
         BLACK,
@@ -218,8 +218,8 @@ fn a_failed_join_colors_the_title_as_a_warning() {
         .flat_map(|x| (0..16).map(move |y| (x, y)))
         .find(|(x, y)| normal.lit(*x, *y))
         .expect("the title drew something");
-    assert_eq!(normal.pixel(title_pixel.0, title_pixel.1), pack(ACCENT));
-    assert_eq!(failed.pixel(title_pixel.0, title_pixel.1), pack(WARNING));
+    assert_eq!(normal.pixel(title_pixel.0, title_pixel.1), ACCENT);
+    assert_eq!(failed.pixel(title_pixel.0, title_pixel.1), WARNING);
 }
 
 // -- Prepared view -----------------------------------------------------------
@@ -308,9 +308,10 @@ fn an_icon_toast_dims_the_frame_and_draws_its_icon() {
         .flat_map(|x| (0..32).map(move |y| (x, y)))
         .find(|(x, y)| plain.lit(*x, *y))
         .expect("the idle title drew something");
+    let lit = plain.pixel(title.0, title.1);
     assert_eq!(
         dimmed.pixel(title.0, title.1),
-        plain.pixel(title.0, title.1) >> 1 & 0x7BEF,
+        Rgb888::new(lit.red() >> 1, lit.green() >> 1, lit.blue() >> 1),
         "the held ladder level is half brightness"
     );
     assert!(
@@ -380,7 +381,7 @@ fn the_overlay_fades_out_after_the_toast_expires() {
 fn spinner_head(frame: &Frame) -> (i32, i32) {
     let pixels: Vec<(i32, i32)> = (SPINNER_BOX.1..SPINNER_BOX.3)
         .flat_map(|y| (SPINNER_BOX.0..SPINNER_BOX.2).map(move |x| (x, y)))
-        .filter(|(x, y)| frame.pixel(*x, *y) == pack(PRIMARY))
+        .filter(|(x, y)| frame.pixel(*x, *y) == PRIMARY)
         .collect();
     assert!(!pixels.is_empty(), "no dot at full brightness");
     let count = pixels.len() as i32;
@@ -421,30 +422,27 @@ fn the_spinner_head_walks_the_ring_in_angular_order() {
 
 #[test]
 fn the_spinner_leaves_a_gap_behind_its_tail() {
-    // The trail covers 10 of 12 dots; the other two get the key as their color,
-    // so the blit skips them and whatever is underneath shows through.
+    // The trail covers 10 of 12 dots; the other two get no colour at all, so
+    // the blit skips them and whatever is underneath shows through.
     let mut snapshot = snapshot();
     snapshot.toast = toast_view(ToastKind::Spinner, 1_000);
     let frame = render(|canvas| {
-        canvas.fill(0xFFFF);
+        canvas.fill(WHITE);
         toast::overlay(canvas, &snapshot, WallMs(1_000));
     });
 
     // The dimmed background is what an undrawn dot leaves behind. Every dot the
     // comet does light is brighter than it.
     let background = frame.pixel(0, 0);
-    let dots: Vec<u16> = (SPINNER_BOX.1..SPINNER_BOX.3)
+    let dots: Vec<Rgb888> = (SPINNER_BOX.1..SPINNER_BOX.3)
         .flat_map(|y| (SPINNER_BOX.0..SPINNER_BOX.2).map(move |x| (x, y)))
         .map(|(x, y)| frame.pixel(x, y))
         .filter(|color| *color != background)
         .collect();
     assert!(!dots.is_empty(), "the comet drew nothing");
+    assert!(dots.contains(&PRIMARY), "the head is at full brightness");
     assert!(
-        dots.contains(&pack(PRIMARY)),
-        "the head is at full brightness"
-    );
-    assert!(
-        dots.iter().any(|color| *color != pack(PRIMARY)),
+        dots.iter().any(|color| *color != PRIMARY),
         "the tail fades behind the head"
     );
 }
@@ -475,7 +473,7 @@ fn the_menu_highlight_never_inverts_a_checkbox() {
     let highlighted = render(|canvas| menu::render(canvas, &menu_snapshot(0), WallMs(0)));
     let plain = render(|canvas| menu::render(canvas, &menu_snapshot(1), WallMs(0)));
 
-    let primary = pack(PRIMARY);
+    let primary = PRIMARY;
     for y in 2..9 {
         assert_eq!(
             highlighted.pixel(2, y),
@@ -491,7 +489,7 @@ fn the_menu_highlight_never_inverts_a_checkbox() {
 #[test]
 fn a_checked_row_fills_its_box_and_an_unchecked_one_does_not() {
     let frame = render(|canvas| menu::render(canvas, &menu_snapshot(-1), WallMs(0)));
-    let primary = pack(PRIMARY);
+    let primary = PRIMARY;
     // Row 0 is checked, row 1 is not.
     assert_eq!(frame.pixel(4, 4), primary, "row 0's fill");
     assert_eq!(frame.pixel(4, 14), BLACK, "row 1 is unchecked");
@@ -501,11 +499,7 @@ fn a_checked_row_fills_its_box_and_an_unchecked_one_does_not() {
 fn the_done_footer_inverts_when_it_is_the_cursor() {
     let selected = render(|canvas| menu::render(canvas, &menu_snapshot(-1), WallMs(0)));
     let unselected = render(|canvas| menu::render(canvas, &menu_snapshot(0), WallMs(0)));
-    assert_eq!(
-        selected.pixel(1, 56),
-        pack(PRIMARY),
-        "the footer band fills"
-    );
+    assert_eq!(selected.pixel(1, 56), PRIMARY, "the footer band fills");
     assert_eq!(unselected.pixel(1, 56), BLACK);
     // Row 63 stays dark either way: the panel's edge pixels are unreliable.
     assert_eq!(selected.lit_in(0..WIDTH as i32, 63..64), 0);
@@ -525,6 +519,6 @@ fn a_short_list_draws_no_scrollbar() {
     snapshot.menu.thumb_h = 12;
     let scrolled = render(|canvas| menu::render(canvas, &snapshot, WallMs(0)));
     assert!(scrolled.lit_in(125..127, 1..51) > 0, "the track and thumb");
-    assert_eq!(scrolled.pixel(125, 1), pack(PRIMARY), "the thumb");
-    assert_eq!(scrolled.pixel(125, 40), pack(SECONDARY), "track");
+    assert_eq!(scrolled.pixel(125, 1), PRIMARY, "the thumb");
+    assert_eq!(scrolled.pixel(125, 40), SECONDARY, "track");
 }

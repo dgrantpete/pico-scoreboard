@@ -1,18 +1,61 @@
-//! The scalar RGB565 pack the fused-table version replaced, kept verbatim
-//! as the property-test oracle (and as the slow lane in `benches/pack.rs`).
-//! This is the code that ran on silicon for the BUDGET.md frame-time
-//! measurements; byte-identical output against it is the correctness bar
-//! for any pack rewrite — the BCM buffer feeds running PIO/DMA hardware,
-//! where a single wrong bit is a visibly wrong color at some plane weight.
+//! The two scalar packs the fused-table version stands on, kept verbatim as
+//! property-test oracles (and as the slow lanes in `benches/pack.rs`):
+//!
+//! * [`pack_rgb888_reference`] is the scalar RGB888 pack the driver carried
+//!   beside the RGB565 one until the drawing surface went to eight bits a
+//!   channel (BACKLOG 115). It is the direct oracle for the fused RGB888 pack.
+//! * [`pack_rgb565_reference`] is the scalar RGB565 pack that ran on silicon
+//!   for the BUDGET.md frame-time measurements, and in front of every frame
+//!   the fleet drew before BACKLOG 115. Bit-replicated into RGB888, a 565
+//!   frame must pack byte-identically through the fused RGB888 pack — which
+//!   is what keeps a crest, or any colour the 565 surface could hold, lighting
+//!   exactly the LEDs it lit before.
+//!
+//! Byte-identical output is the correctness bar for any pack rewrite — the BCM
+//! buffer feeds running PIO/DMA hardware, where a single wrong bit is a
+//! visibly wrong color at some plane weight.
 //!
 //! Shared by an integration test and a bench, which compile it separately;
 //! either alone leaves some items unused.
 #![allow(dead_code)]
 
 use hub75::geometry::{
-    BITPLANE_BUFFER_BYTES, BITPLANE_BYTES, COLOR_BIT_DEPTH, RGB565_FRAME_BYTES,
+    BITPLANE_BUFFER_BYTES, BITPLANE_BYTES, COLOR_BIT_DEPTH, PIXEL_COUNT, RGB888_FRAME_BYTES,
     ROW_ADDRESS_COUNT, SHIFT_REGISTER_DEPTH,
 };
+
+/// Bytes in an RGB565 frame (little-endian, `framebuf.RGB565` layout) — the
+/// driver no longer takes one; the oracle below still does.
+pub const RGB565_FRAME_BYTES: usize = PIXEL_COUNT * 2;
+
+/// `packing::pack_rgb888` as of the scalar implementation the fused one
+/// replaced.
+pub fn pack_rgb888_reference(
+    input: &[u8; RGB888_FRAME_BYTES],
+    gamma_lut: &[u8; 256],
+    output: &mut [u8; BITPLANE_BUFFER_BYTES],
+) {
+    for pair in 0..ROW_ADDRESS_COUNT {
+        let top = pair * SHIFT_REGISTER_DEPTH * 3;
+        let bottom = (pair + ROW_ADDRESS_COUNT) * SHIFT_REGISTER_DEPTH * 3;
+        for x in 0..SHIFT_REGISTER_DEPTH {
+            let t = top + 3 * x;
+            let b = bottom + 3 * x;
+            write_pair(
+                [
+                    gamma_lut[input[t] as usize],
+                    gamma_lut[input[t + 1] as usize],
+                    gamma_lut[input[t + 2] as usize],
+                    gamma_lut[input[b] as usize],
+                    gamma_lut[input[b + 1] as usize],
+                    gamma_lut[input[b + 2] as usize],
+                ],
+                output,
+                pair * SHIFT_REGISTER_DEPTH + x,
+            );
+        }
+    }
+}
 
 /// `packing::pack_rgb565` as of the pre-FusedTables implementation.
 pub fn pack_rgb565_reference(

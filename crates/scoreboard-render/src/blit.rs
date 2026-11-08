@@ -1,5 +1,5 @@
-//! The pixel path: an RGB565 draw surface, clipping sub-views, and blits from
-//! the five packed source formats the generated art uses.
+//! The pixel path: an RGB888 draw surface, clipping sub-views, and blits from
+//! the five packed source formats the generated art and the crests use.
 //!
 //! This is the port of MicroPython's `framebuf` module as the firmware
 //! actually used it — `display.py`'s `Region`, the `blit`/`fill_rect`/`line`
@@ -16,12 +16,17 @@
 //!    *low* two bits; `GS4_HMSB` puts it in the *high* nibble. That is
 //!    MicroPython's own inconsistency, and the compiled sprites are packed to
 //!    match it.
-//! 2. **The palette is applied before the key comparison.** A transparent
-//!    pixel is palette index 0, which maps to [`crate::MAGENTA`], which equals
-//!    the key — so paletted and RGB565 sprites share one key value.
+//! 2. **Transparency is a palette entry, not a colour.** A see-through pixel
+//!    is one whose palette entry is `None` — index 0 of every compiled sprite
+//!    with transparency, the background of a text draw that has none, any
+//!    entry a renderer blanks to reveal what is under a sprite. MicroPython
+//!    keyed on the mapped colour magenta instead, which made every colour that
+//!    packed to the key undrawable (BACKLOG 112, gone with it).
 //! 3. **Rows are byte-whole.** A source's stride rounds up to a whole number
 //!    of bytes per row, so an 11-pixel-wide `MONO_HLSB` glyph occupies 2 bytes
 //!    per row and row 1 never reads row 0's tail.
+
+use crate::Rgb888;
 
 /// Packed source formats, named for their `framebuf` constants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,7 +39,9 @@ pub enum PixelFormat {
     Gs4Hmsb,
     /// 1 byte per pixel, palette index.
     Gs8,
-    /// 2 bytes per pixel, little-endian. No palette.
+    /// 2 bytes per pixel, little-endian. No palette: the pixels are colours,
+    /// widened to eight bits a channel by [`expand_rgb565`] as they land. The
+    /// crests' format.
     Rgb565,
 }
 
@@ -61,7 +68,7 @@ impl PixelFormat {
         }
     }
 
-    /// Read the raw value at `(x, y)` — a palette index, or an RGB565 color
+    /// Read the raw value at `(x, y)` — a palette index, or an RGB565 colour
     /// for [`PixelFormat::Rgb565`].
     fn read(self, data: &[u8], row_bytes: usize, x: usize, y: usize) -> u16 {
         let row = y * row_bytes;
@@ -100,11 +107,10 @@ pub struct Source<'data> {
     pub height: i32,
     pub stride: i32,
     pub format: PixelFormat,
-    /// RGB565 entries indexed by the raw source value. `None` means the source
-    /// already carries colors ([`PixelFormat::Rgb565`]).
-    pub palette: Option<&'data [u16]>,
-    /// Mapped color that is not drawn. `None` draws every pixel.
-    pub key: Option<u16>,
+    /// Entries indexed by the raw source value; a `None` entry is not drawn.
+    /// `None` for the whole palette means the source carries its own colours
+    /// ([`PixelFormat::Rgb565`]), all of them drawn.
+    pub palette: Option<&'data [Option<Rgb888>]>,
 }
 
 impl<'data> Source<'data> {
@@ -114,8 +120,7 @@ impl<'data> Source<'data> {
         width: i32,
         height: i32,
         format: PixelFormat,
-        palette: Option<&'data [u16]>,
-        key: Option<u16>,
+        palette: Option<&'data [Option<Rgb888>]>,
     ) -> Self {
         Source {
             data,
@@ -124,14 +129,13 @@ impl<'data> Source<'data> {
             stride: width,
             format,
             palette,
-            key,
         }
     }
 
     /// Swap in a different palette — the Rust replacement for MicroPython's
     /// tint-the-shared-palette-and-restore-in-a-`finally` idiom. The
     /// replacement is a caller-owned array, so nothing outlives the draw.
-    pub const fn with_palette(mut self, palette: &'data [u16]) -> Self {
+    pub const fn with_palette(mut self, palette: &'data [Option<Rgb888>]) -> Self {
         self.palette = Some(palette);
         self
     }
@@ -143,15 +147,17 @@ impl<'data> Source<'data> {
         self
     }
 
-    fn map(&self, raw: u16) -> u16 {
+    /// The colour a raw source value draws, or `None` where it is
+    /// see-through.
+    fn map(&self, raw: u16) -> Option<Rgb888> {
         match self.palette {
             Some(palette) => palette[raw as usize],
-            None => raw,
+            None => Some(expand_rgb565(raw)),
         }
     }
 }
 
-/// A sprite compiled from source art: pixels, palette and key, ready to blit.
+/// A sprite compiled from source art: pixels and palette, ready to blit.
 ///
 /// The generated modules in [`crate::generated`] are `const` values of this
 /// type. `palette` stays `&'static` and immutable; a renderer that needs to
@@ -162,8 +168,7 @@ pub struct Sprite {
     pub width: i32,
     pub height: i32,
     pub format: PixelFormat,
-    pub palette: Option<&'static [u16]>,
-    pub key: Option<u16>,
+    pub palette: Option<&'static [Option<Rgb888>]>,
 }
 
 impl Sprite {
@@ -174,12 +179,11 @@ impl Sprite {
             self.height,
             self.format,
             self.palette,
-            self.key,
         )
     }
 
     /// This sprite drawn through a caller-owned palette.
-    pub const fn tinted<'a>(&self, palette: &'a [u16]) -> Source<'a> {
+    pub const fn tinted<'a>(&self, palette: &'a [Option<Rgb888>]) -> Source<'a> {
         Source {
             data: self.data,
             width: self.width,
@@ -187,7 +191,6 @@ impl Sprite {
             stride: self.width,
             format: self.format,
             palette: Some(palette),
-            key: self.key,
         }
     }
 }
@@ -202,7 +205,30 @@ pub struct Slice {
     pub height: i32,
 }
 
-/// An RGB565 drawing surface, or a clipping sub-view of one.
+/// Bytes one pixel occupies on a [`Canvas`]: red, green, blue, in that order —
+/// the layout `hub75`'s `load_rgb888` packs, so a finished frame goes to the
+/// driver as it lies.
+pub const BYTES_PER_PIXEL: usize = 3;
+
+/// An RGB565 crest or clip pixel (a little-endian `framebuf.RGB565` value)
+/// widened to eight bits a channel by bit replication: each field's top bits
+/// repeat into its low ones, so 0 stays 0 and full scale lands on 255.
+///
+/// This is exactly the expansion the panel driver applied when the drawing
+/// surface was RGB565, which is why a crest lights the same LEDs it did then,
+/// and why truncating the result back to RGB565 returns the original value.
+pub const fn expand_rgb565(raw: u16) -> Rgb888 {
+    let red = (raw >> 11) as u8;
+    let green = ((raw >> 5) & 0x3F) as u8;
+    let blue = (raw & 0x1F) as u8;
+    Rgb888::new(
+        (red << 3) | (red >> 2),
+        (green << 2) | (green >> 4),
+        (blue << 3) | (blue >> 2),
+    )
+}
+
+/// An RGB888 drawing surface, or a clipping sub-view of one.
 ///
 /// The port of `display.py`'s `Region`: a view carries its parent's row pitch,
 /// so every write clips to the view's own bounds with no masking by the
@@ -210,7 +236,8 @@ pub struct Slice {
 /// one of its views is alive — the compile-time form of "Regions are the draw
 /// target, and only one thing draws at a time".
 pub struct Canvas<'pixels> {
-    /// RGB565 little-endian, starting at this view's top-left pixel.
+    /// [`BYTES_PER_PIXEL`] bytes a pixel, starting at this view's top-left
+    /// pixel.
     pixels: &'pixels mut [u8],
     width: i32,
     height: i32,
@@ -223,7 +250,7 @@ impl<'pixels> Canvas<'pixels> {
     pub fn new(pixels: &'pixels mut [u8], width: i32, height: i32) -> Self {
         assert!(width >= 0 && height >= 0, "negative canvas size");
         assert!(
-            pixels.len() >= (width * height) as usize * 2,
+            pixels.len() >= (width * height) as usize * BYTES_PER_PIXEL,
             "canvas buffer too small"
         );
         Canvas {
@@ -255,7 +282,7 @@ impl<'pixels> Canvas<'pixels> {
             x + width <= self.width && y + height <= self.height,
             "region escapes its parent"
         );
-        let offset = ((y * self.stride + x) * 2) as usize;
+        let offset = (y * self.stride + x) as usize * BYTES_PER_PIXEL;
         Canvas {
             pixels: &mut self.pixels[offset..],
             width,
@@ -270,7 +297,7 @@ impl<'pixels> Canvas<'pixels> {
     }
 
     fn index(&self, x: i32, y: i32) -> usize {
-        ((y * self.stride + x) * 2) as usize
+        (y * self.stride + x) as usize * BYTES_PER_PIXEL
     }
 
     fn contains(&self, x: i32, y: i32) -> bool {
@@ -278,26 +305,32 @@ impl<'pixels> Canvas<'pixels> {
     }
 
     /// Set one pixel; out-of-bounds coordinates are dropped.
-    pub fn pixel(&mut self, x: i32, y: i32, color: u16) {
+    pub fn pixel(&mut self, x: i32, y: i32, color: Rgb888) {
         if self.contains(x, y) {
             let index = self.index(x, y);
-            self.pixels[index..index + 2].copy_from_slice(&color.to_le_bytes());
+            self.pixels[index..index + BYTES_PER_PIXEL].copy_from_slice(&bytes(color));
         }
     }
 
     /// Read one pixel; `None` out of bounds.
-    pub fn pixel_at(&self, x: i32, y: i32) -> Option<u16> {
+    pub fn pixel_at(&self, x: i32, y: i32) -> Option<Rgb888> {
         self.contains(x, y).then(|| {
             let index = self.index(x, y);
-            u16::from_le_bytes([self.pixels[index], self.pixels[index + 1]])
+            let pixel = &self.pixels[index..index + BYTES_PER_PIXEL];
+            Rgb888::new(pixel[0], pixel[1], pixel[2])
         })
     }
 
-    pub fn fill(&mut self, color: u16) {
+    pub fn fill(&mut self, color: Rgb888) {
         self.fill_rect(0, 0, self.width, self.height, color);
     }
 
-    pub fn fill_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: u16) {
+    /// Fill a rectangle, clipped to the canvas.
+    ///
+    /// A gray — black above all, which clears every frame — is one byte value
+    /// repeated, so it fills as a byte run the compiler turns into a `memset`
+    /// of whole words; any other colour is written a pixel at a time.
+    pub fn fill_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: Rgb888) {
         let x0 = x.max(0);
         let y0 = y.max(0);
         let x1 = (x + width).min(self.width);
@@ -305,26 +338,31 @@ impl<'pixels> Canvas<'pixels> {
         if x1 <= x0 || y1 <= y0 {
             return;
         }
-        let bytes = color.to_le_bytes();
+        let pixel = bytes(color);
+        let gray = pixel[0] == pixel[1] && pixel[1] == pixel[2];
         for row in y0..y1 {
-            let start = self.index(x0, row);
-            let end = self.index(x1, row);
-            for pixel in self.pixels[start..end].as_chunks_mut::<2>().0 {
-                *pixel = bytes;
+            let (start, end) = (self.index(x0, row), self.index(x1, row));
+            let span = &mut self.pixels[start..end];
+            if gray {
+                span.fill(pixel[0]);
+            } else {
+                for out in span.as_chunks_mut::<BYTES_PER_PIXEL>().0 {
+                    *out = pixel;
+                }
             }
         }
     }
 
-    pub fn hline(&mut self, x: i32, y: i32, width: i32, color: u16) {
+    pub fn hline(&mut self, x: i32, y: i32, width: i32, color: Rgb888) {
         self.fill_rect(x, y, width, 1, color);
     }
 
-    pub fn vline(&mut self, x: i32, y: i32, height: i32, color: u16) {
+    pub fn vline(&mut self, x: i32, y: i32, height: i32, color: Rgb888) {
         self.fill_rect(x, y, 1, height, color);
     }
 
     /// A one-pixel outline.
-    pub fn rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: u16) {
+    pub fn rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: Rgb888) {
         if width <= 0 || height <= 0 {
             return;
         }
@@ -339,7 +377,7 @@ impl<'pixels> Canvas<'pixels> {
     /// loop and then sets the second endpoint unconditionally, so both
     /// endpoints are always lit. The football perspective lines are golden
     /// tested against it.
-    pub fn line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: u16) {
+    pub fn line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: Rgb888) {
         let (mut x, mut y) = (x1, y1);
         let mut dx = x2 - x1;
         let mut sx = if dx > 0 { 1 } else { -1 };
@@ -374,9 +412,8 @@ impl<'pixels> Canvas<'pixels> {
 
     /// Copy `source` in at `(x, y)`, clipping every edge.
     ///
-    /// Reproduces `framebuf.blit()` exactly: per-pixel bounds clipping
-    /// including negative offsets, and the palette lookup applied **before**
-    /// the key comparison.
+    /// Reproduces `framebuf.blit()`'s clipping exactly — per pixel, including
+    /// negative offsets. A pixel whose palette entry is `None` is skipped.
     pub fn blit(&mut self, source: &Source<'_>, x: i32, y: i32) {
         let row_bytes = source.format.row_bytes(source.stride as usize);
         for row in 0..source.height {
@@ -393,48 +430,54 @@ impl<'pixels> Canvas<'pixels> {
                 let raw = source
                     .format
                     .read(source.data, row_bytes, col as usize, row as usize);
-                let color = source.map(raw);
-                if source.key == Some(color) {
+                let Some(color) = source.map(raw) else {
                     continue;
-                }
+                };
                 let index = self.index(x + col, dst_y);
-                self.pixels[index..index + 2].copy_from_slice(&color.to_le_bytes());
+                self.pixels[index..index + BYTES_PER_PIXEL].copy_from_slice(&bytes(color));
             }
         }
     }
 
     /// Multiply every pixel by `terms`' brightness factor, in place.
     ///
-    /// The port of `display._dim_frame`. Each 32-bit word holds two RGB565
-    /// pixels and the factor is a sum of masked shifts, where each mask clears
-    /// the bits a shift would otherwise bleed across the R5/G6/B5 field
-    /// boundaries. Channel sums cannot overflow their fields because the total
-    /// factor is below 1.
+    /// The port of `display._dim_frame`, re-derived for eight-bit channels
+    /// (BACKLOG 115). The factor is a sum of shifts — `c >> 1`, plus `c >> 2`
+    /// and `c >> 3` as the rung asks — applied to every channel byte. Four
+    /// bytes go at once as a `u32`, each shift masked to the bits that stay
+    /// inside their own byte (`0x7F`, `0x3F`, `0x1F` per byte), so a channel
+    /// never bleeds into its neighbour; which bytes share a word does not
+    /// matter, because every byte is a channel and every channel is scaled the
+    /// same. The sum cannot overflow a byte because the factor is below 1.
     ///
-    /// The MicroPython version needed its masks built through variables (a full
-    /// 32-bit literal boxes into an object viper cannot combine with native
-    /// ints) and its `@micropython.viper` body read the buffer as `ptr32`,
-    /// where `>>` is an arithmetic shift whose sign extension `m1` had to
-    /// clear. Neither concern survives the port: these are `u32` literals and
-    /// `>>` is logical. The masks are unchanged, so the output is bit-identical.
+    /// Same four rungs, same truncation per term, as the RGB565 version, which
+    /// applied these shifts to 5- and 6-bit fields with masks built for the
+    /// R5/G6/B5 boundaries; at eight bits the steps are finer and a dimmed
+    /// colour keeps its hue.
     ///
-    /// Panics unless this canvas is contiguous (a whole frame, not a sub-view)
-    /// with an even pixel count — the two-pixels-per-word arithmetic has no
-    /// meaning otherwise.
+    /// Panics unless this canvas is contiguous (a whole frame, not a sub-view).
     pub fn dim(&mut self, terms: FadeTerms) {
         assert_eq!(self.stride, self.width, "dim() needs a contiguous canvas");
-        let words = (self.width * self.height / 2) as usize;
-        assert_eq!(self.width * self.height % 2, 0, "dim() needs even pixels");
-        for word in self.pixels[..words * 4].as_chunks_mut::<4>().0 {
+        let len = (self.width * self.height) as usize * BYTES_PER_PIXEL;
+        let (words, tail) = self.pixels[..len].as_chunks_mut::<4>();
+        for word in words {
             let raw = u32::from_le_bytes(*word);
-            let mut value = (raw >> 1) & 0x7BEF_7BEF;
+            let mut value = (raw >> 1) & 0x7F7F_7F7F;
             if terms.half_step {
-                value += (raw >> 2) & 0x39E7_39E7;
+                value += (raw >> 2) & 0x3F3F_3F3F;
             }
             if terms.quarter_step {
-                value += (raw >> 3) & 0x18E3_18E3;
+                value += (raw >> 3) & 0x1F1F_1F1F;
             }
             *word = value.to_le_bytes();
+        }
+        // Only a canvas whose byte count is not a multiple of four has any;
+        // a frame (24,576 B) has none.
+        for channel in tail {
+            let raw = *channel;
+            let half = if terms.half_step { raw >> 2 } else { 0 };
+            let quarter = if terms.quarter_step { raw >> 3 } else { 0 };
+            *channel = (raw >> 1) + half + quarter;
         }
     }
 
@@ -478,14 +521,18 @@ pub const FADE_TERMS: [FadeTerms; 4] = [
 ];
 
 /// The two-entry palette every text draw runs through: index 0 is the
-/// background (or [`crate::MAGENTA`] for a transparent draw), index 1 the
-/// glyph color.
+/// background (`None` for a transparent draw), index 1 the glyph colour.
 ///
 /// In MicroPython this was `FontWriter._palette_buf`, a preallocated
 /// `bytearray` on the writer that had to be registered as scratch and poisoned
 /// between frames to prove nothing read it stale. Here it is a local array
 /// built at every call site, which is the same guarantee with nothing to
 /// register.
-pub const fn text_palette(background: u16, color: u16) -> [u16; 2] {
-    [background, color]
+pub const fn text_palette(background: Option<Rgb888>, color: Rgb888) -> [Option<Rgb888>; 2] {
+    [background, Some(color)]
+}
+
+/// A colour as the three bytes a pixel occupies.
+const fn bytes(color: Rgb888) -> [u8; BYTES_PER_PIXEL] {
+    [color.red(), color.green(), color.blue()]
 }

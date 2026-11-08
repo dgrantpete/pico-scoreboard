@@ -20,7 +20,7 @@ use crate::blit::{Canvas, FADE_TERMS};
 use crate::generated::layout;
 use crate::geometry::{HEIGHT, WIDTH};
 use crate::time::WallMs;
-use crate::{pack_scaled, pulse};
+use crate::{pulse, scale};
 use scoreboard_model::snapshot::{TOAST_DISPLAY_MS, TOAST_STICKY_MAX_MS, ToastView};
 use scoreboard_model::{Millis, Rgb888, ScoreboardSnapshot, ToastKind};
 
@@ -62,8 +62,9 @@ const LOCK_Y: i32 = 19;
 
 /// Angular dot index → palette index.
 ///
-/// `tools/gen_toast_icons.py` bakes dot *k*'s color so that its RGB565 value is
-/// exactly `k + 1`, while `compile_layout.py` assigns palette indices in
+/// `tools/gen_toast_icons.py` bakes dot *k*'s color as pure blue `8 * (k + 1)`
+/// — an RGB565 value of exactly `k + 1`, which is how MicroPython read it —
+/// while `compile_layout.py` assigns palette indices in
 /// row-major first-seen order — which is not angular order. MicroPython
 /// inverted the compiled palette once at import and raised there if the
 /// contract had drifted. Doing it in a `const fn` moves that check from import
@@ -80,7 +81,12 @@ const fn spinner_order() -> [u8; SPINNER_DOTS] {
     let mut seen = [false; SPINNER_DOTS];
     let mut entry = 1;
     while entry <= SPINNER_DOTS {
-        let angular = palette[entry] as usize;
+        let angular = match palette[entry] {
+            Some(color) if color.red() == 0 && color.green() == 0 && color.blue() % 8 == 0 => {
+                (color.blue() / 8) as usize
+            }
+            _ => 0,
+        };
         assert!(
             angular >= 1 && angular <= SPINNER_DOTS,
             "a spinner dot's baked color is not its angular index — regenerate \
@@ -163,8 +169,8 @@ pub fn overlay(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: Wall
     let primary = snapshot.ui_colors.primary;
     match toast.kind {
         ToastKind::Spinner => spinner(canvas, elapsed, brightness, primary),
-        ToastKind::Unlock => lock(canvas, pack_scaled(primary, brightness.into(), 255), true),
-        ToastKind::Lock => lock(canvas, pack_scaled(primary, brightness.into(), 255), false),
+        ToastKind::Unlock => lock(canvas, scale(primary, brightness.into(), 255), true),
+        ToastKind::Lock => lock(canvas, scale(primary, brightness.into(), 255), false),
     }
 }
 
@@ -175,12 +181,11 @@ pub fn overlay(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: Wall
 /// shifts every frame rather than stepping dot to dot — the fluidity is the
 /// point, and it is the one thing on the panel that visibly gains from the
 /// frame rate, since the ring is driven off the wall clock and simply gets
-/// three times as many samples per revolution. Dots outside the trail get the
-/// key as their color, so the blit skips them entirely.
+/// three times as many samples per revolution. Dots outside the trail get no
+/// colour at all, so the blit skips them entirely.
 fn spinner(canvas: &mut Canvas<'_>, elapsed: Millis, dim: u8, primary: Rgb888) {
     let sprite = layout::toast_spinner::SPRITE;
     let mut palette = layout::toast_spinner::PALETTE;
-    let key = sprite.key.unwrap_or(0);
 
     let head =
         ((elapsed % SPINNER_PERIOD_MS) * (SPINNER_DOTS as u64 * 256) / SPINNER_PERIOD_MS) as u32;
@@ -190,21 +195,21 @@ fn spinner(canvas: &mut Canvas<'_>, elapsed: Millis, dim: u8, primary: Rgb888) {
         let lag = (head + full_turn - dot as u32 * 256) % full_turn;
         let entry = *entry as usize;
         if lag >= span {
-            palette[entry] = key;
+            palette[entry] = None;
             continue;
         }
         let mut value = 255 - (lag * 255) / span;
         if dim != 255 {
             value = (value * dim as u32) >> 8;
         }
-        palette[entry] = pack_scaled(primary, value, 255);
+        palette[entry] = Some(scale(primary, value, 255));
     }
     canvas.blit(&sprite.tinted(&palette), SPINNER_X, SPINNER_Y);
 }
 
 /// A padlock centered on the panel. Open lifts the shackle's left leg out of
 /// the body; both sprites share a canvas, so one blit position serves.
-fn lock(canvas: &mut Canvas<'_>, color: u16, open: bool) {
+fn lock(canvas: &mut Canvas<'_>, color: Rgb888, open: bool) {
     let (sprite, defaults) = if open {
         (
             layout::toast_lock_open::SPRITE,
@@ -217,6 +222,6 @@ fn lock(canvas: &mut Canvas<'_>, color: u16, open: bool) {
         )
     };
     let mut palette = defaults;
-    palette[1] = color;
+    palette[1] = Some(color);
     canvas.blit(&sprite.tinted(&palette), LOCK_X, LOCK_Y);
 }

@@ -10,12 +10,13 @@ per frame that rewrites the previous frame into the next — frame 0 in full,
 every later frame as the pixels that changed.
 
 Why this shape and not deflate: the decoder writes straight into the render
-loop's existing 16 KB frame surface and needs no other RAM. An inflater needs
+loop's existing 24 KB frame surface and needs no other RAM. An inflater needs
 ~11 KB of tables plus a history window, and the firmware's static-RAM budget
 has ~14.5 KB left before it breaks its 40 % headroom target (BUDGET.md).
 
 Besides the clip, this writes `<out>.frames` — one FNV-1a-64 hash per frame of
-the RGB565 frame the clip must decode to — which the render crate's test
+the RGB888 frame the clip must decode to (the RGB565 palette widened by bit
+replication, as the decoder widens it) — which the render crate's test
 checks the Rust decoder against, frame by frame. The encoder also decodes its
 own output before writing anything, so a clip that reaches disk round-trips.
 """
@@ -45,6 +46,13 @@ OP_SKIP, OP_FILL, OP_LIT = 0x00, 0x40, 0x80
 def rgb565(rgb: np.ndarray) -> np.ndarray:
     r, g, b = (rgb[..., i].astype(np.uint16) for i in range(3))
     return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+
+
+def widen(palette565: np.ndarray) -> np.ndarray:
+    """RGB565 values -> (K, 3) RGB888 by bit replication, as the decoder widens them."""
+    v = palette565.astype(np.uint16)
+    r, g, b = v >> 11, (v >> 5) & 0x3F, v & 0x1F
+    return np.stack([(r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2)], axis=-1).astype(np.uint8)
 
 
 def fnv1a64(data: bytes) -> int:
@@ -166,11 +174,12 @@ def main() -> int:
 
     # Round-trip before anything touches disk.
     surface = np.zeros(PIXELS, dtype=np.uint8)
+    wide = widen(palette)
     hashes = []
     for k, stream in enumerate(streams):
         decode_frame(stream, surface, keyframe=(k == 0))
         assert np.array_equal(surface, indices[k]), f"frame {k} does not round-trip"
-        hashes.append(fnv1a64(palette[surface].astype("<u2").tobytes()))
+        hashes.append(fnv1a64(wide[surface].tobytes()))
 
     offsets = [0]
     for s in streams:

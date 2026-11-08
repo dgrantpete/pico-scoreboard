@@ -6,7 +6,8 @@ date window is open (`src/event.rs`, `EVENTS`). The format and the player are
 image and decoded in place from flash.
 
 Each clip sits beside a `.sbev.frames` file: one FNV-1a-64 hash per frame of
-the RGB565 frame the clip must decode to, written by the encoder.
+the RGB888 frame the clip must decode to (its RGB565 palette widened by bit
+replication, as the decoder widens it), written by the encoder.
 `crates/scoreboard-render/tests/event.rs` decodes every shipped clip through
 the firmware's decoder and checks every frame against it.
 

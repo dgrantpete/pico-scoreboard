@@ -39,7 +39,7 @@ use crate::font::{self, Align, Scroll, Style};
 use crate::geometry::{PLAY_SCROLL_PAUSE_MS, RenderSettings};
 use crate::prepared::PreparedView;
 use crate::time::{FrameElapsed, WallMs};
-use crate::{DIM_GRAY, generated, geometry, pack};
+use crate::{DIM_GRAY, Rgb888, generated, geometry};
 use scoreboard_model::ScoreboardSnapshot;
 use scoreboard_model::snapshot::LogoRef;
 
@@ -79,7 +79,6 @@ impl<'pool> Logos<'pool> {
             LOGO_EDGE,
             LOGO_EDGE,
             PixelFormat::Rgb565,
-            None,
             None,
         ))
     }
@@ -148,10 +147,7 @@ pub fn bottom_strip(canvas: &mut Canvas<'_>, scene: &Scene<'_>) -> Strip {
         // The scroll offset is motion, so it rides the frame rail: a stalled
         // frame holds position instead of jumping a handful of pixels.
         scene.play.motion(),
-        Style::new(
-            &generated::UNSCII_16,
-            pack(scene.snapshot.ui_colors.primary),
-        ),
+        Style::new(&generated::UNSCII_16, scene.snapshot.ui_colors.primary),
         scene.game_scroll(PLAY_SCROLL_PAUSE_MS),
     );
     Strip::Play
@@ -162,7 +158,7 @@ pub fn bottom_strip(canvas: &mut Canvas<'_>, scene: &Scene<'_>) -> Strip {
 /// Every game screen draws exactly two of these, and the alignment is what
 /// makes a slot's width meaningful — a three-digit score in a two-digit slot
 /// overhangs evenly rather than running off one end.
-pub fn big_score(canvas: &mut Canvas<'_>, slot: Slice, score: u16, color: u16) {
+pub fn big_score(canvas: &mut Canvas<'_>, slot: Slice, score: u16, color: Rgb888) {
     font::integer(
         canvas,
         score,
@@ -180,7 +176,7 @@ pub fn big_score(canvas: &mut Canvas<'_>, slot: Slice, score: u16, color: u16) {
 /// Nothing here scrolls. These are all short enough to fit by construction, and
 /// a chip that overflowed would be a geometry bug rather than something to
 /// animate around.
-pub fn chip(canvas: &mut Canvas<'_>, slot: Slice, text: &str, color: u16) {
+pub fn chip(canvas: &mut Canvas<'_>, slot: Slice, text: &str, color: Rgb888) {
     let mut region = canvas.slice(slot);
     font::draw_unscrolled(
         &mut region,
@@ -212,7 +208,7 @@ pub fn column_dividers(
     divider_x: i32,
     separator_y: i32,
 ) {
-    let rule = pack(scene.snapshot.ui_colors.secondary);
+    let rule = scene.snapshot.ui_colors.secondary;
     // Both rules stop at the 1 px border (BACKLOG 56).
     let inset = geometry::EDGE_INSET;
     canvas.vline(divider_x, inset, geometry::HEIGHT - 2 * inset, rule);
@@ -222,7 +218,7 @@ pub fn column_dividers(
 
 /// Winner emphasis: the winning side keeps its team color, the losing side goes
 /// gray. No abbreviations — color is the whole signal.
-pub fn winner_colors(home_won: bool, away: u16, home: u16) -> (u16, u16) {
+pub fn winner_colors(home_won: bool, away: Rgb888, home: Rgb888) -> (Rgb888, Rgb888) {
     if home_won {
         (DIM_GRAY, home)
     } else {

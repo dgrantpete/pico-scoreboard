@@ -65,6 +65,15 @@ bright magenta (or any color that quantizes to RGB565 0xF81F) as a real
 color, it will be treated as transparent at blit time. Pick a different
 color for real art, or adjust the sentinel here.
 
+The Rust emission differs in two ways (BACKLOG 115). Its palettes carry the
+art's own eight-bit colours, `Option<Rgb888>`, not their RGB565 packing; and
+it has no key: the reserved index 0 is emitted as `None`, which the Rust
+blitter skips, so transparency is a palette entry rather than a colour and
+no drawable colour can collide with it. Only the art's genuine magenta
+(255, 0, 255) still lands on index 0, since the scan above merges it with the
+sentinel. A sprite that falls back to RGB565 has no palette to carry `None`,
+so the Rust emission refuses one with transparent pixels.
+
 Output filename collisions across sources (plain PNG, layer, or slice) are
 hard errors — the compiler prints the conflicting sources and exits without
 writing anything.
@@ -372,6 +381,8 @@ def convert_image(img: Image.Image) -> dict:
         "data": data,
         "palette": palette_data,
         "palette_count": num_colors if choice["paletted"] else 0,
+        "palette_rgb": palette if choice["paletted"] else None,
+        "has_transparent": has_transparent,
         "mode_desc": mode_desc,
         "key": key,
     }
@@ -472,14 +483,15 @@ _RUST_HEADER = '''\
 //!
 //! The pixel format is chosen per sprite to minimise pixel bytes plus palette
 //! bytes, so the same art can arrive as any of five packings; [`PixelFormat`]
-//! documents the bit order each one uses. `KEY` is the *mapped* magenta
-//! ([`crate::MAGENTA`]) for every sprite with transparency, paletted or not,
-//! because the palette lookup happens before the key comparison.
+//! documents the bit order each one uses. Palettes hold the art's own
+//! eight-bit colours; a sprite with transparency has `None` at index 0, which
+//! the blitter skips.
 //!
 //! Palettes are `&'static` and immutable. A renderer that tints one — count
 //! dots, base markers, the spinner comet, endzone fills — copies it into a
 //! local array first; see the mutation-contract table in the crate docs.
 
+use crate::Rgb888;
 use crate::blit::{PixelFormat, Slice, Sprite};
 '''
 
@@ -493,22 +505,30 @@ def rust_bytes_literal(data: bytes, per_line: int = 16, indent: str = "    ") ->
     return "\n".join(lines)
 
 
-def rust_palette_literal(palette_bytes: bytes, per_line: int = 8, indent: str = "    ") -> str:
-    """Emit the body of a Rust `[u16; N]` array literal from RGB565-LE bytes."""
+def rust_palette_literal(palette: list, transparent: bool, per_line: int = 3, indent: str = "    ") -> str:
+    """Emit the body of a Rust `[Option<Rgb888>; N]` array literal.
+
+    Index 0 is `None` when the sprite has transparency (the reserved sentinel
+    slot); every other entry is the art's own eight-bit colour.
+    """
     values = [
-        int.from_bytes(palette_bytes[i : i + 2], "little")
-        for i in range(0, len(palette_bytes), 2)
+        "None," if transparent and index == 0 else f"Some(Rgb888(0x{r:02x}{g:02x}{b:02x})),"
+        for index, (r, g, b) in enumerate(palette)
     ]
     lines = []
     for offset in range(0, len(values), per_line):
-        chunk = values[offset : offset + per_line]
-        lines.append(indent + " ".join(f"0x{v:04x}," for v in chunk))
+        lines.append(indent + " ".join(values[offset : offset + per_line]))
     return "\n".join(lines)
 
 
 def generate_rust_sprite(name: str, info: dict, source_desc: str, position=None) -> str:
     """One `pub mod <name>` holding a Sprite (and its POSITION when absolute)."""
-    key = "None" if info["key"] == -1 else f"Some(0x{info['key']:04X})"
+    if info["palette"] is None and info["has_transparent"]:
+        raise SystemExit(
+            f"{source_desc}: {name} fell back to RGB565 with transparent pixels; the "
+            "Rust blitter keys nothing on RGB565 sources, so the sprite would draw "
+            "its transparency. Reduce it to 256 colours or fewer."
+        )
     lines = [
         f"/// `{source_desc}` — {info['mode_desc']}.",
         f"pub mod {name} {{",
@@ -520,7 +540,6 @@ def generate_rust_sprite(name: str, info: dict, source_desc: str, position=None)
         f"        height: {info['height']},",
         f"        format: PixelFormat::{_RUST_FORMATS[info['format_name']]},",
         f"        palette: {'Some(&PALETTE)' if info['palette'] is not None else 'None'},",
-        f"        key: {key},",
         "    };",
     ]
     if position is not None:
@@ -546,12 +565,12 @@ def generate_rust_sprite(name: str, info: dict, source_desc: str, position=None)
     if info["palette"] is not None:
         lines += [
             "",
-            f"    /// RGB565, index 0 = transparent."
-            if info["key"] != -1
-            else "    /// RGB565.",
+            "    /// The art's colours; index 0 (`None`) is see-through."
+            if info["has_transparent"]
+            else "    /// The art's colours.",
             "    #[rustfmt::skip]",
-            f"    pub static PALETTE: [u16; {info['palette_count']}] = [",
-            rust_palette_literal(info["palette"], indent="        "),
+            f"    pub static PALETTE: [Option<Rgb888>; {info['palette_count']}] = [",
+            rust_palette_literal(info["palette_rgb"], info["has_transparent"], indent="        "),
             "    ];",
         ]
     lines.append("}")

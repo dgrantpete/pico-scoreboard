@@ -16,6 +16,16 @@
 //! Rust renderer's own, the MicroPython firmware is frozen on the gift fleet,
 //! and a deliberate visual change is made in Rust alone and re-blessed here.
 //!
+//! Since 2026-11-08 the frames are RGB888, three bytes a pixel, as the drawing
+//! surface is (BACKLOG 115). They were re-blessed once for that, against an
+//! oracle rather than by eye: every frame, truncated back to RGB565, matched
+//! its RGB565 golden exactly once the three blends that are *meant* to change
+//! — `scale`, `mix` and the toast's `dim` — were swapped for RGB565-emulating
+//! twins; with the real ones, the frames that differ are exactly the ones those
+//! three draw into (PARITY.md has the counts). The frames stay raw: git stores
+//! every blob deflated, so the repository pays the compressed size either way,
+//! and a raw frame needs no decoder in the test.
+//!
 //! # Reading a failure, and re-blessing
 //!
 //! A mismatch writes `expected | actual | diff` panels to
@@ -36,7 +46,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use hub75::display::{FrameBytes, Hub75Display};
-use hub75::geometry::{HEIGHT, RGB565_FRAME_BYTES, WIDTH};
+use hub75::geometry::{HEIGHT, RGB888_FRAME_BYTES, WIDTH};
 use hub75::sim::SimulatorSink;
 use scoreboard_model::snapshot::LogoRef;
 use scoreboard_model::{
@@ -303,7 +313,7 @@ fn render_frame(
         view: FrameElapsed(offset),
         play: FrameElapsed(offset),
     };
-    let mut buffer: Box<FrameBytes> = Box::new([0; RGB565_FRAME_BYTES]);
+    let mut buffer: Box<FrameBytes> = Box::new([0; RGB888_FRAME_BYTES]);
     let mut display = Hub75Display::new(&mut buffer, SimulatorSink::new());
     {
         let mut canvas = Canvas::new(display.buffer_mut(), WIDTH as i32, HEIGHT as i32);
@@ -315,8 +325,14 @@ fn render_frame(
 
 // -- Comparison ---------------------------------------------------------------
 
-fn pixel(frame: &[u8], index: usize) -> u16 {
-    u16::from_le_bytes([frame[index * 2], frame[index * 2 + 1]])
+/// One pixel as `[r, g, b]`.
+fn pixel(frame: &[u8], index: usize) -> [u8; 3] {
+    [frame[index * 3], frame[index * 3 + 1], frame[index * 3 + 2]]
+}
+
+/// One pixel as `0xRRGGBB`, for reports.
+fn hex(pixel: [u8; 3]) -> u32 {
+    u32::from_be_bytes([0, pixel[0], pixel[1], pixel[2]])
 }
 
 /// What the two frames disagree about.
@@ -326,17 +342,17 @@ struct Diff {
     /// `(x0, y0, x1, y1)`, inclusive.
     bounds: (usize, usize, usize, usize),
     /// Each distinct `(golden, actual)` pair and how often it occurs.
-    pairs: BTreeMap<(u16, u16), usize>,
+    pairs: BTreeMap<(u32, u32), usize>,
 }
 
 fn compare(expected: &[u8], actual: &[u8]) -> Option<Diff> {
     let mut indices = Vec::new();
-    let mut pairs: BTreeMap<(u16, u16), usize> = BTreeMap::new();
+    let mut pairs: BTreeMap<(u32, u32), usize> = BTreeMap::new();
     for index in 0..PIXELS {
         let (want, got) = (pixel(expected, index), pixel(actual, index));
         if want != got {
             indices.push(index);
-            *pairs.entry((want, got)).or_default() += 1;
+            *pairs.entry((hex(want), hex(got))).or_default() += 1;
         }
     }
     if indices.is_empty() {
@@ -355,15 +371,6 @@ fn compare(expected: &[u8], actual: &[u8]) -> Option<Diff> {
         bounds: (x0, y0, x1, y1),
         pairs,
     })
-}
-
-/// The channel codes an RGB565 word carries: 5 bits red, 6 green, 5 blue.
-fn channels(value: u16) -> (i32, i32, i32) {
-    (
-        ((value >> 11) & 0x1F) as i32,
-        ((value >> 5) & 0x3F) as i32,
-        (value & 0x1F) as i32,
-    )
 }
 
 // -- Diff artifacts -----------------------------------------------------------
@@ -407,8 +414,8 @@ fn write_panels(path: &Path, expected: &[u8], actual: &[u8], diff: &Diff) {
             }
             let index = source_y * WIDTH + panel_x / DIFF_SCALE;
             let color = match panel_index {
-                0 => expand(pixel(expected, index)),
-                1 => expand(pixel(actual, index)),
+                0 => pixel(expected, index),
+                1 => pixel(actual, index),
                 _ if differing[index] => [0xFF, 0x30, 0x30],
                 _ => [0x10, 0x10, 0x10],
             };
@@ -419,17 +426,6 @@ fn write_panels(path: &Path, expected: &[u8], actual: &[u8], diff: &Diff) {
         let _ = std::fs::create_dir_all(parent);
     }
     png::write_rgb(path, width, height, &rgb).expect("diff PNG written");
-}
-
-/// RGB565 to RGB888 by bit replication — the expansion the panel's own drive
-/// performs, and injective, so nothing about the frame is lost in the artifact.
-fn expand(value: u16) -> [u8; 3] {
-    let (red, green, blue) = channels(value);
-    [
-        ((red << 3) | (red >> 2)) as u8,
-        ((green << 2) | (green >> 4)) as u8,
-        ((blue << 3) | (blue >> 2)) as u8,
-    ]
 }
 
 // -- The tests ----------------------------------------------------------------
@@ -443,7 +439,7 @@ fn border_lit(frame: &[u8]) -> Vec<(usize, usize)> {
     (0..PIXELS)
         .map(|index| (index % WIDTH, index / WIDTH))
         .filter(|&(x, y)| x == 0 || y == 0 || x == WIDTH - 1 || y == HEIGHT - 1)
-        .filter(|&(x, y)| pixel(frame, y * WIDTH + x) != 0)
+        .filter(|&(x, y)| pixel(frame, y * WIDTH + x) != [0, 0, 0])
         .collect()
 }
 
@@ -537,7 +533,7 @@ fn every_case_renders_its_golden_frame() {
             });
             assert_eq!(
                 expected.len(),
-                RGB565_FRAME_BYTES,
+                RGB888_FRAME_BYTES,
                 "{label}: golden is not a frame"
             );
             let Some(diff) = compare(&expected, &actual) else {
@@ -560,7 +556,7 @@ fn every_case_renders_its_golden_frame() {
                 .pairs
                 .iter()
                 .take(8)
-                .map(|(&(want, got), n)| format!("{want:#06x}->{got:#06x} x{n}"))
+                .map(|(&(want, got), n)| format!("{want:#08x}->{got:#08x} x{n}"))
                 .collect::<Vec<_>>()
                 .join(", ");
             failures.push(format!(

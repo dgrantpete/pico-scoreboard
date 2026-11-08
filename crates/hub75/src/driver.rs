@@ -39,8 +39,7 @@ use rp235x_pac as pac;
 
 use crate::gamma::{Gamma, GammaTable};
 use crate::geometry::{
-    BITPLANE_BUFFER_BYTES, RGB565_FRAME_BYTES, RGB888_FRAME_BYTES, SHIFT_REGISTER_DEPTH,
-    TIMING_WORDS,
+    BITPLANE_BUFFER_BYTES, RGB888_FRAME_BYTES, SHIFT_REGISTER_DEPTH, TIMING_WORDS,
 };
 use crate::packing;
 use crate::programs;
@@ -163,10 +162,9 @@ pub struct Hub75Driver {
     brightness: f64,
     blanking_time_ns: u32,
     gamma: Gamma,
-    gamma_lut: [u8; 256],
-    /// The RGB565 pack's fused gamma+bitspread tables (1 KiB), derived from
-    /// `gamma_lut`. Every write to one rebuilds the other — `set_gamma` and
-    /// construction are the only two sites.
+    /// The pack's fused gamma+bitspread tables (2 KiB), derived from the
+    /// active gamma LUT, which is not kept: the tables are all the pack reads.
+    /// `set_gamma` and construction are the only two writers.
     fused: packing::FusedTables,
     system_clock_hz: u32,
     data_clock_hz: u32,
@@ -190,7 +188,6 @@ impl Hub75Driver {
         assert!(pins.data_base <= 24 && pins.clock_base <= 28 && pins.output_enable <= 29
             && pins.address_base <= 25, "pin group exceeds GPIO bank 0");
 
-        let gamma_lut = config.gamma.build_lut();
         let mut driver = Hub75Driver {
             pio,
             dma,
@@ -199,8 +196,7 @@ impl Hub75Driver {
             brightness: config.brightness.clamp(0.0, 1.0),
             blanking_time_ns: config.blanking_time_ns,
             gamma: config.gamma,
-            fused: packing::FusedTables::new(&gamma_lut),
-            gamma_lut,
+            fused: packing::FusedTables::new(&config.gamma.build_lut()),
             system_clock_hz: config.system_clock_hz,
             data_clock_hz: config.data_clock_hz,
         };
@@ -492,22 +488,14 @@ impl Hub75Driver {
         });
     }
 
-    /// Convert an RGB888 frame into the inactive framebuffer (visible after
-    /// [`flip`](Self::flip)). Gamma is applied during conversion.
+    /// Convert an RGB888 frame (R, G, B per pixel, row-major) into the
+    /// inactive framebuffer (visible after [`flip`](Self::flip)). Gamma is
+    /// applied during conversion.
     pub fn load_rgb888(&mut self, frame: &[u8; RGB888_FRAME_BYTES]) {
         // SAFETY: as in `inactive_buffer`, which this inlines so the table
         // fields can be borrowed alongside the buffer.
         let buffer = unsafe { &mut (*FRAMEBUFFERS.0.get()).0[1 - self.active_index] };
-        packing::pack_rgb888(frame, &self.gamma_lut, buffer);
-    }
-
-    /// Convert an RGB565 frame (little-endian, `framebuf.RGB565` layout)
-    /// into the inactive framebuffer. Gamma is applied during conversion.
-    pub fn load_rgb565(&mut self, frame: &[u8; RGB565_FRAME_BYTES]) {
-        // SAFETY: as in `inactive_buffer`, which this inlines so the table
-        // fields can be borrowed alongside the buffer.
-        let buffer = unsafe { &mut (*FRAMEBUFFERS.0.get()).0[1 - self.active_index] };
-        packing::pack_rgb565(frame, &self.fused, buffer);
+        packing::pack_rgb888(frame, &self.fused, buffer);
     }
 
     /// Zero the inactive framebuffer. Takes effect on the next `flip()`.
@@ -544,7 +532,7 @@ impl Hub75Driver {
     /// wire is wrong". Nothing on the render path reads it.
     pub fn active_planes(&self) -> &[u8] {
         // SAFETY: `&self` excludes every `&mut self` accessor for the
-        // borrow's lifetime, `load_rgb565` writes only the *other* buffer,
+        // borrow's lifetime, `load_rgb888` writes only the *other* buffer,
         // `flip` only moves the index, and DMA is a reader.
         unsafe { &(*FRAMEBUFFERS.0.get()).0[self.active_index] }
     }
@@ -622,7 +610,6 @@ impl Hub75Driver {
     /// ([`packing::FusedTables`]) and safe inside a frame.
     pub fn set_gamma(&mut self, table: GammaTable) -> Gamma {
         self.gamma = table.gamma();
-        self.gamma_lut = *table.lut();
         self.fused = packing::FusedTables::new(table.lut());
         self.gamma
     }

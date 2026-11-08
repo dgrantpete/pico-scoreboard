@@ -1,10 +1,10 @@
-//! Host-side frame sink: `show()` lands frames in a plain in-memory RGB565
+//! Host-side frame sink: `show()` lands frames in a plain in-memory RGB888
 //! buffer instead of the panel, so render code driving a
 //! [`Hub75Display`](crate::display::Hub75Display) can be pixel-asserted on
 //! the desktop.
 
 use crate::display::{FrameBytes, FrameSink};
-use crate::geometry::{HEIGHT, RGB565_FRAME_BYTES, WIDTH};
+use crate::geometry::{HEIGHT, RGB888_FRAME_BYTES, WIDTH};
 
 pub struct SimulatorSink {
     front: FrameBytes,
@@ -14,7 +14,7 @@ pub struct SimulatorSink {
 impl SimulatorSink {
     pub fn new() -> Self {
         SimulatorSink {
-            front: [0; RGB565_FRAME_BYTES],
+            front: [0; RGB888_FRAME_BYTES],
             frames_shown: 0,
         }
     }
@@ -26,10 +26,14 @@ impl SimulatorSink {
 
     /// Read a pixel from the last shown frame (panics out of bounds — the
     /// simulator is for tests, where that is a bug worth failing loudly).
-    pub fn pixel_at(&self, x: usize, y: usize) -> u16 {
+    pub fn pixel_at(&self, x: usize, y: usize) -> [u8; 3] {
         assert!(x < WIDTH && y < HEIGHT, "pixel out of bounds");
-        let index = (y * WIDTH + x) * 2;
-        u16::from_le_bytes([self.front[index], self.front[index + 1]])
+        let index = (y * WIDTH + x) * 3;
+        [
+            self.front[index],
+            self.front[index + 1],
+            self.front[index + 2],
+        ]
     }
 
     pub fn frames_shown(&self) -> usize {

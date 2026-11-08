@@ -28,7 +28,7 @@
 //! | 8 | 2 | palette length `P`, `1..=256` |
 //! | 10 | 1 | width, must be [`WIDTH`] |
 //! | 11 | 1 | height, must be [`HEIGHT`] |
-//! | 12 | `2P` | palette: RGB565, the panel's own byte order |
+//! | 12 | `2P` | palette: RGB565, little-endian, widened by bit replication as it decodes |
 //! | … | `4(F+1)` | frame offsets into the op data; first `0`, last = its length |
 //! | … | | op data: one stream per frame |
 //!
@@ -49,12 +49,20 @@
 //!
 //! ## Why this shape and not deflate
 //!
-//! The decoder writes straight into the render loop's existing 16 KB frame
+//! The decoder writes straight into the render loop's existing 24 KB frame
 //! surface, reading the clip in place from flash, and needs no RAM of its own —
 //! the palette is looked up where it lies. An inflater needs ~11 KB of tables
 //! plus a history window, against ~14.5 KB of static-RAM headroom (BUDGET.md).
 //! For the first clip the difference was 324 KB against ~250 KB; flash is the
 //! resource there was room in.
+//!
+//! ## Why the palette stayed RGB565
+//!
+//! The drawing surface went to eight bits a channel (BACKLOG 115) after the
+//! format was fixed, and the format did not follow: a clip's palette is at most
+//! 256 colours the encoder already quantised, so widening each entry as it is
+//! written ([`expand_rgb565`], the panel's own expansion) costs one shift-and-or
+//! per pixel and keeps every encoded clip, and the encoder, valid as they are.
 //!
 //! # Playback
 //!
@@ -81,6 +89,7 @@
 
 use scoreboard_model::{Millis, Mode};
 
+use crate::blit::{BYTES_PER_PIXEL, expand_rgb565};
 use crate::geometry::{HEIGHT, WIDTH};
 use crate::time::{FPS, WallMs};
 
@@ -90,7 +99,7 @@ const MAGIC: &[u8; 4] = b"SBEV";
 const VERSION: u8 = 1;
 const HEADER_BYTES: usize = 12;
 const PIXELS: usize = (WIDTH * HEIGHT) as usize;
-const SURFACE_BYTES: usize = PIXELS * 2;
+const SURFACE_BYTES: usize = PIXELS * BYTES_PER_PIXEL;
 
 const OP_MASK: u8 = 0xC0;
 const OP_SKIP: u8 = 0x00;
@@ -118,7 +127,7 @@ pub enum ClipError {
     BadOffsets,
     /// A frame index past the end of the clip.
     NoSuchFrame(u16),
-    /// The surface is not one RGB565 frame.
+    /// The surface is not one RGB888 frame.
     BadSurface,
     /// A frame's op stream is malformed: a reserved op, a palette index out of
     /// range, a skip in the keyframe, or a cursor that does not land exactly on
@@ -214,8 +223,8 @@ impl<'a> Clip<'a> {
     /// Decode frame `frame` onto `surface`, which must hold frame `frame - 1`
     /// (or anything at all, for frame 0).
     ///
-    /// Writes the palette's bytes as they lie, so a clip frame and a rendered
-    /// frame are the same RGB565 layout by construction.
+    /// Writes each palette entry widened to the canvas's RGB888 layout, so a
+    /// clip frame and a rendered frame are the same bytes to the driver.
     pub fn decode_into(&self, frame: u16, surface: &mut [u8]) -> Result<(), ClipError> {
         if frame >= self.timing.frames {
             return Err(ClipError::NoSuchFrame(frame));
@@ -244,14 +253,16 @@ impl<'a> Clip<'a> {
                         .colour(*stream.get(at).ok_or(corrupt)?)
                         .ok_or(corrupt)?;
                     at += 1;
-                    for pixel in surface[cursor * 2..end * 2].as_chunks_mut::<2>().0 {
+                    let span = &mut surface[cursor * BYTES_PER_PIXEL..end * BYTES_PER_PIXEL];
+                    for pixel in span.as_chunks_mut::<BYTES_PER_PIXEL>().0 {
                         *pixel = colour;
                     }
                 }
                 OP_LITERAL => {
                     let indices = stream.get(at..at + run).ok_or(corrupt)?;
                     at += run;
-                    let pixels = surface[cursor * 2..end * 2].as_chunks_mut::<2>().0;
+                    let span = &mut surface[cursor * BYTES_PER_PIXEL..end * BYTES_PER_PIXEL];
+                    let pixels = span.as_chunks_mut::<BYTES_PER_PIXEL>().0;
                     for (pixel, &index) in pixels.iter_mut().zip(indices) {
                         *pixel = self.colour(index).ok_or(corrupt)?;
                     }
@@ -271,11 +282,12 @@ impl<'a> Clip<'a> {
         u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize
     }
 
-    fn colour(&self, index: u8) -> Option<[u8; 2]> {
+    fn colour(&self, index: u8) -> Option<[u8; BYTES_PER_PIXEL]> {
         let b = self
             .palette
             .get(index as usize * 2..index as usize * 2 + 2)?;
-        Some([b[0], b[1]])
+        let colour = expand_rgb565(u16::from_le_bytes([b[0], b[1]]));
+        Some([colour.red(), colour.green(), colour.blue()])
     }
 }
 

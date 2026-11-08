@@ -33,14 +33,14 @@ use crate::geometry::{
 };
 use crate::time::WallMs;
 use crate::widgets::{arrow, count_dots};
-use crate::{BLACK, MAGENTA, WHITE, generated, mix, pack, rgb565, scale, toast};
+use crate::{BLACK, Rgb888, WHITE, generated, mix, scale, toast};
 use scoreboard_model::UiColors;
 use scoreboard_model::snapshot::{
     BannerKind, GoalMark, HockeyLiveView, ShootoutRow, ShootoutView, ShotMark, Side,
 };
 
 /// Goal-lamp red, what the scoring side's number pulses toward (D4).
-const LAMP: u16 = rgb565(255, 24, 24);
+const LAMP: Rgb888 = Rgb888::new(255, 24, 24);
 /// How long the lamp burns after a goal (D4). A duration, so it is measured
 /// on the wall rail: a stalled frame spends lamp time like any other.
 const LAMP_MS: u64 = 20_000;
@@ -56,7 +56,7 @@ const GOAL_MARK_ALPHA: u32 = 141;
 /// The power-play zone's glow: one dim ↔ bright cycle.
 const GLOW_PULSE_MS: u64 = 1_600;
 /// A missed shootout attempt's X.
-const MISS: u16 = rgb565(255, 10, 10);
+const MISS: Rgb888 = Rgb888::new(255, 10, 10);
 /// Each side's count cell at the ends of the shots ledger: two digits and a
 /// pixel either side.
 const SHOTS_COUNT_WIDTH: i32 = 14;
@@ -66,7 +66,7 @@ pub fn render_live(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let snapshot = scene.snapshot;
     let view = &snapshot.hockey_live;
     let table = HOCKEY_LIVE;
-    let primary = pack(snapshot.ui_colors.primary);
+    let primary = snapshot.ui_colors.primary;
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
     if let Some(shootout) = &view.shootout {
@@ -87,27 +87,27 @@ pub fn render_live(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             table.clock,
             shootout,
             "-",
-            Style::new(&generated::UNSCII_16, pack(snapshot.ui_colors.accent)),
+            Style::new(&generated::UNSCII_16, snapshot.ui_colors.accent),
         );
         line(
             canvas,
             table.situation,
             "SHOOTOUT",
             &generated::SPLEEN_5X8,
-            pack(snapshot.ui_colors.secondary),
+            snapshot.ui_colors.secondary,
         );
         shootout_row(
             canvas,
             table.shootout_away,
             &shootout.away,
-            pack(view.away_color),
+            view.away_color,
             &snapshot.ui_colors,
         );
         shootout_row(
             canvas,
             table.shootout_home,
             &shootout.home,
-            pack(view.home_color),
+            view.home_color,
             &snapshot.ui_colors,
         );
         short_rink(canvas, view, table.shootout_rink_y);
@@ -151,7 +151,7 @@ fn skater_dots(
         width: 5 * pitch - 1,
         height: layout::dot::SPRITE.height,
     };
-    let accent = pack(scene.snapshot.ui_colors.accent);
+    let accent = scene.snapshot.ui_colors.accent;
     for (side, count, color) in [
         (Side::Away, view.away_skaters, view.away_color),
         (Side::Home, view.home_skaters, view.home_color),
@@ -165,7 +165,7 @@ fn skater_dots(
             Side::Away => table.skaters_away_x,
             Side::Home => table.skaters_home_end - width + 1,
         };
-        count_dots(canvas, Slice { x, ..five }, count.min(5), Some(pack(color)));
+        count_dots(canvas, Slice { x, ..five }, count.min(5), Some(color));
         if count > 5 {
             let extra = Slice {
                 x: x + 5 * pitch,
@@ -192,7 +192,7 @@ fn situation(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &HockeyLiveView, 
                     slot,
                     banner.attackers,
                     banner.defenders,
-                    Style::new(face, pack(scene.snapshot.ui_colors.primary)),
+                    Style::new(face, scene.snapshot.ui_colors.primary),
                 );
                 return;
             }
@@ -236,15 +236,17 @@ const RINK_WIDTH_FT: i32 = 85;
 /// at build time, so drifted art fails `cargo build`. Football's endzones work
 /// the same way. The ice is found too: the glow redraws the art with it
 /// see-through.
-const AWAY_END: usize = rink_index(rgb565(255, 0, 0));
-const HOME_END: usize = rink_index(rgb565(0, 0, 255));
-const ICE: usize = rink_index(rgb565(14, 22, 34));
+const AWAY_END: usize = rink_index(Rgb888::new(255, 0, 0));
+const HOME_END: usize = rink_index(Rgb888::new(0, 0, 255));
+const ICE: usize = rink_index(Rgb888::new(14, 22, 34));
 
-const fn rink_index(color: u16) -> usize {
+const fn rink_index(color: Rgb888) -> usize {
     let palette = &layout::rink::PALETTE;
     let mut index = 0;
     while index < palette.len() {
-        if palette[index] == color {
+        if let Some(entry) = palette[index]
+            && entry.0 == color.0
+        {
             return index;
         }
         index += 1;
@@ -269,10 +271,10 @@ pub fn mark_at(mark: GoalMark) -> (i32, i32) {
 
 /// The art with each team's end tinted a third of the team's color: enough to
 /// say whose net is whose without outshining the goals plotted there.
-fn rink_palette(view: &HockeyLiveView) -> [u16; layout::rink::PALETTE.len()] {
+fn rink_palette(view: &HockeyLiveView) -> [Option<Rgb888>; layout::rink::PALETTE.len()] {
     let mut palette = layout::rink::PALETTE;
-    palette[AWAY_END] = scale(pack(view.away_color), 1, 3);
-    palette[HOME_END] = scale(pack(view.home_color), 1, 3);
+    palette[AWAY_END] = Some(scale(view.away_color, 1, 3));
+    palette[HOME_END] = Some(scale(view.home_color, 1, 3));
     palette
 }
 
@@ -308,7 +310,7 @@ fn rink(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &HockeyLiveView) {
         // with its ice and ends see-through.
         let mut lines = palette;
         for index in [ICE, AWAY_END, HOME_END] {
-            lines[index] = MAGENTA;
+            lines[index] = None;
         }
         canvas.blit(&sprite.tinted(&lines), RINK.x, RINK.y);
     }
@@ -363,7 +365,7 @@ fn short_rink(canvas: &mut Canvas<'_>, view: &HockeyLiveView, y: i32) {
 fn identity(
     canvas: &mut Canvas<'_>,
     view: &HockeyLiveView,
-    primary: u16,
+    primary: Rgb888,
     away: Slice,
     home: Slice,
     period: Slice,
@@ -428,10 +430,10 @@ fn shots(canvas: &mut Canvas<'_>, scene: &Scene<'_>, slot: Slice, bar_y: i32) {
             slot.y,
             SHOTS_COUNT_WIDTH,
             Align::Center,
-            Style::new(face, pack(colors.primary)),
+            Style::new(face, colors.primary),
         );
     }
-    line(canvas, slot, "SHOTS", face, pack(colors.secondary));
+    line(canvas, slot, "SHOTS", face, colors.secondary);
 
     let (away, home) = (shots.away as i32, shots.home as i32);
     // A pixel's gap at the split; level shots — 0-0 included — split evenly.
@@ -440,13 +442,13 @@ fn shots(canvas: &mut Canvas<'_>, scene: &Scene<'_>, slot: Slice, bar_y: i32) {
     } else {
         slot.x + (slot.width - 1) * away / (away + home)
     };
-    canvas.fill_rect(slot.x, bar_y, split - slot.x, 2, pack(view.away_color));
+    canvas.fill_rect(slot.x, bar_y, split - slot.x, 2, view.away_color);
     canvas.fill_rect(
         split + 1,
         bar_y,
         slot.x + slot.width - split - 1,
         2,
-        pack(view.home_color),
+        view.home_color,
     );
 }
 
@@ -500,7 +502,7 @@ fn shootout_row(
     canvas: &mut Canvas<'_>,
     slot: Slice,
     row: &ShootoutRow,
-    color: u16,
+    color: Rgb888,
     colors: &UiColors,
 ) {
     let size = SHOOTOUT_MARK;
@@ -515,11 +517,11 @@ fn shootout_row(
                 }
             }
             ShotMark::Next => {
-                let next = pack(colors.primary);
+                let next = colors.primary;
                 canvas.rect(x, y, size, size, next);
                 canvas.fill_rect(x + 2, y + 2, size - 4, size - 4, next);
             }
-            ShotMark::Pending => canvas.rect(x, y, size, size, pack(colors.secondary)),
+            ShotMark::Pending => canvas.rect(x, y, size, size, colors.secondary),
         }
     }
 }
@@ -542,13 +544,10 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let view = &snapshot.hockey_final;
     let table = HOCKEY_FINAL;
     let colors = &snapshot.ui_colors;
-    let (away_color, home_color) = super::winner_colors(
-        shared.home_won,
-        pack(shared.away_color),
-        pack(shared.home_color),
-    );
+    let (away_color, home_color) =
+        super::winner_colors(shared.home_won, shared.away_color, shared.home_color);
 
-    let rule = pack(colors.secondary);
+    let rule = colors.secondary;
     canvas.vline(
         table.divider_x,
         EDGE_INSET,
@@ -565,12 +564,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
     super::big_score(canvas, table.score_away, shared.away_score, away_color);
     super::big_score(canvas, table.score_home, shared.home_score, home_color);
-    super::chip(
-        canvas,
-        table.final_label,
-        &shared.final_text,
-        pack(colors.accent),
-    );
+    super::chip(canvas, table.final_label, &shared.final_text, colors.accent);
 
     let face = &generated::SPLEEN_5X8;
     match &view.stars {
@@ -582,9 +576,9 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
                 }
                 // A star's name is in its own team's color, winner or not.
                 let color = match line.side {
-                    Some(Side::Away) => pack(shared.away_color),
-                    Some(Side::Home) => pack(shared.home_color),
-                    None => pack(colors.primary),
+                    Some(Side::Away) => shared.away_color,
+                    Some(Side::Home) => shared.home_color,
+                    None => colors.primary,
                 };
                 let mut region = canvas.slice(slot);
                 font::draw(
@@ -602,7 +596,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
                 (
                     table.linescore_rows[0],
                     &shared.header_row,
-                    pack(colors.secondary),
+                    colors.secondary,
                 ),
                 (table.linescore_rows[1], &shared.away_row, away_color),
                 (table.linescore_rows[2], &shared.home_row, home_color),
@@ -626,7 +620,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             series,
             Align::Center,
             scene.view.motion(),
-            Style::new(face, pack(colors.secondary)),
+            Style::new(face, colors.secondary),
             HOCKEY_STARS_SCROLL,
         );
     }
@@ -638,7 +632,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             shots.away as u16,
             "-",
             shots.home as u16,
-            Style::new(face, pack(colors.secondary)),
+            Style::new(face, colors.secondary),
         );
     }
 
@@ -648,7 +642,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
 // -- Primitives ----------------------------------------------------------------
 
 /// A static line centered in its slot, clipped to it.
-fn line(canvas: &mut Canvas<'_>, slot: Slice, text: &str, face: &FontFace, color: u16) {
+fn line(canvas: &mut Canvas<'_>, slot: Slice, text: &str, face: &FontFace, color: Rgb888) {
     let mut region = canvas.slice(slot);
     font::draw_unscrolled(&mut region, text, Align::Center, Style::new(face, color));
 }
@@ -676,9 +670,9 @@ fn numbers(
     font::integer(canvas, b, x, slot.y, 0, Align::Left, style);
 }
 
-fn side_color(view: &HockeyLiveView, side: Side) -> u16 {
-    pack(match side {
+fn side_color(view: &HockeyLiveView, side: Side) -> Rgb888 {
+    match side {
         Side::Away => view.away_color,
         Side::Home => view.home_color,
-    })
+    }
 }

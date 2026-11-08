@@ -18,7 +18,7 @@ use crate::geometry::WIDTH;
 use crate::prepared::PreparedView;
 use crate::time::WallMs;
 use crate::widgets::{count_dots, progress_bar};
-use crate::{BLACK, generated, pack, toast};
+use crate::{BLACK, Rgb888, generated, toast};
 use core::fmt::Write as _;
 use scoreboard_model::{ScoreboardSnapshot, SetupReason};
 
@@ -68,7 +68,7 @@ pub fn startup(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
     let startup = &snapshot.startup;
     canvas.fill(BLACK);
 
-    title(canvas, STARTUP_TITLE, "BOOTING", pack(colors.accent));
+    title(canvas, STARTUP_TITLE, "BOOTING", colors.accent);
 
     let progress = if startup.total_steps == 0 {
         0
@@ -79,8 +79,8 @@ pub fn startup(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
         canvas,
         PROGRESS_BAR,
         progress,
-        pack(colors.secondary),
-        pack(colors.accent),
+        colors.secondary,
+        colors.accent,
     );
 
     if startup.attempts_total > 0 {
@@ -94,14 +94,14 @@ pub fn startup(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
         STARTUP_STEP,
         &step_text,
         Align::Left,
-        pack(colors.secondary),
+        colors.secondary,
     );
     small(
         canvas,
         STARTUP_OPERATION,
         &startup.operation,
         Align::Center,
-        pack(colors.primary),
+        colors.primary,
     );
     if !startup.detail.is_empty() {
         small(
@@ -109,7 +109,7 @@ pub fn startup(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
             STARTUP_DETAIL,
             &startup.detail,
             Align::Center,
-            pack(colors.secondary),
+            colors.secondary,
         );
     }
 }
@@ -123,13 +123,13 @@ pub fn updating(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
     let updating = &snapshot.updating;
     canvas.fill(BLACK);
 
-    title(canvas, STARTUP_TITLE, "UPDATING", pack(colors.accent));
+    title(canvas, STARTUP_TITLE, "UPDATING", colors.accent);
     progress_bar(
         canvas,
         PROGRESS_BAR,
         updating.progress,
-        pack(colors.secondary),
-        pack(colors.accent),
+        colors.secondary,
+        colors.accent,
     );
 
     if !updating.percent_text.is_empty() {
@@ -138,7 +138,7 @@ pub fn updating(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
             STARTUP_STEP,
             &updating.percent_text,
             Align::Left,
-            pack(colors.secondary),
+            colors.secondary,
         );
     }
     small(
@@ -146,7 +146,7 @@ pub fn updating(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
         STARTUP_OPERATION,
         &updating.phase,
         Align::Center,
-        pack(colors.primary),
+        colors.primary,
     );
     if !updating.detail.is_empty() {
         small(
@@ -154,7 +154,7 @@ pub fn updating(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
             STARTUP_DETAIL,
             &updating.detail,
             Align::Center,
-            pack(colors.secondary),
+            colors.secondary,
         );
     }
 }
@@ -163,13 +163,13 @@ pub fn updating(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
 pub fn idle(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
     let colors = &snapshot.ui_colors;
     canvas.fill(BLACK);
-    title(canvas, IDLE_TITLE, "PICO", pack(colors.primary));
+    title(canvas, IDLE_TITLE, "PICO", colors.primary);
     let mut region = canvas.slice(IDLE_SUBTITLE);
     font::draw_unscrolled(
         &mut region,
         "SCOREBOARD",
         Align::Center,
-        Style::new(&generated::UNSCII_8, pack(colors.accent)),
+        Style::new(&generated::UNSCII_8, colors.accent),
     );
 }
 
@@ -178,13 +178,13 @@ pub fn idle(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
 pub fn no_games(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: WallMs) {
     let colors = &snapshot.ui_colors;
     canvas.fill(BLACK);
-    title(canvas, NO_GAMES_TITLE, "NO GAMES", pack(colors.primary));
+    title(canvas, NO_GAMES_TITLE, "NO GAMES", colors.primary);
     small(
         canvas,
         NO_GAMES_SUBTITLE,
         "scheduled",
         Align::Center,
-        pack(colors.secondary),
+        colors.secondary,
     );
     toast::overlay(canvas, snapshot, now);
 }
@@ -200,7 +200,7 @@ pub fn error(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
     } else {
         &error.title
     };
-    title(canvas, ERROR_TITLE, heading, pack(colors.clock_warning));
+    title(canvas, ERROR_TITLE, heading, colors.clock_warning);
 
     for (line, y) in error.lines.iter().zip(ERROR_LINE_Y) {
         small(
@@ -208,7 +208,7 @@ pub fn error(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot) {
             rect(0, y, WIDTH, 8),
             line,
             Align::Center,
-            pack(colors.primary),
+            colors.primary,
         );
     }
 }
@@ -242,9 +242,9 @@ pub fn setup(
         SetupReason::BadAuth | SetupReason::ConnectionFailed
     );
     let title_color = if failed {
-        pack(colors.clock_warning)
+        colors.clock_warning
     } else {
-        pack(colors.accent)
+        colors.accent
     };
 
     let qr = prepared.qr();
@@ -259,10 +259,10 @@ pub fn setup(
     );
 
     let lines = [
-        (18, &setup.line_18, pack(colors.primary), true),
-        (28, &setup.line_28, pack(colors.secondary), true),
-        (44, &setup.line_44, pack(colors.secondary), false),
-        (54, &setup.line_54, pack(colors.accent), false),
+        (18, &setup.line_18, colors.primary, true),
+        (28, &setup.line_28, colors.secondary, true),
+        (44, &setup.line_44, colors.secondary, false),
+        (54, &setup.line_54, colors.accent, false),
     ];
     for (y, text, color, scrolls) in lines {
         let mut region = canvas.region(SETUP_PAD, y, width_for(y, 8), 8);
@@ -303,7 +303,7 @@ fn setup_line_width(y: i32, height: i32, qr_size: i32) -> i32 {
 
 // -- Shared draws ------------------------------------------------------------
 
-fn title(canvas: &mut Canvas<'_>, slot: Slice, text: &str, color: u16) {
+fn title(canvas: &mut Canvas<'_>, slot: Slice, text: &str, color: Rgb888) {
     let mut region = canvas.slice(slot);
     font::draw_unscrolled(
         &mut region,
@@ -313,7 +313,7 @@ fn title(canvas: &mut Canvas<'_>, slot: Slice, text: &str, color: u16) {
     );
 }
 
-fn small(canvas: &mut Canvas<'_>, slot: Slice, text: &str, align: Align, color: u16) {
+fn small(canvas: &mut Canvas<'_>, slot: Slice, text: &str, align: Align, color: Rgb888) {
     let mut region = canvas.slice(slot);
     font::draw_unscrolled(
         &mut region,

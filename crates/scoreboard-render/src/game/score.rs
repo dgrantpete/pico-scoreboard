@@ -14,7 +14,7 @@ use super::Scene;
 use crate::blit::Canvas;
 use crate::font::{self, Align, Style};
 use crate::geometry::{EDGE_INSET, FINAL, FINAL_LINESCORE_SCROLL, HEIGHT};
-use crate::{BLACK, generated, pack, toast};
+use crate::{BLACK, generated, toast};
 use scoreboard_model::Sport;
 
 pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
@@ -22,10 +22,10 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let snapshot = scene.snapshot;
     let view = &snapshot.linescore_final;
     let table = FINAL;
-    let secondary = pack(snapshot.ui_colors.secondary);
+    let secondary = snapshot.ui_colors.secondary;
 
     let (away_color, home_color) =
-        super::winner_colors(view.home_won, pack(view.away_color), pack(view.home_color));
+        super::winner_colors(view.home_won, view.away_color, view.home_color);
 
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
@@ -42,7 +42,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         canvas,
         table.final_label,
         &view.final_text,
-        pack(snapshot.ui_colors.accent),
+        snapshot.ui_colors.accent,
     );
 
     // One elapsed clock for all three rows: that is what keeps them locked.

@@ -15,7 +15,7 @@ use crate::blit::Canvas;
 use crate::font::{self, Align, Style};
 use crate::geometry::{PREGAME, PREGAME_INFO_DWELL_MS, PREGAME_SCROLL};
 use crate::prepared::PregameLine;
-use crate::{BLACK, generated, pack, pack_scaled, toast};
+use crate::{BLACK, generated, scale, toast};
 use scoreboard_model::Sport;
 
 pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
@@ -58,13 +58,9 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         // Overtime losses take the losses' color at 5/8, a step dimmer: the
         // third column matters least, and the stack reads top-down by weight.
         for (slot, value, color) in [
-            (wins_slot, Some(record.wins), pack(colors.primary)),
-            (losses_slot, Some(record.losses), pack(colors.secondary)),
-            (
-                three_rows[2],
-                ot_losses,
-                pack_scaled(colors.secondary, 5, 8),
-            ),
+            (wins_slot, Some(record.wins), colors.primary),
+            (losses_slot, Some(record.losses), colors.secondary),
+            (three_rows[2], ot_losses, scale(colors.secondary, 5, 8)),
         ] {
             let Some(value) = value else {
                 continue;
@@ -98,7 +94,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             &mut slot,
             big,
             Align::Center,
-            Style::new(&generated::UNSCII_16, pack(colors.accent)),
+            Style::new(&generated::UNSCII_16, colors.accent),
         );
     }
 
@@ -115,7 +111,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             text,
             Align::Left,
             crate::time::Motion(phase_elapsed),
-            Style::new(&generated::SPLEEN_5X8, pack(colors.secondary)),
+            Style::new(&generated::SPLEEN_5X8, colors.secondary),
             PREGAME_SCROLL,
         );
     }
@@ -133,7 +129,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             &side.line,
             Align::Left,
             scene.view.motion(),
-            Style::new(&generated::SPLEEN_5X8, pack(side.color)),
+            Style::new(&generated::SPLEEN_5X8, side.color),
             PREGAME_SCROLL,
         );
     }

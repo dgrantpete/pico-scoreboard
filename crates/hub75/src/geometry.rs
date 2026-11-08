@@ -34,9 +34,6 @@ pub const BITPLANE_BYTES: usize = PIXEL_COUNT / 2;
 /// Bytes per BCM framebuffer (all bitplanes, plane-major, LSB plane first).
 pub const BITPLANE_BUFFER_BYTES: usize = BITPLANE_BYTES * COLOR_BIT_DEPTH;
 
-/// Bytes in an RGB565 input frame (little-endian, `framebuf.RGB565` layout).
-pub const RGB565_FRAME_BYTES: usize = PIXEL_COUNT * 2;
-
 /// Bytes in an RGB888 input frame (R, G, B per pixel).
 pub const RGB888_FRAME_BYTES: usize = PIXEL_COUNT * 3;
 

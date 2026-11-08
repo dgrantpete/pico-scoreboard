@@ -15,14 +15,15 @@
 //!
 //! The pixel format is chosen per sprite to minimise pixel bytes plus palette
 //! bytes, so the same art can arrive as any of five packings; [`PixelFormat`]
-//! documents the bit order each one uses. `KEY` is the *mapped* magenta
-//! ([`crate::MAGENTA`]) for every sprite with transparency, paletted or not,
-//! because the palette lookup happens before the key comparison.
+//! documents the bit order each one uses. Palettes hold the art's own
+//! eight-bit colours; a sprite with transparency has `None` at index 0, which
+//! the blitter skips.
 //!
 //! Palettes are `&'static` and immutable. A renderer that tints one — count
 //! dots, base markers, the spinner comet, endzone fills — copies it into a
 //! local array first; see the mutation-contract table in the crate docs.
 
+use crate::Rgb888;
 use crate::blit::{PixelFormat, Slice, Sprite};
 
 /// `mlb_layout.png slice 'away_logo'`.
@@ -83,7 +84,6 @@ pub mod base_marker {
         height: 5,
         format: PixelFormat::Gs2Hmsb,
         palette: Some(&PALETTE),
-        key: Some(0xF81F),
     };
 
     #[rustfmt::skip]
@@ -91,10 +91,11 @@ pub mod base_marker {
         0x54, 0x00, 0x69, 0x01, 0x59, 0x01, 0x55, 0x03, 0xd4, 0x00,
     ];
 
-    /// RGB565, index 0 = transparent.
+    /// The art's colours; index 0 (`None`) is see-through.
     #[rustfmt::skip]
-    pub static PALETTE: [u16; 4] = [
-        0xf81f, 0xd646, 0xfffd, 0xbd87,
+    pub static PALETTE: [Option<Rgb888>; 4] = [
+        None, Some(Rgb888(0xd2ca32)), Some(Rgb888(0xfffee9)),
+        Some(Rgb888(0xb9b33c)),
     ];
 }
 
@@ -132,7 +133,6 @@ pub mod dot {
         height: 4,
         format: PixelFormat::Gs2Hmsb,
         palette: Some(&PALETTE),
-        key: Some(0xF81F),
     };
 
     #[rustfmt::skip]
@@ -140,10 +140,10 @@ pub mod dot {
         0x14, 0x69, 0x69, 0x14,
     ];
 
-    /// RGB565, index 0 = transparent.
+    /// The art's colours; index 0 (`None`) is see-through.
     #[rustfmt::skip]
-    pub static PALETTE: [u16; 3] = [
-        0xf81f, 0xffff, 0x52aa,
+    pub static PALETTE: [Option<Rgb888>; 3] = [
+        None, Some(Rgb888(0xffffff)), Some(Rgb888(0x565656)),
     ];
 }
 
@@ -157,7 +157,6 @@ pub mod field {
         height: 30,
         format: PixelFormat::Gs4Hmsb,
         palette: Some(&PALETTE),
-        key: Some(0xF81F),
     };
 
     /// Authoritative screen position: this layer is `__absolute`, so
@@ -211,10 +210,11 @@ pub mod field {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
 
-    /// RGB565, index 0 = transparent.
+    /// The art's colours; index 0 (`None`) is see-through.
     #[rustfmt::skip]
-    pub static PALETTE: [u16; 5] = [
-        0xf81f, 0x2ac3, 0x8b44, 0xffff, 0xcd09,
+    pub static PALETTE: [Option<Rgb888>; 5] = [
+        None, Some(Rgb888(0x2c581e)), Some(Rgb888(0x8e6b27)),
+        Some(Rgb888(0xffffff)), Some(Rgb888(0xcca04d)),
     ];
 }
 
@@ -240,7 +240,6 @@ pub mod football_ball {
         height: 5,
         format: PixelFormat::Gs4Hmsb,
         palette: Some(&PALETTE),
-        key: Some(0xF81F),
     };
 
     #[rustfmt::skip]
@@ -249,10 +248,11 @@ pub mod football_ball {
         0x23, 0x10, 0x01, 0x23, 0x44, 0x43, 0x21, 0x00, 0x00, 0x12, 0x11, 0x12, 0x10, 0x00,
     ];
 
-    /// RGB565, index 0 = transparent.
+    /// The art's colours; index 0 (`None`) is see-through.
     #[rustfmt::skip]
-    pub static PALETTE: [u16; 5] = [
-        0xf81f, 0x4124, 0xe6ba, 0x8a88, 0x9ac9,
+    pub static PALETTE: [Option<Rgb888>; 5] = [
+        None, Some(Rgb888(0x432722)), Some(Rgb888(0xe4d6d3)),
+        Some(Rgb888(0x8b5046)), Some(Rgb888(0x99584c)),
     ];
 }
 
@@ -266,7 +266,6 @@ pub mod football_field {
         height: 11,
         format: PixelFormat::Gs4Hmsb,
         palette: Some(&PALETTE),
-        key: Some(0xF81F),
     };
 
     /// Authoritative screen position: this layer is `__absolute`, so
@@ -324,10 +323,11 @@ pub mod football_field {
         0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x10,
     ];
 
-    /// RGB565, index 0 = transparent.
+    /// The art's colours; index 0 (`None`) is see-through.
     #[rustfmt::skip]
-    pub static PALETTE: [u16; 5] = [
-        0xf81f, 0xffff, 0xf800, 0x2442, 0x001f,
+    pub static PALETTE: [Option<Rgb888>; 5] = [
+        None, Some(Rgb888(0xffffff)), Some(Rgb888(0xff0000)),
+        Some(Rgb888(0x278911)), Some(Rgb888(0x0000ff)),
     ];
 }
 
@@ -377,7 +377,6 @@ pub mod inning_bottom {
         height: 3,
         format: PixelFormat::MonoHlsb,
         palette: Some(&PALETTE),
-        key: Some(0xF81F),
     };
 
     /// Authoritative screen position: this layer is `__absolute`, so
@@ -394,10 +393,10 @@ pub mod inning_bottom {
         0xf8, 0x70, 0x20,
     ];
 
-    /// RGB565, index 0 = transparent.
+    /// The art's colours; index 0 (`None`) is see-through.
     #[rustfmt::skip]
-    pub static PALETTE: [u16; 2] = [
-        0xf81f, 0xffff,
+    pub static PALETTE: [Option<Rgb888>; 2] = [
+        None, Some(Rgb888(0xffffff)),
     ];
 }
 
@@ -411,7 +410,6 @@ pub mod inning_top {
         height: 3,
         format: PixelFormat::MonoHlsb,
         palette: Some(&PALETTE),
-        key: Some(0xF81F),
     };
 
     /// Authoritative screen position: this layer is `__absolute`, so
@@ -428,10 +426,10 @@ pub mod inning_top {
         0x20, 0x70, 0xf8,
     ];
 
-    /// RGB565, index 0 = transparent.
+    /// The art's colours; index 0 (`None`) is see-through.
     #[rustfmt::skip]
-    pub static PALETTE: [u16; 2] = [
-        0xf81f, 0xffff,
+    pub static PALETTE: [Option<Rgb888>; 2] = [
+        None, Some(Rgb888(0xffffff)),
     ];
 }
 
@@ -505,7 +503,6 @@ pub mod rink {
         height: 15,
         format: PixelFormat::Gs4Hmsb,
         palette: Some(&PALETTE),
-        key: Some(0xF81F),
     };
 
     /// Authoritative screen position: this layer is `__absolute`, so
@@ -580,10 +577,12 @@ pub mod rink {
         0x00, 0x00,
     ];
 
-    /// RGB565, index 0 = transparent.
+    /// The art's colours; index 0 (`None`) is see-through.
     #[rustfmt::skip]
-    pub static PALETTE: [u16; 8] = [
-        0xf81f, 0x9515, 0xf800, 0xc8c3, 0x08a4, 0x1a9e, 0x001f, 0x447f,
+    pub static PALETTE: [Option<Rgb888>; 8] = [
+        None, Some(Rgb888(0x96a0aa)), Some(Rgb888(0xff0000)),
+        Some(Rgb888(0xc81818)), Some(Rgb888(0x0e1622)), Some(Rgb888(0x1e50f0)),
+        Some(Rgb888(0x0000ff)), Some(Rgb888(0x468cff)),
     ];
 }
 
@@ -609,7 +608,6 @@ pub mod star {
         height: 5,
         format: PixelFormat::MonoHlsb,
         palette: Some(&PALETTE),
-        key: Some(0xF81F),
     };
 
     #[rustfmt::skip]
@@ -617,10 +615,10 @@ pub mod star {
         0x20, 0x70, 0xf8, 0x70, 0x50,
     ];
 
-    /// RGB565, index 0 = transparent.
+    /// The art's colours; index 0 (`None`) is see-through.
     #[rustfmt::skip]
-    pub static PALETTE: [u16; 2] = [
-        0xf81f, 0xfe45,
+    pub static PALETTE: [Option<Rgb888>; 2] = [
+        None, Some(Rgb888(0xffc828)),
     ];
 }
 
@@ -670,7 +668,6 @@ pub mod toast_lock_closed {
         height: 22,
         format: PixelFormat::MonoHlsb,
         palette: Some(&PALETTE),
-        key: Some(0xF81F),
     };
 
     #[rustfmt::skip]
@@ -680,10 +677,10 @@ pub mod toast_lock_closed {
         0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0xff, 0xfc, 0xff, 0xfc,
     ];
 
-    /// RGB565, index 0 = transparent.
+    /// The art's colours; index 0 (`None`) is see-through.
     #[rustfmt::skip]
-    pub static PALETTE: [u16; 2] = [
-        0xf81f, 0xffff,
+    pub static PALETTE: [Option<Rgb888>; 2] = [
+        None, Some(Rgb888(0xffffff)),
     ];
 }
 
@@ -697,7 +694,6 @@ pub mod toast_lock_open {
         height: 22,
         format: PixelFormat::MonoHlsb,
         palette: Some(&PALETTE),
-        key: Some(0xF81F),
     };
 
     #[rustfmt::skip]
@@ -707,10 +703,10 @@ pub mod toast_lock_open {
         0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0xff, 0xfc, 0xff, 0xfc,
     ];
 
-    /// RGB565, index 0 = transparent.
+    /// The art's colours; index 0 (`None`) is see-through.
     #[rustfmt::skip]
-    pub static PALETTE: [u16; 2] = [
-        0xf81f, 0xffff,
+    pub static PALETTE: [Option<Rgb888>; 2] = [
+        None, Some(Rgb888(0xffffff)),
     ];
 }
 
@@ -724,7 +720,6 @@ pub mod toast_spinner {
         height: 25,
         format: PixelFormat::Gs4Hmsb,
         palette: Some(&PALETTE),
-        key: Some(0xF81F),
     };
 
     #[rustfmt::skip]
@@ -752,10 +747,13 @@ pub mod toast_spinner {
         0x00, 0x00, 0x00, 0x00, 0x00,
     ];
 
-    /// RGB565, index 0 = transparent.
+    /// The art's colours; index 0 (`None`) is see-through.
     #[rustfmt::skip]
-    pub static PALETTE: [u16; 13] = [
-        0xf81f, 0x000a, 0x0009, 0x000b, 0x0008, 0x000c, 0x0007, 0x0001,
-        0x0006, 0x0002, 0x0005, 0x0003, 0x0004,
+    pub static PALETTE: [Option<Rgb888>; 13] = [
+        None, Some(Rgb888(0x000050)), Some(Rgb888(0x000048)),
+        Some(Rgb888(0x000058)), Some(Rgb888(0x000040)), Some(Rgb888(0x000060)),
+        Some(Rgb888(0x000038)), Some(Rgb888(0x000008)), Some(Rgb888(0x000030)),
+        Some(Rgb888(0x000010)), Some(Rgb888(0x000028)), Some(Rgb888(0x000018)),
+        Some(Rgb888(0x000020)),
     ];
 }

@@ -17,7 +17,7 @@
 //! glyph counts. The table format still carries a per-glyph width, so nothing
 //! here assumes it.
 
-use crate::MAGENTA;
+use crate::Rgb888;
 use crate::blit::{Canvas, PixelFormat, Source, text_palette};
 use crate::time::Motion;
 
@@ -103,16 +103,15 @@ pub struct Glyph {
 }
 
 impl Glyph {
-    /// This glyph as a blit source. Index 0 of `palette` is the background,
-    /// index 1 the ink.
-    pub fn source<'a>(&self, palette: &'a [u16], key: Option<u16>) -> Source<'a> {
+    /// This glyph as a blit source. Index 0 of `palette` is the background
+    /// (`None` to leave it untouched), index 1 the ink.
+    pub fn source<'a>(&self, palette: &'a [Option<Rgb888>]) -> Source<'a> {
         Source::new(
             self.bits,
             self.width,
             self.height,
             PixelFormat::MonoHlsb,
             Some(palette),
-            key,
         )
     }
 }
@@ -161,20 +160,20 @@ pub fn digits_width(value: u16, font: &FontFace) -> i32 {
 #[derive(Debug, Clone, Copy)]
 pub struct Style<'font> {
     pub font: &'font FontFace,
-    pub color: u16,
+    pub color: Rgb888,
     /// The color behind the glyphs. `None` leaves everything but the lit pixels
-    /// untouched, via the [`MAGENTA`] key.
+    /// untouched: the palette's background entry is see-through.
     ///
     /// The two entry points differ in how far it reaches: [`text_into`] paints
     /// only the glyph cells, while [`draw`] clears the whole region first. That
     /// is `FontWriter.text` and `FontWriter.draw`'s behavior respectively, and
     /// the menu's DONE footer depends on the first of them.
-    pub background: Option<u16>,
+    pub background: Option<Rgb888>,
 }
 
 impl<'font> Style<'font> {
     /// Ink with no background: only the lit pixels are written.
-    pub const fn new(font: &'font FontFace, color: u16) -> Self {
+    pub const fn new(font: &'font FontFace, color: Rgb888) -> Self {
         Style {
             font,
             color,
@@ -183,18 +182,15 @@ impl<'font> Style<'font> {
     }
 
     /// The same ink over an opaque background.
-    pub const fn on(self, background: u16) -> Self {
+    pub const fn on(self, background: Rgb888) -> Self {
         Style {
             background: Some(background),
             ..self
         }
     }
 
-    fn palette(&self) -> ([u16; 2], Option<u16>) {
-        match self.background {
-            Some(background) => (text_palette(background, self.color), None),
-            None => (text_palette(MAGENTA, self.color), Some(MAGENTA)),
-        }
+    fn palette(&self) -> [Option<Rgb888>; 2] {
+        text_palette(self.background, self.color)
     }
 }
 
@@ -244,11 +240,11 @@ pub fn scroll_offset(text_width: i32, display_width: i32, elapsed: Motion, scrol
 ///
 /// Returns the x after the last glyph, for chaining.
 pub fn text_into(canvas: &mut Canvas<'_>, text: &str, x: i32, y: i32, style: Style<'_>) -> i32 {
-    let (palette, key) = style.palette();
+    let palette = style.palette();
     let mut cursor = x;
     for c in text.chars() {
         let glyph = style.font.glyph(c);
-        canvas.blit(&glyph.source(&palette, key), cursor, y);
+        canvas.blit(&glyph.source(&palette), cursor, y);
         cursor += glyph.width;
     }
     cursor
@@ -303,10 +299,10 @@ pub fn integer(
         .sum();
     let mut cursor = x + align.offset(width, total);
 
-    let (palette, key) = style.palette();
+    let palette = style.palette();
     for digit in digits[..count].iter().rev() {
         let glyph = style.font.digit(*digit);
-        canvas.blit(&glyph.source(&palette, key), cursor, y);
+        canvas.blit(&glyph.source(&palette), cursor, y);
         cursor += glyph.width;
     }
     cursor
@@ -333,7 +329,7 @@ pub fn draw(
     if let Some(background) = style.background {
         region.fill(background);
     }
-    let (palette, key) = style.palette();
+    let palette = style.palette();
 
     let text_width = measure(text, style.font);
     let mut cursor = if text_width <= width {
@@ -348,7 +344,7 @@ pub fn draw(
         // clipped blit, which is what keeps a 255-glyph play line as cheap as
         // the 76 px window it shows through.
         if cursor + glyph.width > 0 && cursor < width {
-            region.blit(&glyph.source(&palette, key), cursor, 0);
+            region.blit(&glyph.source(&palette), cursor, 0);
         }
         cursor += glyph.width;
         if cursor >= width {

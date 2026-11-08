@@ -8,7 +8,7 @@ use scoreboard_render::event::{
 };
 use scoreboard_render::time::{FPS, WallMs};
 
-const SURFACE: usize = 128 * 64 * 2;
+const SURFACE: usize = 128 * 64 * 3;
 
 // ------------------------------------------------------------------ shipped
 
@@ -120,14 +120,15 @@ fn a_well_formed_clip_decodes_deltas_onto_the_previous_frame() {
     );
     let mut surface = vec![0x55u8; SURFACE];
     clip.decode_into(0, &mut surface).unwrap();
-    assert!(surface[..HALF * 2].iter().all(|&b| b == 0x00));
-    assert!(surface[HALF * 2..].iter().all(|&b| b == 0xFF));
+    assert!(surface[..HALF * 3].iter().all(|&b| b == 0x00));
+    assert!(surface[HALF * 3..].iter().all(|&b| b == 0xFF));
     clip.decode_into(1, &mut surface).unwrap();
     assert!(
-        surface[..HALF * 2].iter().all(|&b| b == 0x00),
+        surface[..HALF * 3].iter().all(|&b| b == 0x00),
         "skipped half kept"
     );
-    assert_eq!(&surface[HALF * 2..HALF * 2 + 2], &0xF800u16.to_le_bytes());
+    // The palette's RGB565 red, widened by bit replication as it lands.
+    assert_eq!(&surface[HALF * 3..HALF * 3 + 3], &[0xFF, 0x00, 0x00]);
 }
 
 #[test]

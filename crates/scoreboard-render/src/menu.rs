@@ -27,7 +27,7 @@ use crate::blit::Canvas;
 use crate::font::{self, Align, Scroll, Style};
 use crate::geometry::{HEIGHT, WIDTH};
 use crate::time::WallMs;
-use crate::{BLACK, generated, pack};
+use crate::{BLACK, generated};
 use scoreboard_model::ScoreboardSnapshot;
 
 // Geometry, inset 1 px from every panel edge: the edge pixels on this panel are
@@ -66,8 +66,8 @@ const DONE_HIGHLIGHT: i8 = -1;
 /// Draw the menu over the whole frame.
 pub fn render(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: WallMs) {
     let menu = &snapshot.menu;
-    let color = pack(snapshot.ui_colors.primary);
-    let secondary = pack(snapshot.ui_colors.secondary);
+    let color = snapshot.ui_colors.primary;
+    let secondary = snapshot.ui_colors.secondary;
     let elapsed = now.since(menu.updated_ms);
 
     canvas.fill(BLACK);

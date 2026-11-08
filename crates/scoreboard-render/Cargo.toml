@@ -2,7 +2,7 @@
 name = "scoreboard-render"
 version = "0.1.0"
 edition = "2024"
-description = "Fonts, sprites, screen geometry and the pixel path that turns a ScoreboardSnapshot into a 128x64 RGB565 frame"
+description = "Fonts, sprites, screen geometry and the pixel path that turns a ScoreboardSnapshot into a 128x64 RGB888 frame"
 
 [dependencies]
 scoreboard-model = { path = "../scoreboard-model" }

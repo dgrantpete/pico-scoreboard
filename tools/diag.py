@@ -10,7 +10,7 @@ controlled frame at a time. See firmware-rs/app/src/diag.rs for the contract.
     pattern NAME            black | white | red | green | blue | lower_blue |
                             upper_blue | halves | bars
     fill X Y W H R G B      paint a rectangle onto the staged frame
-    push IMAGE              any image file -> 128x64 RGB565, staged in chunks
+    push IMAGE              any image file -> 128x64 RGB888, staged in chunks
     shot OUT.png            the frame core 1 last drew, as a PNG (+ a summary)
     lanes [EXPECT]          set-bit counts per data lane over the live planes;
                             EXPECT is a pattern name to compare against
@@ -25,13 +25,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import struct
 import sys
 import urllib.error
 import urllib.request
 
 WIDTH, HEIGHT = 128, 64
-FRAME_BYTES = WIDTH * HEIGHT * 2
+FRAME_BYTES = WIDTH * HEIGHT * 3
 # The device's HTTP request buffer is 4 KB including headers.
 CHUNK = 2048
 LANES = ("r1", "g1", "b1", "r2", "g2", "b2")
@@ -55,10 +54,6 @@ def say(status: int, body: bytes) -> None:
         sys.exit(1)
 
 
-def rgb565(r: int, g: int, b: int) -> int:
-    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
-
-
 def cmd_pattern(args: argparse.Namespace) -> None:
     say(*request(args.host, "POST", "/api/diag/fill", json.dumps({"pattern": args.name}).encode(), "application/json"))
 
@@ -68,20 +63,17 @@ def cmd_fill(args: argparse.Namespace) -> None:
     say(*request(args.host, "POST", "/api/diag/fill", json.dumps(body).encode(), "application/json"))
 
 
-def image_to_rgb565(path: str) -> bytes:
+def image_to_rgb888(path: str) -> bytes:
     from PIL import Image
 
     image = Image.open(path).convert("RGB")
     if image.size != (WIDTH, HEIGHT):
         image = image.resize((WIDTH, HEIGHT), Image.NEAREST)
-    out = bytearray()
-    for r, g, b in image.getdata():
-        out += struct.pack("<H", rgb565(r, g, b))
-    return bytes(out)
+    return image.tobytes()
 
 
 def cmd_push(args: argparse.Namespace) -> None:
-    frame = image_to_rgb565(args.image)
+    frame = image_to_rgb888(args.image)
     assert len(frame) == FRAME_BYTES
     for offset in range(0, FRAME_BYTES, CHUNK):
         status, body = request(
@@ -89,19 +81,18 @@ def cmd_push(args: argparse.Namespace) -> None:
         )
         if status != 200:
             say(status, body)
-    print(f"pushed {args.image} as {FRAME_BYTES} B in {FRAME_BYTES // CHUNK} chunks")
+    print(f"pushed {args.image} as {FRAME_BYTES} B in {-(-FRAME_BYTES // CHUNK)} chunks")
 
 
 def summarize(frame: bytes) -> None:
-    pixels = struct.unpack(f"<{WIDTH * HEIGHT}H", frame)
     for half, rows in (("upper", range(0, HEIGHT // 2)), ("lower", range(HEIGHT // 2, HEIGHT))):
         red = green = blue = 0
         for y in rows:
             for x in range(WIDTH):
-                p = pixels[y * WIDTH + x]
-                red += (p >> 11) != 0
-                green += ((p >> 5) & 0x3F) != 0
-                blue += (p & 0x1F) != 0
+                at = (y * WIDTH + x) * 3
+                red += frame[at] != 0
+                green += frame[at + 1] != 0
+                blue += frame[at + 2] != 0
         total = WIDTH * HEIGHT // 2
         print(f"{half} half: pixels with red {red}/{total}, green {green}/{total}, blue {blue}/{total}")
 
@@ -113,9 +104,7 @@ def cmd_shot(args: argparse.Namespace) -> None:
         sys.exit(1)
     from PIL import Image
 
-    image = Image.new("RGB", (WIDTH, HEIGHT))
-    pixels = struct.unpack(f"<{WIDTH * HEIGHT}H", body)
-    image.putdata([(((p >> 11) & 0x1F) << 3, ((p >> 5) & 0x3F) << 2, (p & 0x1F) << 3) for p in pixels])
+    image = Image.frombytes("RGB", (WIDTH, HEIGHT), body)
     scale = max(1, args.scale)
     if scale > 1:
         image = image.resize((WIDTH * scale, HEIGHT * scale), Image.NEAREST)

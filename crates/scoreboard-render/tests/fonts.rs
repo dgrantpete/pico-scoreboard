@@ -9,6 +9,10 @@ use scoreboard_render::font::{self, Align, FontFace, Scroll, Style};
 use scoreboard_render::generated::{SPLEEN_5X8, UNSCII_8, UNSCII_16};
 use scoreboard_render::geometry::{FPS, SCROLL_SPEEDS};
 use scoreboard_render::time::{FrameElapsed, Motion, frame_ms};
+use scoreboard_render::{BLACK, Rgb888, WHITE};
+
+/// A background no glyph draws in.
+const TEAL: Rgb888 = Rgb888::new(0x12, 0x34, 0x56);
 
 fn faces() -> [(&'static FontFace, &'static FontGolden); 3] {
     let by_name = |name: &str| FONTS.iter().find(|font| font.name == name).unwrap();
@@ -101,7 +105,7 @@ fn the_fonts_are_fixed_width() {
 
 #[test]
 fn integers_render_as_their_digits() {
-    let mut by_integer = vec![0u8; 64 * 16 * 2];
+    let mut by_integer = vec![0u8; 64 * 16 * 3];
     let mut canvas = Canvas::new(&mut by_integer, 64, 16);
     let end = font::integer(
         &mut canvas,
@@ -110,11 +114,11 @@ fn integers_render_as_their_digits() {
         0,
         64,
         Align::Right,
-        Style::new(&UNSCII_16, 0xFFFF),
+        Style::new(&UNSCII_16, WHITE),
     );
     assert_eq!(end, 64, "right-aligned text ends at the box's right edge");
 
-    let mut by_text = vec![0u8; 64 * 16 * 2];
+    let mut by_text = vec![0u8; 64 * 16 * 3];
     let mut canvas = Canvas::new(&mut by_text, 64, 16);
     font::aligned_text(
         &mut canvas,
@@ -123,14 +127,14 @@ fn integers_render_as_their_digits() {
         0,
         64,
         Align::Right,
-        Style::new(&UNSCII_16, 0xFFFF),
+        Style::new(&UNSCII_16, WHITE),
     );
     assert_eq!(by_integer, by_text);
 }
 
 #[test]
 fn zero_renders_as_one_digit() {
-    let mut digits = vec![0u8; 32 * 16 * 2];
+    let mut digits = vec![0u8; 32 * 16 * 3];
     let mut canvas = Canvas::new(&mut digits, 32, 16);
     let end = font::integer(
         &mut canvas,
@@ -139,7 +143,7 @@ fn zero_renders_as_one_digit() {
         0,
         32,
         Align::Left,
-        Style::new(&UNSCII_16, 0xFFFF),
+        Style::new(&UNSCII_16, WHITE),
     );
     assert_eq!(end, 8);
 }
@@ -149,7 +153,7 @@ fn alignment_floors_when_the_text_overflows_its_box() {
     // MicroPython's `//` floors; truncation would put an overflowing centered
     // line one pixel right of where the panel drew it. Three unscii_16 digits
     // (24 px) in a 22 px slot is the real case — soccer's score windows.
-    let mut pixels = vec![0u8; 22 * 16 * 2];
+    let mut pixels = vec![0u8; 22 * 16 * 3];
     let mut canvas = Canvas::new(&mut pixels, 22, 16);
     let end = font::integer(
         &mut canvas,
@@ -158,7 +162,7 @@ fn alignment_floors_when_the_text_overflows_its_box() {
         0,
         22,
         Align::Center,
-        Style::new(&UNSCII_16, 0xFFFF),
+        Style::new(&UNSCII_16, WHITE),
     );
     assert_eq!(end, -1 + 24, "starts at floor((22 - 24) / 2) = -1");
 }
@@ -285,7 +289,7 @@ fn the_speed_this_frame_rate_exists_for_is_one_pixel_every_two_frames() {
 
 #[test]
 fn a_scrolled_line_stays_inside_its_region() {
-    let mut pixels = vec![0u8; 32 * 8 * 2];
+    let mut pixels = vec![0u8; 32 * 8 * 3];
     let mut canvas = Canvas::new(&mut pixels, 32, 8);
     let mut region = canvas.region(8, 0, 16, 8);
     font::draw(
@@ -293,49 +297,49 @@ fn a_scrolled_line_stays_inside_its_region() {
         "AAAAAAAAAAAAAAAAAAAA",
         Align::Left,
         Motion(2_000),
-        Style::new(&UNSCII_8, 0xFFFF),
+        Style::new(&UNSCII_8, WHITE),
         Scroll::DEFAULT,
     );
     for y in 0..8 {
         for x in (0..8).chain(24..32) {
-            assert_eq!(canvas.pixel_at(x, y), Some(0), "spilled at ({x}, {y})");
+            assert_eq!(canvas.pixel_at(x, y), Some(BLACK), "spilled at ({x}, {y})");
         }
     }
 }
 
 #[test]
 fn a_transparent_draw_leaves_the_background_alone() {
-    let mut pixels = vec![0u8; 16 * 8 * 2];
+    let mut pixels = vec![0u8; 16 * 8 * 3];
     let mut canvas = Canvas::new(&mut pixels, 16, 8);
-    canvas.fill(0x1234);
+    canvas.fill(TEAL);
     let mut region = canvas.region(0, 0, 16, 8);
-    font::draw_unscrolled(&mut region, "I", Align::Left, Style::new(&UNSCII_8, 0xFFFF));
+    font::draw_unscrolled(&mut region, "I", Align::Left, Style::new(&UNSCII_8, WHITE));
     assert!(
-        (0..16).any(|x| (0..8).any(|y| canvas.pixel_at(x, y) == Some(0xFFFF))),
+        (0..16).any(|x| (0..8).any(|y| canvas.pixel_at(x, y) == Some(WHITE))),
         "nothing was drawn"
     );
     assert!(
-        (0..16).any(|x| (0..8).any(|y| canvas.pixel_at(x, y) == Some(0x1234))),
+        (0..16).any(|x| (0..8).any(|y| canvas.pixel_at(x, y) == Some(TEAL))),
         "the background was painted over"
     );
 }
 
 #[test]
 fn an_opaque_draw_paints_its_background() {
-    let mut pixels = vec![0u8; 16 * 8 * 2];
+    let mut pixels = vec![0u8; 16 * 8 * 3];
     let mut canvas = Canvas::new(&mut pixels, 16, 8);
-    canvas.fill(0x1234);
+    canvas.fill(TEAL);
     let mut region = canvas.region(0, 0, 16, 8);
     font::draw(
         &mut region,
         "I",
         Align::Left,
         Motion(0),
-        Style::new(&UNSCII_8, 0xFFFF).on(0),
+        Style::new(&UNSCII_8, WHITE).on(BLACK),
         Scroll::DEFAULT,
     );
     assert!(
-        (0..16).all(|x| (0..8).all(|y| canvas.pixel_at(x, y) != Some(0x1234))),
+        (0..16).all(|x| (0..8).all(|y| canvas.pixel_at(x, y) != Some(TEAL))),
         "the region should have been cleared first"
     );
 }

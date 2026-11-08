@@ -47,7 +47,7 @@
 //! here (owner, 2026-11-08: one design, no knobs).
 
 use crate::blit::Canvas;
-use crate::{BLACK, mix, rgb565, scale};
+use crate::{BLACK, Rgb888, mix, scale};
 use scoreboard_model::snapshot::Side;
 
 /// The court's rectangle on the panel — the lines are its outer ring — and
@@ -98,9 +98,9 @@ pub const PAINT_DEPTH: f32 = 19.0;
 pub const ESPN_ORIGIN: f32 = RIM - 1.0;
 
 /// The floor, the lines, the rim.
-pub const WOOD: u16 = rgb565(30, 20, 10);
-pub const LINES: u16 = rgb565(150, 150, 150);
-pub const IRON: u16 = rgb565(255, 110, 0);
+pub const WOOD: Rgb888 = Rgb888::new(30, 20, 10);
+pub const LINES: Rgb888 = Rgb888::new(150, 150, 150);
+pub const IRON: Rgb888 = Rgb888::new(255, 110, 0);
 
 /// A mark's edge, in pixels: every make is 2 × 2, threes the same as twos
 /// (D5; a 1 px mark was invisible on wood).
@@ -133,7 +133,7 @@ impl Court {
 
     /// The bare floor: wood, lines, each end's lane in its attacking team's
     /// colour, the arcs, the boards and the rims.
-    pub fn draw(&self, canvas: &mut Canvas<'_>, away: u16, home: u16) {
+    pub fn draw(&self, canvas: &mut Canvas<'_>, away: Rgb888, home: Rgb888) {
         let (x0, x1) = (self.x, self.x + self.width - 1);
         let y0 = self.y;
         let mid = self.mid();
@@ -212,7 +212,7 @@ impl Court {
         end: End,
         along: f32,
         across: f32,
-        color: u16,
+        color: Rgb888,
         alpha: u32,
     ) {
         let (x, y) = self.origin(end, along, across);
@@ -225,7 +225,7 @@ impl Court {
     }
 
     /// An opaque mark in `color`: the newest make's blink.
-    pub fn plot(&self, canvas: &mut Canvas<'_>, end: End, along: f32, across: f32, color: u16) {
+    pub fn plot(&self, canvas: &mut Canvas<'_>, end: End, along: f32, across: f32, color: Rgb888) {
         let (x, y) = self.origin(end, along, across);
         canvas.fill_rect(x, y, MARK, MARK, color);
     }

@@ -10,7 +10,7 @@ use crate::blit::{Canvas, Slice};
 use crate::font::{self, Align, Style};
 use crate::geometry::{EDGE_INSET, SOCCER_FINAL, SOCCER_LIVE, SOCCER_SCROLL_PAUSE_MS};
 use crate::time::WallMs;
-use crate::{BLACK, generated, pack, toast};
+use crate::{BLACK, generated, toast};
 use scoreboard_model::UiColors;
 use scoreboard_model::snapshot::SoccerLiveView;
 
@@ -28,7 +28,7 @@ pub fn render_live(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let view = &snapshot.soccer_live;
     let table = SOCCER_LIVE;
     let colors = &snapshot.ui_colors;
-    let primary = pack(colors.primary);
+    let primary = colors.primary;
 
     super::column_dividers(canvas, scene, table.divider_x, table.separator_y);
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
@@ -47,7 +47,7 @@ pub fn render_live(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     if super::bottom_strip(canvas, scene) == Strip::Free {
         let scroll = scene.game_scroll(SOCCER_SCROLL_PAUSE_MS);
         if view.has_event {
-            let color = pack(view.event_color);
+            let color = view.event_color;
             let mut top = canvas.slice(table.event_top);
             font::draw(
                 &mut top,
@@ -76,7 +76,7 @@ pub fn render_live(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
                 &mut empty,
                 "NO GOALS",
                 Align::Center,
-                Style::new(&generated::SPLEEN_5X8, pack(colors.secondary)),
+                Style::new(&generated::SPLEEN_5X8, colors.secondary),
             );
         }
     }
@@ -120,7 +120,7 @@ fn clock(
             slot.y,
             slot.width,
             Align::Center,
-            Style::new(&generated::UNSCII_16, pack(colors.accent)),
+            Style::new(&generated::UNSCII_16, colors.accent),
         );
         return;
     }
@@ -141,14 +141,14 @@ fn clock(
             3
         };
         let mut cursor = slot.x + (slot.width - (digits + 1) * CLOCK_GLYPH_WIDTH) / 2;
-        let style = Style::new(&generated::UNSCII_16, pack(colors.clock_normal));
+        let style = Style::new(&generated::UNSCII_16, colors.clock_normal);
         cursor = font::integer(canvas, minute as u16, cursor, slot.y, 0, Align::Left, style);
         font::text_into(canvas, "'", cursor, slot.y, style);
     } else {
         let added = (minute - base).min(MAX_ADDED_MINUTES);
         let digits = if base < 100 { 2 } else { 3 } + if added < 10 { 1 } else { 2 } + 2;
         let mut cursor = slot.x + (slot.width - digits * CLOCK_GLYPH_WIDTH) / 2;
-        let style = Style::new(&generated::UNSCII_16, pack(colors.clock_warning));
+        let style = Style::new(&generated::UNSCII_16, colors.clock_warning);
         cursor = font::integer(canvas, base as u16, cursor, slot.y, 0, Align::Left, style);
         cursor = font::text_into(canvas, "+", cursor, slot.y, style);
         cursor = font::integer(canvas, added as u16, cursor, slot.y, 0, Align::Left, style);
@@ -168,16 +168,16 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let table = SOCCER_FINAL;
 
     let (away_color, home_color) = if view.draw {
-        (pack(view.away_color), pack(view.home_color))
+        (view.away_color, view.home_color)
     } else {
-        super::winner_colors(view.home_won, pack(view.away_color), pack(view.home_color))
+        super::winner_colors(view.home_won, view.away_color, view.home_color)
     };
 
     canvas.vline(
         table.divider_x,
         EDGE_INSET,
         crate::geometry::HEIGHT - 2 * EDGE_INSET,
-        pack(snapshot.ui_colors.secondary),
+        snapshot.ui_colors.secondary,
     );
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
@@ -187,7 +187,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         canvas,
         table.full_time_label,
         &view.ft_text,
-        pack(snapshot.ui_colors.accent),
+        snapshot.ui_colors.accent,
     );
 
     let scroll = scene.game_scroll(SOCCER_SCROLL_PAUSE_MS);

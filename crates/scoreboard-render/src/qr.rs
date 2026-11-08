@@ -30,7 +30,7 @@
 //! standard's penalty rules.
 
 use crate::blit::{PixelFormat, Source};
-use crate::{BLACK, WHITE};
+use crate::{BLACK, Rgb888, WHITE};
 use qrcodegen_no_heap::{QrCode, QrCodeEcc, Version};
 
 /// Largest symbol version the encoder may choose.
@@ -96,7 +96,7 @@ pub struct QrBitmap {
 
 impl QrBitmap {
     /// White background, black modules — matching `state._qr_palette`.
-    pub const PALETTE: [u16; 2] = [WHITE, BLACK];
+    pub const PALETTE: [Option<Rgb888>; 2] = [Some(WHITE), Some(BLACK)];
 
     pub const fn empty() -> Self {
         QrBitmap {
@@ -160,7 +160,6 @@ impl QrBitmap {
             self.size,
             PixelFormat::MonoHlsb,
             Some(&Self::PALETTE),
-            None,
         )
     }
 }
