@@ -1317,3 +1317,50 @@ reviewed change.
     sessions. Reproduce on the bench with two published versions before
     treating the backward path as safe, and consider refusing a downgrade in
     `scoreboard_ota::decide` unless the channel says so.
+
+115. **RGB888 drawing surface (owner asked, 2026-11-08).** The render path is
+    RGB565 end to end: `Canvas`, the `rgb565()` constants, the generated
+    sprite palettes, `text_palette`, hockey's `mix`/`scale`, `pixel_at`
+    read-backs, the 565 golden frames, the diag frame endpoints,
+    `tools/preview` and the two mockup harnesses. Nothing downstream needs
+    it: the HUB75 driver already packs eight BCM planes per channel and has
+    `load_rgb888` beside `load_rgb565`, the model's colour type is already
+    `Rgb888`, and the backend already serves `image/x-rgb888` crests when
+    asked. The 565 choice is a MicroPython `framebuf` inheritance. Cost:
+    +8,192 B for the drawing surface (16,384 to 24,576) and +18,432 B if the
+    32-slot crest pool follows (36,864 to 55,296), taking BUDGET.md's 36.6 %
+    headroom to 35.1 % or 31.6 %. Benefit: smooth pulses (the power-play glow
+    walks 4 to 10 levels per channel today and reads as a 12 Hz stair, which
+    the owner noticed on the panel), dark team colours that keep their hue
+    instead of collapsing to a few codes, and translucent heat-map marks that
+    composite in eight bits all the way down. Plan: convert the canvas and the
+    kernels first and leave crests at 565 until the pool is re-measured;
+    re-bless the goldens once; measure render microseconds, since 3-byte
+    pixels lose the aligned u16 writes. Sequence after the Screen Layouts
+    prune and the sport-switch merge, as its own change.
+116. **Retire the Aseprite pipeline; one source of truth for art (owner,
+    2026-11-08).** Today the truth is split four ways. Three `.aseprite`
+    files under `firmware/assets/layout/` are declared the source and
+    compiled by `tools/compile_layout.py` (Pillow plus the Aseprite CLI)
+    into the committed `crates/scoreboard-render/src/generated/layout.rs`,
+    and into MicroPython modules nothing consumes since that tree froze.
+    Only `mlb_layout` was drawn by hand: `hockey_layout` is produced by
+    `tools/hockey_layout.lua` driving Aseprite from numbers, and
+    `football_layout` by a Rust generator in a separate, uncommitted repo
+    (the `aseprite-io` feasibility harness). The toast icons are PNGs a
+    Python script writes. And `mlb_layout` carries twenty slices encoding
+    MLB screen geometry of which the Rust renderer reads three (the base
+    markers); the rest duplicates `geometry.rs` and is dead. The rink shows
+    the cost: the mockup drew it procedurally in Rust, it was re-authored as
+    Lua, compiled to bytes, and the renderer re-derives its geometry from
+    the compiled `POSITION` to project goals; the court is heading the same
+    way. Plan: procedural Rust for everything geometric (rink, court, star,
+    dots, arrows, toasts), with the numbers beside the projection math that
+    reads them; a Rust-only compile step from committed PNGs for the few
+    hand-drawn pieces (the MLB diamond and base marker, the football ball
+    and field); a test that draws each procedural replacement and compares
+    it pixel for pixel with the compiled sprite before the sprite goes, so
+    the golden frames stay byte-identical; then delete `compile_layout.py`,
+    the Lua script, the `.aseprite` files, the dead MLB slices and the
+    MicroPython output. `compile_fonts.py` is a different job and stays.
+    Sequence after 115.
