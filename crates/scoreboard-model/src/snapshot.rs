@@ -893,9 +893,9 @@ impl ToastView {
 pub struct MenuRow {
     pub label: Text<MENU_LABEL>,
     pub checked: bool,
-    /// Index of the league this row stands for, stable across scrolls — the
-    /// marquee restamps when the highlighted *item* changes, not when the
-    /// cursor lands on the same item at a different row.
+    /// Index of the league this row stands for (into [`crate::feed::LEAGUES`]),
+    /// stable across scrolls — the marquee restamps when the highlighted *item*
+    /// changes, not when the cursor lands on the same item at a different row.
     pub source: u8,
 }
 

@@ -20,7 +20,7 @@ pub struct Logos {
 pub struct MenuRowInput<'a> {
     pub label: &'a str,
     pub checked: bool,
-    /// Index of the league this row stands for.
+    /// Index of the league this row stands for, into [`crate::feed::LEAGUES`].
     pub source: u8,
 }
 

@@ -36,17 +36,14 @@ function buildUpdateFromTouched(config: Config, touchedFields: Set<string>): Con
 
 /**
  * Sections whose settings only take effect at boot. `network.*` (WiFi
- * reconnect), `watchdog.*` (the hardware WDT is armed once at startup), and
- * `sports.*` (the game poller builds its league sources once at startup) —
+ * reconnect) and `watchdog.*` (the hardware WDT is armed once at startup) —
  * saving these must prompt for a reboot or the change silently does nothing.
+ * `sports.*` used to be here too; the poller now rebuilds its league sources
+ * on every save of that section, so it applies like any other field.
  */
 function needsRebootToApply(touchedFields: Set<string>): boolean {
 	for (const path of touchedFields) {
-		if (
-			path.startsWith('network.') ||
-			path.startsWith('watchdog.') ||
-			path.startsWith('sports.')
-		) {
+		if (path.startsWith('network.') || path.startsWith('watchdog.')) {
 			return true;
 		}
 	}
@@ -256,7 +253,7 @@ export function createSettingsStore() {
 				touchedFields = new Set();
 
 				// Prompt for reboot when boot-time-only settings changed
-				// (network credentials, hardware watchdog, sports selection)
+				// (network credentials, hardware watchdog)
 				if (rebootRequired) {
 					showRebootPrompt = true;
 				}

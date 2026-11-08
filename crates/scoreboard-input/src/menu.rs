@@ -6,20 +6,43 @@
 //! timeout — and everything core 1 draws is computed here, so
 //! `scoreboard_render::menu` stays a pure reader of the published view.
 //!
-//! # The semantics are user-locked, and three of them are surprising
+//! # The checked set is the configuration
 //!
-//! * **The checked set is a *session* filter.** It restricts the rotation to
-//!   some of the configured league sources and resets to all-checked on reboot;
-//!   the persisted configuration still owns which leagues are polled at all.
-//!   Nothing here writes flash.
+//! The rows are the registered leagues ([`LEAGUES`], all nine, in rotation
+//! order), and a checked row is a league that is on in the device
+//! configuration — the same `sports` section the settings page's switches
+//! edit. Opening the menu reads that configuration as a mask
+//! (`DeviceConfig::enabled_leagues`); closing it hands a new mask back
+//! ([`Action::LeaguesChosen`]), and the caller writes it into the
+//! configuration, saves it to flash **once** — the same single write a
+//! settings save makes — and rebuilds the poll sources. Nothing here touches
+//! the `Slate`, the configuration or flash: the controller decides what was
+//! chosen, and the poller does the rest in the order its own docs give.
+//!
+//! `menu.py` applied a *session filter* instead — a mask over the configured
+//! sources, forgotten at reboot, the configuration left alone. That gave the
+//! board two notions of "which leagues": one in flash and one in RAM, free to
+//! disagree, with the web's switches needing a reboot and the panel's
+//! checkboxes not surviving one. One state, edited from both ends, is simpler
+//! to explain and cannot drift. It is also why `menu.py`'s "no configured
+//! leagues" refusal is gone: the nine rows always exist, and opening the menu
+//! with nothing checked is how a league gets switched on from the panel.
+//!
+//! # Three semantics are user-locked, and two of them are surprising
+//!
 //! * **Every exit applies.** DONE, a long press on B, and the 10 s timeout all
 //!   commit the working flags. There is deliberately no cancel path — the menu
-//!   is a filter you are adjusting, not a form you are filling in, and a cancel
-//!   would mean the highlighted state on screen was not the state in effect.
-//! * **The last checked league cannot be unchecked**, silently. An empty filter
-//!   is a blank scoreboard, and refusing is better than explaining. There is no
-//!   toast to explain with, either: the menu view preempts the renderer's mode
-//!   dispatch entirely, so nothing else is on screen while it is open.
+//!   is a setting you are adjusting, not a form you are filling in, and a
+//!   cancel would mean the highlighted state on screen was not the state in
+//!   effect. An exit that lands back on the set it opened with is
+//!   [`Action::Handled`], so an untouched menu costs no flash write.
+//! * **The last checked league cannot be unchecked**, silently. An empty
+//!   selection is a blank scoreboard, and refusing is better than explaining.
+//!   There is no toast to explain with, either: the menu view preempts the
+//!   renderer's mode dispatch entirely, so nothing else is on screen while it
+//!   is open.
+//! * **It does not open over an OTA progress screen.** A reboot is imminent
+//!   and the bar has to stay visible.
 //!
 //! # Why this is the dispatch point for presses the menu does not want
 //!
@@ -32,10 +55,9 @@
 //! [`Action`] for the ones that are not the menu's.
 
 use heapless::Vec;
-use scoreboard_model::feed::LEAGUE_KEY;
-use scoreboard_model::slate::MAX_SOURCES;
+use scoreboard_model::feed::LEAGUES;
 use scoreboard_model::store::MenuRowInput;
-use scoreboard_model::{Mode, Slate, Store, Text};
+use scoreboard_model::{Mode, Store};
 use scoreboard_render::menu::thumb;
 
 pub use crate::button::Press;
@@ -43,6 +65,12 @@ pub use crate::button::Press;
 /// Inactivity before the menu applies and closes itself. `menu.py`'s
 /// `_TIMEOUT_MS`.
 pub const TIMEOUT_MS: u64 = 10_000;
+
+/// Rows in the menu: one per registered league, in registry order, so the
+/// mask the checkboxes make is `DeviceConfig::enabled_leagues`'s bit for bit.
+pub const ROWS: usize = LEAGUES.len();
+
+const _: () = assert!(ROWS <= u16::BITS as usize);
 
 /// Which physical button a press came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,24 +96,26 @@ pub enum Action {
     SkipLeague,
     /// Toggle the rotation lock.
     ToggleLock,
-    /// The menu closed and the filter it applied actually changed the
-    /// rotation. `poller.py:353` woke the poll loop here so the board moves off
-    /// a filtered-out game within a tick instead of waiting out the interval.
-    FilterApplied,
+    /// The menu closed on a different set of leagues than it opened with. One
+    /// bit per row of [`LEAGUES`] — the shape `DeviceConfig::set_enabled_leagues`
+    /// takes — and from here the work is the caller's: write it, save it,
+    /// rebuild the sources, and tick now, so the board moves off a league that
+    /// was just switched off within a tick rather than a poll interval
+    /// (`poller.py:353` woke the loop at this point for the same reason).
+    LeaguesChosen(u16),
 }
 
 /// Core 0's owner of the league menu session.
 #[derive(Debug, Clone)]
 pub struct MenuController {
     active: bool,
-    /// Configured sources at the moment the session opened. Held so a
-    /// mid-session change to the slate cannot renumber the working flags —
-    /// which cannot happen today (sources are read once at poller start) and is
-    /// exactly the kind of thing that stops being true quietly.
-    count: usize,
-    /// Working checkbox flags, parallel to [`Slate::sources`].
-    checked: [bool; MAX_SOURCES],
-    /// `0..count` are items; `count` is the DONE footer.
+    /// The mask the session opened with. An exit that lands back on it is
+    /// [`Action::Handled`], not a write: toggling a league off and on again, or
+    /// walking away from an untouched menu, must not cost a flash write.
+    opened_with: u16,
+    /// Working checkbox flags, parallel to [`LEAGUES`].
+    checked: [bool; ROWS],
+    /// `0..ROWS` are items; `ROWS` is the DONE footer.
     cursor: usize,
     /// First visible item.
     scroll: usize,
@@ -96,8 +126,8 @@ impl MenuController {
     pub const fn new() -> MenuController {
         MenuController {
             active: false,
-            count: 0,
-            checked: [true; MAX_SOURCES],
+            opened_with: 0,
+            checked: [false; ROWS],
             cursor: 0,
             scroll: 0,
             last_input_ms: 0,
@@ -126,18 +156,24 @@ impl MenuController {
     }
 
     /// The single dispatch point for both buttons. See the module docs.
+    ///
+    /// `enabled` is the configuration's league mask *now*. It is read only by
+    /// the press that opens the menu, to seed the checkboxes; from then on the
+    /// session works on its own copy, so a settings save landing mid-session
+    /// cannot renumber the boxes under the cursor. Every other press ignores
+    /// it, which is why the caller can pass it unconditionally.
     pub fn press(
         &mut self,
         button: Button,
         press: Press,
-        slate: &mut Slate,
+        enabled: u16,
         store: &mut Store,
         now_ms: u64,
     ) -> Action {
         match (button, press, self.active) {
             (Button::A, Press::Short, true) => {
                 self.touch(now_ms);
-                self.advance(slate, store, now_ms);
+                self.advance(store, now_ms);
                 Action::Handled
             }
             (Button::A, Press::Short, false) => Action::Skip,
@@ -150,103 +186,96 @@ impl MenuController {
             (Button::A, Press::Long, false) => Action::SkipLeague,
             (Button::B, Press::Short, true) => {
                 self.touch(now_ms);
-                self.select(slate, store, now_ms)
+                self.select(store, now_ms)
             }
             (Button::B, Press::Short, false) => Action::ToggleLock,
-            (Button::B, Press::Long, true) => self.apply_and_close(slate, store),
+            (Button::B, Press::Long, true) => self.apply_and_close(store),
             (Button::B, Press::Long, false) => {
-                self.open(slate, store, now_ms);
+                self.open(enabled, store, now_ms);
                 Action::Handled
             }
         }
     }
 
     /// Apply and close if nothing has happened for [`TIMEOUT_MS`].
-    pub fn check_timeout(&mut self, slate: &mut Slate, store: &mut Store, now_ms: u64) -> Action {
+    pub fn check_timeout(&mut self, store: &mut Store, now_ms: u64) -> Action {
         if !self.active || now_ms.saturating_sub(self.last_input_ms) < TIMEOUT_MS {
             return Action::Handled;
         }
-        self.apply_and_close(slate, store)
+        self.apply_and_close(store)
     }
 
-    /// Open the session, seeding the working flags from the live filter.
+    /// Open the session, seeding the checkboxes from the configuration.
     ///
-    /// Refuses in two cases, both `menu.py`'s: with no configured sources there
-    /// is nothing to show, and during an OTA the progress screen must stay
-    /// visible because a reboot is imminent.
-    fn open(&mut self, slate: &Slate, store: &mut Store, now_ms: u64) {
-        let count = slate.sources().len();
-        if count == 0 || store.mode() == Mode::Updating {
+    /// Refuses during an OTA: the progress screen must stay visible because a
+    /// reboot is imminent. `menu.py` also refused with no configured sources;
+    /// the rows are the registry now, so there is always something to show.
+    fn open(&mut self, enabled: u16, store: &mut Store, now_ms: u64) {
+        if store.mode() == Mode::Updating {
             return;
         }
-        let filter = slate.filter();
-        self.count = count;
+        self.opened_with = enabled;
         for (index, checked) in self.checked.iter_mut().enumerate() {
-            *checked = filter.is_none_or(|mask| mask & (1 << index) != 0);
+            *checked = enabled & (1 << index) != 0;
         }
         self.active = true;
         self.cursor = 0;
         self.scroll = 0;
         self.touch(now_ms);
-        self.stage(slate, store, now_ms);
+        self.stage(store, now_ms);
     }
 
     /// Move the cursor one row down, wrapping through DONE.
-    fn advance(&mut self, slate: &Slate, store: &mut Store, now_ms: u64) {
-        self.cursor = (self.cursor + 1) % (self.count + 1);
+    fn advance(&mut self, store: &mut Store, now_ms: u64) {
+        self.cursor = (self.cursor + 1) % (ROWS + 1);
         // Keep the cursor inside the window. DONE is drawn in its own footer
         // and is always visible, so it needs no scroll of its own.
         if self.cursor == 0 {
             self.scroll = 0;
-        } else if self.cursor < self.count && self.cursor >= self.scroll + thumb::VISIBLE_ROWS {
+        } else if self.cursor < ROWS && self.cursor >= self.scroll + thumb::VISIBLE_ROWS {
             self.scroll = self.cursor - thumb::VISIBLE_ROWS + 1;
         }
-        self.stage(slate, store, now_ms);
+        self.stage(store, now_ms);
     }
 
     /// Toggle the highlighted checkbox, or activate DONE.
-    fn select(&mut self, slate: &mut Slate, store: &mut Store, now_ms: u64) -> Action {
-        if self.cursor == self.count {
-            return self.apply_and_close(slate, store);
+    fn select(&mut self, store: &mut Store, now_ms: u64) -> Action {
+        if self.cursor == ROWS {
+            return self.apply_and_close(store);
         }
         if self.checked[self.cursor] && self.checked_count() == 1 {
             // Silent: there is nowhere to say it. See the module docs.
             return Action::Handled;
         }
         self.checked[self.cursor] = !self.checked[self.cursor];
-        self.stage(slate, store, now_ms);
+        self.stage(store, now_ms);
         Action::Handled
     }
 
-    /// Commit the working flags and take the menu off the panel.
-    fn apply_and_close(&mut self, slate: &mut Slate, store: &mut Store) -> Action {
-        // The keys are copied out rather than borrowed: `set_filter` takes
-        // `&mut Slate` and the sources live inside it, so a slice of borrowed
-        // `&str` would still be alive at the call. Eight 32-byte keys on the
-        // stack is the cheapest way to say "these came from the slate and the
-        // slate may now change".
-        let mut owned: Vec<Text<LEAGUE_KEY>, MAX_SOURCES> = Vec::new();
-        for (index, source) in slate.sources().iter().enumerate().take(self.count) {
-            if self.checked[index] {
-                let _ = owned.push(source.key.clone());
-            }
-        }
-        let keys: Vec<&str, MAX_SOURCES> = owned.iter().map(Text::as_str).collect();
+    /// Take the menu off the panel and report what was chosen, if it differs
+    /// from what the session opened with.
+    fn apply_and_close(&mut self, store: &mut Store) -> Action {
+        let chosen = self.chosen();
         self.active = false;
-        let changed = slate.set_filter(&keys);
         store.clear_menu();
-        if changed {
-            Action::FilterApplied
-        } else {
+        if chosen == self.opened_with {
             Action::Handled
+        } else {
+            Action::LeaguesChosen(chosen)
         }
     }
 
-    fn checked_count(&self) -> usize {
-        self.checked[..self.count]
+    /// The working flags as the configuration's mask.
+    fn chosen(&self) -> u16 {
+        self.checked
             .iter()
-            .filter(|checked| **checked)
-            .count()
+            .enumerate()
+            .filter(|(_, checked)| **checked)
+            .fold(0, |mask, (index, _)| mask | (1 << index))
+    }
+
+    fn checked_count(&self) -> usize {
+        self.checked.iter().filter(|checked| **checked).count()
     }
 
     fn touch(&mut self, now_ms: u64) {
@@ -265,27 +294,24 @@ impl MenuController {
     /// holding the previously published ones; here `Store::set_menu` copies
     /// into the snapshot it owns, so the wholesale-replacement contract is the
     /// snapshot channel's and this just passes a slice of borrowed labels.
-    fn stage(&self, slate: &Slate, store: &mut Store, now_ms: u64) {
+    fn stage(&self, store: &mut Store, now_ms: u64) {
         let mut rows: Vec<MenuRowInput<'_>, { thumb::VISIBLE_ROWS }> = Vec::new();
-        let sources = slate.sources();
-        for index in self.scroll..(self.scroll + thumb::VISIBLE_ROWS).min(self.count) {
-            let Some(source) = sources.get(index) else {
-                break;
-            };
+        let end = (self.scroll + thumb::VISIBLE_ROWS).min(ROWS);
+        for (index, league) in LEAGUES.iter().enumerate().take(end).skip(self.scroll) {
             let _ = rows.push(MenuRowInput {
-                label: source.display_name.as_str(),
+                label: league.display_name,
                 checked: self.checked[index],
                 source: index as u8,
             });
         }
         // -1 is the DONE footer, which is where the cursor is when it is past
         // the last item.
-        let highlight = if self.cursor < self.count {
+        let highlight = if self.cursor < ROWS {
             (self.cursor - self.scroll) as i8
         } else {
             -1
         };
-        let (thumb_y, thumb_h) = thumb::compute(self.count, self.scroll);
+        let (thumb_y, thumb_h) = thumb::compute(ROWS, self.scroll);
         store.set_menu(&rows, highlight, thumb_y, thumb_h, now_ms);
     }
 }
@@ -299,182 +325,155 @@ impl Default for MenuController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scoreboard_model::{LeagueId, Sport};
 
-    fn slate_with(leagues: &[(Sport, &str)]) -> Slate {
-        let mut slate = Slate::new();
-        let sources: Vec<LeagueId, MAX_SOURCES> = leagues
-            .iter()
-            .map(|(sport, slug)| LeagueId::from_slug(*sport, slug))
-            .collect();
-        slate.set_sources(&sources);
-        slate
-    }
+    /// Bits of the configuration mask, by registry position.
+    const MLB: u16 = 1 << 0;
+    const NBA: u16 = 1 << 1;
+    const NHL: u16 = 1 << 2;
+    const WORLD_CUP: u16 = 1 << 8;
+    /// Every registered league on.
+    const ALL: u16 = (1 << ROWS) - 1;
+    /// What the caller passes on a press that is not the opening one: the
+    /// controller does not read it, and these tests prove that by passing
+    /// something that would be wrong if it did.
+    const IGNORED: u16 = 0;
 
-    /// Two leagues: enough to exercise the last-checked rule, too few to
-    /// scroll.
-    fn small() -> Slate {
-        slate_with(&[(Sport::Mlb, "mlb"), (Sport::Nba, "nba")])
-    }
-
-    /// Seven leagues, so the five-row window has to scroll.
-    fn large() -> Slate {
-        slate_with(&[
-            (Sport::Mlb, "mlb"),
-            (Sport::Nba, "nba"),
-            (Sport::Football, "nfl"),
-            (Sport::Football, "college-football"),
-            (Sport::Soccer, "usa.1"),
-            (Sport::Soccer, "eng.1"),
-            (Sport::Soccer, "esp.1"),
-        ])
-    }
-
-    /// Every registered league switched on: nine rows in rotation order (NHL.md
-    /// D6), the most the settings page can configure.
-    fn every_league() -> Slate {
-        let leagues: Vec<(Sport, &str), MAX_SOURCES> = scoreboard_model::feed::LEAGUES
-            .iter()
-            .map(|league| (league.sport, league.slug))
-            .collect();
-        slate_with(&leagues)
-    }
-
-    fn open(slate: &mut Slate, store: &mut Store) -> MenuController {
+    fn open(enabled: u16, store: &mut Store) -> MenuController {
         let mut menu = MenuController::new();
         assert_eq!(
-            menu.press(Button::B, Press::Long, slate, store, 0),
+            menu.press(Button::B, Press::Long, enabled, store, 0),
             Action::Handled
         );
         assert!(menu.active(), "a long press on B opens the menu");
         menu
     }
 
+    /// `steps` short presses on A.
+    fn down(menu: &mut MenuController, store: &mut Store, steps: usize) {
+        for _ in 0..steps {
+            menu.press(Button::A, Press::Short, IGNORED, store, 0);
+        }
+    }
+
+    /// A short press on B: toggle the highlighted row, or activate DONE.
+    fn select(menu: &mut MenuController, store: &mut Store) -> Action {
+        menu.press(Button::B, Press::Short, IGNORED, store, 0)
+    }
+
+    /// A long press on B inside the menu: apply and close.
+    fn close(menu: &mut MenuController, store: &mut Store) -> Action {
+        menu.press(Button::B, Press::Long, IGNORED, store, 0)
+    }
+
     #[test]
     fn a_closed_menu_routes_every_press_to_the_poller() {
         let mut menu = MenuController::new();
-        let mut slate = small();
         let mut store = Store::new();
         for (button, press, expected) in [
             (Button::A, Press::Short, Action::Skip),
             (Button::A, Press::Long, Action::SkipLeague),
             (Button::B, Press::Short, Action::ToggleLock),
         ] {
-            assert_eq!(
-                menu.press(button, press, &mut slate, &mut store, 0),
-                expected
-            );
+            assert_eq!(menu.press(button, press, ALL, &mut store, 0), expected);
             assert!(!menu.active(), "none of these open the menu");
         }
     }
 
     #[test]
-    fn opening_publishes_every_league_checked() {
-        let mut slate = small();
+    fn opening_shows_the_registry_in_rotation_order_seeded_from_the_configuration() {
         let mut store = Store::new();
-        let _menu = open(&mut slate, &mut store);
+        // The shipped defaults: MLB and the NHL on.
+        let _menu = open(MLB | NHL, &mut store);
         let view = &store.snapshot().menu;
         assert!(view.active);
-        assert_eq!(view.rows.len(), 2);
-        assert!(view.rows.iter().all(|row| row.checked));
-        assert_eq!(view.highlight, 0, "the cursor starts on the first item");
-        assert_eq!(view.thumb_y, -1, "two rows need no scrollbar");
-    }
-
-    #[test]
-    fn the_nhl_row_sits_after_nba_under_its_league_name() {
-        let mut slate = every_league();
-        let mut store = Store::new();
-        let _menu = open(&mut slate, &mut store);
-        let view = &store.snapshot().menu;
         let labels: Vec<&str, { thumb::VISIBLE_ROWS }> =
             view.rows.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(labels, ["MLB", "NBA", "NHL", "NFL", "NCAA FOOTBALL"]);
+        let checked: Vec<bool, { thumb::VISIBLE_ROWS }> =
+            view.rows.iter().map(|row| row.checked).collect();
+        assert_eq!(checked, [true, false, true, false, false]);
+        assert_eq!(view.highlight, 0, "the cursor starts on the first item");
         assert!(view.thumb_y >= 0, "nine rows need a scrollbar");
     }
 
     #[test]
-    fn the_ninth_league_unchecks_and_reopens_unchecked() {
-        // Its bit is the ninth, one past what a byte-wide filter could hold.
-        let mut slate = every_league();
+    fn the_ninth_league_is_the_ninth_bit_and_reopens_as_the_configuration_says() {
+        // One past what a byte-wide mask could hold.
         let mut store = Store::new();
-        let mut menu = open(&mut slate, &mut store);
-        for _ in 0..8 {
-            menu.press(Button::A, Press::Short, &mut slate, &mut store, 0);
-        }
-        menu.press(Button::B, Press::Short, &mut slate, &mut store, 0);
+        let mut menu = open(ALL, &mut store);
+        down(&mut menu, &mut store, 8);
+        select(&mut menu, &mut store);
         assert_eq!(
-            menu.press(Button::B, Press::Long, &mut slate, &mut store, 0),
-            Action::FilterApplied
+            close(&mut menu, &mut store),
+            Action::LeaguesChosen(ALL & !WORLD_CUP)
         );
-        assert_eq!(slate.filter(), Some(0b0_1111_1111));
 
-        menu.press(Button::B, Press::Long, &mut slate, &mut store, 1_000);
-        for _ in 0..8 {
-            menu.press(Button::A, Press::Short, &mut slate, &mut store, 1_000);
-        }
+        // The caller wrote that mask; the next session opens on it.
+        menu.press(Button::B, Press::Long, ALL & !WORLD_CUP, &mut store, 1_000);
+        down(&mut menu, &mut store, 8);
         let view = &store.snapshot().menu;
         let row = &view.rows[view.highlight as usize];
         assert_eq!(row.source, 8);
         assert_eq!(row.label.as_str(), "WORLD CUP");
-        assert!(!row.checked, "the session reopens with the ninth league off");
+        assert!(!row.checked);
+        select(&mut menu, &mut store);
+        assert_eq!(close(&mut menu, &mut store), Action::LeaguesChosen(ALL));
+    }
+
+    #[test]
+    fn opening_with_nothing_on_is_how_a_league_gets_switched_on() {
+        // `menu.py` refused to open with no configured sources. The rows are
+        // the registry now, so a board with every sport off can turn one on
+        // from the panel.
+        let mut store = Store::new();
+        let mut menu = open(0, &mut store);
+        assert!(store.snapshot().menu.rows.iter().all(|row| !row.checked));
+        assert_eq!(select(&mut menu, &mut store), Action::Handled);
+        assert!(store.snapshot().menu.rows[0].checked);
+        assert_eq!(close(&mut menu, &mut store), Action::LeaguesChosen(MLB));
     }
 
     #[test]
     fn the_menu_refuses_to_open_over_an_ota_progress_screen() {
-        let mut slate = small();
         let mut store = Store::new();
         store.set_mode(Mode::Updating);
         let mut menu = MenuController::new();
-        menu.press(Button::B, Press::Long, &mut slate, &mut store, 0);
+        menu.press(Button::B, Press::Long, ALL, &mut store, 0);
         assert!(!menu.active(), "a reboot is imminent; the progress bar stays");
         assert!(!store.snapshot().menu.active);
     }
 
     #[test]
-    fn the_menu_refuses_to_open_with_no_configured_leagues() {
-        let mut slate = Slate::new();
-        let mut store = Store::new();
-        let mut menu = MenuController::new();
-        menu.press(Button::B, Press::Long, &mut slate, &mut store, 0);
-        assert!(!menu.active());
-    }
-
-    #[test]
     fn a_short_wraps_through_done_and_back_to_the_top() {
-        let mut slate = small();
         let mut store = Store::new();
-        let mut menu = open(&mut slate, &mut store);
-        // Items, then DONE, then wrap.
-        menu.press(Button::A, Press::Short, &mut slate, &mut store, 0);
+        let mut menu = open(ALL, &mut store);
+        down(&mut menu, &mut store, 1);
         assert_eq!(store.snapshot().menu.highlight, 1);
-        menu.press(Button::A, Press::Short, &mut slate, &mut store, 0);
+        // The rest of the items, then DONE, then wrap.
+        down(&mut menu, &mut store, ROWS - 1);
         assert_eq!(store.snapshot().menu.highlight, -1, "DONE");
-        menu.press(Button::A, Press::Short, &mut slate, &mut store, 0);
+        down(&mut menu, &mut store, 1);
         assert_eq!(store.snapshot().menu.highlight, 0, "wrapped to the top");
     }
 
     #[test]
     fn the_window_scrolls_to_keep_the_cursor_visible_and_the_thumb_follows() {
-        let mut slate = large();
         let mut store = Store::new();
-        let mut menu = open(&mut slate, &mut store);
+        let mut menu = open(ALL, &mut store);
         let (top_y, top_h) = (
             store.snapshot().menu.thumb_y,
             store.snapshot().menu.thumb_h,
         );
-        assert!(top_y >= 0 && top_h > 0, "seven items need a scrollbar");
+        assert!(top_y >= 0 && top_h > 0, "nine items need a scrollbar");
 
         // Four presses put the cursor on row 4, the last visible one.
-        for _ in 0..4 {
-            menu.press(Button::A, Press::Short, &mut slate, &mut store, 0);
-        }
+        down(&mut menu, &mut store, 4);
         assert_eq!(store.snapshot().menu.highlight, 4);
         assert_eq!(store.snapshot().menu.thumb_y, top_y, "no scroll yet");
 
         // The fifth scrolls by one, and the highlight stays pinned to the
         // bottom row.
-        menu.press(Button::A, Press::Short, &mut slate, &mut store, 0);
+        down(&mut menu, &mut store, 1);
         assert_eq!(store.snapshot().menu.highlight, 4);
         assert!(store.snapshot().menu.thumb_y > top_y, "the thumb moved down");
         assert_eq!(
@@ -485,9 +484,9 @@ mod tests {
 
         // Wrapping back to the top resets the window in one step, rather than
         // scrolling back up through it.
-        for _ in 0..3 {
-            menu.press(Button::A, Press::Short, &mut slate, &mut store, 0);
-        }
+        down(&mut menu, &mut store, ROWS - 5);
+        assert_eq!(store.snapshot().menu.highlight, -1, "DONE");
+        down(&mut menu, &mut store, 1);
         assert_eq!(store.snapshot().menu.highlight, 0);
         assert_eq!(store.snapshot().menu.thumb_y, top_y);
         assert_eq!(store.snapshot().menu.rows[0].source, 0);
@@ -495,149 +494,153 @@ mod tests {
 
     #[test]
     fn b_short_toggles_the_highlighted_checkbox() {
-        let mut slate = small();
         let mut store = Store::new();
-        let mut menu = open(&mut slate, &mut store);
-        menu.press(Button::B, Press::Short, &mut slate, &mut store, 0);
+        let mut menu = open(MLB | NBA, &mut store);
+        select(&mut menu, &mut store);
         assert!(!store.snapshot().menu.rows[0].checked);
-        menu.press(Button::B, Press::Short, &mut slate, &mut store, 0);
+        select(&mut menu, &mut store);
         assert!(store.snapshot().menu.rows[0].checked);
     }
 
     #[test]
     fn the_last_checked_league_cannot_be_unchecked() {
-        let mut slate = small();
         let mut store = Store::new();
-        let mut menu = open(&mut slate, &mut store);
+        let mut menu = open(MLB | NBA, &mut store);
         // Uncheck the first, move to the second, try to uncheck it too.
-        menu.press(Button::B, Press::Short, &mut slate, &mut store, 0);
-        menu.press(Button::A, Press::Short, &mut slate, &mut store, 0);
-        assert_eq!(
-            menu.press(Button::B, Press::Short, &mut slate, &mut store, 0),
-            Action::Handled
-        );
+        select(&mut menu, &mut store);
+        down(&mut menu, &mut store, 1);
+        assert_eq!(select(&mut menu, &mut store), Action::Handled);
         assert!(
             store.snapshot().menu.rows[1].checked,
-            "an empty filter is a blank scoreboard; the refusal is silent"
+            "an empty selection is a blank scoreboard; the refusal is silent"
+        );
+        assert_eq!(
+            close(&mut menu, &mut store),
+            Action::LeaguesChosen(NBA),
+            "and what applies is the set with the refusal in it"
         );
     }
 
     #[test]
-    fn b_long_applies_and_closes() {
-        let mut slate = small();
+    fn b_long_applies_and_closes_with_the_chosen_mask() {
         let mut store = Store::new();
-        let mut menu = open(&mut slate, &mut store);
-        menu.press(Button::B, Press::Short, &mut slate, &mut store, 0);
-        assert_eq!(
-            menu.press(Button::B, Press::Long, &mut slate, &mut store, 0),
-            Action::FilterApplied
-        );
+        let mut menu = open(MLB | NBA, &mut store);
+        select(&mut menu, &mut store);
+        assert_eq!(close(&mut menu, &mut store), Action::LeaguesChosen(NBA));
         assert!(!menu.active());
         assert!(!store.snapshot().menu.active, "the menu left the panel");
-        assert_eq!(slate.filter(), Some(0b10), "only the second league rotates");
     }
 
     #[test]
     fn done_applies_and_closes_the_same_way_b_long_does() {
-        let mut slate = small();
         let mut store = Store::new();
-        let mut menu = open(&mut slate, &mut store);
-        menu.press(Button::B, Press::Short, &mut slate, &mut store, 0);
+        let mut menu = open(MLB | NBA, &mut store);
+        select(&mut menu, &mut store);
         // Cursor to DONE, then activate it.
-        menu.press(Button::A, Press::Short, &mut slate, &mut store, 0);
-        menu.press(Button::A, Press::Short, &mut slate, &mut store, 0);
-        assert_eq!(
-            menu.press(Button::B, Press::Short, &mut slate, &mut store, 0),
-            Action::FilterApplied
-        );
+        down(&mut menu, &mut store, ROWS);
+        assert_eq!(store.snapshot().menu.highlight, -1);
+        assert_eq!(select(&mut menu, &mut store), Action::LeaguesChosen(NBA));
         assert!(!menu.active());
-        assert_eq!(slate.filter(), Some(0b10));
+        assert!(!store.snapshot().menu.active);
     }
 
     #[test]
     fn the_inactivity_timeout_applies_it_does_not_cancel() {
-        let mut slate = small();
         let mut store = Store::new();
-        let mut menu = open(&mut slate, &mut store);
-        menu.press(Button::B, Press::Short, &mut slate, &mut store, 0);
+        let mut menu = open(MLB | NBA, &mut store);
+        select(&mut menu, &mut store);
 
         assert_eq!(menu.deadline_ms(), Some(TIMEOUT_MS));
         assert_eq!(
-            menu.check_timeout(&mut slate, &mut store, TIMEOUT_MS - 1),
+            menu.check_timeout(&mut store, TIMEOUT_MS - 1),
             Action::Handled
         );
         assert!(menu.active(), "not yet");
         assert_eq!(
-            menu.check_timeout(&mut slate, &mut store, TIMEOUT_MS),
-            Action::FilterApplied
-        );
-        assert!(!menu.active());
-        assert_eq!(
-            slate.filter(),
-            Some(0b10),
+            menu.check_timeout(&mut store, TIMEOUT_MS),
+            Action::LeaguesChosen(NBA),
             "there is no cancel path: walking away commits what is on screen"
         );
+        assert!(!menu.active());
+        assert!(!store.snapshot().menu.active);
+        assert_eq!(menu.deadline_ms(), None);
     }
 
     #[test]
     fn every_press_including_the_no_op_hold_pushes_the_timeout_out() {
-        let mut slate = small();
         let mut store = Store::new();
-        let mut menu = open(&mut slate, &mut store);
+        let mut menu = open(MLB | NBA, &mut store);
         // A long press on A does nothing inside the menu, but the user is
         // clearly still there.
         assert_eq!(
-            menu.press(Button::A, Press::Long, &mut slate, &mut store, 5_000),
+            menu.press(Button::A, Press::Long, IGNORED, &mut store, 5_000),
             Action::Handled
         );
         assert_eq!(menu.deadline_ms(), Some(5_000 + TIMEOUT_MS));
         assert_eq!(
-            menu.check_timeout(&mut slate, &mut store, TIMEOUT_MS + 1),
+            menu.check_timeout(&mut store, TIMEOUT_MS + 1),
             Action::Handled
         );
         assert!(menu.active());
     }
 
     #[test]
-    fn closing_with_everything_checked_clears_the_filter_rather_than_storing_a_no_op() {
-        let mut slate = small();
+    fn an_exit_that_lands_where_it_opened_is_handled_not_a_write() {
         let mut store = Store::new();
-        let mut menu = open(&mut slate, &mut store);
+        // Off and on again is no change.
+        let mut menu = open(MLB | NBA, &mut store);
+        select(&mut menu, &mut store);
+        select(&mut menu, &mut store);
         assert_eq!(
-            menu.press(Button::B, Press::Long, &mut slate, &mut store, 0),
+            close(&mut menu, &mut store),
             Action::Handled,
-            "nothing changed, so the poll loop is not woken"
+            "the configuration already says this, so there is nothing to save"
         );
-        assert_eq!(slate.filter(), None);
+        assert!(!store.snapshot().menu.active, "but the menu still closed");
+
+        // And an untouched menu timing out is the same.
+        menu.press(Button::B, Press::Long, ALL, &mut store, 20_000);
+        assert_eq!(
+            menu.check_timeout(&mut store, 20_000 + TIMEOUT_MS),
+            Action::Handled
+        );
+        assert!(!menu.active());
+        assert!(!store.snapshot().menu.active);
     }
 
     #[test]
-    fn reopening_seeds_the_boxes_from_the_filter_that_is_actually_in_effect() {
-        let mut slate = small();
+    fn reopening_reads_the_configuration_not_the_last_session() {
         let mut store = Store::new();
-        let mut menu = open(&mut slate, &mut store);
-        menu.press(Button::B, Press::Short, &mut slate, &mut store, 0);
-        menu.press(Button::B, Press::Long, &mut slate, &mut store, 0);
+        let mut menu = open(MLB | NBA, &mut store);
+        select(&mut menu, &mut store);
+        assert_eq!(close(&mut menu, &mut store), Action::LeaguesChosen(NBA));
 
-        menu.press(Button::B, Press::Long, &mut slate, &mut store, 20_000);
+        // The caller wrote NBA alone, and that is what the next session shows.
+        menu.press(Button::B, Press::Long, NBA, &mut store, 20_000);
         let rows = &store.snapshot().menu.rows;
-        assert!(!rows[0].checked, "the session reopens where it left off");
+        assert!(!rows[0].checked);
         assert!(rows[1].checked);
+        close(&mut menu, &mut store);
+
+        // Had the write not happened — or a settings save undone it — the
+        // menu would show that instead. It keeps nothing of its own between
+        // sessions; the configuration is the only memory.
+        menu.press(Button::B, Press::Long, MLB | NBA, &mut store, 40_000);
+        assert!(store.snapshot().menu.rows[0].checked);
     }
 
     #[test]
     fn a_press_that_arrives_while_the_menu_is_open_never_reaches_the_poller() {
-        let mut slate = small();
         let mut store = Store::new();
-        let mut menu = open(&mut slate, &mut store);
+        let mut menu = open(MLB | NBA, &mut store);
         for (button, press) in [
             (Button::A, Press::Short),
             (Button::A, Press::Long),
             (Button::B, Press::Short),
         ] {
-            let action = menu.press(button, press, &mut slate, &mut store, 0);
+            let action = menu.press(button, press, IGNORED, &mut store, 0);
             assert!(
-                matches!(action, Action::Handled | Action::FilterApplied),
+                matches!(action, Action::Handled | Action::LeaguesChosen(_)),
                 "the menu owns both buttons while it is open, got {action:?}"
             );
         }

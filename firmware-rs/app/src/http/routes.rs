@@ -565,6 +565,15 @@ async fn put_config(body: ConfigBody) -> impl IntoResponse {
         crate::debug!("api: config updated, live-apply ran");
     }
     persist();
+    if applied.sources {
+        // After the write. The poller rebuilds from the running configuration,
+        // which `with_mut` committed above, so this only has to say the section
+        // was touched — and saying it after the save means the list the poller
+        // polls is never newer than the one a reboot would read. The poller
+        // compares before it rebuilds, so a section resent unchanged costs
+        // nothing on the panel.
+        poller::command(poller::Command::SourcesChanged);
+    }
 
     Either::B(json(render_config()))
 }

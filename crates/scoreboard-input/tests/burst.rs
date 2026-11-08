@@ -71,8 +71,10 @@ fn a_burst_of_presses_advances_the_rotation_exactly_once() {
     let mut rejected = 0;
     for index in 0..8u64 {
         let press = tap(&mut tracker, 1_000 + index * 100).expect("each tap is a short press");
+        // The configuration mask only matters to a press that opens the menu;
+        // one league on, to match the slate.
         assert_eq!(
-            menu.press(Button::A, press, &mut slate, &mut store, 1_000 + index * 100),
+            menu.press(Button::A, press, 0b1, &mut store, 1_000 + index * 100),
             Action::Skip,
             "with the menu closed, A short is always a skip"
         );

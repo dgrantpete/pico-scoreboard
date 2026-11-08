@@ -148,6 +148,8 @@ impl DisplayUpdate {
                 gamma: true,
                 blanking_time: true,
                 log_level: false,
+                // The poller reads its sources itself when it starts.
+                sources: false,
             },
         )
     }

@@ -24,7 +24,8 @@ use crate::text::{Text, set_folded};
 /// slugs poll by design); `DeviceConfig::league_sources` counts those rather
 /// than dropping them silently.
 ///
-/// Also the width of the filter bitmask, a `u16`.
+/// Also why the configuration's league mask (`DeviceConfig::enabled_leagues`,
+/// one bit per registered league) is a `u16`.
 pub const MAX_SOURCES: usize = 9;
 
 const _: () = assert!(MAX_SOURCES <= u16::BITS as usize);
@@ -65,10 +66,6 @@ pub struct Slate {
     /// Indices into `entries`, in rotation order.
     rotation: heapless::Vec<u8, MAX_SLATE, u8>,
     index: u8,
-    /// Rotation restricted to these sources; `None` is every league. Session
-    /// state by design — the persisted config owns which leagues are polled at
-    /// all, and this resets on reboot.
-    filter: Option<u16>,
     locked: bool,
     /// The `(source, game id)` on screen, cached so a slate rebuild can put
     /// the index back on it even though the entries themselves moved.
@@ -88,19 +85,19 @@ impl Slate {
             entries: heapless::Vec::new(),
             rotation: heapless::Vec::new(),
             index: 0,
-            filter: None,
             locked: false,
             current: None,
         }
     }
 
     /// Install the configured leagues, in poll order: MLB, NBA, NHL, football
-    /// leagues, soccer leagues. Drops every cached game — a source list only
-    /// changes on a config write, which invalidates the indices anyway.
+    /// leagues, soccer leagues. Drops every cached game: the sources change
+    /// whenever the configuration does — a settings save, or the device's own
+    /// league menu, which edits the same `sports` section — and every entry's
+    /// source index is meaningless against the new list anyway.
     ///
-    /// The session league filter clears with it. `poller.py` kept the filter
-    /// keyed by league key so it could survive this; a config write is already
-    /// a disruptive event and the menu is the only thing that sets a filter.
+    /// The lock survives. It is about the game on screen, not the league list,
+    /// and the caller's next refresh decides what is on screen now.
     pub fn set_sources(&mut self, sources: &[LeagueId]) {
         self.sources.clear();
         for source in sources.iter().take(MAX_SOURCES) {
@@ -109,7 +106,6 @@ impl Slate {
         self.entries.clear();
         self.rotation.clear();
         self.index = 0;
-        self.filter = None;
         self.current = None;
     }
 
@@ -148,22 +144,7 @@ impl Slate {
     /// The game on screen keeps its position if it is still listed, so an
     /// unrelated game flipping state cannot yank the view mid-dwell.
     pub fn rebuild(&mut self) {
-        let filter = match self.filter {
-            // Every filtered league left the configured sources.
-            Some(mask) if mask & self.source_mask() == 0 => {
-                self.filter = None;
-                None
-            }
-            other => other,
-        };
-
-        self.collect_rotation(filter);
-        if self.rotation.is_empty() && filter.is_some() {
-            // The filter is kept — its games may come back — but a board that
-            // shows nothing is worse than one showing an unfiltered game.
-            self.collect_rotation(None);
-        }
-
+        self.collect_rotation();
         let restored = match self.current.as_ref() {
             Some((source, id)) => self.position_of(*source, id).unwrap_or(0),
             None => 0,
@@ -172,27 +153,17 @@ impl Slate {
         self.sync_current();
     }
 
-    fn source_mask(&self) -> u16 {
-        match self.sources.len() {
-            0 => 0,
-            len => (1u32 << len).wrapping_sub(1) as u16,
-        }
-    }
-
-    fn collect_rotation(&mut self, filter: Option<u16>) {
+    fn collect_rotation(&mut self) {
         self.rotation.clear();
-        self.push_state(filter, GameState::Live);
+        self.push_state(GameState::Live);
         if self.rotation.is_empty() {
-            self.push_state(filter, GameState::Final);
-            self.push_state(filter, GameState::Pregame);
+            self.push_state(GameState::Final);
+            self.push_state(GameState::Pregame);
         }
     }
 
-    fn push_state(&mut self, filter: Option<u16>, state: GameState) {
+    fn push_state(&mut self, state: GameState) {
         for source in 0..self.sources.len() as u8 {
-            if filter.is_some_and(|mask| mask & (1 << source) == 0) {
-                continue;
-            }
             for (position, entry) in self.entries.iter().enumerate() {
                 if entry.source == source && entry.state == state {
                     let _ = self.rotation.push(position as u8);
@@ -273,9 +244,6 @@ impl Slate {
 
     /// Step to the first game of the next league, scanning forward cyclically.
     /// A single-league slate degrades to a plain [`Slate::advance`].
-    ///
-    /// Stays *within* the league filter: the filter is a deliberate
-    /// multi-select, unlike the one-league lock a skip used to escape.
     pub fn advance_league(&mut self) {
         let len = self.rotation.len() as u8;
         if len == 0 {
@@ -306,43 +274,6 @@ impl Slate {
     pub fn toggle_lock(&mut self) -> bool {
         self.locked = !self.locked;
         self.locked
-    }
-
-    /// The active filter as a source bitmask; `None` is every league.
-    pub fn filter(&self) -> Option<u16> {
-        self.filter
-    }
-
-    /// Restrict the rotation to the leagues named by `keys`. A set covering
-    /// every configured source clears the filter instead of storing a
-    /// no-op. Returns whether anything changed.
-    ///
-    /// The lock is independent and survives. If the locked game's league is
-    /// filtered out, the rebuild moves the board to a filtered-in game despite
-    /// the lock — the user just excluded that league on purpose.
-    pub fn set_filter(&mut self, keys: &[&str]) -> bool {
-        let mut mask = 0u16;
-        for (index, source) in self.sources.iter().enumerate() {
-            if keys.contains(&source.key.as_str()) {
-                mask |= 1 << index;
-            }
-        }
-        let filter = (mask != self.source_mask()).then_some(mask);
-        if filter == self.filter {
-            return false;
-        }
-        self.filter = filter;
-        self.rebuild();
-        true
-    }
-
-    pub fn clear_filter(&mut self) -> bool {
-        if self.filter.is_none() {
-            return false;
-        }
-        self.filter = None;
-        self.rebuild();
-        true
     }
 }
 

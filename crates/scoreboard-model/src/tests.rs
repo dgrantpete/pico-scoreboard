@@ -1217,41 +1217,9 @@ fn a_single_league_slate_degrades_a_league_skip_to_a_plain_skip() {
 }
 
 #[test]
-fn a_filter_restricts_the_rotation_and_survives_an_empty_slate() {
-    let mut slate = Slate::new();
-    slate.set_sources(&sources());
-    list(&mut slate, 0, &[(GameState::Final, "m1")]);
-    list(&mut slate, 1, &[(GameState::Final, "n1")]);
-    slate.rebuild();
-
-    assert!(slate.set_filter(&["basketball/nba"]));
-    assert_eq!(slate.len(), 1);
-    assert_eq!(slate.current().unwrap().id, "n1");
-
-    // The NBA slate empties: fall back to every league rather than blank the
-    // board, and keep the filter — its games may come back.
-    list(&mut slate, 1, &[]);
-    slate.rebuild();
-    assert_eq!(slate.current().unwrap().id, "m1");
-    assert!(slate.filter().is_some());
-
-    list(&mut slate, 1, &[(GameState::Final, "n2")]);
-    slate.rebuild();
-    assert_eq!(slate.current().unwrap().id, "n2");
-}
-
-#[test]
-fn a_filter_naming_every_league_is_no_filter() {
-    let mut slate = Slate::new();
-    slate.set_sources(&sources());
-    assert!(!slate.set_filter(&["baseball/mlb", "basketball/nba", "soccer/usa.1"]));
-    assert!(slate.filter().is_none());
-}
-
-#[test]
-fn the_filter_reaches_the_ninth_source() {
-    // Every registered league at once is nine sources, one past a byte: the
-    // last one's bit is the one a `u8` mask would have lost.
+fn every_registered_league_rotates_at_once() {
+    // Every registered league at once is nine sources, one past a byte; the
+    // ninth's games have to be reachable under their own league.
     let every: Vec<LeagueId> = crate::feed::LEAGUES
         .iter()
         .map(|league| LeagueId::from_slug(league.sport, league.slug))
@@ -1264,23 +1232,23 @@ fn the_filter_reaches_the_ninth_source() {
     list(&mut slate, 8, &[(GameState::Final, "w1")]);
     slate.rebuild();
 
-    assert!(slate.set_filter(&["soccer/fifa.world"]));
-    assert_eq!(slate.filter(), Some(1 << 8));
-    assert_eq!(slate.len(), 1);
-    assert_eq!(slate.current().unwrap().id, "w1");
-
-    // Naming all nine is still "no filter" — the full mask spans the ninth bit.
-    let keys: Vec<&str> = every.iter().map(|league| league.key.as_str()).collect();
-    assert!(slate.set_filter(&keys));
-    assert!(slate.filter().is_none());
+    assert_eq!(slate.len(), 2);
+    slate.advance_league();
+    let entry = slate.current().unwrap();
+    assert_eq!(entry.id, "w1");
+    assert_eq!(entry.source, 8);
+    assert_eq!(entry.league.key.as_str(), "soccer/fifa.world");
 }
 
 #[test]
-fn the_rotation_lock_is_independent_of_the_filter() {
+fn the_rotation_lock_toggles_and_survives_a_source_change() {
     let mut slate = Slate::new();
     slate.set_sources(&sources());
     assert!(slate.toggle_lock());
-    slate.set_filter(&["baseball/mlb"]);
+    assert!(slate.locked());
+    // A new league list drops the games, not the lock: the lock is about
+    // whatever is on screen, and the next refresh decides what that is.
+    slate.set_sources(&sources()[..1]);
     assert!(slate.locked());
     assert!(!slate.toggle_lock());
 }
@@ -2772,9 +2740,9 @@ impl Maxima {
 /// shows up as a failing test rather than as silent RAM.
 #[test]
 fn the_snapshot_stays_inside_its_budget_line() {
-    assert_eq!(ScoreboardSnapshot::SIZE, 3_224);
-    assert_eq!(crate::SnapshotChannel::SIZE, 9_680);
-    assert_eq!(Slate::SIZE, 4_668);
+    assert_eq!(ScoreboardSnapshot::SIZE, 3_208);
+    assert_eq!(crate::SnapshotChannel::SIZE, 9_632);
+    assert_eq!(Slate::SIZE, 4_664);
 }
 
 // =========================================================================

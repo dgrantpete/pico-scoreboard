@@ -398,7 +398,7 @@ the buffer sizing — is host-tested in `scoreboard-model::poll`.
 | One poller owns every league, slates merged into one rotation | **Match** | |
 | `sources_from_config` order: MLB, NBA, football, soccer | **Match** | Now `DeviceConfig::league_sources`, host-tested. The NHL, which MicroPython never had, sits between NBA and football (NHL.md D6). |
 | Live-first rotation; finals before pregames; empty merged slate → `no_games` | **Match** | `Slate`, host-tested. |
-| League filter, its empty-slate fallback, and the index restore | **Match** | `Slate`, host-tested. |
+| League filter, its empty-slate fallback, and the index restore | **Match**, then **Deviation** (2026-11-08) | Matched as ported. The filter is gone now: the menu edits the `sports` configuration instead, so there is nothing to fall back from. The index restore stays, host-tested. See the post-parity register. |
 | Per-source ETag; `304` keeps the cached slate | **Match** | Bench-validated. |
 | One source failing keeps its cached slate; only an all-source failure fails the tick | **Match** | Bench-validated: `baseball/mlb list refresh failed, keeping cached slate`. |
 | `MAX_FAILURES = 5` → `set_error("API ERROR", …)` | **Match** | Bench-validated: five timeouts, then `Mode::Error` on the panel. |
@@ -408,7 +408,7 @@ the buffer sizing — is host-tested in `scoreboard-model::poll`.
 | **No exponential backoff**; the sleep is always `poll_interval_seconds` | **Match** | |
 | Sleep interrupted by a wake | **Match** | An `embassy_sync` channel rather than an `Event`; see `poller`'s module docs. |
 | Skip machine: armed/rejected, one in flight, sticky spinner, `finally` teardown on every path | **Match** | Host-tested. The *sender* was task #12's — at the time of this table the button loop did not exist yet; it does now. |
-| `skip_league` stays within the league filter | **Match** | `Slate::advance_league`, host-tested. |
+| `skip_league` stays within the league filter | **Match**, then **Deviation** (2026-11-08) | No filter to stay within any more; it steps to the next configured league. `Slate::advance_league`, host-tested. |
 | `_poll_current` re-fetches every tick, including static screens | **Match** | Bench-validated: three detail fetches per rotation at `poll_interval=5`, `game_rotation=15`. |
 | Detail `404` skips the slot; the next rotation refreshes the list | **Match** | |
 | `_flash_play`: one slot for every sport, previous id carried in the snapshot | **Match** | `Store::commit_detail`, host-tested. |
@@ -531,7 +531,10 @@ from; splitting them would give the same four fields two owners and make
 the league filter are deliberately session state, which `menu.py` states
 outright, and brightness is `display.brightness`. The OTA dev flag is Phase 4's
 and SPEC §8 already says it becomes a config field, so reserving a flash key for
-it now would be guessing at Phase 4's shape in a storage format.
+it now would be guessing at Phase 4's shape in a storage format. (The league
+half of that changed on 2026-11-08: the menu's selection is the `sports`
+configuration now, see the post-parity register. It still needs no key of its
+own, because it lives in the config document.)
 
 **2. `dev.toml` seeds only when no document exists at all.** The bench seam
 survives storage, with a precedence rule chosen against the tempting one.
@@ -1115,4 +1118,38 @@ content), every font, every color, and the pregame and final designs
 themselves — slots moved by a pixel or two, nothing was redesigned. 132 of
 the 176 golden frames moved (the four `toast_text` frames are gone) and were
 re-blessed after review.
+
+## The league menu edits the configuration, 2026-11-08
+
+**Was:** two states for "which leagues rotate". The persisted `sports`
+section decided what was polled, read once at poller start, so a switch on
+the settings page needed a reboot and the card said so. The device's menu
+(hold B) applied a *session filter* over those sources — `menu.py`'s
+semantics, carried over deliberately and recorded above as deviation 1's
+"no sticky prefs": a bitmask in the `Slate`, never written to flash, reset to
+"everything" at reboot, with an empty-slate fallback and a self-heal for a
+filter whose leagues had all left the configuration. The two could disagree,
+only the filter was reachable from the panel, and only the configuration
+survived a power cycle.
+
+**Is:** one state. The configuration is the truth; the settings page and the
+menu both edit it, and either edit applies within a tick. The menu's rows are
+the nine registered leagues (`feed::LEAGUES`, rotation order) and a checked
+row is a league that is on in the configuration:
+`DeviceConfig::enabled_leagues` seeds the session, `set_enabled_leagues` takes
+what it chose, and the poller's `choose_leagues` writes flash once — the same
+single write a settings save makes — then rebuilds its sources. `PUT
+/api/config` with a `sports` section now ends in `Command::SourcesChanged`,
+and the poller compares the rebuilt list with the one it holds before it
+drops anything, so the page's habit of resending a whole touched section
+cannot blank the slate. The "no configured leagues" refusal is gone: nine
+rows always exist, and opening the menu with nothing on is how a league gets
+turned on from the panel. The session filter, its fallback and its self-heal
+are deleted from `Slate`, which is 4 B smaller; the settings page no longer
+raises the reboot dialog for the Sports card.
+
+**Unchanged:** the rotation lock, which stays session state; every exit of
+the menu applies and there is no cancel; the last checked league cannot be
+unchecked; the menu does not open over an OTA progress screen. The frozen
+MicroPython keeps its session filter and its reboot.
 

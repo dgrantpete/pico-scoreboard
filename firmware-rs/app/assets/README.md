@@ -46,16 +46,28 @@ the frontend actually changed, not that somebody rebuilt it.
 
 | | |
 |---|---|
-| SHA-1 | `80e23203b05a816bf9c980859ab20f7c97f06ff1` |
-| ETag (first 8 bytes) | `80e23203b05a816b` |
-| Size | 56,617 B |
-| Built | 2026-10-15, `bun 1.3.6`, in the same commit as the frontend change it carries |
+| SHA-1 | `4fe0dc2c2918a3aad708f205847b13d808b39581` |
+| ETag (first 8 bytes) | `4fe0dc2c2918a3aa` |
+| Size | 55,681 B |
+| Built | 2026-11-08, `bun 1.3.6`, in the same commit as the frontend change it carries |
 
-The settings page gains the NHL: a switch on the Sports card and an "NHL
-Live" layout picker (A Period ledger / B Rink), each shown only when the
-device's `GET /api/config` carries its key, so a unit on the frozen
-MicroPython never sees either (NHL.md D7). The artifact before it, 56,517 B
-(`610bb724…`), was the status card showing the whole release version
+The Sports card says that league changes apply right away and that the
+board's own menu (hold B) switches the same leagues, and saving the card no
+longer raises the reboot dialog — the poller rebuilds its sources on every
+save of the `sports` section, and the menu writes that section too. The
+artifact before it, 55,650 B (`11d9453e…`, in the same change as this one,
+never committed on its own), lost the Screen Layouts card: the per-screen
+layout pickers and the divider-lines switch went with the firmware's layout
+variants, and the scroll-speed select moved into a new Appearance card
+together with the colour rows that were the Display Colors card. The
+artifact before that, 56,629 B (`f442728d…`, committed 2026-11-07 in 665aa34
+without this table being updated), reworded those colour rows' descriptions
+when every text element started taking its colour from the palette; before
+that, 56,617 B (`80e23203…`), the settings page gained the NHL: a switch on
+the Sports card and an "NHL Live" layout picker (A Period ledger / B Rink),
+each shown only when the device's `GET /api/config` carried its key, so a
+unit on the frozen MicroPython never saw either (NHL.md D7); before that,
+56,517 B (`610bb724…`), the status card showing the whole release version
 (`2026.10.12-03942fd`, with the link profile in its tooltip) instead of its
 first eight characters, which for a date-shaped version was `2026.10.` for
 every build of a month; before that, 56,607 B (`496aa1b6…`), the Advanced

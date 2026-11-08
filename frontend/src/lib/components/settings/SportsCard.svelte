@@ -58,7 +58,8 @@
 		<header class="card-header">
 			<h3 class="card-title">Sports</h3>
 			<p class="card-description">
-				Which leagues rotate on the board. Takes effect after a reboot.
+				Which leagues rotate on the board. Applies right away, and the board's
+				own menu (hold B) switches the same leagues.
 			</p>
 		</header>
 		<div class="card-content">

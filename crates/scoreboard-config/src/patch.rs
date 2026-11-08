@@ -48,6 +48,12 @@ pub struct Applied {
     pub blanking_time: bool,
     /// `logger.set_level`, which `config.py` pushed rather than `api_routes.py`.
     pub log_level: bool,
+    /// The poller's league sources, rebuilt from the `sports` section — the
+    /// one hook `api_routes.py` did not have, which is why a sports change
+    /// took a reboot there. Set when the section was present, like the rest:
+    /// whether the rebuilt list actually differs is the poller's to decide,
+    /// since it is the one holding the list it would be replacing.
+    pub sources: bool,
 }
 
 impl Applied {
@@ -63,7 +69,7 @@ impl Applied {
     }
 
     pub fn any(&self) -> bool {
-        self.ui_colors || self.log_level || self.touches_core1()
+        self.ui_colors || self.log_level || self.sources || self.touches_core1()
     }
 }
 
@@ -298,6 +304,7 @@ impl DeviceConfig {
             if let Some(soccer) = &sports.soccer {
                 set(&mut self.sports.soccer.leagues, &soccer.leagues);
             }
+            applied.sources = true;
         }
 
         if let Some(log) = &patch.log

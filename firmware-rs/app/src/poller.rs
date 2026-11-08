@@ -1,9 +1,9 @@
 //! The poll loop: core 0's one owner of the display state.
 //!
 //! Port of `poller.py`'s `GamePoller.run` / `_tick`. What the rotation *is* —
-//! live-first ordering, the league filter, the stale-clock guard, the
-//! view-identity rule — belongs to `scoreboard-model` and is host-tested there;
-//! what is here is the I/O around it and the order the two are done in.
+//! live-first ordering, the stale-clock guard, the view-identity rule —
+//! belongs to `scoreboard-model` and is host-tested there; what is here is the
+//! I/O around it and the order the two are done in.
 //!
 //! # Who owns the display state, and why it is a task rather than a lock
 //!
@@ -108,7 +108,7 @@ use scoreboard_model::slate::MAX_SOURCES;
 use scoreboard_model::snapshot::{ABBR, GAME_ID, Millis};
 use scoreboard_model::store::Logos;
 use scoreboard_model::text::{Text, set_plain};
-use scoreboard_model::{GameFeed, Mode, Publisher, Slate, Sport, Store, WireFeed};
+use scoreboard_model::{GameFeed, LeagueId, Mode, Publisher, Slate, Sport, Store, WireFeed};
 
 use crate::logos::{CrestDirectory, WARM_GAMES, Warm};
 use crate::net::api_client::{ApiClient, Etag, ResponseBuffer, base_url, url};
@@ -131,6 +131,14 @@ pub enum Command {
     /// `api_routes.py` wrote them into a module the renderers read directly and
     /// they appeared on the next frame; this is what keeps that promise.
     ColorsChanged,
+    /// The `sports` section was written — by `PUT /api/config`, after its
+    /// flash write. The one piece of configuration this loop cannot simply
+    /// re-read every tick like the cadence: installing a league list drops
+    /// every cached game and ETag, so the loop is told when to look, and it
+    /// compares before it acts ([`Poller::reload_sources`]). The device's own
+    /// menu takes the same path without the message, since it already lives
+    /// here.
+    SourcesChanged,
     /// A button press, already debounced and folded into short or long by
     /// [`crate::inputs`]. Where it goes is [`MenuController`]'s decision, not
     /// the input task's — see its module docs.
@@ -297,9 +305,10 @@ struct Poller {
     /// tick syncs before it commits anything — `main.py` ran the sync in the
     /// boot sequence, ahead of the poller, for the same reason.
     next_time_sync: Instant,
-    /// The league-select session. Lives here because it mutates the `Slate` and
-    /// the `Store`, and this task owns both — `menu.py`'s controller had the
-    /// same two references for the same reason.
+    /// The league-select session. Lives here because it stages into the
+    /// `Store`, which this task owns, and because what it chooses ends in a
+    /// configuration write and a sources rebuild ([`Poller::choose_leagues`]),
+    /// which only the owner of the `Slate` can finish.
     menu: MenuController,
     /// When the next update check is due. A local for the same reason
     /// everything else here is one: the check borrows this task's client,
@@ -316,9 +325,11 @@ pub async fn run(
     publisher: Publisher<'static>,
     stack: Stack<'static>,
 ) -> ! {
-    // Read once: changing which leagues are polled takes a reboot, and
-    // `Slate::set_sources` drops every cached game anyway, which is why it is
-    // not a thing to do casually.
+    // The first read of the league list. It is read again on
+    // `Command::SourcesChanged` — a settings save, or the device's own menu —
+    // so a change lands within a tick rather than at the next reboot. What
+    // keeps it from being re-read every tick like the cadence is that
+    // installing it drops every cached game (`Poller::reload_sources`).
     let LeagueSources { sources, dropped } = crate::config::with(DeviceConfig::league_sources);
     let mut poller = Poller {
         store,
@@ -337,25 +348,7 @@ pub async fn run(
         buffer: [0; poll::RESPONSE_BYTES],
     };
     poller.slate.set_sources(&sources);
-
-    if sources.is_empty() {
-        // Not an error: `league_sources` returns nothing when every sport is
-        // switched off, and the panel's answer to that is the same as its
-        // answer to a day with no games.
-        crate::error!("poll: no sports enabled, nothing to poll");
-    }
-    if dropped > 0 {
-        // Only a hand-written config gets here — every league the settings
-        // page offers fits at once — so say which limit it hit.
-        crate::error!(
-            "poll: {} configured leagues past the first {} are not polled",
-            dropped,
-            MAX_SOURCES
-        );
-    }
-    for source in &sources {
-        crate::debug!("poll: source {}", source.key.as_str());
-    }
+    log_sources(&sources, dropped);
 
     loop {
         let cadence = cadence();
@@ -406,6 +399,29 @@ pub async fn run(
         }
 
         poller.sleep_until(deadline).await;
+    }
+}
+
+/// Say what is being polled — at start, and again whenever the configuration
+/// changes it.
+fn log_sources(sources: &[LeagueId], dropped: usize) {
+    if sources.is_empty() {
+        // Not an error: `league_sources` returns nothing when every sport is
+        // switched off, and the panel's answer to that is the same as its
+        // answer to a day with no games.
+        crate::error!("poll: no sports enabled, nothing to poll");
+    }
+    if dropped > 0 {
+        // Only a hand-written config gets here — every league the settings
+        // page offers fits at once — so say which limit it hit.
+        crate::error!(
+            "poll: {} configured leagues past the first {} are not polled",
+            dropped,
+            MAX_SOURCES
+        );
+    }
+    for source in sources {
+        crate::debug!("poll: source {}", source.key.as_str());
     }
 }
 
@@ -890,13 +906,22 @@ impl Poller {
     /// Apply the menu's inactivity timeout. Returns whether the loop should
     /// tick now.
     fn menu_timeout(&mut self, now_ms: Millis) -> bool {
-        let action = self.menu.check_timeout(&mut self.slate, self.store, now_ms);
-        if action == Action::FilterApplied {
-            crate::debug!("menu: input timeout, filter applied");
+        let was_open = self.menu.active();
+        let action = self.menu.check_timeout(self.store, now_ms);
+        if was_open && !self.menu.active() {
+            // The close is staged in the store and reaches the panel only when
+            // published — however the session ended. An exit that changed
+            // nothing used to skip this and leave the menu drawn until the
+            // next tick, up to a poll interval later.
             self.publish();
-            return true;
         }
-        false
+        match action {
+            Action::LeaguesChosen(mask) => {
+                crate::debug!("menu: input timeout, applying");
+                self.choose_leagues(mask) == Wake::Now
+            }
+            _ => false,
+        }
     }
 
     fn apply(&mut self, command: Command) -> Wake {
@@ -909,8 +934,63 @@ impl Poller {
                 }
                 Wake::Later
             }
+            Command::SourcesChanged => self.reload_sources(),
             Command::Press(button, press) => self.route(button, press),
         }
+    }
+
+    /// Re-read the configured leagues and, if the list changed, start over on
+    /// it. Returns whether the loop should tick now.
+    ///
+    /// Compared before anything moves: the settings page resends the whole
+    /// `sports` section whenever one switch in it was touched, and a save that
+    /// leaves the list as it was must not blank the slate, drop the ETags and
+    /// restart the rotation for nothing. When it did change, everything kept
+    /// per source goes with it — the ETags are indexed by source and the
+    /// indices just moved — and `last_rotation_ms = None` is what makes the
+    /// next tick fetch every list unconditionally, exactly as the first tick
+    /// after boot does. The crest pool stays: its keys are league and team,
+    /// not source index.
+    fn reload_sources(&mut self) -> Wake {
+        let LeagueSources { sources, dropped } = crate::config::with(DeviceConfig::league_sources);
+        if sources.as_slice() == self.slate.sources() {
+            return Wake::Later;
+        }
+        self.slate.set_sources(&sources);
+        self.etags = [const { None }; MAX_SOURCES];
+        self.last_rotation_ms = None;
+        // Every record was keyed to a source index that no longer names the
+        // same league; the slate is empty now, so this drops them all.
+        self.warm.prune(&self.slate);
+        crate::debug!("poll: sources changed");
+        log_sources(&sources, dropped);
+        Wake::Now
+    }
+
+    /// Write the menu's choice into the configuration and bring the poller in
+    /// line with it: the settings page's path, entered from the other end.
+    ///
+    /// The order is `put_config`'s. The running configuration changes under
+    /// the lock; the flash write happens outside it (`config::persist` — the
+    /// lock is a critical section and a flash write parks core 1, BACKLOG
+    /// 113); and only then are the sources rebuilt, so the list this loop
+    /// polls is never newer than the one a reboot would read.
+    fn choose_leagues(&mut self, mask: u16) -> Wake {
+        let Ok(changed) = crate::config::with_mut(|config| {
+            Ok::<bool, core::convert::Infallible>(config.set_enabled_leagues(mask))
+        });
+        if !changed {
+            // The menu compared against the mask it opened with; a settings
+            // save that landed mid-session can have written the same thing
+            // first, and its own command rebuilt the sources already.
+            crate::debug!("menu: leagues unchanged, the configuration already agrees");
+            return Wake::Later;
+        }
+        if !crate::config::persist() {
+            crate::error!("menu: the league choice was applied but not saved");
+        }
+        crate::debug!("menu: leagues chosen, mask {:#x}", mask);
+        self.reload_sources()
     }
 
     /// Hand a press to the menu controller and act on what it hands back.
@@ -920,10 +1000,11 @@ impl Poller {
     /// open/closed question is asked in exactly one place.
     fn route(&mut self, button: MenuButton, press: Press) -> Wake {
         let now = Instant::now().as_millis();
-        match self.menu.press(button, press, &mut self.slate, self.store, now) {
+        let enabled = crate::config::with(DeviceConfig::enabled_leagues);
+        match self.menu.press(button, press, enabled, self.store, now) {
             // `Handled` means the controller staged a menu change into the
             // store — open, cursor, toggle, a timeout restamp, or a close that
-            // left the filter unchanged. None of it reaches the panel until
+            // left the leagues as they were. None of it reaches the panel until
             // the store crosses the channel, so publish unconditionally: the
             // one arm that didn't left the menu running invisibly while every
             // button drove it (found on the first hardware unit with buttons).
@@ -952,12 +1033,12 @@ impl Poller {
                 // polling either way and there is nothing for a tick to do.
                 Wake::Later
             }
-            Action::FilterApplied => {
-                crate::debug!("menu: filter applied, {} in rotation", self.slate.len());
+            Action::LeaguesChosen(mask) => {
+                // The close is staged like every other menu change: publish
+                // first, so the menu leaves the panel before the flash write
+                // and the refetch that follow it.
                 self.publish();
-                // `poller.py:353` woke the loop here so the board moves off a
-                // filtered-out game within a tick rather than a poll interval.
-                Wake::Now
+                self.choose_leagues(mask)
             }
         }
     }

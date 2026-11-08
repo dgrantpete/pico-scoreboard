@@ -40,6 +40,7 @@
 #![forbid(unsafe_code)]
 
 use heapless::{String, Vec};
+use scoreboard_model::feed::{LEAGUES, RegisteredLeague};
 use scoreboard_model::slate::MAX_SOURCES;
 use scoreboard_model::{LeagueId, Sport};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -265,6 +266,15 @@ pub struct SportToggle {
     pub enabled: bool,
 }
 
+impl SportToggle {
+    /// Switch on or off, returning whether that was a change.
+    fn set(&mut self, enabled: bool) -> bool {
+        let changed = self.enabled != enabled;
+        self.enabled = enabled;
+        changed
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SportLeagues {
     #[serde(default)]
@@ -282,6 +292,32 @@ impl SportLeagues {
             .iter()
             .map(String::as_str)
             .filter(|slug| !slug.is_empty())
+    }
+
+    fn contains(&self, slug: &str) -> bool {
+        self.leagues.iter().any(|listed| listed == slug)
+    }
+
+    /// Switch one slug on or off the way the settings page edits the list —
+    /// on appends, off removes — returning whether the list changed. Every
+    /// other slug keeps its place, so a league the firmware does not know by
+    /// name rides along untouched.
+    ///
+    /// A list already holding [`MAX_LEAGUES`] slugs cannot take another; only a
+    /// hand-written config gets there, and the answer is "nothing changed"
+    /// rather than a dropped slug elsewhere.
+    fn set(&mut self, slug: &str, enabled: bool) -> bool {
+        if self.contains(slug) == enabled {
+            return false;
+        }
+        if !enabled {
+            self.leagues.retain(|listed| listed != slug);
+            return true;
+        }
+        let Ok(slug) = String::try_from(slug) else {
+            return false;
+        };
+        self.leagues.push(slug).is_ok()
     }
 }
 
@@ -411,9 +447,11 @@ impl DeviceConfig {
     /// NHL.md D6: MLB, NBA, NHL, the football leagues, the soccer leagues.
     ///
     /// `poller.py:223-239`'s `sources_from_config`, here rather than in the
-    /// app so the order is host-tested. The app reads it once, at poller
-    /// start: `api_routes.py` never rebuilt the sources either, so changing
-    /// which leagues are polled has always taken a reboot.
+    /// app so the order is host-tested. The app reads it at poller start and
+    /// again whenever the `sports` section is written ([`Applied::sources`]),
+    /// which is what lets a settings save or the device's league menu take
+    /// effect without a reboot — `api_routes.py` never rebuilt the sources, so
+    /// on MicroPython it always took one.
     pub fn league_sources(&self) -> LeagueSources {
         let mut out = LeagueSources {
             sources: Vec::new(),
@@ -437,6 +475,66 @@ impl DeviceConfig {
             out.push(LeagueId::from_slug(Sport::Soccer, slug));
         }
         out
+    }
+
+    /// Which registered leagues are on, one bit per row of
+    /// [`scoreboard_model::feed::LEAGUES`]: bit `i` is set when league `i`
+    /// is configured — the `enabled` toggle for MLB, NBA and the NHL, or the
+    /// slug's membership of the football or soccer list.
+    ///
+    /// This is the device's league menu's view of the configuration: nine
+    /// checkboxes in registry order, which is also rotation order. The menu
+    /// reads the mask when it opens and hands a new one to
+    /// [`DeviceConfig::set_enabled_leagues`] when it closes, so the two sides of
+    /// the `sports` section — the settings page's switches and the panel's
+    /// checkboxes — edit the same bits and neither can drift from the other.
+    /// Unregistered slugs are not in the mask; they are preserved by `set` and
+    /// still polled, they just have no checkbox.
+    pub fn enabled_leagues(&self) -> u16 {
+        let mut mask = 0u16;
+        for (index, league) in LEAGUES.iter().enumerate() {
+            if self.league_enabled(league) {
+                mask |= 1 << index;
+            }
+        }
+        mask
+    }
+
+    /// Switch every registered league on or off to match `mask`, the inverse
+    /// of [`DeviceConfig::enabled_leagues`]. Returns whether anything changed,
+    /// which is the caller's cue to write flash.
+    ///
+    /// A list slug turning on is appended, as the settings page appends it, so
+    /// a config edited from both ends keeps the page's order; turning off
+    /// removes the one slug and nothing else, so a hand-written league the
+    /// firmware does not know stays listed and polled.
+    pub fn set_enabled_leagues(&mut self, mask: u16) -> bool {
+        let mut changed = false;
+        for (index, league) in LEAGUES.iter().enumerate() {
+            let enabled = mask & (1 << index) != 0;
+            let sports = &mut self.sports;
+            changed |= match league.sport {
+                Sport::Mlb => sports.mlb.set(enabled),
+                Sport::Nba => sports.nba.set(enabled),
+                // One hockey league, one toggle; a second row needs a config
+                // shape first, which `every_registered_league_fits_the_slate`
+                // insists on (NHL.md D5).
+                Sport::Hockey => sports.nhl.set(enabled),
+                Sport::Football => sports.football.set(league.slug, enabled),
+                Sport::Soccer => sports.soccer.set(league.slug, enabled),
+            };
+        }
+        changed
+    }
+
+    fn league_enabled(&self, league: &RegisteredLeague) -> bool {
+        match league.sport {
+            Sport::Mlb => self.sports.mlb.enabled,
+            Sport::Nba => self.sports.nba.enabled,
+            Sport::Hockey => self.sports.nhl.enabled,
+            Sport::Football => self.sports.football.contains(league.slug),
+            Sport::Soccer => self.sports.soccer.contains(league.slug),
+        }
     }
 
     /// The UI colors, as the model carries them.

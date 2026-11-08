@@ -192,10 +192,13 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
     and document the pattern in `button.py` if anything surprising shows up.
 13. **Persistent lock indicator** — the lock/unlock icon toasts landed
     2026-07-09 (transient, centered), but a *persistent* subtle indicator
-    while rotation lock or the league filter (menu-applied, 2026-07-15) is
-    engaged (small corner glyph?) is still open — right now nothing on
-    screen says the board is locked/filtered after the toast fades or the
-    menu closes.
+    while rotation lock is engaged (small corner glyph?) is still open —
+    right now nothing on screen says the board is locked after the toast
+    fades. (The league filter that used to share this item stopped being
+    hidden state on the Rust firmware 2026-11-08: the menu's checked set
+    is the `sports` configuration, readable on the settings page, so it
+    needs no on-panel indicator. The frozen MicroPython's menu-applied
+    filter still has none.)
 35. **Toast-dim golden** — the icon-toast frame dim + fade ladder
     (2026-07-11) has two implementations of `display._dim_frame` (viper on
     device, pure Python in the preview) that must stay mask-identical, and
@@ -325,15 +328,17 @@ the soccer live frame.
     not yet observed — backend warns and degrades to in-play; extra-time
     periods 3/4 already render as "ET" with 105/120 stoppage bases).
 
-33. **Sports config hot-reload** — the Sports settings card landed
-    2026-07-09 but league changes are reboot-required (the poller builds
-    its `LeagueSource` list once at startup; the frontend raises the
-    existing reboot dialog). If reboots annoy: rebuild sources inside
-    `GamePoller._refresh_lists` when the config-derived key list changes
-    (reset per-source caches/etags, prune vanished keys from the league
-    filter — `_build_rotation` already self-heals a fully-vanished filter —
-    and rebuild rotation; MenuController shares the boot-static `sources`
-    list, so a rebuild must reach it too).
+33. **Sports config hot-reload** — landed on the Rust firmware 2026-11-08:
+    a `PUT /api/config` with a `sports` section sends the poller
+    `Command::SourcesChanged`, which rebuilds the sources only when the
+    list actually differs (ETags cleared, rotation restarted from an
+    unconditional list refresh), and the device's menu writes the same
+    section, so there is no separate league filter left to prune or
+    self-heal. The settings page no longer raises the reboot dialog for
+    the Sports card. What remains is the frozen MicroPython, which still
+    builds its `LeagueSource` list once at startup and keeps its session
+    filter; it is not getting this (CLAUDE.md), so the gift fleet's reboot
+    stays until the last unit migrates.
 
 34. **Soccer + UX on-hardware shakedown** — first live match day with a
     real device: the extrapolated clock across 30 s polls (drift should

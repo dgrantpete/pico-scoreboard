@@ -369,15 +369,140 @@ fn switching_the_nhl_off_sticks_across_a_reboot() {
         .unwrap();
     assert!(!config.sports.nhl.enabled);
     assert!(config.sports.mlb.enabled, "the patch named only the NHL");
-    // Sources are read once at poller start, so there is nothing to apply
-    // live; the settings page prompts for the reboot.
-    assert!(!applied.any());
+    // The poller rebuilds its sources from the running configuration, so the
+    // change is on the panel within a tick — and it has to survive the reboot
+    // too, which is the rest of this test.
+    assert!(applied.sources);
 
     // The stored `false` is a present key, so the default never overrides it.
     let (reloaded, complaint) = DeviceConfig::from_json(json(&config).as_bytes());
     assert_eq!(complaint, None);
     assert!(!reloaded.sports.nhl.enabled);
     assert_eq!(source_keys(&reloaded), ["baseball/mlb"]);
+}
+
+/// The bit a registered league occupies in the menu's mask.
+fn bit(slug: &str) -> u16 {
+    let index = scoreboard_model::feed::LEAGUES
+        .iter()
+        .position(|league| league.slug == slug)
+        .expect("a registered slug");
+    1 << index
+}
+
+#[test]
+fn the_league_mask_is_the_registry_in_order_and_round_trips() {
+    // The defaults: MLB and the NHL on, everything else off.
+    let mut config = DeviceConfig::new();
+    assert_eq!(config.enabled_leagues(), bit("mlb") | bit("nhl"));
+
+    for mask in [0, 0b1_1111_1111, bit("nba") | bit("eng.1"), bit("nfl")] {
+        assert!(config.set_enabled_leagues(mask), "{mask:#011b} differs");
+        assert_eq!(config.enabled_leagues(), mask);
+        assert!(
+            !config.set_enabled_leagues(mask),
+            "setting the mask that is already in effect changes nothing"
+        );
+        // And the mask agrees with the poll sources it stands for.
+        assert_eq!(
+            config.league_sources().sources.len(),
+            mask.count_ones() as usize
+        );
+    }
+}
+
+#[test]
+fn the_mask_appends_and_removes_list_slugs_the_way_the_settings_page_does() {
+    let mut config = DeviceConfig::new();
+    config.sports.soccer.leagues.clear();
+    config
+        .sports
+        .soccer
+        .leagues
+        .push(heapless::String::try_from("eng.1").unwrap())
+        .unwrap();
+
+    let mask = config.enabled_leagues();
+    assert!(config.set_enabled_leagues(mask | bit("usa.1") | bit("nfl")));
+    let soccer: std::vec::Vec<&str> = config.sports.soccer.active().collect();
+    assert_eq!(soccer, ["eng.1", "usa.1"], "appended, not re-sorted");
+    let football: std::vec::Vec<&str> = config.sports.football.active().collect();
+    assert_eq!(football, ["nfl"]);
+
+    assert!(config.set_enabled_leagues(bit("usa.1") | bit("nfl")));
+    let soccer: std::vec::Vec<&str> = config.sports.soccer.active().collect();
+    assert_eq!(soccer, ["usa.1"]);
+    assert!(!config.sports.mlb.enabled && !config.sports.nhl.enabled);
+}
+
+#[test]
+fn a_slug_the_firmware_does_not_know_has_no_bit_and_is_left_alone() {
+    // A hand-written config naming leagues the registry lacks: they poll, so
+    // the menu must not be able to lose them, and they cannot be shown as a
+    // checkbox because the menu's rows are the registry.
+    let mut config = DeviceConfig::new();
+    for (sport, slug) in [
+        (&mut config.sports.football, "ufl"),
+        (&mut config.sports.soccer, "esp.1"),
+    ] {
+        sport
+            .leagues
+            .push(heapless::String::try_from(slug).unwrap())
+            .unwrap();
+    }
+    assert_eq!(config.enabled_leagues(), bit("mlb") | bit("nhl"));
+
+    assert!(config.set_enabled_leagues(0));
+    let football: std::vec::Vec<&str> = config.sports.football.active().collect();
+    let soccer: std::vec::Vec<&str> = config.sports.soccer.active().collect();
+    assert_eq!(football, ["ufl"]);
+    assert_eq!(soccer, ["esp.1"]);
+    assert_eq!(source_keys(&config), ["football/ufl", "soccer/esp.1"]);
+
+    assert!(config.set_enabled_leagues(bit("nfl") | bit("mex.1")));
+    assert_eq!(
+        source_keys(&config),
+        [
+            "football/ufl",
+            "football/nfl",
+            "soccer/esp.1",
+            "soccer/mex.1"
+        ],
+        "the registered slugs append after what was already there"
+    );
+}
+
+#[test]
+fn the_ninth_league_is_the_ninth_bit() {
+    // One past a byte: the bit a `u8` mask would have lost.
+    let mut config = DeviceConfig::new();
+    assert_eq!(bit("fifa.world"), 1 << 8);
+    assert!(config.set_enabled_leagues(1 << 8));
+    assert_eq!(config.enabled_leagues(), 1 << 8);
+    assert_eq!(source_keys(&config), ["soccer/fifa.world"]);
+}
+
+#[test]
+fn a_patch_naming_the_sports_section_asks_for_a_sources_rebuild() {
+    let mut config = DeviceConfig::new();
+    let applied = config
+        .apply(&patch(r#"{"sports":{"soccer":{"leagues":["usa.1"]}}}"#))
+        .unwrap();
+    assert!(applied.sources);
+    assert!(applied.any());
+
+    // A set of hooks, not a diff: the page resends a section it touched even
+    // when the value ended where it started, and the poller is the one that
+    // can tell whether the list it holds actually changed.
+    let applied = config
+        .apply(&patch(r#"{"sports":{"mlb":{"enabled":true}}}"#))
+        .unwrap();
+    assert!(applied.sources);
+
+    let applied = config
+        .apply(&patch(r#"{"colors":{"accent":{"r":1,"g":2,"b":3}}}"#))
+        .unwrap();
+    assert!(!applied.sources);
 }
 
 #[test]
