@@ -788,7 +788,15 @@ bench), then `stable`. **Deploy the backend before any firmware channel**: a dev
 asking `ext=2` of an older backend draws a bare court. Watch the friend's
 unit's first NBA rotation in the Fly logs.
 
-### 6.9 Docs
+### 6.9 Docs — in progress 2026-11-08
+Done with 6.2: DESIGN.md's NBA summary lane. Done after 6.5: SPEC.md (§3's
+extension level, §4's and §11's measured snapshot and store, §6's Rust-only
+screens), BUDGET.md (the handoff and store rows; the flash row follows the
+release build), PARITY.md (the NBA screens leave the parity set), BACKLOG
+(41 reworded to the bench shakedown, 103 and 104 recounted, 116's first
+step, new 117 injury line, 118 shared extractor helpers, 119 the corpus's
+missing states). ARCHITECTURE.md is gitignored and updated outside the
+repo.
 SPEC.md (§6's screens list, §4/§11's measured snapshot), BUDGET.md (§5's
 numbers), `scoreboard-espn/DESIGN.md` (the NBA summary lane beside
 hockey's), PARITY.md (the NBA live and final screens leave the parity set:

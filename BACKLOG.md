@@ -412,7 +412,7 @@ the soccer live frame.
       display.py's run_display_thread, and the mock rig notes (the mock
       lives in the session scratchpad, nothing in-repo).
 
-## NBA (end-to-end wiring landed 2026-07-12; validation remaining)
+## NBA (wiring landed 2026-07-12; the court screens 2026-11-08 — `firmware-rs/NBA.md`)
 
 Landed 2026-07-12, both slices: inbound (`backend/src/nba/` types +
 transforms on the `status.type.state` DU, `LivePhase` from
@@ -432,17 +432,15 @@ settings Sports card). Same change unified the outbound enum style
 `Record`/`GameListEntry`/`GameState`/`parse_start_time` to
 `shared/`/`espn/`. NBA logos were already served by the generic route.
 
-41. **NBA corpus is playoff-only — validate on live games next
-    season** — the April 2026 corpus never showed overtime (max
-    `status.period` is 4). Types tolerate period ≥ 5 and growing line
-    scores (synthetic Rust test + `nba-overtime`/`nba-final-ot`
-    preview scenarios), and an unknown live description warns and
-    degrades to in-play. When games return (October): re-run
-    `schema`/`spec`/`validate --league nba`, regenerate fixtures,
-    check whether ESPN uses an OT-specific description that
-    `parse_live_phase` should map, and give the new screens the same
-    on-hardware shakedown soccer got (item 34) — rotation with other
-    sports, play-flash cadence, clock staleness across 30 s polls.
+41. **NBA court screens — the on-hardware shakedown.** The corpus
+    (twenty-one real fixtures, overtime included — the playoff-only April
+    corpus is gone), the summary extractor, the `ext=2` wire, the model and
+    both screens landed 2026-11-08 (NBA.md phases 6.0–6.5). What the bench
+    still owes the release, as soccer's item 34 did: rotation with the other
+    sports, the flash cadence under the §3.7 filter (stoppages only), the
+    news window and the mark's blink on a live game, the ledger through a
+    quarter change, the clock across 30 s polls. Delete when the bench has
+    watched a live NBA night on the stable build.
 
 ## Football (end-to-end wiring landed 2026-07-18; live validation remaining)
 
@@ -1187,16 +1185,20 @@ while designing hockey and kept out of the NHL change (D8). Each is its own
 reviewed change.
 
 103. **Snapshot views as a sum (NHL.md C3).** Every sport's view lives in
-    the snapshot side by side, though only one is ever shown: 3,224 B a
-    snapshot since hockey added 400 B, and four copies resident (three
-    channel slots and the `Store`). An enum would make the `Mode`/view
-    pairing unrepresentable when wrong, and save the difference between the
-    sum and the largest view, four times over. Measure first; take it only if
-    RAM wants it.
+    the snapshot side by side, though only one is ever shown: 3,848 B a
+    snapshot since the NBA's court screens added 640 B on 2026-11-08 (3,224
+    after hockey's 400), and four copies resident (three channel slots and
+    the `Store`). The NBA live view is the largest at 496 B, the 128-make
+    ring 385 B of it. An enum would make the `Mode`/view pairing
+    unrepresentable when wrong, and save the difference between the sum and
+    the largest view, four times over. Measure first; take it only if RAM
+    wants it.
 104. **Line-score OT headers for NBA and football (NHL.md C4).** Their finals
     label overtime columns "5", "6". Hockey's header row already says "OT"
     and "SO" (`build_hockey_linescore`); NBA and football could adopt "OT"
-    for their first overtime.
+    for their first overtime. Since 2026-11-08 the NBA's rows show only as
+    the leaders final's fallback (a final ESPN posted without leaders), so
+    football's final is the one a viewer sees.
 105. **Shootout markers for soccer penalties (NHL.md C5).** Soccer shows only
     "PENS". Hockey's shootout marker row is sport-neutral and could carry the
     kick-by-kick sequence, which needs the penalty sequence from the soccer
@@ -1363,4 +1365,26 @@ reviewed change.
     the golden frames stay byte-identical; then delete `compile_layout.py`,
     the Lua script, the `.aseprite` files, the dead MLB slices and the
     MicroPython output. `compile_fonts.py` is a different job and stays.
-    Sequence after 115.
+    Sequence after 115. First step taken 2026-11-08: the NBA court is
+    procedural (`crates/scoreboard-render/src/court.rs`, NBA.md D14), pinned
+    byte for byte to the mockup; the rink's rewrite takes its shape.
+117. **The NBA pregame's injury line (NBA.md D10, deferred).** The mockups
+    showed "OUT: GILBERT, NEWELL, LANDALE (ATL) DEMIN (BKN)" as the info
+    cycle's second line; it needs the 122 KB pregame summary per game per
+    cache window (`injuries[]`), which the backend does not fetch for
+    pregames. Today the second line is the scoreboard's note and, in the
+    playoffs, the series. Decide whether the line is worth the fetch once
+    the court screens have run a while.
+118. **Extractor helpers shared by hockey and the NBA (NBA.md C7, C10;
+    DESIGN.md ruling 15).** `hockey.rs` and `nba.rs` each carry a per-team
+    `Pool`, a `side_of` lookup, a `code` parser and an "eligible play"
+    filter (goals and penalties; stoppages and news). Promote them into
+    `common` now that the second lane exists; the backend's quirk → message
+    match grows with every lane and could become a method on `Quirk`.
+119. **NBA corpus — the states the first night did not have (NBA.md §6.0).**
+    `double_overtime` (a live period-6 body), `final_no_leaders` (0 of 372
+    post rows lacked them), a live playoff body (`series` and a game-number
+    headline), a live NBA Cup body for the pregame's second line. Pull them
+    from the collector's first fortnight of NBA summaries (from 2026-11-08)
+    by `backend/testdata/nba/PROVENANCE.md`'s method, and re-check §2's
+    counts against it.
