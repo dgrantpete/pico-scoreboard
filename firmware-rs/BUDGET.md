@@ -20,8 +20,8 @@ no heap to absorb a mistake.
 | Item | Bytes | Status | Notes |
 |---|---:|---|---|
 | HUB75 BCM framebuffers ×2 + driver statics | 65,609 | **MEASURED** | `crates/hub75`. 2 × 32,768 B bitplane buffers + 64 B timing stream + 8 B DMA pointer words + 1 B construction guard. See the breakdown below. |
-| `Hub75Display` RGB565 frame buffer | 16,384 | **MEASURED** | 128 × 64 × 2 B. App-owned, not a driver static — the driver never allocates the drawing surface. Costs 16,385 B as linked (`ConstStaticCell` appends a 1 B taken flag). |
-| Gamma LUT + fused pack tables | — | **MEASURED, inside the core-1 line** | The 256 B `[u8; 256]` and task #20's 1 KiB `FusedTables` both live **inside `Hub75Driver`**, not in statics of their own, so they land in whichever arena owns the driver. That is the core-1 render-loop arena below, and this row is a pointer rather than a number so they are not counted twice. |
+| `Hub75Display` RGB888 frame buffer | 24,576 | **MEASURED** | 128 × 64 × 3 B since BACKLOG 115 (2026-11-08); it was 16,384 B at RGB565. App-owned, not a driver static — the driver never allocates the drawing surface. Costs 24,577 B as linked (`ConstStaticCell` appends a 1 B taken flag). |
+| Fused pack table | — | **MEASURED, inside the core-1 line** | The RGB888 pack's 1 KiB `FusedTables` (BACKLOG 115: one 256-entry `u32` table, the RGB565 pack's three tables' size) lives **inside `Hub75Driver`**, not in a static of its own, so it lands in whichever arena owns the driver. That is the core-1 render-loop arena below, and this row is a pointer rather than a number so it is not counted twice. The 256 B gamma LUT the driver kept beside the RGB565 tables is gone: the table is all the pack reads. |
 | Snapshot handoff — `SnapshotChannel` | 11,552 | **MEASURED** | `crates/scoreboard-model`. Three `ScoreboardSnapshot` slots of 3,848 B + 2 B of index + padding. The NBA's court screens (NBA.md phases 6.4–6.5, 2026-11-08) added 640 B a slot against §5's 650 B estimate: `NbaLiveView` 496 B — the 128-make ring is 385 B of it, the caption 42 — and `NbaFinalView` 182 B; 9,632 B with 3,208 B slots before that. 9,680 B with 3,224 B slots until earlier the same day, when the soccer view's spelled-out period line (16 B, read only by the deleted soccer-B layout) went with the layout variants. Hockey (NHL.md phases 6.4–6.5, 2026-10-14) added 400 B a slot against §5's 350 B estimate: `HockeyLiveView` 208 B, `HockeyFinalView` 170 B, and 12 B of pregame — the W-L-OTL record's third column and an info line widened from 48 to 56 B for the playoffs' round-and-series line. 2,824 B before that, and 2,848 B until 2026-10-01 (the text toast was deleted, the soccer event label widened). Three, not two — see the correction below. |
 | `Store` (core-0 authoritative state) | 3,928 | **MEASURED** | `scoreboard-app`'s `STORE` (`arm-none-eabi-nm -S`, 2026-11-08, the NBA court screens; 3,304 B before them). One more snapshot plus the startup flag, the soccer stale-clock guard and the goal lamp's 40 B of per-side high-water marks (NHL.md §3.7), plus `StaticCell`'s 1 B taken flag and padding. 2,864 B before hockey. A `static` rather than a task local because it is *lent* to `net::bringup` for the boot screen and then moves to the poller — see the state-sharing note below. |
 | Poller task arena | 16,224 | **MEASURED** | `scoreboard-app`, tasks #11 and #18. The `Slate` (4,664 B — 160 entries × (source, state, 20-byte game id), the rotation order and 9 league descriptors, sized for a college-football Saturday alongside a full MLB slate; 4,668 B until the session league filter left it on 2026-11-08, when the menu started editing the configuration instead), the 4,096 B receive buffer, nine per-source ETags, the crest directory's 32 keys and LRU, the warm index's 16 game records, and the futures of a whole tick: a detail fetch with two crest fetches nested inside it, each carrying its own 256 B URL. It grew 208 B for a ninth source on 2026-10-15 — a league descriptor, an ETag slot, a wider filter mask and the start-up source list — so that with the NHL on, every registered league still fits at once (NHL.md D5–D6); 16,024 B before that. It gave 8 B back on 2026-11-08, when the session filter left the `Slate` and the menu controller stopped carrying a source count (its rows are the registry now); 16,232 B before that. It grew 2,184 B for the 32-slot pool — 1,536 B of it is the directory's key array, which is 32 × `Option<CrestKey>` at 41 bytes plus a `usize` length. |
@@ -34,7 +34,7 @@ no heap to absorb a mistake.
 | HTTP server — sockets, request buffers, task arenas | 100,612 | **MEASURED** | `scoreboard-app`, task #10, **re-measured at four connections (108bc85, drill day)**. 88,320 B of task arena — 22,080 each for four connections (1,536 B TCP receive + 2,920 B TCP send + 4,096 B request buffer, and picoserve's request-handling future around them) — plus 12,292 B of pooled response scratch, one 3,072 B slot per connection. It was 50,114 B at two connections. **The arena figure is dominated by the future, not the buffers** — see the multiplier note below before adding a route, and the four-connections note for why the count is what it is. |
 | Receive/scratch buffers (OTA chunk) | 0 | **MEASURED** | The last of SPEC §11's 40,960 B guess, and it turned out to be nothing. An update is a *phase of the poll loop*, so the poller's 4,096 B receive buffer is idle for the whole download and splits into a 2,048 B header half and a 2,048 B chunk half; the `BlockingFirmwareUpdater`'s own aligned buffer is **one byte**, on the stack. See "The download costs zero RAM" below. |
 | Glyph/font tables + compiled sprites | 0 | **MEASURED** | `crates/scoreboard-render`. **10,493 B of flash, 0 B of RAM** — read out of the crate's own object code, not asserted. 9,538 B before hockey's rink and star (2026-10-15). Breakdown and the command below. |
-| Core-1 render-loop task arena | 3,448 | **MEASURED** | `scoreboard-app`. The loop's `LoopState` — frame rail, prepared view, skip memo, probe — plus the display and everything else held across the frame's await. It lives in the **task arena, not on the core-1 stack**: an embassy task's future is a static. See the correction below. The crest pool it now owns is a `static` it borrows, so it is the line above and not this one. It was 1,384 B until task #20's repack: the driver travels in this arena, so `hub75::packing::FusedTables` (1 KiB) and its alignment came here rather than to a `static` of their own. |
+| Core-1 render-loop task arena | 3,016 | **MEASURED** | `scoreboard-app`. The loop's `LoopState` — frame rail, prepared view, skip memo, probe — plus the display and everything else held across the frame's await. It lives in the **task arena, not on the core-1 stack**: an embassy task's future is a static. See the correction below. The crest pool it now owns is a `static` it borrows, so it is the line above and not this one. It was 1,384 B until task #20's repack: the driver travels in this arena, so `hub75::packing::FusedTables` (1 KiB) and its alignment came here rather than to a `static` of their own. It read 3,528 B at 2a34275 and BACKLOG 115 took 512 B out (2026-11-08): the RGB888 table is the same 1 KiB of `u32` rather than `u64` entries, and the gamma LUT left the driver. |
 | Input, brightness and watchdog task arenas | 888 | **MEASURED** | `scoreboard-app`, task #12. `supervise::watchdog` 360 B, `inputs::run` 264 B, `brightness::auto_brightness` 264 B. All three are small because the state that could have been large is not theirs: the button fold is two 24 B structs, the brightness chain is three floats, and the watchdog holds a counter. The 3 KB storage buffer is a **stack** local of a plain `fn`, deliberately — see the note below. |
 | Crash breadcrumb — served copy | 228 | **MEASURED** | `supervise::PREVIOUS`, the decoded copy `/api/logs/previous` serves so that opening the logs page does not park core 1 to read flash. **The 240 B RAM cell is no longer in this budget**: since drill day it lives at `scoreboard_layout::BREADCRUMB_BASE`, in the top 256 B that no profile's linker map contains — reserved, not allocated. See the caveat at the end of this file. |
 | Storage map | ~32 | **MEASURED** | `sequential-storage`'s `MapStorage` over an `Uncached` cache: a flash range, a `PhantomData`, and embassy-rp's `Flash` (which is itself a `PhantomData` plus an optional DMA channel). Under the 512 B reporting floor. The 3 KB scratch every operation needs is a stack local. |
@@ -42,14 +42,24 @@ no heap to absorb a mistake.
 | Core-0 stack | — | **MEASURED (not a fixed line)** | With flip-link the stack is the whole remainder below the statics: **186,304 B** today (`_stack_start = 0x2002_d7c0`), growing *down*, guarded by MSPLIM at the bottom of RAM. It is not a number to budget; it is what the rest of the table does not spend, which is why it shrinks every time a static grows — it read 266,536 B before drill day added 50 KB of HTTP connections. The last published high-water is **25,816 B**, taken against the 266,536 B stack (9.7 % then, 13.9 % of what is left now) over a run that included a config save, whose 3 KB buffer is a stack local. **Not re-taken since drill day**; the depth should not have moved, but the denominator did. |
 | Core-1 stack | 8,192 | **MEASURED** | Sized 8 KB by `scoreboard-app`; **high-water 3,348 B (41 %)** over a run of real backend data — up from 2,480 B under the demo, because the demo never drove the pregame screen. The setup screen, which is the only QR encoder caller and therefore the deepest frame, is still not among them. Guarded by MSPLIM at its bottom. See the core-1 notes below. |
 | Ring log | 28,812 | **MEASURED** | `crates/scoreboard-log`, task #10. 200 slots × 144 B — a `u32` sequence, a `u32` timestamp, a level byte and a 128-byte bounded message, padded. SPEC §11's ~8 KB guess assumed a shorter message; 128 B was chosen against the measured distribution of the 87 log call sites in `firmware/src` (median 43 B, max 116 B), where 64 B would have truncated real lines. It is `.bss`, not `.data` — see the note below. |
-| Misc statics | ~2,900 | **MEASURED** | embassy-rp's GPIO/DMA/PIO wakers, the time driver, the critical-section lock, the clock cache, the PAC singleton flags, task #10's small publishers (`net::hosts`, `net::status`, the config cell, the stack-watermark atomics), the live display settings, and — new with task #20 — `hub75::packing::pack_rgb565`'s 562 B, which is code that lives in `.data` because the pack loop runs from RAM rather than XIP. |
-| **Measured total** | **337,712** | | **329.8 KiB** — read out of a real ELF, not summed from this table; see the breakdown below |
+| Misc statics | ~2,900 | **MEASURED** | embassy-rp's GPIO/DMA/PIO wakers, the time driver, the critical-section lock, the clock cache, the PAC singleton flags, task #10's small publishers (`net::hosts`, `net::status`, the config cell, the stack-watermark atomics), the live display settings, and `hub75::packing::pack_rgb888`'s 438 B, which is code that lives in `.data` because the pack loop runs from RAM rather than XIP (task #20's RGB565 loop was 562 B until BACKLOG 115 replaced it). |
+| **Measured total** | **314,196** | | **306.8 KiB** — read out of a real ELF, not summed from this table; see the breakdown below |
 
-**Headroom: 36.6 %** (194,768 B free of 532,480 B). Against the 524,032 B the
-linker actually declares — see the caveat below — it is 35.6 %.
+**Headroom: 41.0 %** (218,284 B free of 532,480 B), measured 2026-11-08 from a
+fresh `--locked` boot-integrated build with BACKLOG 115's RGB888 surface in:
+`.data` 14,156 + `.bss` 295,944 + `.uninit` 4,096. Against the 524,032 B the
+linker actually declares — see the caveat below — it is 40.0 %. Statics are
+5,292 B under the 319,488 B ceiling. The same build one commit earlier
+(2a34275, RGB565) measured 306,636 B, 42.4 %: the surface's +8,192 B, less 512 B
+of core-1 arena and 120 B of `.data` the new pack gave back.
 
-**That is under the ≥ 40 % target, and it is the first time this file has had to
-say so.** Statics alone are 18,224 B past the 319,488 B ceiling. The cause is
+That figure is higher than the 36.6 % this line read from drill day until
+today, which was never re-taken after the flat-dispatch router took 44 KB out of
+the HTTP arena (the breakdown below, 2026-08-17: 304,944 B, 42.7 %). The
+paragraphs that follow are the drill-day reading, kept as it was written.
+
+**On drill day it was under the ≥ 40 % target, and it was the first time this
+file had to say so.** Statics alone were 18,224 B past the 319,488 B ceiling. The cause is
 one line and it is not a surprise: the HTTP server went from two connections to
 four on drill day and grew 50,498 B doing it, because picoserve's arena is
 mostly *future* and each connection instantiates the whole router. That is
@@ -99,7 +109,7 @@ predicted. That is the `u16` length prefix on every bounded string doing its
 job: the layout is identical on the host and on `thumbv8m.main-none-eabihf`, so
 `scoreboard-model`'s own budget test is a real check and not a coincidence.
 
-**Measured today: 337,712 B** (329.8 KiB, 36.6 % headroom) — the whole of
+**Measured on drill day: 337,712 B** (329.8 KiB, 36.6 % headroom) — the whole of
 `scoreboard-app`, **`link-boot-integrated`**, which is now the binary of record
 because it is the profile the production unit runs: `.data` 11,296 + `.bss`
 322,320 + `.uninit` 4,096. The `.uninit` is dev-only defmt/RTT and leaves with
@@ -249,6 +259,25 @@ sport's three layouts. `.data` is `CHANNEL`'s three slots growing 640 B
 each. The image is 75 % of the active partition; **390 KB of headroom**
 remain. The two ELFs are the release worktree builds; reproduce as the
 hockey section above says.
+
+### What the RGB888 surface cost in flash (BACKLOG 115)
+
+Measured 2026-11-08 as a clean before/after: 2a34275 against the RGB888
+change on top of it, both built boot-integrated with
+`SCOREBOARD_FW_VERSION=measure`.
+
+| Section | Before | After | Δ |
+|---|---:|---:|---:|
+| `.text` | 788,624 | 787,320 | −1,304 |
+| `.rodata` | 378,376 | 378,632 | +256 |
+| `.data` | 14,276 | 14,156 | −120 |
+| Raw image | 1,181,580 | 1,180,404 | **−1,176** |
+
+Smaller, not larger. The RGB565 pack and its table builder are gone, the
+RGB888 pack's loop is shorter (438 B against 562, which is also the `.data`
+delta), and the per-pixel 565 packing at every colour site went with
+`rgb565()`. `.rodata` is the sprite palettes widening to eight-bit colours
+(+318 B, "The render tables are flash" below).
 
 ### Correction to SPEC §4 — the handoff needs three buffers, not two
 
@@ -425,10 +454,13 @@ visible in the symbol table:
 | `unscii_8` heap + index | 2,360 | `.rodata` |
 | `spleen_5x8` heap + index | 1,410 | `.rodata` |
 | The three font descriptors | 60 | `.rodata` |
-| 12 compiled sprites (pixels + palettes) | 2,775 | `.rodata` |
-| **Total** | **10,493** | **flash, 0 B RAM** |
+| 12 compiled sprites (pixels + palettes) | 3,093 | `.rodata` |
+| **Total** | **10,811** | **flash, 0 B RAM** |
 
-Re-measured 2026-10-15 for NHL.md §5. Hockey's two sprites are 955 B of it:
+Re-measured 2026-11-08 for BACKLOG 115: the palettes went from RGB565 `u16`
+entries to the art's eight-bit colours as `Option<Rgb888>` (8 B an entry, `None`
+being the see-through index), 106 → 424 B across the twelve sprites; nothing
+else moved. Re-measured 2026-10-15 for NHL.md §5. Hockey's two sprites are 955 B of it:
 the rink, a 124×15 four-bit sheet with an 8-color palette (930 + 16 B), and
 the 5×5 star (5 + 4 B). That is inside §5's "< 1 KB", and it is the whole
 difference from the 9,538 B this table read before. The descriptors were
@@ -607,6 +639,26 @@ not depend on what was drawn. That is **~76 % of a drawn frame**, and it is
 > `show` is no longer ~76 % of a drawn frame, and the headroom question the
 > 60 FPS move opened is closed with ~13 ms of margin per frame.
 
+> **BACKLOG 115 (2026-11-08) changed both halves of a drawn frame, and neither
+> has been measured on device.** `show` is now `load_rgb888`: the RGB565 pack is
+> deleted and the RGB888 one, a scalar per-plane pluck until then, has a fused
+> table of its own (`hub75::packing::FusedTables`, 1 KiB, interleaved plane
+> nibbles). On thumbv8m its loop is **47.5 instructions per pixel pair against
+> the RGB565 pack's 78.5** compiled alone (`benches/pack.rs` has the asm
+> table), and 51 against 74.5 as linked into the app, so if cycles track
+> instructions as they did for task #20 the 2,241 µs `show` should land near
+> 1.5 ms; it reads six input bytes a pair where the RGB565 pack read four,
+> which is the reason to measure rather than assume. The render side writes
+> three bytes a pixel instead of two and the toast's dim walks 6,144 words
+> instead of 4,096; on the host the corpus renders **28 % slower on average**
+> (5.37 → 6.85 µs a frame), the dimmed frames ~50 % (6.40 → 9.59 µs for
+> `toast_lock` at t0), the live screens 10–50 %. Applied to the worst render
+> measured on device (2.18 ms, final + spinner toast) that is ~3.3 ms, so a
+> drawn frame should cost within about half a millisecond of what it did — a
+> render ~1.1 ms slower, a pack ~0.7 ms faster — and stays far inside the
+> 16.7 ms budget. The first bench session should take the frame probe's
+> numbers.
+
 `rebuild` (the prepared view, on commit frames only) is 14–16 µs for everything
 except the 255-byte play line, where measuring 255 glyphs to size the flash
 window takes **116 µs** — still a rounding error, and it happens once per
@@ -650,6 +702,10 @@ measures: 337,712 B at 108bc85 — the image the production unit runs — and
 (**42.7 % headroom**), with core-0 stack below them (flip-link keeps
 `_stack_start` at the statics' floor).
 
+Three rows were re-measured on 2026-11-08 for BACKLOG 115 and say so —
+`FRAME`, `render_loop::POOL` and the pack loop; the rest are 2026-08-17's, and
+the headline total for today is the one at the top of this file.
+
 The previous version of this table was the task-#10 snapshot — standalone
 profile, two HTTP connections, the demo feed still in it, and no poller, crest
 pool, mDNS or OTA path. It is not annotated here because almost every row moved;
@@ -661,7 +717,7 @@ what follows replaces it.
 | `hub75::driver::FRAMEBUFFERS` | 65,536 | hub75 — the two BCM bitplane buffers |
 | `scoreboard_app::CRESTS` | 36,865 | the 32-slot crest pool, owned outright by core 1 |
 | `ringlog::RING` | 28,812 | the deployed log: 200 × 144 B slots. `.bss`, deliberately — see below |
-| `scoreboard_app::FRAME` | 16,385 | app — RGB565 drawing surface (16,384 + 1 B `ConstStaticCell` flag) |
+| `scoreboard_app::FRAME` | 24,577 | app — RGB888 drawing surface (24,576 + 1 B `ConstStaticCell` flag); 16,385 B at RGB565, before BACKLOG 115 |
 | `poller::run::POOL` | 16,096 | the poll loop's arena: `Slate`, the 4,096 B receive buffer, the crest directory, the warm index, and a whole tick's futures |
 | `net::CYW43_STATE` | 12,696 | cyw43's ioctl state and its 4-deep packet channel in each direction |
 | `http::scratch::SLOTS` | 12,292 | four 3,072 B response buffers and their claim flags, pooled rather than held in handler futures |
@@ -670,7 +726,7 @@ what follows replaces it.
 | `net::STACK_RESOURCES` | 5,336 | `StackResources<10>` — smoltcp's `SocketSet` storage |
 | `net::cyw43_runner::POOL` | 5,232 | the radio runner's arena — its SPI scratch dominates |
 | `defmt_rtt::BUFFER` | 4,096 | defmt ring, `.uninit`. **Dev-only** |
-| `display_core1::render_loop::POOL` | 3,448 | core 1's task arena — the loop state, the display, and the driver's 1 KiB fused pack tables |
+| `display_core1::render_loop::POOL` | 3,016 | core 1's task arena — the loop state, the display, and the driver's 1 KiB fused pack table (3,528 B before BACKLOG 115) |
 | `scoreboard_app::STORE` | 2,888 | core 0's authoritative snapshot |
 | `net::dhcp_server::serve::POOL` | 2,752 | the DHCP task's two 1 KiB packet scratch buffers and its lease table |
 | `logos::UPDATES` | 2,336 | the two-deep channel core 0 ships new crest pixels over |
@@ -682,7 +738,7 @@ what follows replaces it.
 | `net::{dhcp_server,captive_dns}::{RX,TX}_BUFFER` | 4,100 | 4 × 1,025 — the four UDP socket payload buffers |
 | `config::CONFIG` | 960 | **`.data`** — the running configuration behind one lock |
 | `net::…::{RX,TX}_META` | 600 | UDP packet metadata across all three responders |
-| `hub75::packing::pack_rgb565` | 562 | **`.data`** — the pack loop itself, copied to RAM so it does not run from XIP |
+| `hub75::packing::pack_rgb888` | 438 | **`.data`** — the pack loop itself, copied to RAM so it does not run from XIP (the RGB565 loop it replaced was 562 B) |
 | `inputs::run::POOL` + `brightness::auto_brightness::POOL` | 528 | 264 each |
 | `.L_MergedGlobals` ×4 | 404 | hub75 driver statics, `net::hosts::HOSTS`, the stack-watermark atomics, embassy/defmt/probe singletons |
 | `supervise::watchdog::POOL` | 360 | the feeder |
@@ -825,21 +881,22 @@ arm-none-eabi-nm -C --size-sort -r -S -td "$ELF" | awk '$3 ~ /^[bBdD]$/'
 The panel-driver reference point, kept so the hub75 numbers stay comparable
 across commits. Links plain (no flip-link), which is why its symbol addresses
 are not comparable with the app's.
-Re-measured 2026-08-09, after task #20's repack. **32,348 B flash** (`.text` +
-`.rodata` + `.data` + vector/boot blocks), **616 B `.data`**, **85,096 B
-`.bss`**, **1,024 B `.uninit`** → **86,736 B of RAM statics**, leaving 427.3 KiB
-of its 512 KiB map unspent.
+Re-measured 2026-11-08, after BACKLOG 115's RGB888 surface. **31,908 B flash**
+(`.text` + `.rodata` + `.data` + vector/boot blocks), **492 B `.data`**,
+**92,776 B `.bss`**, **1,024 B `.uninit`** → **94,292 B of RAM statics**,
+leaving 419.9 KiB of its 512 KiB map unspent. It read 32,348 B flash and
+86,736 B of RAM on 2026-08-09, after task #20's repack.
 
 | Symbol | Bytes | Owner |
 |---|---:|---|
 | `hub75::driver::FRAMEBUFFERS` | 65,536 | hub75 — the two BCM bitplane buffers |
-| `hub75_diag::FRAME` | 16,385 | app — RGB565 drawing surface (16,384 + 1 B `ConstStaticCell` flag) |
-| `hub75_diag::__embassy_main::POOL` | 2,816 | embassy task arena — holds the `Hub75Display`, hence the gamma LUT and the fused pack tables. It was 768 B before task #20 |
+| `hub75_diag::FRAME` | 24,577 | app — RGB888 drawing surface (24,576 + 1 B `ConstStaticCell` flag) |
+| `hub75_diag::__embassy_main::POOL` | 2,304 | embassy task arena — holds the `Hub75Display`, hence the fused pack table. It was 768 B before task #20 and 2,816 B before BACKLOG 115 dropped the driver's gamma LUT |
 | `defmt_rtt::BUFFER` | 1,024 | defmt-rtt ring, `.uninit`. **Dev-only**; not in the deployed budget |
 | `embassy_rp::gpio::BANK0_WAKERS` | 240 | embassy-rp |
 | `.L_MergedGlobals` | 104 | embassy/defmt singletons and driver flags |
 | `hub75::driver::TIMING_BUFFER` | 64 | the OE/BCM timing stream |
-| `hub75::packing::pack_rgb565` | 562 | **`.data`** — the RAM-resident pack loop, which is why `.data` went from 56 B to 616 B |
+| `hub75::packing::pack_rgb888` | 438 | **`.data`** — the RAM-resident pack loop, which is why `.data` is not 56 B (task #20's RGB565 loop was 562 B) |
 | `_SEGGER_RTT` + `defmt_rtt::NAME` | 54 | `.data`, RTT control block. Dev-only |
 | `embassy_rp::time_driver::DRIVER` + clocks cache + PAC flag | 21 | |
 

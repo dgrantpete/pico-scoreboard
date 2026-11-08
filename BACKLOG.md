@@ -854,10 +854,11 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     than three, so a finer ladder would actually be seen. The ceiling is the
     dim's arithmetic, not the frame rate. `Canvas::dim` is a masked shift-add —
     `w>>1` plus optional `w>>2` and `w>>3` — which spans 1/2 to 7/8 in eighths.
-    Adding a `w>>4` term doubles that to eight rungs in sixteenths (the mask is
-    `0x0861`, by the same per-field derivation as the existing three); a `w>>5`
-    term is where it stops, because at 1/32 the mask is `0x0020` and only the
-    6-bit green channel survives, so the frame would tint as it faded.
+    Since BACKLOG 115 it runs on eight-bit channels (per-byte masks `0x7F`,
+    `0x3F`, `0x1F`), which moved the ceiling: a `w>>4` term (`0x0F` a byte)
+    doubles the ladder to eight rungs in sixteenths and a `w>>5` term (`0x07`)
+    to thirty-seconds, both without the tint the RGB565 masks forced (there,
+    1/32's mask kept only the 6-bit green channel).
 
     Eight rungs over eight frames is 133 ms against today's 150, which is the
     natural landing spot. `toast_lock` and `toast_spinner` are in the golden
@@ -870,7 +871,7 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     computed rather than observed. `Hub75Driver::flip` swaps the framebuffer
     pointer, but the data-control DMA keeps scanning the old buffer until the
     next panel frame boundary, and the old buffer is what the next
-    `load_rgb565` writes into. Safe while the gap between a flip and the next
+    `load_rgb888` writes into. Safe while the gap between a flip and the next
     load exceeds one refresh period: at 120 Hz that is 8.3 ms against 48 ms of
     gap at 20 FPS and **15 ms at 60 FPS**. Still clear by 6.7 ms, and the
     margin was 40 ms.
@@ -1205,14 +1206,6 @@ reviewed change.
     save. `main` now seeds the `Store` from the stored config before the
     first publish. Ships with the next release; the friend's unit has been
     showing default colours on every boot since the Rust migration.
-112. **A palette colour that packs to the transparency key draws nothing
-    (2026-11-07).** `MAGENTA` (RGB565 `0xF81F`) is the blit transparency key,
-    so any configured colour that packs to it — red at or above 248, green
-    below 4, blue at or above 248 — vanishes wherever it is used as text or
-    sprite paint. That was always true of text; since the palette now colours
-    the toast icon too, it applies there as well. Cheap fix if it ever bites:
-    nudge such a colour one step in `pack` (or reject it in the settings
-    page), with a test that packs the key's neighbours.
 113. **FIXED on main 2026-11-07, unreleased — a config save could deadlock
     both cores, and a `power` gamma did so every time.** `config::persist`
     ran the flash write inside `config::with`, a critical-section mutex, so
@@ -1249,26 +1242,6 @@ reviewed change.
     treating the backward path as safe, and consider refusing a downgrade in
     `scoreboard_ota::decide` unless the channel says so.
 
-115. **RGB888 drawing surface (owner asked, 2026-11-08).** The render path is
-    RGB565 end to end: `Canvas`, the `rgb565()` constants, the generated
-    sprite palettes, `text_palette`, hockey's `mix`/`scale`, `pixel_at`
-    read-backs, the 565 golden frames, the diag frame endpoints,
-    `tools/preview` and the two mockup harnesses. Nothing downstream needs
-    it: the HUB75 driver already packs eight BCM planes per channel and has
-    `load_rgb888` beside `load_rgb565`, the model's colour type is already
-    `Rgb888`, and the backend already serves `image/x-rgb888` crests when
-    asked. The 565 choice is a MicroPython `framebuf` inheritance. Cost:
-    +8,192 B for the drawing surface (16,384 to 24,576) and +18,432 B if the
-    32-slot crest pool follows (36,864 to 55,296), taking BUDGET.md's 36.6 %
-    headroom to 35.1 % or 31.6 %. Benefit: smooth pulses (the power-play glow
-    walks 4 to 10 levels per channel today and reads as a 12 Hz stair, which
-    the owner noticed on the panel), dark team colours that keep their hue
-    instead of collapsing to a few codes, and translucent heat-map marks that
-    composite in eight bits all the way down. Plan: convert the canvas and the
-    kernels first and leave crests at 565 until the pool is re-measured;
-    re-bless the goldens once; measure render microseconds, since 3-byte
-    pixels lose the aligned u16 writes. Sequence after the Screen Layouts
-    prune and the sport-switch merge, as its own change.
 116. **Retire the Aseprite pipeline; one source of truth for art (owner,
     2026-11-08).** Today the truth is split four ways. Three `.aseprite`
     files under `firmware/assets/layout/` are declared the source and
@@ -1294,9 +1267,12 @@ reviewed change.
     the golden frames stay byte-identical; then delete `compile_layout.py`,
     the Lua script, the `.aseprite` files, the dead MLB slices and the
     MicroPython output. `compile_fonts.py` is a different job and stays.
-    Sequence after 115. First step taken 2026-11-08: the NBA court is
-    procedural (`crates/scoreboard-render/src/court.rs`, NBA.md D14), pinned
-    byte for byte to the mockup; the rink's rewrite takes its shape.
+    115 landed first (2026-11-08): the compiled palettes now carry the art's
+    eight-bit colours, read from the `.aseprite` sources before they go, and
+    the canvas draws `Rgb888`, so a procedural replacement is compared with
+    those. First step taken 2026-11-08: the NBA court is procedural
+    (`crates/scoreboard-render/src/court.rs`, NBA.md D14), pinned byte for
+    byte to its mockup-derived references; the rink's rewrite takes its shape.
 117. **The NBA pregame's injury line (NBA.md D10, deferred).** The mockups
     showed "OUT: GILBERT, NEWELL, LANDALE (ATL) DEMIN (BKN)" as the info
     cycle's second line; it needs the 122 KB pregame summary per game per
@@ -1317,3 +1293,15 @@ reviewed change.
     from the collector's first fortnight of NBA summaries (from 2026-11-08)
     by `backend/testdata/nba/PROVENANCE.md`'s method, and re-check §2's
     counts against it.
+120. **Crests at eight bits — what BACKLOG 115 left (2026-11-08).** The
+    drawing surface is RGB888, but the 32-slot crest pool is still RGB565
+    (36,864 B) and the blit widens each crest by bit replication, which keeps
+    every crest exactly as the panel drew it before. Going to RGB888 is
+    +18,432 B for the pool (55,296 B) and a slot-size change in the poller's
+    channel and directory; the backend already serves `image/x-rgb888` when
+    asked. 115's plan was to re-measure the pool first; BUDGET.md's headroom
+    after 115 is 41.0 %, so the pool's growth would take it to 37.5 %, under
+    the 40 % rule. Event clips' palettes are the same kind of content: a
+    version-2 `.sbev` with three-byte palette entries is the matching change
+    there, at most 256 B a clip. Neither is visibly wrong today; take them if
+    a crest's banding or a clip's palette is ever noticed on the panel.

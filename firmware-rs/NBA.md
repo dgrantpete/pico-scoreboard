@@ -858,9 +858,10 @@ finding. ARCHITECTURE.md is gitignored and updated outside the repo.
   (hockey: goals and penalties; NBA: stoppages and news); a shared
   "eligible play" concept in `scoreboard-espn::common` would hold both
   tables. After 6.2.
-- **C8 RGB888 — BACKLOG 115** — the run glow and the mark alpha quantise
-  through 565 like hockey's power-play glow; the owner noticed the stair on
-  the panel. The court composites in eight bits the day the canvas does.
+- **C8 RGB888 — landed 2026-11-08 (BACKLOG 115)** — the run glow and the
+  mark alpha quantised through 565 like hockey's power-play glow; the owner
+  noticed the stair on the panel. The canvas is eight bits a channel now, and
+  the court, its makes and the run glow composite in them.
 - **C9 The extension level** (D9) is the first time a sport's existing
   payload grows after deployment; the `ext_level` mechanism is now the
   documented way to do it (crate docs, §4).

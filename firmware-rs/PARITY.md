@@ -1161,3 +1161,57 @@ the menu applies and there is no cancel; the last checked league cannot be
 unchecked; the menu does not open over an OTA progress screen. The frozen
 MicroPython keeps its session filter and its reboot.
 
+
+## The drawing surface is eight bits a channel, 2026-11-08
+
+**Was:** RGB565 end to end — `framebuf`'s format, inherited. Every colour was
+truncated to 5/6/5 bits the moment it was drawn: the configured palette, team
+colours, the sprite palettes (compiled from eight-bit art), and every derived
+shade. The blends that derive one colour from another ran on those truncated
+fields, so the power-play glow walked 7 red, 13 green and 7 blue levels over a
+pulse — 13 distinct colours across 96 frames at 60 FPS, a visible stair the
+owner noticed on the panel — dark team colours collapsed toward a few codes
+and lost their hue (the court's wood, 30/20/10, drew as 24/21/8 on the panel,
+olive rather than brown), and the toast's dim shifted 5- and 6-bit fields.
+Sprites keyed on the mapped colour magenta, so a palette colour that packed to
+`0xF81F` drew nothing (BACKLOG 112).
+
+**Is:** RGB888, three bytes a pixel, 24,576 B (BACKLOG 115). The canvas, the
+blitter, the fonts, every screen and the court take `Rgb888` — the snapshot's
+own colour type, so there is no packing step between the model and the
+pixels. Sprite palettes carry the art's eight-bit colours, regenerated from
+the `.aseprite` sources; transparency is a `None` palette entry, which no
+colour can collide with, so BACKLOG 112 is gone. `scale`, `mix` and the dim run
+on eight-bit channels — the glow now takes 49 distinct colours over the same
+pulse. The driver packs RGB888 through a fused table of its own (1 KiB,
+interleaved plane nibbles, ~47 instructions per pixel pair on thumbv8m against
+the RGB565 pack's 78); the RGB565 pack, `load_rgb565` and the 565 colour
+helpers are deleted.
+
+**Unchanged:** crests and event clips, which stay RGB565 content — the 32-slot
+pool is not re-sized, and the backend and clip encoder are untouched. Both are
+widened where they are drawn by bit replication, which is the expansion the
+panel always applied, so `tests/packing.rs` can pin that every RGB565 value,
+widened, lights exactly the LEDs the old pack lit. Every layout, font, timing
+and the dim's four rungs.
+
+**The re-bless, and the oracle behind it.** All 320 golden frames moved (they
+are three bytes a pixel now), so they were checked against the RGB565 goldens
+rather than by eye. Truncated back to RGB565, the new frames matched the old
+ones in **320 of 320** once the three blends meant to change — `scale`, `mix`,
+`Canvas::dim` — were swapped for RGB565-emulating twins: every straight colour,
+sprite palette, glyph, crest and derived-then-packed shade (the toast and
+spinner tint, the pregame's 5/8 secondary, the count-dot pulse) is
+bit-identical to what the panel drew before. With the real eight-bit blends,
+**287 match and 33 differ**, each explained by one of the three, stage by
+stage: `toast_lock` and `toast_spinner` at t0 (the dim's 7/8 rung; 1,751 and
+1,756 px — the held 1/2 rung truncates identically at either depth), and 31
+NBA court frames (the lanes' `scale(team, 2, 3)`, 63 px a team, and the
+makes' and run glow's `mix`, 19–218 px). Hockey's rink ends (`scale` by 1/3)
+are in the corpus and truncate identically — a single integer division
+commutes with the truncation — while its goal marks and power-play glow never
+show at the corpus's time points (the play flash holds the strip;
+`tests/game.rs` checks both against the eight-bit arithmetic restated). The
+court's mockup pin went through the same oracle: emulated, both reference
+courts matched the mockup's RGB565 bytes exactly; the references are now
+RGB888.
