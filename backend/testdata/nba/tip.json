@@ -1,0 +1,635 @@
+{
+  "id": "401909940",
+  "uid": "s:40~l:46~e:401909940",
+  "date": "2026-11-08T01:00Z",
+  "name": "New York Knicks at Cleveland Cavaliers",
+  "shortName": "NY @ CLE",
+  "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+  },
+  "competitions": [
+    {
+      "id": "401909940",
+      "uid": "s:40~l:46~e:401909940~c:401909940",
+      "date": "2026-11-08T01:00Z",
+      "attendance": 0,
+      "type": {
+        "id": "1",
+        "abbreviation": "STD"
+      },
+      "timeValid": true,
+      "neutralSite": false,
+      "conferenceCompetition": false,
+      "playByPlayAvailable": true,
+      "recent": true,
+      "venue": {
+        "id": "3417",
+        "fullName": "Rocket Arena",
+        "address": {
+          "city": "Cleveland",
+          "state": "OH"
+        },
+        "indoor": true
+      },
+      "competitors": [
+        {
+          "id": "5",
+          "uid": "s:40~l:46~t:5",
+          "type": "team",
+          "order": 0,
+          "homeAway": "home",
+          "team": {
+            "id": "5",
+            "uid": "s:40~l:46~t:5",
+            "location": "Cleveland",
+            "name": "Cavaliers",
+            "abbreviation": "CLE",
+            "displayName": "Cleveland Cavaliers",
+            "shortDisplayName": "Cavaliers",
+            "color": "860038",
+            "alternateColor": "bc945c",
+            "isActive": true,
+            "venue": {
+              "id": "3417"
+            },
+            "links": [
+              {
+                "rel": [
+                  "clubhouse",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nba/team/_/name/cle/cleveland-cavaliers",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nba/team/roster/_/name/cle/cleveland-cavaliers",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:5&section=roster",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nba/team/stats/_/name/cle/cleveland-cavaliers",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:5&section=stats",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nba/team/schedule/_/name/cle",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:5&section=scores",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              }
+            ],
+            "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/cle.png",
+            "logoDark": "https://a.espncdn.com/i/teamlogos/nba/500-dark/scoreboard/cle.png"
+          },
+          "score": "0",
+          "linescores": [
+            {
+              "value": 0.0,
+              "displayValue": "0",
+              "period": 1
+            }
+          ],
+          "statistics": [
+            {
+              "name": "rebounds",
+              "abbreviation": "REB",
+              "displayValue": "0"
+            },
+            {
+              "name": "avgRebounds",
+              "abbreviation": "REB",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "assists",
+              "abbreviation": "AST",
+              "displayValue": "0"
+            },
+            {
+              "name": "fieldGoalsAttempted",
+              "abbreviation": "FGA",
+              "displayValue": "0"
+            },
+            {
+              "name": "fieldGoalsMade",
+              "abbreviation": "FGM",
+              "displayValue": "0"
+            },
+            {
+              "name": "fieldGoalPct",
+              "abbreviation": "FG%",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "freeThrowPct",
+              "abbreviation": "FT%",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "freeThrowsAttempted",
+              "abbreviation": "FTA",
+              "displayValue": "0"
+            },
+            {
+              "name": "freeThrowsMade",
+              "abbreviation": "FTM",
+              "displayValue": "0"
+            },
+            {
+              "name": "points",
+              "abbreviation": "PTS",
+              "displayValue": "0"
+            },
+            {
+              "name": "threePointPct",
+              "abbreviation": "3P%",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "threePointFieldGoalsAttempted",
+              "abbreviation": "3PA",
+              "displayValue": "0"
+            },
+            {
+              "name": "threePointFieldGoalsMade",
+              "abbreviation": "3PM",
+              "displayValue": "0"
+            },
+            {
+              "name": "avgPoints",
+              "abbreviation": "PTS",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "avgAssists",
+              "abbreviation": "AST",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "threePointFieldGoalPct",
+              "abbreviation": "3P%",
+              "displayValue": "0.0"
+            }
+          ],
+          "records": [
+            {
+              "name": "overall",
+              "abbreviation": "Total",
+              "type": "total",
+              "summary": "5-4"
+            },
+            {
+              "name": "Home",
+              "type": "home",
+              "summary": "4-1"
+            },
+            {
+              "name": "Road",
+              "type": "road",
+              "summary": "1-3"
+            }
+          ]
+        },
+        {
+          "id": "18",
+          "uid": "s:40~l:46~t:18",
+          "type": "team",
+          "order": 1,
+          "homeAway": "away",
+          "team": {
+            "id": "18",
+            "uid": "s:40~l:46~t:18",
+            "location": "New York",
+            "name": "Knicks",
+            "abbreviation": "NY",
+            "displayName": "New York Knicks",
+            "shortDisplayName": "Knicks",
+            "color": "1d428a",
+            "alternateColor": "f58426",
+            "isActive": true,
+            "venue": {
+              "id": "1830"
+            },
+            "links": [
+              {
+                "rel": [
+                  "clubhouse",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nba/team/_/name/ny/new-york-knicks",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nba/team/roster/_/name/ny/new-york-knicks",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:18&section=roster",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nba/team/stats/_/name/ny/new-york-knicks",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:18&section=stats",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nba/team/schedule/_/name/ny",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:18&section=scores",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              }
+            ],
+            "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/ny.png",
+            "logoDark": "https://a.espncdn.com/i/teamlogos/nba/500-dark/scoreboard/ny.png"
+          },
+          "score": "0",
+          "linescores": [
+            {
+              "value": 0.0,
+              "displayValue": "0",
+              "period": 1
+            }
+          ],
+          "statistics": [
+            {
+              "name": "rebounds",
+              "abbreviation": "REB",
+              "displayValue": "0"
+            },
+            {
+              "name": "avgRebounds",
+              "abbreviation": "REB",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "assists",
+              "abbreviation": "AST",
+              "displayValue": "0"
+            },
+            {
+              "name": "fieldGoalsAttempted",
+              "abbreviation": "FGA",
+              "displayValue": "0"
+            },
+            {
+              "name": "fieldGoalsMade",
+              "abbreviation": "FGM",
+              "displayValue": "0"
+            },
+            {
+              "name": "fieldGoalPct",
+              "abbreviation": "FG%",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "freeThrowPct",
+              "abbreviation": "FT%",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "freeThrowsAttempted",
+              "abbreviation": "FTA",
+              "displayValue": "0"
+            },
+            {
+              "name": "freeThrowsMade",
+              "abbreviation": "FTM",
+              "displayValue": "0"
+            },
+            {
+              "name": "points",
+              "abbreviation": "PTS",
+              "displayValue": "0"
+            },
+            {
+              "name": "threePointPct",
+              "abbreviation": "3P%",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "threePointFieldGoalsAttempted",
+              "abbreviation": "3PA",
+              "displayValue": "0"
+            },
+            {
+              "name": "threePointFieldGoalsMade",
+              "abbreviation": "3PM",
+              "displayValue": "0"
+            },
+            {
+              "name": "avgPoints",
+              "abbreviation": "PTS",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "avgAssists",
+              "abbreviation": "AST",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "threePointFieldGoalPct",
+              "abbreviation": "3P%",
+              "displayValue": "0.0"
+            }
+          ],
+          "records": [
+            {
+              "name": "overall",
+              "abbreviation": "Total",
+              "type": "total",
+              "summary": "4-4"
+            },
+            {
+              "name": "Home",
+              "type": "home",
+              "summary": "3-2"
+            },
+            {
+              "name": "Road",
+              "type": "road",
+              "summary": "1-2"
+            }
+          ]
+        }
+      ],
+      "notes": [],
+      "situation": {
+        "lastPlay": {
+          "id": "4019099404",
+          "type": {
+            "id": "615",
+            "text": "Jumpball"
+          },
+          "text": "Karl-Anthony Towns vs. Evan Mobley (Peyton Watson gains possession)",
+          "scoreValue": 0,
+          "team": {
+            "id": "5"
+          },
+          "probability": {
+            "tiePercentage": 0.0,
+            "homeWinPercentage": 0.465,
+            "awayWinPercentage": 0.5349999999999999
+          },
+          "athletesInvolved": [
+            {
+              "id": "4432158",
+              "fullName": "Evan Mobley",
+              "displayName": "Evan Mobley",
+              "shortName": "E. Mobley",
+              "links": [
+                {
+                  "rel": [
+                    "playercard",
+                    "desktop",
+                    "athlete"
+                  ],
+                  "href": "https://www.espn.com/nba/player/_/id/4432158/evan-mobley"
+                }
+              ],
+              "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/4432158.png",
+              "jersey": "4",
+              "position": "C",
+              "team": {
+                "id": "5"
+              }
+            }
+          ]
+        }
+      },
+      "status": {
+        "clock": 713.0,
+        "displayClock": "11:53",
+        "period": 1,
+        "type": {
+          "id": "2",
+          "name": "STATUS_IN_PROGRESS",
+          "state": "in",
+          "completed": false,
+          "description": "In Progress",
+          "detail": "11:53 - 1st Quarter",
+          "shortDetail": "11:53 - 1st"
+        }
+      },
+      "broadcasts": [
+        {
+          "market": "national",
+          "names": [
+            "NBA TV"
+          ]
+        },
+        {
+          "market": "home",
+          "names": [
+            "DAZN CLE"
+          ]
+        }
+      ],
+      "format": {
+        "regulation": {
+          "periods": 4
+        }
+      },
+      "startDate": "2026-11-08T01:00Z",
+      "broadcast": "NBA TV",
+      "geoBroadcasts": [
+        {
+          "type": {
+            "id": "1",
+            "shortName": "TV"
+          },
+          "market": {
+            "id": "1",
+            "type": "National"
+          },
+          "media": {
+            "shortName": "NBA TV"
+          },
+          "lang": "en",
+          "region": "us"
+        },
+        {
+          "type": {
+            "id": "4",
+            "shortName": "Streaming"
+          },
+          "market": {
+            "id": "2",
+            "type": "Home"
+          },
+          "media": {
+            "shortName": "DAZN CLE"
+          },
+          "lang": "en",
+          "region": "us"
+        }
+      ],
+      "highlights": []
+    }
+  ],
+  "links": [
+    {
+      "language": "en-US",
+      "rel": [
+        "live",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/nba/game?gameId=401909940",
+      "text": "Gamecast",
+      "shortText": "Gamecast",
+      "isExternal": false,
+      "isPremium": false
+    },
+    {
+      "language": "en-US",
+      "rel": [
+        "boxscore",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/nba/boxscore/_/gameId/401909940",
+      "text": "Box Score",
+      "shortText": "Box Score",
+      "isExternal": false,
+      "isPremium": false
+    },
+    {
+      "language": "en-US",
+      "rel": [
+        "pbp",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/nba/playbyplay/_/gameId/401909940",
+      "text": "Play-by-Play",
+      "shortText": "Play-by-Play",
+      "isExternal": false,
+      "isPremium": false
+    }
+  ],
+  "status": {
+    "clock": 713.0,
+    "displayClock": "11:53",
+    "period": 1,
+    "type": {
+      "id": "2",
+      "name": "STATUS_IN_PROGRESS",
+      "state": "in",
+      "completed": false,
+      "description": "In Progress",
+      "detail": "11:53 - 1st Quarter",
+      "shortDetail": "11:53 - 1st"
+    }
+  }
+}

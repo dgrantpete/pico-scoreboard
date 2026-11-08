@@ -11,14 +11,30 @@ use scoreboard_wire::{GameState, SliceSink};
 use std::fs;
 use std::path::PathBuf;
 
-const STEMS: [&str; 7] = [
+/// Every event fixture in `backend/testdata/nba/`, sorted as the backend's
+/// corpus walk lists them (`PROVENANCE.md` there). The `.summary.json` halves
+/// of the pairs are not fixtures; this lane reads the scoreboard alone.
+const STEMS: [&str; 20] = [
+    "bonus",
+    "bonus_both",
+    "end_of_fourth",
     "end_of_period",
     "final",
+    "final_2ot",
+    "final_ot",
+    "final_playoff",
+    "frozen_clock",
     "halftime",
     "in_progress",
     "in_progress_no_last_play",
     "in_progress_subminute",
+    "ledger_glitch",
+    "overtime",
+    "placeholder_play",
     "pregame",
+    "run",
+    "timeout",
+    "tip",
 ];
 
 fn testdata(rel: &str) -> PathBuf {
@@ -171,7 +187,12 @@ fn pre_tip_empty_situation_glitch_is_byte_equal_with_no_last_play() {
     let bytes = encode(&extract);
     assert_eq!(bytes[2] & 0x01, 0, "flags bit0 must be clear");
     let expected = golden("in_progress_no_last_play");
-    assert_eq!(expected.len(), 49, "the smallest golden in the corpus");
+    let smallest = STEMS.iter().map(|stem| golden(stem).len()).min();
+    assert_eq!(
+        Some(expected.len()),
+        smallest,
+        "no play text, so the smallest golden in the corpus"
+    );
     assert_eq!(bytes, expected);
 }
 
@@ -223,19 +244,32 @@ fn list_mode_counts_an_empty_object_event_as_failed() {
 
     let (entries, stats) = run_list(&body, &[body.len()]);
     let expected: Vec<(String, GameState)> = [
+        ("bonus", GameState::Live),
+        ("bonus_both", GameState::Live),
+        ("end_of_fourth", GameState::Live),
         ("end_of_period", GameState::Live),
         ("final", GameState::Final),
+        ("final_2ot", GameState::Final),
+        ("final_ot", GameState::Final),
+        ("final_playoff", GameState::Final),
+        ("frozen_clock", GameState::Live),
         ("halftime", GameState::Live),
         ("in_progress", GameState::Live),
         ("in_progress_no_last_play", GameState::Live),
         ("in_progress_subminute", GameState::Live),
+        ("ledger_glitch", GameState::Live),
+        ("overtime", GameState::Live),
+        ("placeholder_play", GameState::Live),
         ("pregame", GameState::Pregame),
+        ("run", GameState::Live),
+        ("timeout", GameState::Live),
+        ("tip", GameState::Live),
     ]
     .into_iter()
     .map(|(stem, state)| (event_id(&fixture(stem)), state))
     .collect();
     assert_eq!(entries, expected);
-    assert_eq!((stats.ok, stats.failed), (7, 1));
+    assert_eq!((stats.ok, stats.failed), (20, 1));
     assert!(!stats.events_malformed);
 }
 
@@ -313,7 +347,7 @@ fn unknown_home_away_marker_is_deserialize_tier_and_drops_the_event() {
 
 #[test]
 fn home_away_resolves_by_marker_even_with_the_array_flipped() {
-    // All 7 fixtures put home at index 0 — flip the array and the bytes
+    // Every fixture puts home at index 0 — flip the array and the bytes
     // must not move. (The serde_json rebuild also shuffles every object's
     // key order, so this doubles as the field-order independence proof.)
     let mut event = fixture_value("in_progress");
@@ -453,7 +487,7 @@ fn clock_passes_through_verbatim_including_the_colonless_shape() {
     let (outcome, _) = run_detail(&body, &event_id(&event), &[body.len()]);
     match &found(outcome).kind {
         Kind::Live(live) => {
-            assert_eq!(live.clock.as_str(), "0.0", "colonless crunch signal intact");
+            assert_eq!(live.clock.as_str(), "39.0", "colonless crunch signal intact");
         }
         other => panic!("expected live, got {other:?}"),
     }
@@ -669,14 +703,14 @@ fn some(away: &str, home: &str) -> (Option<String>, Option<String>) {
 
 #[test]
 fn the_pregame_fixture_carries_its_closing_lines_at_every_chunk_size() {
-    // PHX at LAL: away -2.5 / -130, home +2.5 / +110 (`close`, not `open`).
+    // SA at POR: away -5.5 / -205, home +5.5 / +171 (`close`, not `open`).
     let event = fixture("pregame");
     let body = wrap(&[&event]);
     let id = event_id(&event);
     for sizes in [&[body.len()][..], &[1], &[3, 7], &[64]] {
         assert_eq!(
             pregame_lines(&body, &id, sizes),
-            some("-2.5  -130", "+2.5  +110"),
+            some("-5.5  -205", "+5.5  +171"),
             "chunk sizes {sizes:?}"
         );
     }
@@ -698,8 +732,8 @@ fn the_lines_ride_only_the_ext_encoding() {
     else {
         panic!("pregame payload");
     };
-    assert_eq!(pregame.away.line, Some("-2.5  -130"));
-    assert_eq!(pregame.home.line, Some("+2.5  +110"));
+    assert_eq!(pregame.away.line, Some("-5.5  -205"));
+    assert_eq!(pregame.home.line, Some("+5.5  +171"));
 }
 
 #[test]
@@ -707,7 +741,7 @@ fn moneylines_join_only_in_pairs() {
     let mut value = fixture_value("pregame");
     value["competitions"][0]["odds"][0]["moneyline"]["home"]["close"]["odds"] =
         serde_json::Value::Null;
-    assert_eq!(lines_of(&value), some("-2.5", "+2.5"));
+    assert_eq!(lines_of(&value), some("-5.5", "+5.5"));
 }
 
 #[test]

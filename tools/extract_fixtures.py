@@ -7,7 +7,12 @@ serves. Regenerate any time with:  python tools/extract_fixtures.py
 Fixtures are grouped per league; each group scans that league's 200-responses
 newest-first and keeps the first event matching each named predicate. Output
 dirs nest per ESPN league slug for the multi-league sports (football/nfl,
-soccer/fifa.world); the single-league sports (mlb, nba) stay flat.
+soccer/fifa.world); the single-league sport (mlb) stays flat.
+
+The pairs corpora are not generated here: `backend/testdata/hockey/nhl/` and
+`backend/testdata/nba/` hold `<name>.json` + `<name>.summary.json` pairs
+selected from the collector and the design captures by the method their
+`PROVENANCE.md` records, and this tool must not overwrite them.
 """
 
 import json
@@ -152,39 +157,6 @@ GROUPS: list[tuple[str, str, list[tuple[str, Predicate]]]] = [
             ("live_inning", _live_inning),
             ("rain_delay", _rain_delay),
             ("final", _final),
-        ],
-    ),
-    (
-        "nba",
-        "nba",
-        [
-            ("pregame", _description("Scheduled")),
-            (
-                "in_progress",
-                _description(
-                    "In Progress",
-                    lambda c: ":" in c["status"]["displayClock"]
-                    and bool((c.get("situation") or {}).get("lastPlay")),
-                ),
-            ),
-            # Sub-minute clock switches to "SS.d" form (e.g. "53.0").
-            (
-                "in_progress_subminute",
-                _description(
-                    "In Progress", lambda c: ":" not in c["status"]["displayClock"]
-                ),
-            ),
-            # Early-game glitch bucket: situation present but empty ({}).
-            (
-                "in_progress_no_last_play",
-                _description(
-                    "In Progress",
-                    lambda c: not (c.get("situation") or {}).get("lastPlay"),
-                ),
-            ),
-            ("halftime", _description("Halftime")),
-            ("end_of_period", _description("End of Period")),
-            ("final", _description("Final")),
         ],
     ),
     # Football corpus is empty until preseason (see BACKLOG); these groups

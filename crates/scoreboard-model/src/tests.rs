@@ -2531,13 +2531,13 @@ fn the_spot_checked_fixtures_carry_the_values_espn_sent() {
 
     let store = committed("nba/in_progress");
     let view = &store.snapshot().nba_live;
-    assert_eq!(view.phase_text.as_str(), "Q3");
-    assert_eq!(view.clock_text.as_str(), "4:37");
+    assert_eq!(view.phase_text.as_str(), "Q2");
+    assert_eq!(view.clock_text.as_str(), "11:32");
     assert!(!view.clock_low);
-    assert_eq!((view.away_score, view.home_score), (75, 77));
+    assert_eq!((view.away_score, view.home_score), (26, 30));
     assert_eq!(
         store.snapshot().play.text.as_str(),
-        "Zeke Nnaji out of bounds bad pass turnover"
+        "Riley Minix makes 22-foot running jump shot (Evan Mobley assists)"
     );
 
     let store = committed("football/nfl/in_progress");

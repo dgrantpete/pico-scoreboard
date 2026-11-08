@@ -21,6 +21,8 @@ fn testdata() -> PathBuf {
 
 /// Fixture stems under `backend/testdata/football`, league subdirs
 /// included (`nfl/pregame`, `college-football/pregame_ranked`), sorted.
+/// A `<name>.summary.json` is a pair's summary half, never an event fixture
+/// (the rule every corpus walk shares), so it is skipped here too.
 fn fixture_names() -> Vec<String> {
     fn walk(dir: &PathBuf, prefix: &str, out: &mut Vec<String>) {
         for entry in fs::read_dir(dir).unwrap_or_else(|e| panic!("read {dir:?}: {e}")) {
@@ -29,7 +31,9 @@ fn fixture_names() -> Vec<String> {
             if entry.file_type().unwrap().is_dir() {
                 walk(&entry.path(), &format!("{prefix}{name}/"), out);
             } else if let Some(stem) = name.strip_suffix(".json") {
-                out.push(format!("{prefix}{stem}"));
+                if !stem.ends_with(".summary") {
+                    out.push(format!("{prefix}{stem}"));
+                }
             }
         }
     }

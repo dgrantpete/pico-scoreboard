@@ -43,8 +43,9 @@ fn testdata() -> PathBuf {
 }
 
 /// Fixture stems under `testdata/{sport}`, recursing into the per-league
-/// subdirectories football and soccer use — the same walk `wire_corpus.rs`
-/// does, so the two harnesses cannot disagree about what the corpus is.
+/// subdirectories football and soccer use and skipping a pair's
+/// `<name>.summary.json` half — the same walk `wire_corpus.rs` does, so the
+/// two harnesses cannot disagree about what the corpus is.
 fn fixture_names(sport: &str) -> Vec<String> {
     fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {dir:?}: {e}")) {
@@ -52,7 +53,9 @@ fn fixture_names(sport: &str) -> Vec<String> {
             let name = entry.file_name().into_string().expect("utf-8 filename");
             if entry.file_type().expect("file type").is_dir() {
                 walk(&entry.path(), &format!("{prefix}{name}/"), out);
-            } else if let Some(stem) = name.strip_suffix(".json") {
+            } else if let Some(stem) = name.strip_suffix(".json")
+                && !stem.ends_with(".summary")
+            {
                 out.push(format!("{prefix}{stem}"));
             }
         }
@@ -216,7 +219,7 @@ fn the_gate_covers_every_committed_golden() {
         "the parity gate and the committed goldens disagree about the corpus"
     );
     // Guards the arithmetic in the per-sport report, not the sets above.
-    assert_eq!(exercised.len(), 34, "corpus size changed");
+    assert_eq!(exercised.len(), 47, "corpus size changed");
 }
 
 /// Per-sport counts, so a sport silently dropping out of the walk is loud.
@@ -232,7 +235,7 @@ fn every_sport_is_represented() {
     }
     assert_eq!(
         counts,
-        [("mlb", 4), ("nba", 7), ("football", 10), ("soccer", 13)],
+        [("mlb", 4), ("nba", 20), ("football", 10), ("soccer", 13)],
         "per-sport golden counts changed"
     );
 }

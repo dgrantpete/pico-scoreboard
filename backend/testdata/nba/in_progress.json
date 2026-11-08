@@ -1,19 +1,19 @@
 {
-  "id": "401811037",
-  "uid": "s:40~l:46~e:401811037",
-  "date": "2026-04-11T01:00Z",
-  "name": "Oklahoma City Thunder at Denver Nuggets",
-  "shortName": "OKC @ DEN",
+  "id": "401909940",
+  "uid": "s:40~l:46~e:401909940",
+  "date": "2026-11-08T01:00Z",
+  "name": "New York Knicks at Cleveland Cavaliers",
+  "shortName": "NY @ CLE",
   "season": {
-    "year": 2026,
+    "year": 2027,
     "type": 2,
     "slug": "regular-season"
   },
   "competitions": [
     {
-      "id": "401811037",
-      "uid": "s:40~l:46~e:401811037~c:401811037",
-      "date": "2026-04-11T01:00Z",
+      "id": "401909940",
+      "uid": "s:40~l:46~e:401909940~c:401909940",
+      "date": "2026-11-08T01:00Z",
       "attendance": 0,
       "type": {
         "id": "1",
@@ -25,34 +25,34 @@
       "playByPlayAvailable": true,
       "recent": true,
       "venue": {
-        "id": "892",
-        "fullName": "Ball Arena",
+        "id": "3417",
+        "fullName": "Rocket Arena",
         "address": {
-          "city": "Denver",
-          "state": "CO"
+          "city": "Cleveland",
+          "state": "OH"
         },
         "indoor": true
       },
       "competitors": [
         {
-          "id": "7",
-          "uid": "s:40~l:46~t:7",
+          "id": "5",
+          "uid": "s:40~l:46~t:5",
           "type": "team",
           "order": 0,
           "homeAway": "home",
           "team": {
-            "id": "7",
-            "uid": "s:40~l:46~t:7",
-            "location": "Denver",
-            "name": "Nuggets",
-            "abbreviation": "DEN",
-            "displayName": "Denver Nuggets",
-            "shortDisplayName": "Nuggets",
-            "color": "0e2240",
-            "alternateColor": "fec524",
+            "id": "5",
+            "uid": "s:40~l:46~t:5",
+            "location": "Cleveland",
+            "name": "Cavaliers",
+            "abbreviation": "CLE",
+            "displayName": "Cleveland Cavaliers",
+            "shortDisplayName": "Cavaliers",
+            "color": "860038",
+            "alternateColor": "bc945c",
             "isActive": true,
             "venue": {
-              "id": "892"
+              "id": "3417"
             },
             "links": [
               {
@@ -61,7 +61,7 @@
                   "desktop",
                   "team"
                 ],
-                "href": "https://www.espn.com/nba/team/_/name/den/denver-nuggets",
+                "href": "https://www.espn.com/nba/team/_/name/cle/cleveland-cavaliers",
                 "text": "Clubhouse",
                 "isExternal": false,
                 "isPremium": false
@@ -72,356 +72,19 @@
                   "desktop",
                   "team"
                 ],
-                "href": "https://www.espn.com/nba/team/roster/_/name/den/denver-nuggets",
+                "href": "https://www.espn.com/nba/team/roster/_/name/cle/cleveland-cavaliers",
                 "text": "Roster",
-                "isExternal": false,
-                "isPremium": false
-              },
-              {
-                "rel": [
-                  "stats",
-                  "desktop",
-                  "team"
-                ],
-                "href": "https://www.espn.com/nba/team/stats/_/name/den/denver-nuggets",
-                "text": "Statistics",
-                "isExternal": false,
-                "isPremium": false
-              },
-              {
-                "rel": [
-                  "schedule",
-                  "desktop",
-                  "team"
-                ],
-                "href": "https://www.espn.com/nba/team/schedule/_/name/den",
-                "text": "Schedule",
-                "isExternal": false,
-                "isPremium": false
-              }
-            ],
-            "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/den.png"
-          },
-          "score": "77",
-          "linescores": [
-            {
-              "value": 34.0,
-              "displayValue": "34",
-              "period": 1
-            },
-            {
-              "value": 25.0,
-              "displayValue": "25",
-              "period": 2
-            },
-            {
-              "value": 18.0,
-              "displayValue": "18",
-              "period": 3
-            }
-          ],
-          "statistics": [
-            {
-              "name": "rebounds",
-              "abbreviation": "REB",
-              "displayValue": "36"
-            },
-            {
-              "name": "avgRebounds",
-              "abbreviation": "REB",
-              "displayValue": "36.0"
-            },
-            {
-              "name": "assists",
-              "abbreviation": "AST",
-              "displayValue": "18"
-            },
-            {
-              "name": "fieldGoalsAttempted",
-              "abbreviation": "FGA",
-              "displayValue": "64"
-            },
-            {
-              "name": "fieldGoalsMade",
-              "abbreviation": "FGM",
-              "displayValue": "29"
-            },
-            {
-              "name": "fieldGoalPct",
-              "abbreviation": "FG%",
-              "displayValue": "45.3"
-            },
-            {
-              "name": "freeThrowPct",
-              "abbreviation": "FT%",
-              "displayValue": "85.7"
-            },
-            {
-              "name": "freeThrowsAttempted",
-              "abbreviation": "FTA",
-              "displayValue": "7"
-            },
-            {
-              "name": "freeThrowsMade",
-              "abbreviation": "FTM",
-              "displayValue": "6"
-            },
-            {
-              "name": "points",
-              "abbreviation": "PTS",
-              "displayValue": "77"
-            },
-            {
-              "name": "threePointPct",
-              "abbreviation": "3P%",
-              "displayValue": "44.8"
-            },
-            {
-              "name": "threePointFieldGoalsAttempted",
-              "abbreviation": "3PA",
-              "displayValue": "29"
-            },
-            {
-              "name": "threePointFieldGoalsMade",
-              "abbreviation": "3PM",
-              "displayValue": "13"
-            },
-            {
-              "name": "avgPoints",
-              "abbreviation": "PTS",
-              "displayValue": "77.0"
-            },
-            {
-              "name": "avgAssists",
-              "abbreviation": "AST",
-              "displayValue": "18.0"
-            },
-            {
-              "name": "threePointFieldGoalPct",
-              "abbreviation": "3P%",
-              "displayValue": "44.8"
-            }
-          ],
-          "leaders": [
-            {
-              "name": "points",
-              "displayName": "Points",
-              "shortDisplayName": "Pts",
-              "abbreviation": "Pts",
-              "leaders": [
-                {
-                  "displayValue": "17",
-                  "value": 17.0,
-                  "athlete": {
-                    "id": "6477",
-                    "fullName": "Jonas Valanciunas",
-                    "displayName": "Jonas Valanciunas",
-                    "shortName": "J. Valanciunas",
-                    "links": [
-                      {
-                        "rel": [
-                          "playercard",
-                          "desktop",
-                          "athlete"
-                        ],
-                        "href": "https://www.espn.com/nba/player/_/id/6477/jonas-valanciunas"
-                      }
-                    ],
-                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/6477.png",
-                    "jersey": "17",
-                    "position": {
-                      "abbreviation": "C"
-                    },
-                    "team": {
-                      "id": "7"
-                    },
-                    "active": true
-                  },
-                  "team": {
-                    "id": "7"
-                  }
-                }
-              ]
-            },
-            {
-              "name": "rebounds",
-              "displayName": "Rebounds",
-              "shortDisplayName": "Reb",
-              "abbreviation": "Reb",
-              "leaders": [
-                {
-                  "displayValue": "10",
-                  "value": 10.0,
-                  "athlete": {
-                    "id": "6477",
-                    "fullName": "Jonas Valanciunas",
-                    "displayName": "Jonas Valanciunas",
-                    "shortName": "J. Valanciunas",
-                    "links": [
-                      {
-                        "rel": [
-                          "playercard",
-                          "desktop",
-                          "athlete"
-                        ],
-                        "href": "https://www.espn.com/nba/player/_/id/6477/jonas-valanciunas"
-                      }
-                    ],
-                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/6477.png",
-                    "jersey": "17",
-                    "position": {
-                      "abbreviation": "C"
-                    },
-                    "team": {
-                      "id": "7"
-                    },
-                    "active": true
-                  },
-                  "team": {
-                    "id": "7"
-                  }
-                }
-              ]
-            },
-            {
-              "name": "assists",
-              "displayName": "Assists",
-              "shortDisplayName": "Ast",
-              "abbreviation": "Ast",
-              "leaders": [
-                {
-                  "displayValue": "5",
-                  "value": 5.0,
-                  "athlete": {
-                    "id": "4065670",
-                    "fullName": "Bruce Brown",
-                    "displayName": "Bruce Brown",
-                    "shortName": "B. Brown",
-                    "links": [
-                      {
-                        "rel": [
-                          "playercard",
-                          "desktop",
-                          "athlete"
-                        ],
-                        "href": "https://www.espn.com/nba/player/_/id/4065670/bruce-brown"
-                      }
-                    ],
-                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/4065670.png",
-                    "jersey": "11",
-                    "position": {
-                      "abbreviation": "G"
-                    },
-                    "team": {
-                      "id": "7"
-                    },
-                    "active": true
-                  },
-                  "team": {
-                    "id": "7"
-                  }
-                }
-              ]
-            },
-            {
-              "name": "rating",
-              "displayName": "Rating",
-              "shortDisplayName": "RAT",
-              "abbreviation": "RAT",
-              "leaders": [
-                {
-                  "displayValue": "17 PTS, 10 REB",
-                  "value": 36.599998474121094,
-                  "athlete": {
-                    "id": "6477",
-                    "fullName": "Jonas Valanciunas",
-                    "displayName": "Jonas Valanciunas",
-                    "shortName": "J. Valanciunas",
-                    "links": [
-                      {
-                        "rel": [
-                          "playercard",
-                          "desktop",
-                          "athlete"
-                        ],
-                        "href": "https://www.espn.com/nba/player/_/id/6477/jonas-valanciunas"
-                      }
-                    ],
-                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/6477.png",
-                    "jersey": "17",
-                    "position": {
-                      "abbreviation": "C"
-                    },
-                    "team": {
-                      "id": "7"
-                    },
-                    "active": true
-                  },
-                  "team": {
-                    "id": "7"
-                  }
-                }
-              ]
-            }
-          ],
-          "records": [
-            {
-              "name": "overall",
-              "abbreviation": "Total",
-              "type": "total",
-              "summary": "52-28"
-            },
-            {
-              "name": "Home",
-              "type": "home",
-              "summary": "27-13"
-            },
-            {
-              "name": "Road",
-              "type": "road",
-              "summary": "25-15"
-            }
-          ]
-        },
-        {
-          "id": "25",
-          "uid": "s:40~l:46~t:25",
-          "type": "team",
-          "order": 1,
-          "homeAway": "away",
-          "team": {
-            "id": "25",
-            "uid": "s:40~l:46~t:25",
-            "location": "Oklahoma City",
-            "name": "Thunder",
-            "abbreviation": "OKC",
-            "displayName": "Oklahoma City Thunder",
-            "shortDisplayName": "Thunder",
-            "color": "007ac1",
-            "alternateColor": "ef3b24",
-            "isActive": true,
-            "venue": {
-              "id": "2559"
-            },
-            "links": [
-              {
-                "rel": [
-                  "clubhouse",
-                  "desktop",
-                  "team"
-                ],
-                "href": "https://www.espn.com/nba/team/_/name/okc/oklahoma-city-thunder",
-                "text": "Clubhouse",
                 "isExternal": false,
                 "isPremium": false
               },
               {
                 "rel": [
                   "roster",
-                  "desktop",
+                  "sportscenter",
+                  "app",
                   "team"
                 ],
-                "href": "https://www.espn.com/nba/team/roster/_/name/okc/oklahoma-city-thunder",
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:5&section=roster",
                 "text": "Roster",
                 "isExternal": false,
                 "isPremium": false
@@ -432,7 +95,19 @@
                   "desktop",
                   "team"
                 ],
-                "href": "https://www.espn.com/nba/team/stats/_/name/okc/oklahoma-city-thunder",
+                "href": "https://www.espn.com/nba/team/stats/_/name/cle/cleveland-cavaliers",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:5&section=stats",
                 "text": "Statistics",
                 "isExternal": false,
                 "isPremium": false
@@ -443,15 +118,28 @@
                   "desktop",
                   "team"
                 ],
-                "href": "https://www.espn.com/nba/team/schedule/_/name/okc",
+                "href": "https://www.espn.com/nba/team/schedule/_/name/cle",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:5&section=scores",
                 "text": "Schedule",
                 "isExternal": false,
                 "isPremium": false
               }
             ],
-            "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/okc.png"
+            "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/cle.png",
+            "logoDark": "https://a.espncdn.com/i/teamlogos/nba/500-dark/scoreboard/cle.png"
           },
-          "score": "75",
+          "score": "30",
           "linescores": [
             {
               "value": 27.0,
@@ -459,96 +147,91 @@
               "period": 1
             },
             {
-              "value": 24.0,
-              "displayValue": "24",
+              "value": 3.0,
+              "displayValue": "3",
               "period": 2
-            },
-            {
-              "value": 24.0,
-              "displayValue": "24",
-              "period": 3
             }
           ],
           "statistics": [
             {
               "name": "rebounds",
               "abbreviation": "REB",
-              "displayValue": "29"
+              "displayValue": "12"
             },
             {
               "name": "avgRebounds",
               "abbreviation": "REB",
-              "displayValue": "29.0"
+              "displayValue": "12.0"
             },
             {
               "name": "assists",
               "abbreviation": "AST",
-              "displayValue": "19"
+              "displayValue": "8"
             },
             {
               "name": "fieldGoalsAttempted",
               "abbreviation": "FGA",
-              "displayValue": "66"
+              "displayValue": "20"
             },
             {
               "name": "fieldGoalsMade",
               "abbreviation": "FGM",
-              "displayValue": "29"
+              "displayValue": "10"
             },
             {
               "name": "fieldGoalPct",
               "abbreviation": "FG%",
-              "displayValue": "43.9"
+              "displayValue": "50.0"
             },
             {
               "name": "freeThrowPct",
               "abbreviation": "FT%",
-              "displayValue": "75.0"
+              "displayValue": "44.4"
             },
             {
               "name": "freeThrowsAttempted",
               "abbreviation": "FTA",
-              "displayValue": "4"
+              "displayValue": "9"
             },
             {
               "name": "freeThrowsMade",
               "abbreviation": "FTM",
-              "displayValue": "3"
+              "displayValue": "4"
             },
             {
               "name": "points",
               "abbreviation": "PTS",
-              "displayValue": "73"
+              "displayValue": "30"
             },
             {
               "name": "threePointPct",
               "abbreviation": "3P%",
-              "displayValue": "32.4"
+              "displayValue": "46.2"
             },
             {
               "name": "threePointFieldGoalsAttempted",
               "abbreviation": "3PA",
-              "displayValue": "37"
+              "displayValue": "13"
             },
             {
               "name": "threePointFieldGoalsMade",
               "abbreviation": "3PM",
-              "displayValue": "12"
+              "displayValue": "6"
             },
             {
               "name": "avgPoints",
               "abbreviation": "PTS",
-              "displayValue": "73.0"
+              "displayValue": "30.0"
             },
             {
               "name": "avgAssists",
               "abbreviation": "AST",
-              "displayValue": "19.0"
+              "displayValue": "8.0"
             },
             {
               "name": "threePointFieldGoalPct",
               "abbreviation": "3P%",
-              "displayValue": "32.4"
+              "displayValue": "46.2"
             }
           ],
           "leaders": [
@@ -559,13 +242,13 @@
               "abbreviation": "Pts",
               "leaders": [
                 {
-                  "displayValue": "15",
-                  "value": 15.0,
+                  "displayValue": "7",
+                  "value": 7.0,
                   "athlete": {
-                    "id": "4683778",
-                    "fullName": "Jared McCain",
-                    "displayName": "Jared McCain",
-                    "shortName": "J. McCain",
+                    "id": "3908809",
+                    "fullName": "Donovan Mitchell",
+                    "displayName": "Donovan Mitchell",
+                    "shortName": "D. Mitchell",
                     "links": [
                       {
                         "rel": [
@@ -573,21 +256,21 @@
                           "desktop",
                           "athlete"
                         ],
-                        "href": "https://www.espn.com/nba/player/_/id/4683778/jared-mccain"
+                        "href": "https://www.espn.com/nba/player/_/id/3908809/donovan-mitchell"
                       }
                     ],
-                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/4683778.png",
-                    "jersey": "3",
+                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3908809.png",
+                    "jersey": "45",
                     "position": {
                       "abbreviation": "G"
                     },
                     "team": {
-                      "id": "25"
+                      "id": "5"
                     },
                     "active": true
                   },
                   "team": {
-                    "id": "25"
+                    "id": "5"
                   }
                 }
               ]
@@ -599,13 +282,13 @@
               "abbreviation": "Reb",
               "leaders": [
                 {
-                  "displayValue": "8",
-                  "value": 8.0,
+                  "displayValue": "4",
+                  "value": 4.0,
                   "athlete": {
-                    "id": "4592435",
-                    "fullName": "Branden Carlson",
-                    "displayName": "Branden Carlson",
-                    "shortName": "B. Carlson",
+                    "id": "4432158",
+                    "fullName": "Evan Mobley",
+                    "displayName": "Evan Mobley",
+                    "shortName": "E. Mobley",
                     "links": [
                       {
                         "rel": [
@@ -613,21 +296,21 @@
                           "desktop",
                           "athlete"
                         ],
-                        "href": "https://www.espn.com/nba/player/_/id/4592435/branden-carlson"
+                        "href": "https://www.espn.com/nba/player/_/id/4432158/evan-mobley"
                       }
                     ],
-                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/4592435.png",
-                    "jersey": "15",
+                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/4432158.png",
+                    "jersey": "4",
                     "position": {
                       "abbreviation": "C"
                     },
                     "team": {
-                      "id": "25"
+                      "id": "5"
                     },
                     "active": true
                   },
                   "team": {
-                    "id": "25"
+                    "id": "5"
                   }
                 }
               ]
@@ -639,13 +322,13 @@
               "abbreviation": "Ast",
               "leaders": [
                 {
-                  "displayValue": "7",
-                  "value": 7.0,
+                  "displayValue": "2",
+                  "value": 2.0,
                   "athlete": {
-                    "id": "5159925",
-                    "fullName": "Nikola Topic",
-                    "displayName": "Nikola Topic",
-                    "shortName": "N. Topic",
+                    "id": "4432158",
+                    "fullName": "Evan Mobley",
+                    "displayName": "Evan Mobley",
+                    "shortName": "E. Mobley",
                     "links": [
                       {
                         "rel": [
@@ -653,21 +336,21 @@
                           "desktop",
                           "athlete"
                         ],
-                        "href": "https://www.espn.com/nba/player/_/id/5159925/nikola-topic"
+                        "href": "https://www.espn.com/nba/player/_/id/4432158/evan-mobley"
                       }
                     ],
-                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/5159925.png",
-                    "jersey": "44",
+                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/4432158.png",
+                    "jersey": "4",
                     "position": {
-                      "abbreviation": "G"
+                      "abbreviation": "C"
                     },
                     "team": {
-                      "id": "25"
+                      "id": "5"
                     },
                     "active": true
                   },
                   "team": {
-                    "id": "25"
+                    "id": "5"
                   }
                 }
               ]
@@ -679,13 +362,13 @@
               "abbreviation": "RAT",
               "leaders": [
                 {
-                  "displayValue": "13 PTS, 8 REB",
-                  "value": 25.600000381469727,
+                  "displayValue": "7 PTS",
+                  "value": 11.100000381469727,
                   "athlete": {
-                    "id": "4592435",
-                    "fullName": "Branden Carlson",
-                    "displayName": "Branden Carlson",
-                    "shortName": "B. Carlson",
+                    "id": "4576087",
+                    "fullName": "Peyton Watson",
+                    "displayName": "Peyton Watson",
+                    "shortName": "P. Watson",
                     "links": [
                       {
                         "rel": [
@@ -693,21 +376,21 @@
                           "desktop",
                           "athlete"
                         ],
-                        "href": "https://www.espn.com/nba/player/_/id/4592435/branden-carlson"
+                        "href": "https://www.espn.com/nba/player/_/id/4576087/peyton-watson"
                       }
                     ],
-                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/4592435.png",
-                    "jersey": "15",
+                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/4576087.png",
+                    "jersey": "8",
                     "position": {
-                      "abbreviation": "C"
+                      "abbreviation": "G"
                     },
                     "team": {
-                      "id": "25"
+                      "id": "5"
                     },
                     "active": true
                   },
                   "team": {
-                    "id": "25"
+                    "id": "5"
                   }
                 }
               ]
@@ -718,17 +401,398 @@
               "name": "overall",
               "abbreviation": "Total",
               "type": "total",
-              "summary": "64-16"
+              "summary": "5-4"
             },
             {
               "name": "Home",
               "type": "home",
-              "summary": "34-6"
+              "summary": "4-1"
             },
             {
               "name": "Road",
               "type": "road",
-              "summary": "30-9"
+              "summary": "1-3"
+            }
+          ]
+        },
+        {
+          "id": "18",
+          "uid": "s:40~l:46~t:18",
+          "type": "team",
+          "order": 1,
+          "homeAway": "away",
+          "team": {
+            "id": "18",
+            "uid": "s:40~l:46~t:18",
+            "location": "New York",
+            "name": "Knicks",
+            "abbreviation": "NY",
+            "displayName": "New York Knicks",
+            "shortDisplayName": "Knicks",
+            "color": "1d428a",
+            "alternateColor": "f58426",
+            "isActive": true,
+            "venue": {
+              "id": "1830"
+            },
+            "links": [
+              {
+                "rel": [
+                  "clubhouse",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nba/team/_/name/ny/new-york-knicks",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nba/team/roster/_/name/ny/new-york-knicks",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:18&section=roster",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nba/team/stats/_/name/ny/new-york-knicks",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:18&section=stats",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/nba/team/schedule/_/name/ny",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:18&section=scores",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              }
+            ],
+            "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/ny.png",
+            "logoDark": "https://a.espncdn.com/i/teamlogos/nba/500-dark/scoreboard/ny.png"
+          },
+          "score": "26",
+          "linescores": [
+            {
+              "value": 26.0,
+              "displayValue": "26",
+              "period": 1
+            },
+            {
+              "value": 2.0,
+              "displayValue": "2",
+              "period": 2
+            }
+          ],
+          "statistics": [
+            {
+              "name": "rebounds",
+              "abbreviation": "REB",
+              "displayValue": "8"
+            },
+            {
+              "name": "avgRebounds",
+              "abbreviation": "REB",
+              "displayValue": "8.0"
+            },
+            {
+              "name": "assists",
+              "abbreviation": "AST",
+              "displayValue": "6"
+            },
+            {
+              "name": "fieldGoalsAttempted",
+              "abbreviation": "FGA",
+              "displayValue": "23"
+            },
+            {
+              "name": "fieldGoalsMade",
+              "abbreviation": "FGM",
+              "displayValue": "9"
+            },
+            {
+              "name": "fieldGoalPct",
+              "abbreviation": "FG%",
+              "displayValue": "39.1"
+            },
+            {
+              "name": "freeThrowPct",
+              "abbreviation": "FT%",
+              "displayValue": "100.0"
+            },
+            {
+              "name": "freeThrowsAttempted",
+              "abbreviation": "FTA",
+              "displayValue": "5"
+            },
+            {
+              "name": "freeThrowsMade",
+              "abbreviation": "FTM",
+              "displayValue": "5"
+            },
+            {
+              "name": "points",
+              "abbreviation": "PTS",
+              "displayValue": "26"
+            },
+            {
+              "name": "threePointPct",
+              "abbreviation": "3P%",
+              "displayValue": "27.3"
+            },
+            {
+              "name": "threePointFieldGoalsAttempted",
+              "abbreviation": "3PA",
+              "displayValue": "11"
+            },
+            {
+              "name": "threePointFieldGoalsMade",
+              "abbreviation": "3PM",
+              "displayValue": "3"
+            },
+            {
+              "name": "avgPoints",
+              "abbreviation": "PTS",
+              "displayValue": "26.0"
+            },
+            {
+              "name": "avgAssists",
+              "abbreviation": "AST",
+              "displayValue": "6.0"
+            },
+            {
+              "name": "threePointFieldGoalPct",
+              "abbreviation": "3P%",
+              "displayValue": "27.3"
+            }
+          ],
+          "leaders": [
+            {
+              "name": "points",
+              "displayName": "Points",
+              "shortDisplayName": "Pts",
+              "abbreviation": "Pts",
+              "leaders": [
+                {
+                  "displayValue": "14",
+                  "value": 14.0,
+                  "athlete": {
+                    "id": "3136195",
+                    "fullName": "Karl-Anthony Towns",
+                    "displayName": "Karl-Anthony Towns",
+                    "shortName": "K. Towns",
+                    "links": [
+                      {
+                        "rel": [
+                          "playercard",
+                          "desktop",
+                          "athlete"
+                        ],
+                        "href": "https://www.espn.com/nba/player/_/id/3136195/karl-anthony-towns"
+                      }
+                    ],
+                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3136195.png",
+                    "jersey": "32",
+                    "position": {
+                      "abbreviation": "C"
+                    },
+                    "team": {
+                      "id": "18"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "18"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "rebounds",
+              "displayName": "Rebounds",
+              "shortDisplayName": "Reb",
+              "abbreviation": "Reb",
+              "leaders": [
+                {
+                  "displayValue": "4",
+                  "value": 4.0,
+                  "athlete": {
+                    "id": "3136195",
+                    "fullName": "Karl-Anthony Towns",
+                    "displayName": "Karl-Anthony Towns",
+                    "shortName": "K. Towns",
+                    "links": [
+                      {
+                        "rel": [
+                          "playercard",
+                          "desktop",
+                          "athlete"
+                        ],
+                        "href": "https://www.espn.com/nba/player/_/id/3136195/karl-anthony-towns"
+                      }
+                    ],
+                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3136195.png",
+                    "jersey": "32",
+                    "position": {
+                      "abbreviation": "C"
+                    },
+                    "team": {
+                      "id": "18"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "18"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "assists",
+              "displayName": "Assists",
+              "shortDisplayName": "Ast",
+              "abbreviation": "Ast",
+              "leaders": [
+                {
+                  "displayValue": "2",
+                  "value": 2.0,
+                  "athlete": {
+                    "id": "4433225",
+                    "fullName": "Tyler Kolek",
+                    "displayName": "Tyler Kolek",
+                    "shortName": "T. Kolek",
+                    "links": [
+                      {
+                        "rel": [
+                          "playercard",
+                          "desktop",
+                          "athlete"
+                        ],
+                        "href": "https://www.espn.com/nba/player/_/id/4433225/tyler-kolek"
+                      }
+                    ],
+                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/4433225.png",
+                    "jersey": "13",
+                    "position": {
+                      "abbreviation": "G"
+                    },
+                    "team": {
+                      "id": "18"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "18"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "rating",
+              "displayName": "Rating",
+              "shortDisplayName": "RAT",
+              "abbreviation": "RAT",
+              "leaders": [
+                {
+                  "displayValue": "14 PTS",
+                  "value": 22.350000381469727,
+                  "athlete": {
+                    "id": "3136195",
+                    "fullName": "Karl-Anthony Towns",
+                    "displayName": "Karl-Anthony Towns",
+                    "shortName": "K. Towns",
+                    "links": [
+                      {
+                        "rel": [
+                          "playercard",
+                          "desktop",
+                          "athlete"
+                        ],
+                        "href": "https://www.espn.com/nba/player/_/id/3136195/karl-anthony-towns"
+                      }
+                    ],
+                    "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3136195.png",
+                    "jersey": "32",
+                    "position": {
+                      "abbreviation": "C"
+                    },
+                    "team": {
+                      "id": "18"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "18"
+                  }
+                }
+              ]
+            }
+          ],
+          "records": [
+            {
+              "name": "overall",
+              "abbreviation": "Total",
+              "type": "total",
+              "summary": "4-4"
+            },
+            {
+              "name": "Home",
+              "type": "home",
+              "summary": "3-2"
+            },
+            {
+              "name": "Road",
+              "type": "road",
+              "summary": "1-2"
             }
           ]
         }
@@ -736,27 +800,27 @@
       "notes": [],
       "situation": {
         "lastPlay": {
-          "id": "401811037411",
+          "id": "401909940180",
           "type": {
-            "id": "90",
-            "text": "Out of Bounds - Bad Pass Turnover"
+            "id": "113",
+            "text": "Running Jump Shot"
           },
-          "text": "Zeke Nnaji out of bounds bad pass turnover",
-          "scoreValue": 0,
+          "text": "Riley Minix makes 22-foot running jump shot (Evan Mobley assists)",
+          "scoreValue": 3,
           "team": {
-            "id": "7"
+            "id": "5"
           },
           "probability": {
             "tiePercentage": 0.0,
-            "homeWinPercentage": 0.525,
-            "awayWinPercentage": 0.475
+            "homeWinPercentage": 0.565,
+            "awayWinPercentage": 0.43500000000000005
           },
           "athletesInvolved": [
             {
-              "id": "4431690",
-              "fullName": "Zeke Nnaji",
-              "displayName": "Zeke Nnaji",
-              "shortName": "Z. Nnaji",
+              "id": "5177362",
+              "fullName": "Riley Minix",
+              "displayName": "Riley Minix",
+              "shortName": "R. Minix",
               "links": [
                 {
                   "rel": [
@@ -764,45 +828,44 @@
                     "desktop",
                     "athlete"
                   ],
-                  "href": "https://www.espn.com/nba/player/_/id/4431690/zeke-nnaji"
+                  "href": "https://www.espn.com/nba/player/_/id/5177362/riley-minix"
                 }
               ],
-              "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/4431690.png",
-              "jersey": "22",
+              "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/5177362.png",
+              "jersey": "12",
               "position": "F",
               "team": {
-                "id": "7"
+                "id": "5"
               }
             }
           ]
         }
       },
       "status": {
-        "clock": 277.0,
-        "displayClock": "4:37",
-        "period": 3,
+        "clock": 692.0,
+        "displayClock": "11:32",
+        "period": 2,
         "type": {
           "id": "2",
           "name": "STATUS_IN_PROGRESS",
           "state": "in",
           "completed": false,
           "description": "In Progress",
-          "detail": "4:37 - 3rd Quarter",
-          "shortDetail": "4:37 - 3rd"
+          "detail": "11:32 - 2nd Quarter",
+          "shortDetail": "11:32 - 2nd"
         }
       },
       "broadcasts": [
         {
-          "market": "home",
+          "market": "national",
           "names": [
-            "Altitude Sports"
+            "NBA TV"
           ]
         },
         {
-          "market": "away",
+          "market": "home",
           "names": [
-            "FanDuel SN OK",
-            "NBA League Pass"
+            "DAZN CLE"
           ]
         }
       ],
@@ -811,8 +874,8 @@
           "periods": 4
         }
       },
-      "startDate": "2026-04-11T01:00Z",
-      "broadcast": "",
+      "startDate": "2026-11-08T01:00Z",
+      "broadcast": "NBA TV",
       "geoBroadcasts": [
         {
           "type": {
@@ -820,26 +883,26 @@
             "shortName": "TV"
           },
           "market": {
-            "id": "2",
-            "type": "Home"
+            "id": "1",
+            "type": "National"
           },
           "media": {
-            "shortName": "Altitude Sports"
+            "shortName": "NBA TV"
           },
           "lang": "en",
           "region": "us"
         },
         {
           "type": {
-            "id": "1",
-            "shortName": "TV"
+            "id": "4",
+            "shortName": "Streaming"
           },
           "market": {
-            "id": "3",
-            "type": "Away"
+            "id": "2",
+            "type": "Home"
           },
           "media": {
-            "shortName": "FanDuel SN OK"
+            "shortName": "DAZN CLE"
           },
           "lang": "en",
           "region": "us"
@@ -856,7 +919,7 @@
         "desktop",
         "event"
       ],
-      "href": "https://www.espn.com/nba/game?gameId=401811037",
+      "href": "https://www.espn.com/nba/game?gameId=401909940",
       "text": "Gamecast",
       "shortText": "Gamecast",
       "isExternal": false,
@@ -869,9 +932,21 @@
         "desktop",
         "event"
       ],
-      "href": "https://www.espn.com/nba/boxscore/_/gameId/401811037",
+      "href": "https://www.espn.com/nba/boxscore/_/gameId/401909940",
       "text": "Box Score",
       "shortText": "Box Score",
+      "isExternal": false,
+      "isPremium": false
+    },
+    {
+      "language": "en-US",
+      "rel": [
+        "highlights",
+        "desktop"
+      ],
+      "href": "https://www.espn.com/nba/video?gameId=401909940",
+      "text": "Highlights",
+      "shortText": "Highlights",
       "isExternal": false,
       "isPremium": false
     },
@@ -882,7 +957,7 @@
         "desktop",
         "event"
       ],
-      "href": "https://www.espn.com/nba/playbyplay/_/gameId/401811037",
+      "href": "https://www.espn.com/nba/playbyplay/_/gameId/401909940",
       "text": "Play-by-Play",
       "shortText": "Play-by-Play",
       "isExternal": false,
@@ -890,17 +965,17 @@
     }
   ],
   "status": {
-    "clock": 277.0,
-    "displayClock": "4:37",
-    "period": 3,
+    "clock": 692.0,
+    "displayClock": "11:32",
+    "period": 2,
     "type": {
       "id": "2",
       "name": "STATUS_IN_PROGRESS",
       "state": "in",
       "completed": false,
       "description": "In Progress",
-      "detail": "4:37 - 3rd Quarter",
-      "shortDetail": "4:37 - 3rd"
+      "detail": "11:32 - 2nd Quarter",
+      "shortDetail": "11:32 - 2nd"
     }
   }
 }

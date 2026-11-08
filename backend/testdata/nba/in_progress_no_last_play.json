@@ -1,19 +1,19 @@
 {
-  "id": "401811038",
-  "uid": "s:40~l:46~e:401811038",
-  "date": "2026-04-11T02:00Z",
-  "name": "LA Clippers at Portland Trail Blazers",
-  "shortName": "LAC @ POR",
+  "id": "401909941",
+  "uid": "s:40~l:46~e:401909941",
+  "date": "2026-11-08T01:00Z",
+  "name": "Washington Wizards at Oklahoma City Thunder",
+  "shortName": "WSH @ OKC",
   "season": {
-    "year": 2026,
+    "year": 2027,
     "type": 2,
     "slug": "regular-season"
   },
   "competitions": [
     {
-      "id": "401811038",
-      "uid": "s:40~l:46~e:401811038~c:401811038",
-      "date": "2026-04-11T02:00Z",
+      "id": "401909941",
+      "uid": "s:40~l:46~e:401909941~c:401909941",
+      "date": "2026-11-08T01:00Z",
       "attendance": 0,
       "type": {
         "id": "1",
@@ -25,34 +25,34 @@
       "playByPlayAvailable": true,
       "recent": true,
       "venue": {
-        "id": "3423",
-        "fullName": "Moda Center",
+        "id": "2559",
+        "fullName": "Paycom Center",
         "address": {
-          "city": "Portland",
-          "state": "OR"
+          "city": "Oklahoma City",
+          "state": "OK"
         },
         "indoor": true
       },
       "competitors": [
         {
-          "id": "22",
-          "uid": "s:40~l:46~t:22",
+          "id": "25",
+          "uid": "s:40~l:46~t:25",
           "type": "team",
           "order": 0,
           "homeAway": "home",
           "team": {
-            "id": "22",
-            "uid": "s:40~l:46~t:22",
-            "location": "Portland",
-            "name": "Trail Blazers",
-            "abbreviation": "POR",
-            "displayName": "Portland Trail Blazers",
-            "shortDisplayName": "Trail Blazers",
-            "color": "e03a3e",
-            "alternateColor": "000000",
+            "id": "25",
+            "uid": "s:40~l:46~t:25",
+            "location": "Oklahoma City",
+            "name": "Thunder",
+            "abbreviation": "OKC",
+            "displayName": "Oklahoma City Thunder",
+            "shortDisplayName": "Thunder",
+            "color": "007ac1",
+            "alternateColor": "ef3b24",
             "isActive": true,
             "venue": {
-              "id": "3423"
+              "id": "2559"
             },
             "links": [
               {
@@ -61,7 +61,7 @@
                   "desktop",
                   "team"
                 ],
-                "href": "https://www.espn.com/nba/team/_/name/por/portland-trail-blazers",
+                "href": "https://www.espn.com/nba/team/_/name/okc/oklahoma-city-thunder",
                 "text": "Clubhouse",
                 "isExternal": false,
                 "isPremium": false
@@ -72,7 +72,19 @@
                   "desktop",
                   "team"
                 ],
-                "href": "https://www.espn.com/nba/team/roster/_/name/por/portland-trail-blazers",
+                "href": "https://www.espn.com/nba/team/roster/_/name/okc/oklahoma-city-thunder",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:25&section=roster",
                 "text": "Roster",
                 "isExternal": false,
                 "isPremium": false
@@ -83,7 +95,19 @@
                   "desktop",
                   "team"
                 ],
-                "href": "https://www.espn.com/nba/team/stats/_/name/por/portland-trail-blazers",
+                "href": "https://www.espn.com/nba/team/stats/_/name/okc/oklahoma-city-thunder",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:25&section=stats",
                 "text": "Statistics",
                 "isExternal": false,
                 "isPremium": false
@@ -94,13 +118,26 @@
                   "desktop",
                   "team"
                 ],
-                "href": "https://www.espn.com/nba/team/schedule/_/name/por",
+                "href": "https://www.espn.com/nba/team/schedule/_/name/okc",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:25&section=scores",
                 "text": "Schedule",
                 "isExternal": false,
                 "isPremium": false
               }
             ],
-            "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/por.png"
+            "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/okc.png",
+            "logoDark": "https://a.espncdn.com/i/teamlogos/nba/500-dark/scoreboard/okc.png"
           },
           "score": "0",
           "linescores": [
@@ -197,39 +234,39 @@
               "name": "overall",
               "abbreviation": "Total",
               "type": "total",
-              "summary": "40-40"
+              "summary": "7-2"
             },
             {
               "name": "Home",
               "type": "home",
-              "summary": "22-17"
+              "summary": "4-0"
             },
             {
               "name": "Road",
               "type": "road",
-              "summary": "18-23"
+              "summary": "3-2"
             }
           ]
         },
         {
-          "id": "12",
-          "uid": "s:40~l:46~t:12",
+          "id": "27",
+          "uid": "s:40~l:46~t:27",
           "type": "team",
           "order": 1,
           "homeAway": "away",
           "team": {
-            "id": "12",
-            "uid": "s:40~l:46~t:12",
-            "location": "LA",
-            "name": "Clippers",
-            "abbreviation": "LAC",
-            "displayName": "LA Clippers",
-            "shortDisplayName": "Clippers",
-            "color": "12173f",
-            "alternateColor": "c8102e",
+            "id": "27",
+            "uid": "s:40~l:46~t:27",
+            "location": "Washington",
+            "name": "Wizards",
+            "abbreviation": "WSH",
+            "displayName": "Washington Wizards",
+            "shortDisplayName": "Wizards",
+            "color": "e31837",
+            "alternateColor": "002b5c",
             "isActive": true,
             "venue": {
-              "id": "1841"
+              "id": "1823"
             },
             "links": [
               {
@@ -238,7 +275,7 @@
                   "desktop",
                   "team"
                 ],
-                "href": "https://www.espn.com/nba/team/_/name/lac/la-clippers",
+                "href": "https://www.espn.com/nba/team/_/name/wsh/washington-wizards",
                 "text": "Clubhouse",
                 "isExternal": false,
                 "isPremium": false
@@ -249,7 +286,19 @@
                   "desktop",
                   "team"
                 ],
-                "href": "https://www.espn.com/nba/team/roster/_/name/lac/la-clippers",
+                "href": "https://www.espn.com/nba/team/roster/_/name/wsh/washington-wizards",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:27&section=roster",
                 "text": "Roster",
                 "isExternal": false,
                 "isPremium": false
@@ -260,7 +309,19 @@
                   "desktop",
                   "team"
                 ],
-                "href": "https://www.espn.com/nba/team/stats/_/name/lac/la-clippers",
+                "href": "https://www.espn.com/nba/team/stats/_/name/wsh/washington-wizards",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:27&section=stats",
                 "text": "Statistics",
                 "isExternal": false,
                 "isPremium": false
@@ -271,13 +332,26 @@
                   "desktop",
                   "team"
                 ],
-                "href": "https://www.espn.com/nba/team/schedule/_/name/lac",
+                "href": "https://www.espn.com/nba/team/schedule/_/name/wsh",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:46~t:27&section=scores",
                 "text": "Schedule",
                 "isExternal": false,
                 "isPremium": false
               }
             ],
-            "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/lac.png"
+            "logo": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/wsh.png",
+            "logoDark": "https://a.espncdn.com/i/teamlogos/nba/500-dark/scoreboard/wsh.png"
           },
           "score": "0",
           "linescores": [
@@ -374,17 +448,17 @@
               "name": "overall",
               "abbreviation": "Total",
               "type": "total",
-              "summary": "41-39"
+              "summary": "4-5"
             },
             {
               "name": "Home",
               "type": "home",
-              "summary": "22-18"
+              "summary": "2-2"
             },
             {
               "name": "Road",
               "type": "road",
-              "summary": "19-21"
+              "summary": "2-3"
             }
           ]
         }
@@ -392,8 +466,8 @@
       "notes": [],
       "situation": {},
       "status": {
-        "clock": 699.0,
-        "displayClock": "11:39",
+        "clock": 716.0,
+        "displayClock": "11:56",
         "period": 1,
         "type": {
           "id": "2",
@@ -401,23 +475,22 @@
           "state": "in",
           "completed": false,
           "description": "In Progress",
-          "detail": "11:39 - 1st Quarter",
-          "shortDetail": "11:39 - 1st"
+          "detail": "11:56 - 1st Quarter",
+          "shortDetail": "11:56 - 1st"
         }
       },
       "broadcasts": [
         {
-          "market": "home",
+          "market": "away",
           "names": [
-            "KUNP 16",
-            "BlazerVision"
+            "MNMT"
           ]
         },
         {
-          "market": "away",
+          "market": "home",
           "names": [
-            "FanDuel SN SoCal",
-            "NBA League Pass"
+            "KSBI",
+            "Thunder App"
           ]
         }
       ],
@@ -426,9 +499,24 @@
           "periods": 4
         }
       },
-      "startDate": "2026-04-11T02:00Z",
+      "startDate": "2026-11-08T01:00Z",
       "broadcast": "",
       "geoBroadcasts": [
+        {
+          "type": {
+            "id": "1",
+            "shortName": "TV"
+          },
+          "market": {
+            "id": "3",
+            "type": "Away"
+          },
+          "media": {
+            "shortName": "MNMT"
+          },
+          "lang": "en",
+          "region": "us"
+        },
         {
           "type": {
             "id": "1",
@@ -439,7 +527,7 @@
             "type": "Home"
           },
           "media": {
-            "shortName": "KUNP 16"
+            "shortName": "KSBI"
           },
           "lang": "en",
           "region": "us"
@@ -454,22 +542,7 @@
             "type": "Home"
           },
           "media": {
-            "shortName": "BlazerVision"
-          },
-          "lang": "en",
-          "region": "us"
-        },
-        {
-          "type": {
-            "id": "1",
-            "shortName": "TV"
-          },
-          "market": {
-            "id": "3",
-            "type": "Away"
-          },
-          "media": {
-            "shortName": "FanDuel SN SoCal"
+            "shortName": "Thunder App"
           },
           "lang": "en",
           "region": "us"
@@ -486,7 +559,7 @@
         "desktop",
         "event"
       ],
-      "href": "https://www.espn.com/nba/game?gameId=401811038",
+      "href": "https://www.espn.com/nba/game?gameId=401909941",
       "text": "Gamecast",
       "shortText": "Gamecast",
       "isExternal": false,
@@ -499,7 +572,7 @@
         "desktop",
         "event"
       ],
-      "href": "https://www.espn.com/nba/boxscore/_/gameId/401811038",
+      "href": "https://www.espn.com/nba/boxscore/_/gameId/401909941",
       "text": "Box Score",
       "shortText": "Box Score",
       "isExternal": false,
@@ -512,7 +585,7 @@
         "desktop",
         "event"
       ],
-      "href": "https://www.espn.com/nba/playbyplay/_/gameId/401811038",
+      "href": "https://www.espn.com/nba/playbyplay/_/gameId/401909941",
       "text": "Play-by-Play",
       "shortText": "Play-by-Play",
       "isExternal": false,
@@ -520,8 +593,8 @@
     }
   ],
   "status": {
-    "clock": 699.0,
-    "displayClock": "11:39",
+    "clock": 716.0,
+    "displayClock": "11:56",
     "period": 1,
     "type": {
       "id": "2",
@@ -529,8 +602,8 @@
       "state": "in",
       "completed": false,
       "description": "In Progress",
-      "detail": "11:39 - 1st Quarter",
-      "shortDetail": "11:39 - 1st"
+      "detail": "11:56 - 1st Quarter",
+      "shortDetail": "11:56 - 1st"
     }
   }
 }

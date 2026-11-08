@@ -33,9 +33,16 @@ fn testdata() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata")
 }
 
+/// The second half of a corpus pair: `<name>.summary.json` is the per-event
+/// summary body captured at the same moment as the event `<name>.json` (the
+/// `PROVENANCE.md` beside each pairs corpus: hockey's, the NBA's). It ends in
+/// `.json` like an event, so the walk has to know it is never a fixture of its
+/// own, for any sport.
+const SUMMARY_STEM: &str = ".summary";
+
 /// Fixture stems under `testdata/{sport}`, recursing into the per-league
-/// subdirectories football and soccer use. Sorted, so goldens and failures come
-/// out in a stable order.
+/// subdirectories football and soccer use and skipping every pair's summary
+/// half. Sorted, so goldens and failures come out in a stable order.
 fn fixture_names(sport: &str) -> Vec<String> {
     fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
         let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {dir:?}: {e}"));
@@ -44,7 +51,9 @@ fn fixture_names(sport: &str) -> Vec<String> {
             let name = entry.file_name().into_string().expect("utf-8 filename");
             if entry.file_type().expect("file type").is_dir() {
                 walk(&entry.path(), &format!("{prefix}{name}/"), out);
-            } else if let Some(stem) = name.strip_suffix(".json") {
+            } else if let Some(stem) = name.strip_suffix(".json")
+                && !stem.ends_with(SUMMARY_STEM)
+            {
                 out.push(format!("{prefix}{stem}"));
             }
         }
@@ -139,12 +148,6 @@ pub(crate) fn soccer_games() -> Vec<(String, SoccerGame)> {
         .collect()
 }
 
-/// Hockey fixtures are pairs: `<name>.json`, the scoreboard event, and
-/// `<name>.summary.json`, the per-event summary at the same moment
-/// (`testdata/hockey/nhl/PROVENANCE.md`). The second half of a pair is not a
-/// fixture of its own.
-const SUMMARY_STEM: &str = ".summary";
-
 /// The live fixture also pinned without its summary, under
 /// [`NO_SUMMARY_SUFFIX`].
 const HOCKEY_SCOREBOARD_ONLY: &str = "nhl/in_progress";
@@ -187,7 +190,6 @@ pub(crate) fn hockey_games() -> Vec<(String, HockeyGame)> {
 
     let mut games: Vec<(String, HockeyGame)> = fixture_names("hockey")
         .into_iter()
-        .filter(|name| !name.ends_with(SUMMARY_STEM))
         .map(|name| {
             let (extract, summary) = hockey_parts(&name, true);
             let game = game_from_extract(&extract, summary.as_ref());
@@ -548,9 +550,7 @@ mod tests {
     fn hockey_dto_round_trips_the_combined_view() {
         use scoreboard_wire as wire;
 
-        let names = fixture_names("hockey");
-        let fixtures = names.iter().filter(|name| !name.ends_with(SUMMARY_STEM));
-        for name in fixtures {
+        for name in &fixture_names("hockey") {
             for with_summary in [true, false] {
                 let (extract, summary) = hockey_parts(name, with_summary);
                 let view = extract.as_game(summary.as_ref());
