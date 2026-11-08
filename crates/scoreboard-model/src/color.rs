@@ -135,10 +135,36 @@ const fn min_255(value: u32) -> u32 {
     if value > 255 { 255 } else { value }
 }
 
+impl Rgb888 {
+    /// A colour with no hue to keep that the floor would lift to a flat
+    /// gray: every channel equal and under [`TEAM_COLOR_MIN_CHANNEL`]. Pure
+    /// black and the near-blacks some clubs wear (San Antonio, Brooklyn,
+    /// Utah's hockey club, the Kings' `121212`); not Vegas's steel, whose
+    /// channels differ.
+    pub const fn is_dark_gray(self) -> bool {
+        let (red, green, blue) = (self.0 >> 16 & 0xFF, self.0 >> 8 & 0xFF, self.0 & 0xFF);
+        red == green && green == blue && red < TEAM_COLOR_MIN_CHANNEL
+    }
+}
+
 impl From<scoreboard_wire::TeamColors> for Rgb888 {
-    /// A team's primary, brightened — the only form any view stores.
+    /// A team's display colour, brightened — the only form any view stores.
+    ///
+    /// The primary, unless the primary is a dark gray: the floor would lift
+    /// that to the same flat gray every loser wears on a final screen and
+    /// every rule is drawn in, so the winner of a game reads as a second
+    /// loser (owner, 2026-11-08, from the NBA mockups). Then the alternate
+    /// carries the identity — San Antonio silver, Brooklyn white, Utah pale
+    /// blue. An alternate that is itself a dark gray, or absent (the wire
+    /// spells absence as black), leaves the floor's gray in place.
     fn from(colors: scoreboard_wire::TeamColors) -> Self {
-        Self(colors.primary & 0x00FF_FFFF).brightened()
+        let primary = Self(colors.primary & 0x00FF_FFFF);
+        let alternate = Self(colors.alternate & 0x00FF_FFFF);
+        if primary.is_dark_gray() && !alternate.is_dark_gray() {
+            alternate.brightened()
+        } else {
+            primary.brightened()
+        }
     }
 }
 

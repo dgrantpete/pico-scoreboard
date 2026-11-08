@@ -267,6 +267,27 @@ fn brightening_turns_pure_black_into_gray() {
     assert_eq!(Rgb888(0).brightened(), Rgb888::new(128, 128, 128));
 }
 
+/// The floor's gray is also the loser's gray on every final screen, so a
+/// black primary yields to the alternate (owner, 2026-11-08).
+#[test]
+fn a_dark_gray_primary_yields_to_the_alternate() {
+    let colors = |primary, alternate| scoreboard_wire::TeamColors { primary, alternate };
+    // San Antonio: black over silver.
+    assert_eq!(Rgb888::from(colors(0x00_0000, 0xC4_CED4)), Rgb888(0xC4_CED4).brightened());
+    // Brooklyn: black over white.
+    assert_eq!(Rgb888::from(colors(0x00_0000, 0xFF_FFFF)), Rgb888(0xFF_FFFF));
+    // The Kings' near-black counts as gray too.
+    assert_eq!(Rgb888::from(colors(0x12_1212, 0xA2_AAAD)), Rgb888(0xA2_AAAD).brightened());
+    // Two dark grays, or no alternate at all: the floor's gray stands.
+    assert_eq!(Rgb888::from(colors(0x00_0000, 0x00_0000)), Rgb888::new(128, 128, 128));
+    assert_eq!(Rgb888::from(colors(0x00_0000, 0x10_1010)), Rgb888::new(128, 128, 128));
+    // A navy keeps its own lift however bright the alternate.
+    assert_eq!(Rgb888::from(colors(0x0C_2340, 0xFF_FFFF)), Rgb888(0x0C_2340).brightened());
+    // Vegas steel has a hue and keeps it.
+    assert_eq!(Rgb888::from(colors(0x34_4043, 0xB4_975A)), Rgb888(0x34_4043).brightened());
+    assert!(!Rgb888(0x34_4043).is_dark_gray());
+}
+
 #[test]
 fn a_team_color_reaches_the_view_already_brightened() {
     let store = committed("mlb/live_inning");
