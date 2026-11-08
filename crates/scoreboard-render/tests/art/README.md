@@ -31,6 +31,7 @@ Alpha is 0 or 255 everywhere; 0 is transparent.
 
 Phase 2 of BACKLOG 116 deletes this directory with the sprites it pins,
 once the procedural replacements are wired in and the golden frames are
-proven byte-identical. The exception is the four hand-drawn sprites — the
-MLB `field` and `base_marker`, the `football_ball` and `football_field` —
-whose exports become the new source of truth and outlive the pipeline.
+proven byte-identical. The four hand-drawn sprites' exports — the MLB
+`field` and `base_marker`, the `football_ball` and `football_field` — are
+not here: cropped the same way, they are the new source of truth, in
+`crates/scoreboard-render/art/`, and outlive the pipeline.
