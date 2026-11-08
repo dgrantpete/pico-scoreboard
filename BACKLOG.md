@@ -1299,3 +1299,19 @@ reviewed change.
     the LUT after. The fleet has carried the rare form of this since the
     Rust migration; a settings save that happened to land on one of core 1's
     critical sections would have frozen the unit until a power cycle.
+114. **OPEN — a downgrade install's trial boot stalled dark on the bench
+    (2026-11-08 UTC).** While validating the 2026.11.07 release, the bench
+    unit on the new image checked prod before the deploy, found October's
+    version string and installed it (the OTA rule is an exact match in
+    either direction). Download, verify and swap completed; the trial boot of
+    2026.10.15-a5fa0d5 then sat dark with no network for ten minutes, no
+    breadcrumb, both cores executing app code and the state partition still
+    reading "swap". A probe reflash cleared it, and the forward path
+    (October client installing 2026.11.07, trial, confirm at 30 s) then
+    passed cleanly, which is the path the fleet takes. Not reproduced yet.
+    Candidates: the October image's trial under a bootloader built from
+    today's main (the boot crate's pins are unchanged, but confirm), or a
+    DFU partition holding the standalone image's leftovers from the probe
+    sessions. Reproduce on the bench with two published versions before
+    treating the backward path as safe, and consider refusing a downgrade in
+    `scoreboard_ota::decide` unless the channel says so.
