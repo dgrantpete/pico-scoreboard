@@ -783,7 +783,12 @@ the new screens, the new pairs added). Mutation contract: the glow, the
 blink and the caption window are pure functions of snapshot anchors and
 the wall rail; no renderer state.
 
-### 6.6 Config, input, app
+### 6.6 Config, input, app — done 2026-11-08
+Landed: the device's `Accept` is `ext=2` (`STRUCT_CONTENT_TYPE_EXT` flipped
+in the wire crate, the one place it is written) and `probe.rs` names
+`nba_final` (with 6.5b). D12 stays as it was: `sports.nba` defaults off; an
+existing unit's saved document carries the key either way, so a default
+change would reach only units that never saved one.
 Nothing structural: `sports.nba` exists, the league registry and
 `MAX_SOURCES` are unchanged. `probe.rs` mode names gain `nba_final`; the
 default flips only if D12 says so (defaults, patch tests, the README's

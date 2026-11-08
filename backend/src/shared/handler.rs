@@ -119,8 +119,8 @@ mod tests {
     #[tokio::test]
     async fn ext_accept_hands_the_encoder_its_level() {
         for (accept, level) in [
-            (wire::STRUCT_CONTENT_TYPE_EXT, 1u8),
-            ("application/x-scoreboard-struct; ext=2", 2),
+            ("application/x-scoreboard-struct; ext=1", 1u8),
+            (wire::STRUCT_CONTENT_TYPE_EXT, 2),
         ] {
             let headers = headers_with_accept(Some(accept));
             let resp = game_response_ext(&headers, &Dummy { n: 7 }, |d, level| vec![d.n, level]);

@@ -88,10 +88,13 @@ pub use error::{BufferFull, DecodeError, DecodeErrorKind};
 /// The `Accept` / `Content-Type` value that selects this format over JSON.
 pub const STRUCT_CONTENT_TYPE: &str = "application/x-scoreboard-struct";
 
-/// The `Accept` value that asks for extension level 1 — what the shipping Rust
-/// firmware sends. It contains [`STRUCT_CONTENT_TYPE`], so a server that
-/// predates extensions still serves plain v2 to it.
-pub const STRUCT_CONTENT_TYPE_EXT: &str = "application/x-scoreboard-struct; ext=1";
+/// The `Accept` value that asks for the highest extension level this crate
+/// defines — what the shipping Rust firmware sends (level 2 since the NBA
+/// court screens, NBA.md phase 6.6; level 1 from 2026-10-12 until then). It
+/// contains [`STRUCT_CONTENT_TYPE`], so a server that predates extensions
+/// still serves plain v2 to it, and one that knows a lower level serves that
+/// level: either decodes, with the groups it lacks absent.
+pub const STRUCT_CONTENT_TYPE_EXT: &str = "application/x-scoreboard-struct; ext=2";
 
 /// The name of the media-type parameter that carries the extension level:
 /// `ext=N` on a [`STRUCT_CONTENT_TYPE`] media range (crate docs). The backend

@@ -242,8 +242,11 @@ impl ApiClient {
         url: &str,
         buf: &'buf mut [u8],
     ) -> Result<Option<&'buf [u8]>, PollError> {
-        // `ext=1`: the per-sport extensions (today the NBA pregame's betting
-        // lines). A backend that predates them serves plain v2, which decodes.
+        // The extension levels this firmware decodes (`ext=2`): the NBA
+        // pregame's betting lines at 1, and at 2 the court screens' ledger,
+        // run, newest score and makes, the pregame's second info line and the
+        // final's leaders (NBA.md §4). A backend that predates a level serves
+        // the highest it knows, which decodes with those groups absent.
         let fetched = self
             .get(url, &[("Accept", STRUCT_CONTENT_TYPE_EXT)], buf)
             .await?;
