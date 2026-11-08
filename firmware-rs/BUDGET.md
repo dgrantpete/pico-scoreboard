@@ -228,6 +228,28 @@ rust-objcopy -O binary "$ELF" fw.bin && wc -c fw.bin
 arm-none-eabi-size -A "$ELF"
 ```
 
+### What the court screens cost in flash (NBA.md §5)
+
+Measured 2026-11-08 between the two stable releases: `cfd4e88`
+(2026.11.08-cfd4e88, the last image before the NBA work) and `10dcb11`
+(2026.11.08-10dcb11, every NBA phase landed), both built by `publish-fw`
+from a clean checkout with a version string of the same length.
+
+| Section | Before | After | Δ |
+|---|---:|---:|---:|
+| `.text` | 771,456 | 788,624 | +17,168 |
+| `.rodata` | 378,436 | 379,000 | +564 |
+| `.data` | 12,356 | 14,276 | +1,920 |
+| Raw image | 1,162,556 | 1,182,204 | **+19,648** |
+
+Inside §5's 15–25 KB estimate, and 11 KB under hockey's 30.8 KB: the court
+is code, not art (`.rodata` grew 564 B against the rink's 955 B of sprite),
+and the wire's `ext=2` decode is one module's blocks rather than a new
+sport's three layouts. `.data` is `CHANNEL`'s three slots growing 640 B
+each. The image is 75 % of the active partition; **390 KB of headroom**
+remain. The two ELFs are the release worktree builds; reproduce as the
+hockey section above says.
+
 ### Correction to SPEC §4 — the handoff needs three buffers, not two
 
 SPEC §4 specifies `static SNAPSHOTS: [ScoreboardSnapshot; 2]`: core 0 fills the
