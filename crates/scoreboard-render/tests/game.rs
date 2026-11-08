@@ -1036,17 +1036,15 @@ fn the_football_screen_tints_its_endzones_and_bars() {
     let frame = football().draw();
     let table = geometry::FOOTBALL_LIVE;
     // Three bars per team, emptying left to right: two held for the away side.
+    let (away, home) = (table.timeouts_away, table.timeouts_home);
+    assert_eq!(frame.pixel(away.x, away.y), pack(AWAY_TEAM));
     assert_eq!(
-        frame.pixel(table.timeout_away_x, table.timeout_y),
-        pack(AWAY_TEAM)
-    );
-    assert_eq!(
-        frame.pixel(table.timeout_away_x + 14, table.timeout_y),
+        frame.pixel(away.x + 14, away.y),
         DIM_GRAY,
         "the spent timeout"
     );
     assert_eq!(
-        frame.pixel(table.timeout_home_x + 14, table.timeout_y),
+        frame.pixel(home.x + 14, home.y),
         pack(HOME_TEAM),
         "all three held"
     );
@@ -1069,11 +1067,9 @@ fn undeclared_timeouts_draw_no_bars_at_all() {
     harness.snapshot.football_live.away_timeouts = None;
     let frame = harness.draw();
     let table = geometry::FOOTBALL_LIVE;
+    let row = table.timeouts_away;
     assert_eq!(
-        frame.lit_in(
-            table.timeout_away_x..table.timeout_away_x + 20,
-            table.timeout_y..table.timeout_y + 1
-        ),
+        frame.lit_in(row.x..row.x + row.width, row.y..row.y + row.height),
         0,
         "no bars beats three fake ones"
     );
@@ -1155,10 +1151,10 @@ fn the_football_flash_spans_the_full_width() {
 
 use scoreboard_model::snapshot::GoalMark;
 use scoreboard_model::{GameDetail, LeagueId, LocalClock, Logos as CommitLogos, Store};
-use scoreboard_render::game::hockey::{mark_at, mix};
+use scoreboard_render::game::hockey::mark_at;
 use scoreboard_render::generated::layout;
 use scoreboard_render::geometry::{HOCKEY_FINAL, HOCKEY_LIVE};
-use scoreboard_render::{Slice, WHITE, rgb565};
+use scoreboard_render::{Slice, WHITE, mix, rgb565};
 use scoreboard_wire::hockey as wire;
 use scoreboard_wire::{LivePhase, TeamColors, TeamState};
 

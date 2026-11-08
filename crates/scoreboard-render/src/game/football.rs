@@ -18,6 +18,7 @@ use crate::blit::Canvas;
 use crate::font::{self, Align, Style};
 use crate::generated::layout;
 use crate::geometry::{self, FOOTBALL_LIVE};
+use crate::widgets::{arrow, timeout_blocks};
 use crate::{BLACK, DIM_GRAY, generated, pack, rgb565, toast};
 use scoreboard_model::snapshot::Side;
 use scoreboard_model::snapshot::{FieldSituation, FootballLiveView};
@@ -26,6 +27,8 @@ use scoreboard_model::snapshot::{FieldSituation, FootballLiveView};
 const SCRIMMAGE: u16 = rgb565(0, 0, 140);
 /// First-down yellow. It wins where the two lines meet, by drawing second.
 const FIRST_DOWN: u16 = rgb565(255, 255, 0);
+/// A side's timeouts per half, and so the blocks in its row.
+const TIMEOUTS: u8 = 3;
 
 /// The endzone blocks ship as pure red (away) and pure blue (home) placeholders.
 /// Their palette indices are found by *value*, because `compile_layout` assigns
@@ -62,14 +65,14 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
 
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
 
-    for (x, timeouts, color) in [
-        (table.timeout_away_x, view.away_timeouts, view.away_color),
-        (table.timeout_home_x, view.home_timeouts, view.home_color),
+    for (row, timeouts, color) in [
+        (table.timeouts_away, view.away_timeouts, view.away_color),
+        (table.timeouts_home, view.home_timeouts, view.home_color),
     ] {
         // `None` means the feed did not advertise timeouts, so the bars stay
         // undrawn rather than showing a fake three.
         if let Some(remaining) = timeouts {
-            timeout_bars(canvas, x, table.timeout_y, remaining, pack(color));
+            timeout_blocks(canvas, row, TIMEOUTS, remaining, pack(color), DIM_GRAY);
         }
     }
 
@@ -235,22 +238,5 @@ impl Field {
             first_down_top_x: geometry::football_top_x(first_down_x),
             attacking_right,
         }
-    }
-}
-
-/// Three 6×1 bars with 1 px gaps, emptying left to right as timeouts are burned.
-fn timeout_bars(canvas: &mut Canvas<'_>, x: i32, y: i32, remaining: u8, color: u16) {
-    for index in 0..3 {
-        let held = index < remaining as i32;
-        canvas.hline(x + index * 7, y, 6, if held { color } else { DIM_GRAY });
-    }
-}
-
-/// A 3×5 solid triangle, top-left corner at `(x, y)`. Hockey's rink layout
-/// points its strength banner with the same one.
-pub(super) fn arrow(canvas: &mut Canvas<'_>, x: i32, y: i32, points_right: bool, color: u16) {
-    for step in 0..3 {
-        let column = if points_right { x + step } else { x + 2 - step };
-        canvas.vline(column, y + step, 5 - 2 * step, color);
     }
 }

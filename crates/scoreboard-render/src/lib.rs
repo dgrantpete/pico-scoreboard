@@ -53,6 +53,7 @@
 //! CLI but *building* needs only cargo. Same pattern as `hub75`'s goldens.
 
 pub mod blit;
+pub mod court;
 pub mod event;
 pub mod font;
 pub mod frame;
@@ -101,6 +102,48 @@ pub fn pack_scaled(color: scoreboard_model::Rgb888, num: u32, den: u32) -> u16 {
         scale(color.green()),
         scale(color.blue()),
     )
+}
+
+/// A packed color's brightness scaled by `num`/`den`, per 565 channel.
+///
+/// The counterpart of [`pack_scaled`] for a color that is already on the
+/// panel's side of the pack — a team's end of the rink, the court's lane
+/// lines, the power-play glow — where the 5- and 6-bit truncation has already
+/// happened and there is no 8-bit value left to be faithful to.
+pub fn scale(color: u16, num: u32, den: u32) -> u16 {
+    let red = ((color >> 11) & 0x1F) as u32 * num / den;
+    let green = ((color >> 5) & 0x3F) as u32 * num / den;
+    let blue = (color & 0x1F) as u32 * num / den;
+    ((red.min(0x1F) as u16) << 11) | ((green.min(0x3F) as u16) << 5) | blue.min(0x1F) as u16
+}
+
+/// `over` composited onto `under` at `alpha`/256, through 8-bit channels.
+///
+/// The one blend in the crate: hockey's goal marks and the court's makes read
+/// the pixel under them back from the canvas and write this over it, so marks
+/// from one spot climb toward the team color instead of fusing (NHL.md D9,
+/// NBA.md D5). The channels are widened to 8 bits for the arithmetic and
+/// packed again on the way out; the stair that quantisation puts in the
+/// climb is BACKLOG 115's.
+pub fn mix(under: u16, over: u16, alpha: u32) -> u16 {
+    let ([under_r, under_g, under_b], [over_r, over_g, over_b]) = (expand(under), expand(over));
+    let blend = |under: u32, over: u32| ((under * (256 - alpha) + over * alpha) / 256) as u8;
+    rgb565(
+        blend(under_r, over_r),
+        blend(under_g, over_g),
+        blend(under_b, over_b),
+    )
+}
+
+/// A packed color's channels widened back to 8 bits, by scaling — the inverse
+/// of [`rgb565`]'s truncation as nearly as the lost bits allow.
+fn expand(color: u16) -> [u32; 3] {
+    let (red, green, blue) = (
+        (color >> 11) as u32 & 0x1F,
+        (color >> 5) as u32 & 0x3F,
+        color as u32 & 0x1F,
+    );
+    [red * 255 / 31, green * 255 / 63, blue * 255 / 31]
 }
 
 /// Transparency sentinel shared by `fonts.MAGENTA_RGB565`, the layout

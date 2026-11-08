@@ -506,10 +506,10 @@ pub struct FootballLiveGeometry {
     pub logo_home: Slice,
     pub score_away: Slice,
     pub score_home: Slice,
-    /// Timeout bars: three per team, 6×1 px, 1 px gaps.
-    pub timeout_y: i32,
-    pub timeout_away_x: i32,
-    pub timeout_home_x: i32,
+    /// Each side's timeout row: three 6 × 1 bars with 1 px gaps, which
+    /// `widgets::timeout_blocks` cuts from the row's 20 px.
+    pub timeouts_away: Slice,
+    pub timeouts_home: Slice,
     pub phase: Slice,
     pub clock: Slice,
     /// "3RD & 7", centered; the possession arrow sits beside it.
@@ -525,9 +525,8 @@ pub struct FootballLiveGeometry {
 pub const FOOTBALL_LIVE: FootballLiveGeometry = FootballLiveGeometry {
     logo_away: rect(1, 1, 24, 24),
     logo_home: rect(103, 1, 24, 24),
-    timeout_y: 26,
-    timeout_away_x: 3,
-    timeout_home_x: 105,
+    timeouts_away: rect(3, 26, 20, 1),
+    timeouts_home: rect(105, 26, 20, 1),
     score_away: rect(1, 28, 24, 16),
     score_home: rect(103, 28, 24, 16),
     phase: rect(26, 3, 26, 8),

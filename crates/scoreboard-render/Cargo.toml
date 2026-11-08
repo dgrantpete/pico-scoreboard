@@ -12,6 +12,12 @@ heapless = "=0.9.3"
 # no_std, zero dependencies, `forbid(unsafe_code)`, every buffer caller-owned.
 # Audited in SPEC.md Appendix A.
 qrcodegen-no-heap = "=1.8.1"
+# `sqrtf` and `roundf` for the court's three-point arc and its projection
+# (`court.rs`). `core` has neither on stable; the same version, for the same
+# reason, as `crates/hub75` (`pow` for the gamma LUT) and `scoreboard-input`
+# (`logf` for the lux curve). `sqrtf` is correctly rounded and `roundf` is
+# exact, so the court draws the bytes the std-built mockup drew.
+libm = "=0.2.16"
 
 [dev-dependencies]
 # The render target for pixel assertions. A dev-dependency on purpose: the

@@ -2222,6 +2222,7 @@ version = "0.1.0"
 dependencies = [
  "heapless 0.9.3",
  "hub75",
+ "libm",
  "qrcodegen-no-heap",
  "scoreboard-model",
  "scoreboard-wire",

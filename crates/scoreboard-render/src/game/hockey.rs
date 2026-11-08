@@ -32,8 +32,8 @@ use crate::geometry::{
     HockeyLiveGeometry, SHOOTOUT_MARK, SHOOTOUT_PITCH,
 };
 use crate::time::WallMs;
-use crate::widgets::count_dots;
-use crate::{BLACK, MAGENTA, WHITE, generated, pack, rgb565, toast};
+use crate::widgets::{arrow, count_dots};
+use crate::{BLACK, MAGENTA, WHITE, generated, mix, pack, rgb565, scale, toast};
 use scoreboard_model::UiColors;
 use scoreboard_model::snapshot::{
     BannerKind, GoalMark, HockeyLiveView, ShootoutRow, ShootoutView, ShotMark, Side,
@@ -207,7 +207,7 @@ fn situation(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &HockeyLiveView, 
         } else {
             text_x - 6
         };
-        super::football::arrow(canvas, x, slot.y + 1, right, color);
+        arrow(canvas, x, slot.y + 1, right, color);
         return;
     }
     if let Some(side) = view.last_goal {
@@ -686,32 +686,4 @@ fn side_color(view: &HockeyLiveView, side: Side) -> u16 {
         Side::Away => view.away_color,
         Side::Home => view.home_color,
     })
-}
-
-/// `over` composited onto `under` at `alpha`/256, through 8-bit channels.
-pub fn mix(under: u16, over: u16, alpha: u32) -> u16 {
-    let ([under_r, under_g, under_b], [over_r, over_g, over_b]) = (expand(under), expand(over));
-    let blend = |under: u32, over: u32| ((under * (256 - alpha) + over * alpha) / 256) as u8;
-    rgb565(
-        blend(under_r, over_r),
-        blend(under_g, over_g),
-        blend(under_b, over_b),
-    )
-}
-
-fn expand(color: u16) -> [u32; 3] {
-    let (red, green, blue) = (
-        (color >> 11) as u32 & 0x1F,
-        (color >> 5) as u32 & 0x3F,
-        color as u32 & 0x1F,
-    );
-    [red * 255 / 31, green * 255 / 63, blue * 255 / 31]
-}
-
-/// A packed color's brightness scaled by `num`/`den`, per 565 channel.
-fn scale(color: u16, num: u32, den: u32) -> u16 {
-    let red = ((color >> 11) & 0x1F) as u32 * num / den;
-    let green = ((color >> 5) & 0x3F) as u32 * num / den;
-    let blue = (color & 0x1F) as u32 * num / den;
-    ((red.min(0x1F) as u16) << 11) | ((green.min(0x3F) as u16) << 5) | blue.min(0x1F) as u16
 }
