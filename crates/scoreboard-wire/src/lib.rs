@@ -33,8 +33,8 @@
 //!
 //! Only [`nba`] defines levels — `ext=1` its pregame team lines, `ext=2` its
 //! live, pregame and final blocks — so [`EXT_LEVEL_MAX`] is its ceiling. Its
-//! `encode_at(game, level, out)` writes a payload at a level; `encode` and
-//! `encode_ext` are levels 0 and 1 by name, and `decode` accepts every level.
+//! `encode_at(game, level, out)` writes a payload at a level, `encode` is level
+//! 0 by name, and `decode` accepts every level.
 //! The other modules' `encode` writes plain v2 whatever the request, and a new
 //! sport needs no extension: no deployed decoder has ever requested its
 //! endpoint, so its first v2 layout carries everything ([`hockey`]).
@@ -93,10 +93,11 @@ pub const STRUCT_CONTENT_TYPE: &str = "application/x-scoreboard-struct";
 /// predates extensions still serves plain v2 to it.
 pub const STRUCT_CONTENT_TYPE_EXT: &str = "application/x-scoreboard-struct; ext=1";
 
-/// The level-1 media-type parameter, whole: what the backend matches verbatim
-/// today. The parameter is a level (`ext=N`, see the crate docs), and reading
-/// the number is the backend's side of the rule.
-pub const EXT_PARAM: &str = "ext=1";
+/// The name of the media-type parameter that carries the extension level:
+/// `ext=N` on a [`STRUCT_CONTENT_TYPE`] media range (crate docs). The backend
+/// reads the number after it and caps it at [`EXT_LEVEL_MAX`]; a range without
+/// the parameter, or with one that is not a number, is level 0.
+pub const EXT_PARAM_NAME: &str = "ext";
 
 /// The highest extension level any module defines (see the crate docs): a
 /// server caps a request's level here, and [`nba::encode_at`] writes this

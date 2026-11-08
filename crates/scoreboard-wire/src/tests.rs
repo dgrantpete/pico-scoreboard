@@ -566,7 +566,7 @@ fn nba_plain_encode_never_carries_the_team_lines() {
 #[test]
 fn nba_ext_pregame_appends_the_team_lines() {
     assert_eq!(
-        encoded(|out| nba::encode_ext(&nba_pregame_with_lines(), out)),
+        encoded(|out| nba::encode_at(&nba_pregame_with_lines(), 1, out)),
         GOLDEN_NBA_PRE_EXT
     );
     assert_eq!(
@@ -578,7 +578,10 @@ fn nba_ext_pregame_appends_the_team_lines() {
 #[test]
 fn nba_ext_pregame_without_lines_is_one_zero_flags_byte() {
     let golden = format!("{GOLDEN_NBA_PRE}00");
-    assert_eq!(encoded(|out| nba::encode_ext(&nba_pregame(), out)), golden);
+    assert_eq!(
+        encoded(|out| nba::encode_at(&nba_pregame(), 1, out)),
+        golden
+    );
     assert_eq!(nba::decode(&unhex(&golden)).unwrap(), nba_pregame());
 }
 
@@ -590,7 +593,7 @@ fn nba_ext_pregame_carries_one_side_alone() {
     pregame.away.line = Some("+1.5  -102");
     let game = nba::Game::Pregame(pregame);
     let golden = format!("{GOLDEN_NBA_PRE}010a2b312e3520202d313032");
-    assert_eq!(encoded(|out| nba::encode_ext(&game, out)), golden);
+    assert_eq!(encoded(|out| nba::encode_at(&game, 1, out)), golden);
     assert_eq!(nba::decode(&unhex(&golden)).unwrap(), game);
 }
 
@@ -604,10 +607,13 @@ fn nba_plain_v2_pregame_still_decodes_without_lines() {
 fn nba_ext_has_nothing_for_live_or_final() {
     let (live_bytes, final_bytes) = (unhex(GOLDEN_NBA_LIVE), unhex(GOLDEN_NBA_FINAL));
     let live = nba::decode(&live_bytes).unwrap();
-    assert_eq!(encoded(|out| nba::encode_ext(&live, out)), GOLDEN_NBA_LIVE);
+    assert_eq!(
+        encoded(|out| nba::encode_at(&live, 1, out)),
+        GOLDEN_NBA_LIVE
+    );
     let final_game = nba::decode(&final_bytes).unwrap();
     assert_eq!(
-        encoded(|out| nba::encode_ext(&final_game, out)),
+        encoded(|out| nba::encode_at(&final_game, 1, out)),
         GOLDEN_NBA_FINAL
     );
 }
@@ -906,10 +912,10 @@ fn nba_final_ext2_with_nothing_is_thirteen_zero_bytes() {
 // each level decodes to.
 
 #[test]
-fn nba_levels_zero_and_one_are_encode_and_encode_ext() {
-    // Byte for byte, on every fixture: the backend's two entry points can
-    // move to the level without a byte moving. The `ext=2` fixtures drop
-    // their groups below level 2.
+fn nba_level_zero_is_encode_and_level_one_adds_only_the_lines() {
+    // Byte for byte, on every fixture: level 0 is the frozen `encode`, level
+    // 1 the frozen bytes plus the pregame lines block. The `ext=2` fixtures
+    // drop their groups below level 2.
     let pre_without_lines = format!("{GOLDEN_NBA_PRE}00");
     let fixtures = [
         (nba_live(), GOLDEN_NBA_LIVE, GOLDEN_NBA_LIVE),
@@ -926,7 +932,6 @@ fn nba_levels_zero_and_one_are_encode_and_encode_ext() {
         assert_eq!(encoded(|out| nba::encode_at(&game, 0, out)), v2);
         assert_eq!(encoded(|out| nba::encode(&game, out)), v2);
         assert_eq!(encoded(|out| nba::encode_at(&game, 1, out)), ext1);
-        assert_eq!(encoded(|out| nba::encode_ext(&game, out)), ext1);
     }
 }
 

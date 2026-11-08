@@ -1,7 +1,10 @@
 //! NBA parity gate: every fixture in `backend/testdata/nba/` streamed
 //! through the path table must encode byte-identically to the committed
 //! golden in `backend/testdata/wire/nba/` (DESIGN.md ruling 9), whatever
-//! the chunking. Plus the rejection-parity and two-tier-error pins the
+//! the chunking. This lane reads the scoreboard alone, so its golden is the
+//! scoreboard-only `ext=2` form: `<stem>.no_summary.ext2.bin` where the
+//! backend would have fetched a summary (a live game), `<stem>.ext2.bin`
+//! otherwise. Plus the rejection-parity and two-tier-error pins the
 //! backend's serde + transform split implies (ruling 1).
 
 use scoreboard_espn::StreamMatcher;
@@ -47,8 +50,29 @@ fn fixture(stem: &str) -> String {
     fs::read_to_string(testdata(&format!("nba/{stem}.json"))).expect("fixture readable")
 }
 
+/// The committed golden at an extension level: 0 the frozen v2 bytes, 1 the
+/// pregame's team lines, 2 the scoreboard-only `ext=2` form (the backend's
+/// `.no_summary` golden for a live fixture, whose summary this lane never
+/// reads; the plain `.ext2` for a pregame or final, which has none).
+fn golden_at(stem: &str, level: u8) -> Vec<u8> {
+    let path = match level {
+        0 => testdata(&format!("wire/nba/{stem}.bin")),
+        1 => testdata(&format!("wire/nba/{stem}.ext1.bin")),
+        _ => {
+            let degraded = testdata(&format!("wire/nba/{stem}.no_summary.ext2.bin"));
+            if degraded.exists() {
+                degraded
+            } else {
+                testdata(&format!("wire/nba/{stem}.ext2.bin"))
+            }
+        }
+    };
+    fs::read(&path).unwrap_or_else(|e| panic!("golden {path:?}: {e}"))
+}
+
+/// The golden [`encode`] is compared against.
 fn golden(stem: &str) -> Vec<u8> {
-    fs::read(testdata(&format!("wire/nba/{stem}.bin"))).expect("golden readable")
+    golden_at(stem, 2)
 }
 
 /// The scoreboard body shape the table matches: `{"events":[...]}`.
@@ -105,22 +129,18 @@ fn run_list(body: &str, sizes: &[usize]) -> (Vec<(String, GameState)>, ScanStats
     (entries, stats)
 }
 
-/// Today's level-0 bytes. The committed goldens predate NBA.md §3.7's flash
-/// filter, so the scoreboard's unfiltered `lastPlay` stands in for the
-/// filtered one the view carries (phase 6.3 re-blesses every level under the
-/// filter); everything else is the `as_game(None)` view, byte for byte.
-fn encode(extract: &nba::Extract) -> Vec<u8> {
-    let mut game = extract.as_game(None);
-    if let (scoreboard_wire::nba::Game::Live(live), Kind::Live(raw)) = (&mut game, &extract.kind) {
-        live.last_play = raw.last_play.as_ref().map(|play| scoreboard_wire::LastPlay {
-            id: play.id.as_str(),
-            text: play.text.as_str(),
-        });
-    }
+/// The scoreboard-only view at an extension level, byte for byte.
+fn encode_at(extract: &nba::Extract, level: u8) -> Vec<u8> {
     let mut buf = [0u8; 4096];
     let mut sink = SliceSink::new(&mut buf);
-    scoreboard_wire::nba::encode(&game, &mut sink).expect("payload fits");
+    scoreboard_wire::nba::encode_at(&extract.as_game(None), level, &mut sink)
+        .expect("payload fits");
     sink.written().to_vec()
+}
+
+/// The richest scoreboard-only form, what [`golden`] holds.
+fn encode(extract: &nba::Extract) -> Vec<u8> {
+    encode_at(extract, 2)
 }
 
 fn found(outcome: DetailOutcome) -> nba::Extract {
@@ -197,14 +217,11 @@ fn pre_tip_empty_situation_glitch_is_byte_equal_with_no_last_play() {
     }
     let bytes = encode(&extract);
     assert_eq!(bytes[2] & 0x01, 0, "flags bit0 must be clear");
-    let expected = golden("in_progress_no_last_play");
-    let smallest = STEMS.iter().map(|stem| golden(stem).len()).min();
-    assert_eq!(
-        Some(expected.len()),
-        smallest,
-        "no play text, so the smallest golden in the corpus"
-    );
-    assert_eq!(bytes, expected);
+    // Byte identity with the golden is the whole check: under NBA.md §3.7
+    // most scoreboard-only payloads carry no flash either (a rebound or a
+    // made basket is not a play to flash), so this fixture's size no longer
+    // singles it out.
+    assert_eq!(bytes, golden("in_progress_no_last_play"));
 }
 
 // ------------------------------------------------------- rejection parity
@@ -732,19 +749,28 @@ fn the_lines_ride_only_the_ext_encoding() {
     let event = fixture("pregame");
     let body = wrap(&[&event]);
     let extract = found(run_detail(&body, &event_id(&event), &[body.len()]).0);
-    // Plain v2 is the committed golden: the lines are dropped.
-    assert_eq!(hex(&encode(&extract)), hex(&golden("pregame")));
-    let mut buf = [0u8; 4096];
-    let mut sink = SliceSink::new(&mut buf);
-    scoreboard_wire::nba::encode_ext(&extract.as_game(None), &mut sink).expect("payload fits");
-    let bytes = sink.written().to_vec();
-    let scoreboard_wire::nba::Game::Pregame(pregame) =
-        scoreboard_wire::nba::decode(&bytes).expect("ext payload decodes")
-    else {
-        panic!("pregame payload");
+    let lines = |level: u8| {
+        let bytes = encode_at(&extract, level);
+        assert_eq!(
+            hex(&bytes),
+            hex(&golden_at("pregame", level)),
+            "level {level} golden"
+        );
+        let scoreboard_wire::nba::Game::Pregame(pregame) =
+            scoreboard_wire::nba::decode(&bytes).expect("payload decodes")
+        else {
+            panic!("pregame payload");
+        };
+        (
+            pregame.away.line.map(str::to_string),
+            pregame.home.line.map(str::to_string),
+        )
     };
-    assert_eq!(pregame.away.line, Some("-5.5  -205"));
-    assert_eq!(pregame.home.line, Some("+5.5  +171"));
+    // Plain v2 is the frozen golden: the lines are dropped. From `ext=1` on
+    // they ride.
+    assert_eq!(lines(0), (None, None));
+    assert_eq!(lines(1), some("-5.5  -205", "+5.5  +171"));
+    assert_eq!(lines(2), some("-5.5  -205", "+5.5  +171"));
 }
 
 #[test]

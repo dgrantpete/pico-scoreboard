@@ -7,7 +7,7 @@
 use scoreboard_espn::common::{Quirk, Quirks};
 
 use crate::error::AppError;
-use crate::shared::game::{GameState, Record};
+use crate::shared::game::{GameState, Record, Side};
 use crate::shared::team::TeamColors;
 
 /// picojson token scratch for one streaming pass: must hold the longest
@@ -209,5 +209,12 @@ pub(crate) fn domain_record(record: scoreboard_wire::Record) -> Record {
     Record {
         wins: record.wins,
         losses: record.losses,
+    }
+}
+
+pub(crate) fn domain_side(side: scoreboard_wire::Side) -> Side {
+    match side {
+        scoreboard_wire::Side::Home => Side::Home,
+        scoreboard_wire::Side::Away => Side::Away,
     }
 }

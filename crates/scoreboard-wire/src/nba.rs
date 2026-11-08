@@ -135,9 +135,8 @@
 //! [`encode_at`] writes a level: 0 is exactly the frozen v2 bytes, 1 adds the
 //! `ext=1` block, 2 adds the `ext=2` blocks, and a level above
 //! [`crate::EXT_LEVEL_MAX`] writes the highest this crate defines (the server
-//! serves what it knows, capped by the request). [`encode`] and [`encode_ext`]
-//! are levels 0 and 1 by name, so every device that did not ask keeps
-//! decoding the frozen bytes.
+//! serves what it knows, capped by the request). [`encode`] is level 0 by
+//! name, so every device that did not ask keeps decoding the frozen bytes.
 //!
 //! Encode never fails on a field's value, as everywhere in this format
 //! (strings truncate, scores saturate). [`Makes::new`] keeps the newest
@@ -542,13 +541,6 @@ impl Records {
 /// for extensions decodes.
 pub fn encode<S: Sink + ?Sized>(game: &Game<'_>, out: &mut S) -> Result<(), BufferFull> {
     encode_at(game, 0, out)
-}
-
-/// Level 1: [`encode`], plus the pregame team lines a client that sent
-/// [`crate::STRUCT_CONTENT_TYPE_EXT`] decodes. A live or final game has no
-/// `ext=1` block and encodes exactly as [`encode`] does.
-pub fn encode_ext<S: Sink + ?Sized>(game: &Game<'_>, out: &mut S) -> Result<(), BufferFull> {
-    encode_at(game, LEVEL_LINES, out)
 }
 
 /// `game` at an extension level (crate docs): 0 is the frozen v2 bytes, 1

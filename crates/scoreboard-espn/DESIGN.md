@@ -356,12 +356,13 @@ relitigates it:
   (`nba::FLASH_TYPES`: timeout, challenge and review outcomes, technicals,
   flagrant), else the summary's newest eligible play, else none — with and
   without a summary, so a degraded poll flashes less, never more. The
-  extract keeps the unfiltered play (`Live::last_play`) for the backend's
-  JSON DTO and exposes the filtered one as `Live::flash()`; the committed
-  level-0 goldens carry the unfiltered text, and `nba_extract.rs` splices
-  it back for the byte comparison until phase 6.3 re-blesses every level
-  under the filter. Trailing whitespace is trimmed at the wire view (the
-  defensive three-seconds technical's text ends in a newline).
+  filter is applied where the scoreboard play is built, so `Live::last_play`
+  is already the filtered play and no unfiltered copy exists for the wire
+  view, the backend's JSON DTO or direct mode to disagree over (phase 6.3
+  re-blessed every golden under it; the gift fleet's level-0 payload flashes
+  timeouts-and-news too, NBA.md §3.7). Trailing whitespace is trimmed at the
+  wire view (the defensive three-seconds technical's text ends in a
+  newline).
 - **The summary table** reads `header.competitions[0].competitors[*]`
   (`team.id`, `homeAway`, `fouls.{teamFoulsCurrent,bonusState,foulsToGive}`,
   `timeoutsRemaining` — the ledger by `homeAway` and the one team-id → side

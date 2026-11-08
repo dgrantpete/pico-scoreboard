@@ -351,22 +351,13 @@ pub struct Live {
     pub clock: EText,
     pub away: LiveTeam,
     pub home: LiveTeam,
-    /// `situation.lastPlay` as served, every type — what the backend's JSON
-    /// DTO carries. Absent before the opening tip (`situation: {}` is a
-    /// real capture). The wire view flashes it only through [`Live::flash`].
+    /// The scoreboard's contribution to the flash: `situation.lastPlay` when
+    /// its `type.id` is one of [`FLASH_TYPES`] (§3.7), else `None` — a
+    /// rebound or a made basket is not a play to flash, and every consumer
+    /// (the wire view and the backend's JSON DTO alike) sees the one filtered
+    /// play. Also absent before the opening tip (`situation: {}` is a real
+    /// capture).
     pub last_play: Option<LastPlay>,
-    /// §3.7's filter over `last_play`: its `type.id` is one of
-    /// [`FLASH_TYPES`]. Separate from the play so the unfiltered text is not
-    /// copied twice.
-    pub flash_eligible: bool,
-}
-
-impl Live {
-    /// The scoreboard's contribution to the flash: its `lastPlay` when the
-    /// play is itself eligible (§3.7), else nothing.
-    pub fn flash(&self) -> Option<&LastPlay> {
-        self.last_play.as_ref().filter(|_| self.flash_eligible)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -533,7 +524,8 @@ impl Extract {
                 // whitespace goes: the defensive three-seconds technical's
                 // text ends in a newline (PROVENANCE), which no font draws.
                 last_play: game
-                    .flash()
+                    .last_play
+                    .as_ref()
                     .or_else(|| summary.and_then(|s| s.last_play.as_ref()))
                     .map(|play| wire::LastPlay {
                         id: play.id.as_str(),
@@ -1516,11 +1508,14 @@ fn transform<Q: Quirks>(
                 clock: s.clock.clone(),
                 away,
                 home,
-                last_play: s.last_play_seen.then(|| LastPlay {
-                    id: s.play_id.clone(),
-                    text: s.play_text.clone(),
-                }),
-                flash_eligible: s.play_type.is_some_and(flash_eligible),
+                // §3.7's filter, applied where the play is built so no
+                // unfiltered copy exists for a consumer to flash by mistake.
+                last_play: (s.last_play_seen && s.play_type.is_some_and(flash_eligible)).then(
+                    || LastPlay {
+                        id: s.play_id.clone(),
+                        text: s.play_text.clone(),
+                    },
+                ),
             })
         }
         StateKind::Post => {

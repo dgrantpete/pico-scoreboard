@@ -27,13 +27,23 @@ leagues:
         start_in: 90m
       - fixture: mlb/final.json
 
-  - name: nba-in-july
+  # Every NBA screen, twelve different teams across the first six: the
+  # pregame lines, the court through a run, both sides in the bonus, the
+  # halftime and overtime bands, the game-leaders final. The playoff final
+  # (the series line) repeats SA and NY — the corpus has no other.
+  - name: nba-demo
     mode: scenario
     sport: basketball
     league: nba
     events:
-      - fixture: nba/in_progress.json
-      - fixture: nba/final.json
+      - fixture: nba/pregame.json          # SA @ POR, the betting lines
+        start_in: 2h
+      - fixture: nba/run.json              # WSH @ OKC, OKC on an 8-0 run
+      - fixture: nba/bonus_both.json       # NY @ CLE, both sides in the bonus
+      - fixture: nba/halftime.json         # BKN @ ATL
+      - fixture: nba/overtime.json         # ORL @ GS, period 5
+      - fixture: nba/final.json            # DEN @ IND, game leaders
+      - fixture: nba/final_playoff.json    # SA @ NY, NBA Finals game 4
 
   # Every hockey screen, twelve different teams. shootout.json is the same
   # game (event id) as final_so_no_stars.json, so the live shootout is

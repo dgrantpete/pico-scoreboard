@@ -3002,10 +3002,10 @@ fn the_spot_checked_fixtures_carry_the_values_espn_sent() {
     assert_eq!(view.clock_text.as_str(), "11:32");
     assert!(!view.clock_low);
     assert_eq!((view.away_score, view.home_score), (26, 30));
-    assert_eq!(
-        store.snapshot().play.text.as_str(),
-        "Riley Minix makes 22-foot running jump shot (Evan Mobley assists)"
-    );
+    // The scoreboard's own last play is a made jumper, which NBA.md §3.7
+    // never flashes; the flash is the summary's newest eligible play, the
+    // Knicks' timeout earlier in the quarter.
+    assert_eq!(store.snapshot().play.text.as_str(), "Knicks Full timeout");
 
     let store = committed("football/nfl/in_progress");
     let view = &store.snapshot().football_live;

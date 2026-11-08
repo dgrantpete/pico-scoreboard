@@ -14,10 +14,10 @@ use scoreboard_wire as wire;
 
 use crate::error::AppError;
 use crate::espn::adapt::{
-    SCRATCH_LEN, TracingQuirks, TransformKind, absent_verdict, domain_colors, domain_state,
-    events_malformed, stream_error, transform_error, warn_failed_events,
+    SCRATCH_LEN, TracingQuirks, TransformKind, absent_verdict, domain_colors, domain_side,
+    domain_state, events_malformed, stream_error, transform_error, warn_failed_events,
 };
-use crate::shared::game::{GameListEntry, LastPlay, LivePhase, Side};
+use crate::shared::game::{GameListEntry, LastPlay, LivePhase};
 use crate::shared::team::TeamState;
 
 use super::types::{
@@ -191,13 +191,6 @@ fn game_from_view(game: &wire::hockey::Game<'_>) -> HockeyGame {
             }),
             series: game.series.map(str::to_owned),
         }),
-    }
-}
-
-fn domain_side(side: wire::Side) -> Side {
-    match side {
-        wire::Side::Home => Side::Home,
-        wire::Side::Away => Side::Away,
     }
 }
 

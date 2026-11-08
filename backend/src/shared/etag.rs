@@ -21,21 +21,35 @@ pub(crate) fn compute_games_etag(tokens: &[String]) -> String {
     hex::encode(&digest[..8])
 }
 
-/// True when the client asked for the binary format *with* the per-module
-/// extensions: an `application/x-scoreboard-struct` media range carrying the
-/// `ext=1` parameter ([`wire::STRUCT_CONTENT_TYPE_EXT`]). Firmware from
-/// 2026-10-12 sends it; the gift fleet and older firmware never do, and get
-/// plain v2.
-pub(crate) fn wants_ext(headers: &HeaderMap) -> bool {
-    headers.get_all(header::ACCEPT).iter().any(|v| {
-        v.to_str().is_ok_and(|s| {
-            s.split(',').any(|range| {
-                let mut parts = range.split(';').map(str::trim);
-                parts.next() == Some(wire::STRUCT_CONTENT_TYPE)
-                    && parts.any(|param| param.eq_ignore_ascii_case(wire::EXT_PARAM))
-            })
+/// The extension level the client asked for: the `ext=N` parameter
+/// ([`wire::EXT_PARAM_NAME`]) of an `application/x-scoreboard-struct` media
+/// range, read as a number and capped at [`wire::EXT_LEVEL_MAX`] — the server
+/// serves the highest level it knows, so a device asking for a level this
+/// backend predates gets the most it has. 0 without the parameter, or with one
+/// that is not a number: the gift fleet and firmware before 2026-10-12 never
+/// send it and get plain v2. The parameter on another media range
+/// (`application/json; ext=1`) does not count, and the highest of several
+/// struct ranges wins, as any one of them used to.
+pub(crate) fn ext_level(headers: &HeaderMap) -> u8 {
+    headers
+        .get_all(header::ACCEPT)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|s| s.split(','))
+        .filter_map(|range| {
+            let mut parts = range.split(';').map(str::trim);
+            (parts.next() == Some(wire::STRUCT_CONTENT_TYPE)).then_some(parts)
         })
-    })
+        .flatten()
+        .filter_map(|param| {
+            let (name, value) = param.split_once('=')?;
+            name.trim()
+                .eq_ignore_ascii_case(wire::EXT_PARAM_NAME)
+                .then(|| value.trim().parse::<u64>().ok())
+                .flatten()
+        })
+        .max()
+        .map_or(0, |level| level.min(u64::from(wire::EXT_LEVEL_MAX)) as u8)
 }
 
 /// True when the client asked for the packed binary format (see `wire.rs`).

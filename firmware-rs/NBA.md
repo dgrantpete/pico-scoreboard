@@ -487,11 +487,12 @@ accepts a payload that ends after any complete block, so an older backend's
 plain v2 or `ext=1` answer decodes with the new groups absent. The Rust
 firmware asks for `ext=2` (`STRUCT_CONTENT_TYPE_EXT`); the backend's
 `wants_ext` becomes `ext_level`, and its test that rejects `ext=2` flips.
-It lands in three commits, each leaving the workspace green and coherent:
-6.1 adds `encode_at(game, level, out)` (0 = v2, 1 = + the pregame lines,
+It landed in three commits, each leaving the workspace green and coherent:
+6.1 added `encode_at(game, level, out)` (0 = v2, 1 = + the pregame lines,
 2 = + the blocks below) and the decoder, keeping `encode`/`encode_ext`
-compiling for the backend; 6.3 switches the backend to the parsed level
-and deletes `encode_ext`; 6.6 flips the device's `Accept` to `ext=2`.
+compiling for the backend (0667ef8); 6.3 switched the backend to the
+parsed level and deleted `encode_ext`; 6.6 flips the device's `Accept` to
+`ext=2`.
 
 **Live (state 1)** — after the v2 strings (`clock`, and the last play iff
 v2 bit 0), the `ext=2` block:
@@ -654,7 +655,23 @@ hyphen, particle), the bonus equivalence, the glitch, the make filter
 the eligible-play filter, the leaders' both-teams pick and tie rule, the
 secondary pregame line.
 
-### 6.3 Backend
+### 6.3 Backend — done 2026-11-08
+As built: `detail_extract` → `wants_summary` (live only) → `fetch_summary`
+with hockey's degrade → `game_from_extract(&extract, summary)`, the DTO
+built from the crate's own combined view so it cannot disagree with the
+wire; `ext_level(headers)` replaces `wants_ext` (the number after `ext=`
+on a struct media range, capped at `EXT_LEVEL_MAX`, 0 without one, the
+highest of several ranges) and `game_response_ext` hands the encoder its
+level; `encode_ext` and the whole-string `EXT_PARAM` are gone
+(`EXT_PARAM_NAME = "ext"`). Goldens carry their level in the name:
+`<name>.bin` (v2, the canonical with-summary form — at level 0 the frozen
+`last_play` is §3.7's filtered play, so twelve live goldens changed in that
+field alone), `pregame.ext1.bin`, `<name>.ext2.bin` for every fixture and
+`<name>.no_summary.ext2.bin` for every live one (the degrade). The
+extractor's unfiltered play and the two test bridges 6.2 left went with the
+re-bless: `Live::last_play` is the filtered play at transform time. The
+`nba-demo` mock slate (§6.8's mock half) serves seven games at all three
+levels, verified over a local backend.
 `src/nba/{handler,adapter,types,wire}.rs`: the detail handler fetches the
 summary for **live** games only (`wants_summary` = live; hockey's
 degrade-to-None on any failure), the DTO grows (ledger, run, newest score,

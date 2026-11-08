@@ -40,6 +40,11 @@ fn testdata() -> PathBuf {
 /// own, for any sport.
 const SUMMARY_STEM: &str = ".summary";
 
+/// Golden-name suffix for a payload served from the scoreboard alone — what
+/// the handler sends when the summary fetch or parse failed (NHL.md D3,
+/// NBA.md D3).
+const NO_SUMMARY_SUFFIX: &str = ".no_summary";
+
 /// Fixture stems under `testdata/{sport}`, recursing into the per-league
 /// subdirectories football and soccer use and skipping every pair's summary
 /// half. Sorted, so goldens and failures come out in a stable order.
@@ -97,14 +102,64 @@ pub(crate) fn mlb_games() -> Vec<(String, MlbGame)> {
         .collect()
 }
 
+/// One NBA fixture as the detail handler sees it: the scoreboard extract,
+/// then, where the handler would fetch one (a live game, NBA.md D3) and
+/// `with_summary` allows, the pair's summary half through the same adapter
+/// call. A final's pair exists in the corpus but the handler never reads it,
+/// so a final comes out summary-less either way, as a pregame does.
+fn nba_parts(
+    name: &str,
+    with_summary: bool,
+) -> (
+    scoreboard_espn::nba::Extract,
+    Option<scoreboard_espn::nba::Summary>,
+) {
+    use crate::nba::adapter;
+
+    let (id, body) = fixture_body("nba", name);
+    let extract = adapter::detail_extract(body.as_bytes(), &id, "test://corpus/nba")
+        .unwrap_or_else(|e| panic!("nba/{name}: {e:?}"));
+    let summary = (with_summary && adapter::wants_summary(&extract)).then(|| {
+        let path = testdata()
+            .join("nba")
+            .join(format!("{name}{SUMMARY_STEM}.json"));
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("nba/{name}: a live fixture is a pair: {e}"));
+        adapter::summary(&bytes, &extract, "test://corpus/nba/summary")
+            .unwrap_or_else(|| panic!("nba/{name}: summary unreadable"))
+    });
+    (extract, summary)
+}
+
+/// Every NBA fixture with its summary where the handler would fetch one —
+/// the canonical goldens.
 pub(crate) fn nba_games() -> Vec<(String, NbaGame)> {
     fixture_names("nba")
         .into_iter()
         .map(|name| {
-            let (id, body) = fixture_body("nba", &name);
-            let game = crate::nba::adapter::detail_game(body.as_bytes(), &id, "test://corpus/nba")
-                .unwrap_or_else(|e| panic!("nba/{name}: {e:?}"));
+            let (extract, summary) = nba_parts(&name, true);
+            let game = crate::nba::adapter::game_from_extract(&extract, summary.as_ref());
             (name, game)
+        })
+        .collect()
+}
+
+/// Every live NBA fixture from the scoreboard alone, under
+/// [`NO_SUMMARY_SUFFIX`] — what the handler sends when the summary fetch or
+/// parse failed. Every live fixture rather than one: the degrade empties the
+/// `ext=2` groups and takes the flash's second source away (NBA.md §3.7), so
+/// each fixture's degraded form is a payload of its own.
+pub(crate) fn nba_games_without_summary() -> Vec<(String, NbaGame)> {
+    fixture_names("nba")
+        .into_iter()
+        .filter_map(|name| {
+            let (extract, _) = nba_parts(&name, false);
+            crate::nba::adapter::wants_summary(&extract).then(|| {
+                (
+                    format!("{name}{NO_SUMMARY_SUFFIX}"),
+                    crate::nba::adapter::game_from_extract(&extract, None),
+                )
+            })
         })
         .collect()
 }
@@ -151,10 +206,6 @@ pub(crate) fn soccer_games() -> Vec<(String, SoccerGame)> {
 /// The live fixture also pinned without its summary, under
 /// [`NO_SUMMARY_SUFFIX`].
 const HOCKEY_SCOREBOARD_ONLY: &str = "nhl/in_progress";
-
-/// Golden-name suffix for a hockey payload served from the scoreboard alone —
-/// what the handler sends when the summary fetch or parse failed (NHL.md D3).
-const NO_SUMMARY_SUFFIX: &str = ".no_summary";
 
 /// One hockey fixture as the detail handler sees it: the scoreboard extract,
 /// then, where the handler would fetch one and `with_summary` allows, the
@@ -204,11 +255,25 @@ pub(crate) fn hockey_games() -> Vec<(String, HockeyGame)> {
     games
 }
 
-/// Golden-name suffix for a payload encoded with the `ext=1` extension.
-const EXT_SUFFIX: &str = ".ext1";
+/// Golden-name suffixes for a payload encoded at extension level 1 and 2
+/// (crate docs); a bare name is level 0, the frozen v2 bytes.
+const EXT1_SUFFIX: &str = ".ext1";
+const EXT2_SUFFIX: &str = ".ext2";
+
+/// The level an NBA golden's name says it was encoded at.
+fn nba_level(name: &str) -> u8 {
+    if name.ends_with(EXT2_SUFFIX) {
+        2
+    } else if name.ends_with(EXT1_SUFFIX) {
+        1
+    } else {
+        0
+    }
+}
 
 /// Every corpus fixture, encoded, keyed by `{sport}/{fixture}` (plus
-/// `{fixture}.ext1` where the sport defines an extension).
+/// `{fixture}.ext1` / `.ext2` where the sport defines extension levels, and
+/// `.no_summary` where a pair's summary half is degraded away).
 pub(crate) fn encoded_corpus() -> Vec<Encoded> {
     let mut out = Vec::new();
     let mut push = |sport: &str, name: String, bytes: Vec<u8>| {
@@ -220,16 +285,31 @@ pub(crate) fn encoded_corpus() -> Vec<Encoded> {
     for (name, game) in mlb_games() {
         push("mlb", name, crate::mlb::wire::encode_game(&game));
     }
+    // The NBA defines the extension levels: every fixture pins the frozen v2
+    // bytes and its `ext=2` form, a pregame its `ext=1` form too (the only
+    // state with an `ext=1` block), and a live fixture the `ext=2` form the
+    // handler degrades to without its summary.
     for (name, game) in nba_games() {
-        // A pregame also pins its `ext=1` form beside the frozen v2 bytes.
         if matches!(game, NbaGame::Pregame(_)) {
             push(
                 "nba",
-                format!("{name}{EXT_SUFFIX}"),
-                crate::nba::wire::encode_game_ext(&game),
+                format!("{name}{EXT1_SUFFIX}"),
+                crate::nba::wire::encode_game(&game, 1),
             );
         }
-        push("nba", name, crate::nba::wire::encode_game(&game));
+        push(
+            "nba",
+            format!("{name}{EXT2_SUFFIX}"),
+            crate::nba::wire::encode_game(&game, 2),
+        );
+        push("nba", name, crate::nba::wire::encode_game(&game, 0));
+    }
+    for (name, game) in nba_games_without_summary() {
+        push(
+            "nba",
+            format!("{name}{EXT2_SUFFIX}"),
+            crate::nba::wire::encode_game(&game, 2),
+        );
     }
     for (name, game) in football_games() {
         push("football", name, crate::football::wire::encode_game(&game));
@@ -310,8 +390,8 @@ fn corpus_string_maxima() -> Vec<(&'static str, usize)> {
     }
 
     for (name, game) in nba_games() {
-        // The extended form: it carries every string the plain one does.
-        let bytes = crate::nba::wire::encode_game_ext(&game);
+        // The highest level: it carries every string the lower ones do.
+        let bytes = crate::nba::wire::encode_game(&game, wire::EXT_LEVEL_MAX);
         match wire::nba::decode(&bytes).unwrap_or_else(|e| panic!("nba/{name}: {e}")) {
             wire::nba::Game::Live(live) => {
                 max.note("game id", live.game_id);
@@ -322,10 +402,16 @@ fn corpus_string_maxima() -> Vec<(&'static str, usize)> {
                     max.note("play id", play.id);
                     max.note("play text", play.text);
                 }
+                if let Some(score) = live.newest_score {
+                    max.note("player name", score.scorer);
+                }
             }
             wire::nba::Game::Pregame(pregame) => {
                 max.note("game id", pregame.game_id);
                 max.note("venue", pregame.venue);
+                // Empty on this slate (no notes), measured anyway so the
+                // first NBA Cup or playoff pregame meets its budget line.
+                max.note("info secondary", pregame.info_secondary);
                 max.note("abbreviation", pregame.away.abbreviation);
                 max.note("abbreviation", pregame.home.abbreviation);
                 for line in [pregame.away.line, pregame.home.line].into_iter().flatten() {
@@ -336,6 +422,14 @@ fn corpus_string_maxima() -> Vec<(&'static str, usize)> {
                 max.note("game id", game.game_id);
                 max.final_team(&game.away);
                 max.final_team(&game.home);
+                if let Some(leaders) = game.leaders {
+                    for leader in [leaders.points, leaders.rebounds, leaders.assists] {
+                        max.note("player name", leader.name);
+                    }
+                }
+                if let Some(series) = game.series {
+                    max.note("series", series);
+                }
             }
         }
     }
@@ -518,10 +612,8 @@ mod tests {
             let sport = entry.name.split('/').next().expect("sport-prefixed name");
             let decoded = match sport {
                 "mlb" => wire::mlb::decode(bytes).map(|g| wire::mlb::encode(&g, &mut out)),
-                "nba" if entry.name.ends_with(EXT_SUFFIX) => {
-                    wire::nba::decode(bytes).map(|g| wire::nba::encode_ext(&g, &mut out))
-                }
-                "nba" => wire::nba::decode(bytes).map(|g| wire::nba::encode(&g, &mut out)),
+                "nba" => wire::nba::decode(bytes)
+                    .map(|g| wire::nba::encode_at(&g, nba_level(&entry.name), &mut out)),
                 "football" => {
                     wire::football::decode(bytes).map(|g| wire::football::encode(&g, &mut out))
                 }
@@ -537,6 +629,77 @@ mod tests {
                 hex::encode(bytes),
                 "{} does not survive a decode/encode round trip",
                 entry.name
+            );
+        }
+    }
+
+    /// The NBA's DTO is copied from the extractor's combined view, and
+    /// `nba/wire.rs` turns it back into one. The two must compose to the
+    /// identity at every extension level, or the JSON and the struct
+    /// representation of one game could disagree: every NBA fixture, with
+    /// and without its summary, encodes the same through the DTO as straight
+    /// from the crate's view.
+    #[test]
+    fn nba_dto_round_trips_the_combined_view() {
+        use scoreboard_wire as wire;
+
+        for name in &fixture_names("nba") {
+            for with_summary in [true, false] {
+                let (extract, summary) = nba_parts(name, with_summary);
+                let view = extract.as_game(summary.as_ref());
+                let game = crate::nba::adapter::game_from_extract(&extract, summary.as_ref());
+                for level in 0..=wire::EXT_LEVEL_MAX {
+                    let direct = crate::shared::wire::encoded(512, |out| {
+                        wire::nba::encode_at(&view, level, out)
+                    });
+                    assert_eq!(
+                        hex::encode(crate::nba::wire::encode_game(&game, level)),
+                        hex::encode(direct),
+                        "nba/{name} (summary: {with_summary}) changes through the DTO at level {level}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The mock's loader rule (`tools/espn/mockdata.py`), pinned on the
+    /// corpus itself: a pair is one moment of one game, so the summary
+    /// header names the event's id and status. A pair that drifted apart
+    /// would still extract — the lane reads no id from a summary — and pin a
+    /// slate the data never showed.
+    #[test]
+    fn every_nba_pair_names_one_moment_of_one_game() {
+        let status = |holder: &serde_json::Value| {
+            holder["competitions"][0]["status"]["type"]["name"]
+                .as_str()
+                .map(str::to_owned)
+        };
+        for name in fixture_names("nba") {
+            let dir = testdata().join("nba");
+            let Ok(summary) =
+                std::fs::read_to_string(dir.join(format!("{name}{SUMMARY_STEM}.json")))
+            else {
+                // Pregame has no summary (NBA.md D3): the one unpaired state.
+                let (extract, _) = nba_parts(&name, false);
+                assert_eq!(
+                    extract.state(),
+                    scoreboard_wire::GameState::Pregame,
+                    "nba/{name}: a live or final fixture is a pair"
+                );
+                continue;
+            };
+            let event = std::fs::read_to_string(dir.join(format!("{name}.json"))).unwrap();
+            let event: serde_json::Value = serde_json::from_str(&event).unwrap();
+            let summary: serde_json::Value = serde_json::from_str(&summary).unwrap();
+            assert_eq!(
+                summary["header"]["id"].as_str(),
+                event["id"].as_str(),
+                "nba/{name}: the pair's ids"
+            );
+            assert_eq!(
+                status(&summary["header"]),
+                status(&event),
+                "nba/{name}: the pair's statuses"
             );
         }
     }
