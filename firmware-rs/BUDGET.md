@@ -279,6 +279,56 @@ delta), and the per-pixel 565 packing at every colour site went with
 `rgb565()`. `.rodata` is the sprite palettes widening to eight-bit colours
 (+318 B, "The render tables are flash" below).
 
+### What retiring the Aseprite pipeline cost in flash (BACKLOG 116)
+
+Measured 2026-11-08 as a clean before/after: 697485c with the procedural
+modules present but unread (so linked out), against the same code drawing
+every screen from them, both built boot-integrated with
+`SCOREBOARD_FW_VERSION=measure`.
+
+| Section | Before | After | Δ |
+|---|---:|---:|---:|
+| `.text` | 787,312 | 788,040 | +728 |
+| `.rodata` | 378,628 | 377,252 | −1,376 |
+| `.data` | 14,156 | 14,156 | 0 |
+| `.bss` | 295,944 | 295,944 | 0 |
+| Image (`size -B` text) | 1,180,392 | 1,179,744 | **−648** |
+
+Smaller, and no RAM moved. `.rodata` lost the eight sprites that became code
+(the rink alone was 994 B of pixels and palette) and kept the four hand-drawn
+ones at 1,468 B ("The render tables are flash" below). `.text` gained the
+drawing code net of the blit sites and palette edits it replaced: the rink is
+`Rink::draw` 518 B, `draw_lines` 886 B and one out-of-line fill 20 B, the
+star 996 B, the inning arrows 354 B, while `toast::overlay` shrank 938 B
+without the spinner's palette inversion. The drawing keeps scalars on the
+stack and no arrays; the spinner's per-dot colour is a closure over four
+words, so core 1's stack (BACKLOG 109) takes nothing new that a blit's
+locals did not.
+
+The first wiring measured **+4,040 B**, the rink 5,952 B of it: LTO saw the
+strip's constant size, unrolled the per-pixel row loops and inlined the
+canvas's clipped fill at about a hundred sites. Restating the rink as spans
+made it worse (14 KB, each span inlining a multi-row fill); spans through
+a single `#[inline(never)]` fill is what brought it to 1,424 B. The star,
+tried the same way, came out 48 B larger, so it inlines as before.
+
+On the host the procedural screens render faster than the blits they
+replaced: `frame::render` alone over the golden-frame corpus's fixtures,
+release build on x86-64, the best of 7 runs of 4,000 frames, the better of two
+interleaved before/after sessions. No device numbers yet (no board on hand);
+the frame probe should take them at the next bench session.
+
+| Screen | Blit (µs) | Code (µs) |
+|---|---:|---:|
+| Hockey live, even strength | 9.42 | 8.23 |
+| Hockey live, power play (glow and the lines-only pass) | 9.36 | 8.01 |
+| Hockey shootout (the rink in three bands) | 7.23 | 5.20 |
+| Hockey final (six stars) | 6.82 | 6.39 |
+| MLB live (diamond, bases, inning arrow, count dots) | 8.25 | 7.73 |
+| Lock toast | 8.94 | 8.23 |
+| Spinner toast | 9.96 | 8.26 |
+| Football live, still a blit — the run-to-run floor | 7.68 | 7.36 |
+
 ### Correction to SPEC §4 — the handoff needs three buffers, not two
 
 SPEC §4 specifies `static SNAPSHOTS: [ScoreboardSnapshot; 2]`: core 0 fills the
@@ -454,9 +504,14 @@ visible in the symbol table:
 | `unscii_8` heap + index | 2,360 | `.rodata` |
 | `spleen_5x8` heap + index | 1,410 | `.rodata` |
 | The three font descriptors | 60 | `.rodata` |
-| 12 compiled sprites (pixels + palettes) | 3,093 | `.rodata` |
-| **Total** | **10,811** | **flash, 0 B RAM** |
+| 4 hand-drawn sprites, `art/*.png` (pixels + palettes) | 1,468 | `.rodata` |
+| **Total** | **9,186** | **flash, 0 B RAM** |
 
+Re-measured 2026-11-08 for BACKLOG 116: eight of the twelve sprites became
+code (see "What retiring the Aseprite pipeline cost in flash" above), and the
+four left are compiled from PNGs, all at 4 bpp — the field, the football and
+its field byte for byte what they were, the base marker 5 B larger for
+leaving 2 bpp. The table read 10,811 B with twelve sprites at 3,093 B.
 Re-measured 2026-11-08 for BACKLOG 115: the palettes went from RGB565 `u16`
 entries to the art's eight-bit colours as `Option<Rgb888>` (8 B an entry, `None`
 being the see-through index), 106 → 424 B across the twelve sprites; nothing
@@ -466,8 +521,9 @@ the 5×5 star (5 + 4 B). That is inside §5's "< 1 KB", and it is the whole
 difference from the 9,538 B this table read before. The descriptors were
 counted in the sprite row until now; the total is the same either way.
 
-The 24 Aseprite slices cost nothing at all: they are `const` rectangles,
-folded into the code that reads them.
+The rectangles the art needs — the 24 Aseprite slices until BACKLOG 116, the
+geometry tables' fields since — cost nothing at all: they are `const`
+rectangles, folded into the code that reads them.
 
 Reproduce (needs `binutils-arm-none-eabi`):
 

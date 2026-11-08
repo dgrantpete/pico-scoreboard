@@ -9,8 +9,10 @@
 > `GET /api/logs`) and flush to flash on errors. When the network is dead,
 > read them over USB: `mpremote cat :/logs/previous.log` (or `current.log`).
 >
-> Flashing: `python tools/build.py flash` reboots the device into safe mode
-> first (no Core 1 thread — mpremote hangs otherwise, micropython#13476).
+> Flashing: `python tools/build.py flash --no-build` (the MicroPython app
+> can no longer be built from source since 2026-11-08, so it flashes an
+> existing build) reboots the device into safe mode first (no Core 1
+> thread — mpremote hangs otherwise, micropython#13476).
 > Deploys as ROMFS by default (build.config.json `flash_release`); pass
 > `--dev` for a littlefs deploy — costs ~100 KB of heap (GC thrash), only
 > for quick iteration.
@@ -89,19 +91,6 @@ knockout wire change — see commits 53217ae..bc71e57). Remaining threads:
       there is no `source` column anymore, and every poll row is kept
       deliberately — `coverage`'s gap accounting needs poll-cadence
       facts, and body dedup bounds the cost.
-
-59. **Delete the dead `mlb_layout.aseprite` slices** — the MLB live migration
-    moved every text-slot rectangle into `screen_geometry._MLB_LIVE`, so 16
-    slices in `mlb_layout.aseprite` are now dead: `away_logo`, `home_logo`,
-    `away_score`, `home_score`, `inning`, `ball_label`, `ball_values`,
-    `strike_label`, `strike_values`, `out_label`, `out_values`,
-    `pitcher_label`, `pitcher_name`, `batter_label`, `batter_name`,
-    `play_text`. Keep `first_base`/`second_base`/`third_base` (base-marker
-    art anchors). Until they're deleted in the Aseprite GUI, editing any of
-    those slices silently does nothing (the firmware no longer reads them);
-    `compile_layout.compile_all` then auto-removes the stale generated
-    modules. GUI-trivial owner action — do NOT use the aseprite-io transpiler
-    harness (known silent-drop bug vs. a 2-minute manual delete).
 
 60. **espn `ui` viewer → Postgres (fast-follow, do next)** — `ui.py`/`ui.html`
     were kept in-tree but the `ui` subcommand was unregistered when the store
@@ -427,7 +416,8 @@ the weather slot), poller/config/menu/frontend registry rows, preview
 scenarios + two goldens. `football_layout.aseprite` was generated from the
 archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
 `examples/gen_football_layout.rs`); the archive zip is deleted — the
-.aseprite is now the only source of truth.
+.aseprite was then the only source of truth, until the field and ball became
+PNGs under `crates/scoreboard-render/art/` (2026-11-08).
 
 58. **Football corpus is empty until preseason — validate on live games
     (Aug 2026)** — no live NFL/NCAAF bodies exist off-season, so the
@@ -1242,37 +1232,6 @@ reviewed change.
     treating the backward path as safe, and consider refusing a downgrade in
     `scoreboard_ota::decide` unless the channel says so.
 
-116. **Retire the Aseprite pipeline; one source of truth for art (owner,
-    2026-11-08).** Today the truth is split four ways. Three `.aseprite`
-    files under `firmware/assets/layout/` are declared the source and
-    compiled by `tools/compile_layout.py` (Pillow plus the Aseprite CLI)
-    into the committed `crates/scoreboard-render/src/generated/layout.rs`,
-    and into MicroPython modules nothing consumes since that tree froze.
-    Only `mlb_layout` was drawn by hand: `hockey_layout` is produced by
-    `tools/hockey_layout.lua` driving Aseprite from numbers, and
-    `football_layout` by a Rust generator in a separate, uncommitted repo
-    (the `aseprite-io` feasibility harness). The toast icons are PNGs a
-    Python script writes. And `mlb_layout` carries twenty slices encoding
-    MLB screen geometry of which the Rust renderer reads three (the base
-    markers); the rest duplicates `geometry.rs` and is dead. The rink shows
-    the cost: the mockup drew it procedurally in Rust, it was re-authored as
-    Lua, compiled to bytes, and the renderer re-derives its geometry from
-    the compiled `POSITION` to project goals; the court is heading the same
-    way. Plan: procedural Rust for everything geometric (rink, court, star,
-    dots, arrows, toasts), with the numbers beside the projection math that
-    reads them; a Rust-only compile step from committed PNGs for the few
-    hand-drawn pieces (the MLB diamond and base marker, the football ball
-    and field); a test that draws each procedural replacement and compares
-    it pixel for pixel with the compiled sprite before the sprite goes, so
-    the golden frames stay byte-identical; then delete `compile_layout.py`,
-    the Lua script, the `.aseprite` files, the dead MLB slices and the
-    MicroPython output. `compile_fonts.py` is a different job and stays.
-    115 landed first (2026-11-08): the compiled palettes now carry the art's
-    eight-bit colours, read from the `.aseprite` sources before they go, and
-    the canvas draws `Rgb888`, so a procedural replacement is compared with
-    those. First step taken 2026-11-08: the NBA court is procedural
-    (`crates/scoreboard-render/src/court.rs`, NBA.md D14), pinned byte for
-    byte to its mockup-derived references; the rink's rewrite takes its shape.
 117. **The NBA pregame's injury line (NBA.md D10, deferred).** The mockups
     showed "OUT: GILBERT, NEWELL, LANDALE (ATL) DEMIN (BKN)" as the info
     cycle's second line; it needs the 122 KB pregame summary per game per

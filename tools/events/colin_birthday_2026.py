@@ -4,7 +4,7 @@
 Draws every frame procedurally at the panel's native 128x64 and writes them as
 PNGs; `encode_clip.py` turns that directory into the `.sbev` clip the firmware
 embeds (see `firmware-rs/app/assets/events/README.md`). This script is the
-editable source, the same way `gen_toast_icons.py` is for the toast icons.
+editable source: change the drawing here and re-encode, never the frames.
 
     uv run --with numpy --with pillow tools/events/colin_birthday_2026.py <out_dir>
 

@@ -620,8 +620,12 @@ pregame lines). Art: new `firmware/assets/layout/hockey_layout.aseprite`
 with `rink__absolute` (placeholder end colors found by value and tinted
 per team — football's endzone mechanism; boards, goal and blue lines,
 center line and creases, no faceoff dots per D10) and `star` — compiled by
-`tools/compile_layout.py` like the others. All new screens obey the 1 px
-edge rule. Tests: per-screen pixel tests in `tests/game.rs`, and the hockey
+`tools/compile_layout.py` like the others. *2026-11-08 (BACKLOG 116): the
+rink and the star are code now (`rink.rs`, `star.rs`), pinned to exact
+pictures by `tests/hockey_art.rs`; the goal projection reads `rink::STRIP`
+and its foot constants, and the .aseprite, the Lua script that drew it and
+`compile_layout.py` are gone.* All new screens obey the 1 px edge rule.
+Tests: per-screen pixel tests in `tests/game.rs`, and the hockey
 wire fixtures added to the golden-frame corpus (`tests/golden_frames/manifest.txt`
 rows, then a bless).
 Mutation contract: the lamp and PP-zone pulse are pure functions of

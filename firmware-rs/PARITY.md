@@ -263,7 +263,7 @@ MicroPython render path, the fixtures, the fonts or the sprites, and review what
 moved before committing:
 
 ```
-py tools/compile_layout.py && py tools/compile_fonts.py   # if art/fonts changed
+py tools/compile_layout.py && py tools/compile_fonts.py   # if art/fonts changed (compile_layout.py deleted 2026-11-08, BACKLOG 116)
 py crates/scoreboard-render/tests/gen_parity.py
 ```
 

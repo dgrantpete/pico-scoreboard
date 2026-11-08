@@ -849,7 +849,9 @@ finding. ARCHITECTURE.md is gitignored and updated outside the repo.
 - **C4 The procedural court is BACKLOG 116's first step** — the `Court`
   projection type is the shape the rink's procedural rewrite takes next
   (`Rink {x, y, w, h}` with the same `at`/`plot_over`), after which
-  `hockey_layout.aseprite` and its Lua go.
+  `hockey_layout.aseprite` and its Lua go. *Done 2026-11-08: `rink.rs` is
+  `Rink { x, y, width, height }` with `x_at`/`mid`/`dy`, and the Aseprite
+  pipeline is gone.*
 - **C5 Snapshot views as a sum — BACKLOG 103** — the NBA live view becomes
   the largest (§5); measure after 6.4.
 - **C6 Line-score OT headers — BACKLOG 104** — the NBA's fallback rows
