@@ -8,8 +8,9 @@ use scoreboard_wire::{FinalTeam, LivePhase, Side, football, hockey, mlb, nba, so
 use crate::color::Rgb888;
 use crate::feed::{GameDetail, LeagueId};
 use crate::snapshot::{
-    Banner, BannerKind, Bases, CLOCK, FieldSituation, GoalMark, LINESCORE, Millis, Mode, Record,
-    SHOOTOUT_SLOTS, SHORT, ShootoutRow, ShootoutView, ShotMark, Sport, StarLine,
+    Banner, BannerKind, Bases, CLOCK, CourtMark, FieldSituation, GoalMark, LINESCORE, LeaderLine,
+    Millis, Mode, Record, SHOOTOUT_SLOTS, SHORT, ShootoutRow, ShootoutView, ShotMark, Sport,
+    StarLine,
 };
 use crate::store::{Logos, Store};
 use crate::text::{Text, push_folded, push_folded_upper, set_folded, set_plain, write_text};
@@ -378,7 +379,15 @@ impl Store {
 
     // -- NBA ---------------------------------------------------------------
 
+    /// The court screen (NBA.md §3). The first-look rule is hockey's: the
+    /// ledger hold and the news stamp compare against this device's previous
+    /// commit only when that commit was this game, live. Anything else —
+    /// another game, this game's pregame, an error screen — makes this a
+    /// first look, which shows whatever ledger the payload carries and stamps
+    /// no news: a basket already on the board when the game rotates in is old
+    /// news (§3.6).
     pub fn commit_nba_live(&mut self, game: &nba::Live<'_>, logos: Logos, now_ms: Millis) {
+        let first_look = self.mode() != Mode::NbaLive || self.snapshot().game_id != game.game_id;
         self.begin_game(
             Mode::NbaLive,
             game.game_id,
@@ -390,6 +399,8 @@ impl Store {
         let view = &mut self.snapshot_mut().nba_live;
         view.away_score = game.away.score;
         view.home_score = game.home.score;
+        view.away_color = Rgb888::from(game.away.colors);
+        view.home_color = Rgb888::from(game.home.colors);
         set_break_clock(
             &mut view.phase_text,
             &mut view.clock_text,
@@ -397,25 +408,112 @@ impl Store {
             game.phase,
             game.period,
             game.clock,
+            NBA_HALFTIME,
         );
-        // A stop-clock under a minute reads "53.0" — no colon. That shape is
-        // the only crunch-time signal ESPN gives.
-        view.clock_low = game.phase == LivePhase::InProgress && !game.clock.contains(':');
+        // Crunch time where the clock can end the game — the fourth quarter
+        // and overtime — under a minute, which ESPN signals only by the
+        // colonless "39.0" shape; and not "0.0": a real 0.0 lasts a poll
+        // before END_PERIOD, while the frozen-clock quirk would paint a red
+        // 0.0 for ten minutes (§3.2).
+        let sub_minute = !game.clock.is_empty() && !game.clock.contains(':');
+        view.clock_low = game.phase == LivePhase::InProgress
+            && game.period >= 4
+            && sub_minute
+            && game.clock != FROZEN_CLOCK;
+
+        // The ledger hold (§3.3): a payload without a ledger — the summary not
+        // fetched, or the one-poll glitch body the backend drops — keeps the
+        // previous poll's, which outlives the glitch. A first look has no
+        // previous poll to keep.
+        match game.ledger {
+            Some(ledger) => view.ledger = Some(ledger),
+            None if first_look => view.ledger = None,
+            None => {}
+        }
+        view.run = game.run;
+
+        // The news stamp (§3.6). The key is the newest scoring play's sequence
+        // number, so a corrected score is not news and a repeated poll is not
+        // news twice. The key survives a poll whose summary was missing, so
+        // the group coming back unchanged is not news either; and the first
+        // key this look learns is adopted, not stamped — whether it arrives
+        // with the first look or with the first summary after it, the basket
+        // was on the board already.
+        if first_look {
+            view.score_ms = 0;
+            view.score_seq = 0;
+        }
+        view.caption.clear();
+        match game.newest_score {
+            Some(score) => {
+                if view.score_seq != 0 && score.seq != view.score_seq {
+                    view.score_ms = now_ms;
+                }
+                view.score_seq = score.seq;
+                view.last_score = Some(score.side);
+                view.newest_marked = score.marked;
+                if !score.scorer.is_empty() {
+                    set_folded(&mut view.caption, score.scorer);
+                    if score.scorer_points > 0 {
+                        let points = score.scorer_points;
+                        crate::text::write_args(&mut view.caption, format_args!(" {points}"));
+                    }
+                }
+            }
+            None => {
+                view.last_score = None;
+                view.newest_marked = false;
+            }
+        }
+
+        view.marks.clear();
+        for make in game.makes.iter() {
+            // The wire carries at most the capacity's 128 makes.
+            let _ = view.marks.push(CourtMark {
+                side: make.side,
+                x: make.x,
+                y: make.y,
+            });
+        }
         self.finish_game();
     }
 
+    /// The game-leaders final (D2). What every final has — scores, colors,
+    /// the result label, the quarter rows — goes to the shared final view,
+    /// whose rows stand in for the leaders while ESPN has not posted them
+    /// (§3.9); the NBA view holds only what the NBA adds.
     pub fn commit_nba_final(&mut self, game: &nba::Final<'_>, logos: Logos, now_ms: Millis) {
-        self.commit_linescore_final(
-            &LinescoreFinal {
-                sport: Sport::Nba,
-                game_id: game.game_id,
-                periods: game.periods_played,
-                away: game.away,
-                home: game.home,
-            },
+        self.begin_game(
+            Mode::NbaFinal,
+            game.game_id,
+            game.away.abbreviation,
+            game.home.abbreviation,
             logos,
             now_ms,
         );
+        self.fill_linescore_final(&LinescoreFinal {
+            sport: Sport::Nba,
+            game_id: game.game_id,
+            periods: game.periods_played,
+            away: game.away,
+            home: game.home,
+        });
+        let view = &mut self.snapshot_mut().nba_final;
+        view.leaders = game
+            .leaders
+            .map(|leaders| [leaders.points, leaders.rebounds, leaders.assists].map(leader_line));
+        view.series.clear();
+        if let Some(series) = game.series {
+            push_folded_upper(&mut view.series, series);
+        }
+        view.records = game.records.map(|records| {
+            [records.away, records.home].map(|record| Record {
+                wins: record.wins,
+                losses: record.losses,
+                ot_losses: None,
+            })
+        });
+        self.finish_game();
     }
 
     // -- Hockey ------------------------------------------------------------
@@ -626,6 +724,7 @@ impl Store {
             game.phase,
             game.period,
             game.clock,
+            FOOTBALL_HALFTIME,
         );
         // Crunch time only where the clock can end a half: Q2, Q4, overtime.
         // The colon-less form is NBA's sub-minute shape, kept as a belt in
@@ -777,22 +876,30 @@ impl Store {
 
     // -- Shared screens ----------------------------------------------------
 
-    /// The line-score final: MLB innings, NBA and football quarters.
+    /// The line-score final: MLB innings and football quarters.
     pub fn commit_linescore_final(
         &mut self,
         game: &LinescoreFinal<'_>,
         logos: Logos,
         now_ms: Millis,
     ) {
-        let (away, home) = (&game.away, &game.home);
         self.begin_game(
             Mode::Final,
             game.game_id,
-            away.abbreviation,
-            home.abbreviation,
+            game.away.abbreviation,
+            game.home.abbreviation,
             logos,
             now_ms,
         );
+        self.fill_linescore_final(game);
+        self.finish_game();
+    }
+
+    /// The shared final view — scores, colors, the result label and the
+    /// equal-column rows — for the line-score screen and for the NBA's
+    /// leaders screen, which draws them around its own rows.
+    fn fill_linescore_final(&mut self, game: &LinescoreFinal<'_>) {
+        let (away, home) = (&game.away, &game.home);
         let away_color = Rgb888::from(away.colors);
         let home_color = Rgb888::from(home.colors);
         let view = &mut self.snapshot_mut().linescore_final;
@@ -811,7 +918,6 @@ impl Store {
             away.line_score,
             home.line_score,
         );
-        self.finish_game();
     }
 
     /// The upcoming-game screen.
@@ -910,6 +1016,32 @@ fn set_period_name(dst: &mut Text<SHORT>, period: u8) {
     }
 }
 
+/// What a sport's clock slot says at halftime, and whether its period chip
+/// stays up through it.
+#[derive(Debug, Clone, Copy)]
+struct Halftime {
+    word: &'static str,
+    keeps_period: bool,
+}
+
+/// Football blanks the chip and reads "HT", so the state is not announced
+/// twice.
+const FOOTBALL_HALFTIME: Halftime = Halftime {
+    word: "HT",
+    keeps_period: false,
+};
+
+/// The NBA keeps the period that ended and reads "HALF" — hockey's rule, and
+/// what every mockup the owner saw read; the slot has the room (NBA.md §3.2).
+const NBA_HALFTIME: Halftime = Halftime {
+    word: "HALF",
+    keeps_period: true,
+};
+
+/// ESPN's frozen clock (NBA.md §2): "0.0" for minutes while the game runs,
+/// which must not wear the warning colour.
+const FROZEN_CLOCK: &str = "0.0";
+
 /// The clock slot shared by NBA and football: during a break the clock string
 /// is meaningless (it reads "0:00" or a reset "12:00"), so the phase is the
 /// only render signal and the slot shows the break instead.
@@ -920,13 +1052,16 @@ fn set_break_clock(
     phase: LivePhase,
     period: u8,
     clock: &str,
+    halftime: Halftime,
 ) {
     match phase {
         LivePhase::Halftime => {
-            // The clock slot renders "HT"; the period chip stays empty so the
-            // state is not announced twice.
-            phase_text.clear();
-            set_plain(clock_text, "HT");
+            if halftime.keeps_period {
+                set_period_name(phase_text, period);
+            } else {
+                phase_text.clear();
+            }
+            set_plain(clock_text, halftime.word);
             *clock_accent = true;
         }
         LivePhase::EndOfPeriod => {
@@ -955,6 +1090,19 @@ fn set_final_text(dst: &mut Text<SHORT>, sport: Sport, periods: u8) {
             write_text!(dst, "F/{overtimes}OT");
         }
     }
+}
+
+/// One leaders row (NBA.md §3.9): the short name and the stat as one string
+/// in the player's team color — "J. Brunson 36".
+fn leader_line(leader: nba::Leader<'_>) -> LeaderLine {
+    let mut line = LeaderLine {
+        text: Text::new(),
+        side: leader.side,
+    };
+    set_folded(&mut line.text, leader.name);
+    let value = leader.value;
+    crate::text::write_args(&mut line.text, format_args!(" {value}"));
+    line
 }
 
 const DOWNS: [&str; 5] = ["", "1ST", "2ND", "3RD", "4TH"];

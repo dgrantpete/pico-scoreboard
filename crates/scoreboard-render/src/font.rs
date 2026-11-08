@@ -146,6 +146,13 @@ pub fn measure(text: &str, font: &FontFace) -> i32 {
     text.chars().map(|c| font.glyph(c).width).sum()
 }
 
+/// Width of `value`'s digits in pixels, as [`integer`] will draw them — for
+/// centring a number beside text without building a string.
+pub fn digits_width(value: u16, font: &FontFace) -> i32 {
+    let digits = value.checked_ilog10().map_or(1, |log| log + 1) as i32;
+    digits * font.digit(0).width
+}
+
 /// How a run of text is inked.
 ///
 /// The MicroPython entry points carried `color`, `bgcolor` and `font` as three

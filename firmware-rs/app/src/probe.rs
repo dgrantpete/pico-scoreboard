@@ -87,6 +87,7 @@ impl defmt::Format for ModeName {
                 Mode::SoccerLive => "soccer_live",
                 Mode::SoccerFinal => "soccer_final",
                 Mode::NbaLive => "nba_live",
+                Mode::NbaFinal => "nba_final",
                 Mode::FootballLive => "football_live",
                 Mode::HockeyLive => "hockey_live",
                 Mode::HockeyFinal => "hockey_final",

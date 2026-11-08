@@ -666,19 +666,14 @@ fn numbers(
 ) {
     let face = style.font;
     let width = font::measure(prefix, face)
-        + digits_width(a, face)
+        + font::digits_width(a, face)
         + font::measure(between, face)
-        + digits_width(b, face);
+        + font::digits_width(b, face);
     let mut x = slot.x + (slot.width - width).div_euclid(2);
     x = font::text_into(canvas, prefix, x, slot.y, style);
     x = font::integer(canvas, a, x, slot.y, 0, Align::Left, style);
     x = font::text_into(canvas, between, x, slot.y, style);
     font::integer(canvas, b, x, slot.y, 0, Align::Left, style);
-}
-
-fn digits_width(value: u16, face: &FontFace) -> i32 {
-    let digits = value.checked_ilog10().map_or(1, |log| log + 1) as i32;
-    digits * face.digit(0).width
 }
 
 fn side_color(view: &HockeyLiveView, side: Side) -> u16 {

@@ -20,6 +20,7 @@
 //! only ones there are, and the selector went with the alternatives.
 
 use crate::blit::Slice;
+use crate::court::Court;
 use crate::font::Scroll;
 use scoreboard_model::Mode;
 
@@ -173,6 +174,11 @@ pub const PLAY_SCROLL_PAUSE_MS: u64 = 1000;
 /// Pause feel for hockey's last-goal lines; the speed is the user-configurable
 /// one, as for soccer's event line.
 pub const HOCKEY_SCROLL_PAUSE_MS: u64 = 1500;
+
+/// Pause feel for the court's caption (NBA.md §3.6), the same arrangement:
+/// the prepared view sizes the news window with it, so a long name is read
+/// once in full before the caption goes.
+pub const NBA_CAPTION_PAUSE_MS: u64 = 1500;
 
 /// The three-stars final's names and series line: a fixed feel, like the
 /// pregame lines, slow enough to read a name off.
@@ -442,33 +448,121 @@ pub const MLB_LIVE: MlbLiveGeometry = MlbLiveGeometry {
     strip: COLUMN_STRIP,
 };
 
-/// NBA live, "quarter + clock ledger" — the soccer-live silhouette, with the
-/// identity column 4 px wider because NBA scores reach three digits.
+/// NBA live, "Court" (NBA.md D1, the B5 layout): football's broadcast
+/// corners as one 24-row band — crests, each score column a team ledger
+/// (foul dots over the score over timeout blocks), the period over the clock
+/// between them — and a top-down court under it carrying every made field
+/// goal where it was made. Rows 1–62 and columns 1–126 only: the edge rule,
+/// checked over every mockup frame.
+///
+/// The band's arithmetic, for whoever touches it: 2 × 24 px of crest and
+/// 2 × 24 px of three-digit score leave 30 px in the middle, and a
+/// five-character clock is 30 px only in the small font (40 in the other
+/// two) — the price of the 37-row court, accepted by the owner (D13).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NbaLiveGeometry {
     pub logo_away: Slice,
     pub logo_home: Slice,
+    /// Five foul dots at a 5 px pitch, a pixel in from the crests.
+    pub fouls_away: Slice,
+    pub fouls_home: Slice,
     pub score_away: Slice,
     pub score_home: Slice,
-    pub phase: Slice,
-    pub divider_x: i32,
-    pub separator_y: i32,
+    /// Seven 2 × 2 timeout blocks at a 3 px pitch, in the rows the score's
+    /// cell leaves dark; the home row ends a pixel short of its score's
+    /// right edge.
+    pub timeouts_away: Slice,
+    pub timeouts_home: Slice,
+    /// The period chip over the clock, the pair centred on the crests'
+    /// middle row.
+    pub period: Slice,
     pub clock: Slice,
-    /// The bottom strip the play flash takes over. NBA has no
-    /// persistent content there, so between flashes it is empty.
+    /// The court: 124 × 37, so 1.31 px/ft along and 0.72 across.
+    pub court: Court,
+    /// The caption on the floor at the bottom centre — 56 px, what the arcs'
+    /// reach leaves at the court's outer rows — and the wood box painted
+    /// under it, a row taller, which erases the half-court line and any mark
+    /// beneath (§3.6).
+    pub caption: Slice,
+    pub caption_box: Slice,
+    /// The bottom strip the play flash takes over: the court's rows at full
+    /// width, with the 16 px line's ink centred in them. The court hides
+    /// entirely while the flash shows and the band stays (§3.7).
     pub strip: Slice,
 }
 
 pub const NBA_LIVE: NbaLiveGeometry = NbaLiveGeometry {
     logo_away: rect(1, 1, 24, 24),
-    score_away: rect(24, 7, 25, 16),
-    phase: rect(2, 29, 46, 8),
-    logo_home: rect(1, 39, 24, 24),
-    score_home: rect(24, 47, 25, 16),
-    divider_x: 49,
-    separator_y: 36,
-    clock: rect(50, 10, 77, 16),
-    strip: COLUMN_STRIP,
+    logo_home: rect(103, 1, 24, 24),
+    fouls_away: rect(26, 2, 24, 4),
+    fouls_home: rect(78, 2, 24, 4),
+    score_away: rect(25, 7, 24, 16),
+    score_home: rect(79, 7, 24, 16),
+    timeouts_away: rect(27, 21, 20, 2),
+    timeouts_home: rect(81, 21, 20, 2),
+    period: rect(49, 5, 30, 8),
+    clock: rect(49, 14, 30, 8),
+    court: Court {
+        x: 2,
+        y: 26,
+        width: 124,
+        height: 37,
+    },
+    caption: rect(36, 54, 56, 8),
+    caption_box: rect(36, 53, 56, 9),
+    strip: rect(1, 38, 126, 16),
+};
+
+/// The NBA's final, "Game leaders" (D2): hockey's three-stars silhouette
+/// with basketball's postgame ritual where the stars were — the points,
+/// rebounds and assists leaders, each in their team's colour — and both
+/// records under the rule, the series line over them in the playoffs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NbaFinalGeometry {
+    pub logo_away: Slice,
+    pub logo_home: Slice,
+    pub score_away: Slice,
+    pub score_home: Slice,
+    pub divider_x: i32,
+    pub final_label: Slice,
+    /// Each row's category label ("PTS", "REB", "AST") starts here, and the
+    /// leader's "name value" scrolls in the row's slot beside it.
+    pub leader_label_x: i32,
+    pub leader_rows: [Slice; 3],
+    /// While ESPN has not posted the leaders, their band carries the line
+    /// score instead: header, away, home.
+    pub linescore_rows: [Slice; 3],
+    /// The rule under the band, from the divider to the last legal column.
+    pub rule_y: i32,
+    /// The series line (playoffs only) with the records under it; without a
+    /// series the records take the band's middle alone.
+    pub series: Slice,
+    pub records: Slice,
+    pub records_alone: Slice,
+}
+
+pub const NBA_FINAL: NbaFinalGeometry = NbaFinalGeometry {
+    logo_away: rect(1, 2, 24, 24),
+    score_away: rect(25, 6, 25, 16),
+    logo_home: rect(1, 38, 24, 24),
+    score_home: rect(25, 42, 25, 16),
+    divider_x: 51,
+    final_label: rect(53, 2, 74, 8),
+    leader_label_x: 53,
+    leader_rows: [
+        rect(73, 14, 54, 8),
+        rect(73, 24, 54, 8),
+        rect(73, 34, 54, 8),
+    ],
+    linescore_rows: [
+        rect(53, 14, 74, 8),
+        rect(53, 24, 74, 8),
+        rect(53, 34, 74, 8),
+    ],
+    rule_y: 43,
+    series: rect(53, 46, 74, 8),
+    records: rect(53, 54, 74, 8),
+    records_alone: rect(53, 51, 74, 8),
 };
 
 /// Soccer full time, "FT + scorers" — the line-score final's silhouette with

@@ -351,11 +351,12 @@ fn the_play_window_is_sized_to_the_strip_the_flash_scrolls_in() {
     let speed = RenderSettings::new().scroll_px_per_second as u64;
     for (mode, window) in [
         (Mode::MlbLive, 1_000 + 36 * 1_000 / speed + 1_000),
-        (Mode::NbaLive, 1_000 + 36 * 1_000 / speed + 1_000),
         (Mode::SoccerLive, 1_000 + 36 * 1_000 / speed + 1_000),
         (Mode::FootballLive, 2_000),
-        // Hockey's rink gives up the full width, like football's field.
+        // Hockey's rink and the NBA's court give up the full width, like
+        // football's field.
         (Mode::HockeyLive, 2_000),
+        (Mode::NbaLive, 2_000),
     ] {
         let mut harness = Harness::new(mode);
         harness.snapshot.play.text = text(play);
@@ -896,34 +897,643 @@ fn the_period_chip_sits_in_the_identity_column_and_leaves_during_a_break() {
 }
 
 // -- NBA ---------------------------------------------------------------------
+//
+// Hand-built wire games committed through the real model — the corpus's
+// level-0 goldens carry no `ext=2` groups — each naming the ESPN moment it
+// stands for (NBA.md §3, §6.5).
+
+use scoreboard_render::court::{IRON, LINES, WOOD};
+use scoreboard_render::geometry::{NBA_FINAL, NBA_LIVE};
+use scoreboard_render::prepared::NBA_NEWS_MS;
+use scoreboard_wire::{FinalTeam, Record as WireRecord, nba};
+
+/// A burned timeout's block and a mark's opacity, restated rather than
+/// borrowed from the renderer.
+const BURNED: u16 = rgb565(40, 40, 40);
+const MARK_ALPHA: u32 = 96;
+
+fn nba_team(abbreviation: &str, score: u16, primary: u32) -> TeamState<'_> {
+    TeamState {
+        abbreviation,
+        score,
+        colors: TeamColors {
+            primary,
+            alternate: 0,
+        },
+    }
+}
+
+/// NY (red, away) at CLE (blue, home), second quarter: the tip-off ledger a
+/// few fouls and a timeout each in, no run, nothing new.
+fn nba_live<'a>(makes: &'a [nba::Make]) -> nba::Live<'a> {
+    nba::Live {
+        game_id: "401909940",
+        period: 2,
+        phase: LivePhase::InProgress,
+        clock: "11:32",
+        away: nba_team("NY", 26, 0xFF_0000),
+        home: nba_team("CLE", 30, 0x00_00FF),
+        last_play: None,
+        ledger: Some(nba::Ledger {
+            away: nba::TeamLedger {
+                fouls: 2,
+                in_bonus: false,
+                timeouts: 6,
+            },
+            home: nba::TeamLedger {
+                fouls: 4,
+                in_bonus: false,
+                timeouts: 5,
+            },
+        }),
+        run: None,
+        newest_score: None,
+        makes: nba::Makes::new(makes),
+    }
+}
+
+/// A layup at the rim (ESPN's y = 1), and a corner three.
+const AWAY_LAYUP: nba::Make = nba::Make {
+    side: Side::Away,
+    three: false,
+    x: 0,
+    y: 1,
+};
+const HOME_LAYUP: nba::Make = nba::Make {
+    side: Side::Home,
+    three: false,
+    x: 0,
+    y: 1,
+};
+const HOME_CORNER: nba::Make = nba::Make {
+    side: Side::Home,
+    three: true,
+    x: -20,
+    y: 10,
+};
+
+fn commit_nba(store: &mut Store, detail: GameDetail<'_>, now_ms: u64) {
+    let league = LeagueId::from_slug(Sport::Nba, "nba");
+    let logos = CommitLogos {
+        away: Some(LogoRef(0)),
+        home: Some(LogoRef(0)),
+    };
+    store.commit_detail(&league, &detail, logos, now_ms, LocalClock::default());
+}
+
+/// Commit `games` five seconds apart, the last at [`COMMIT_MS`], and draw
+/// whatever the store ends up holding.
+fn basketball(games: &[nba::Live<'_>]) -> Harness {
+    let mut store = Store::new();
+    let first = COMMIT_MS - (games.len() as u64 - 1) * 5_000;
+    for (index, game) in games.iter().enumerate() {
+        commit_nba(
+            &mut store,
+            GameDetail::Nba(nba::Game::Live(*game)),
+            first + index as u64 * 5_000,
+        );
+    }
+    from_store(Mode::NbaLive, &store)
+}
+
+fn nba_sides(harness: &Harness) -> (u16, u16) {
+    let view = &harness.snapshot.nba_live;
+    (pack(view.away_color), pack(view.home_color))
+}
+
+/// The rim pixel at each basket: the away side attacks the left one.
+fn rim(side: Side) -> (i32, i32) {
+    let court = NBA_LIVE.court;
+    (
+        court.at(side.into(), scoreboard_render::court::RIM),
+        court.mid(),
+    )
+}
+
+/// Pixels lit on the panel's outer ring (BACKLOG 56).
+fn edge_lit(frame: &Frame) -> usize {
+    let (w, h) = (WIDTH as i32, HEIGHT as i32);
+    frame.lit_in(0..w, 0..1)
+        + frame.lit_in(0..w, h - 1..h)
+        + frame.lit_in(0..1, 1..h - 1)
+        + frame.lit_in(w - 1..w, 1..h - 1)
+}
 
 #[test]
-fn the_nba_clock_changes_color_with_its_state() {
-    let mut harness = Harness::new(Mode::NbaLive);
-    harness.snapshot.nba_live.away_score = 101;
-    harness.snapshot.nba_live.home_score = 99;
-    harness.snapshot.nba_live.phase_text = text("Q4");
-    harness.snapshot.nba_live.clock_text = text("4:37");
-    let slot = geometry::NBA_LIVE.clock;
-    let count = |frame: &Frame, color| {
-        frame.count(
-            slot.x..slot.x + slot.width,
-            slot.y..slot.y + slot.height,
-            color,
-        )
+fn the_court_screen_draws_its_band_and_its_court() {
+    let makes = [AWAY_LAYUP, HOME_CORNER];
+    let mut harness = basketball(&[nba_live(&makes)]);
+    let (away, home) = nba_sides(&harness);
+    let colors = harness.snapshot.ui_colors;
+    let primary = pack(colors.primary);
+    let frame = harness.draw();
+    let table = NBA_LIVE;
+
+    for slot in [table.logo_away, table.logo_home] {
+        assert_eq!(frame.pixel(slot.x, slot.y), CREST);
+    }
+    for slot in [table.score_away, table.score_home] {
+        assert!(count_in_slot(&frame, slot, primary) > 0, "a score");
+    }
+    assert!(count_in_slot(&frame, table.period, primary) > 0, "Q2");
+    assert!(
+        count_in_slot(&frame, table.clock, pack(colors.clock_normal)) > 0,
+        "11:32"
+    );
+
+    // The ledger: two and four foul dots in the team colours, none red; six
+    // and five of seven timeout blocks held, the rest dark.
+    assert!(count_in_slot(&frame, table.fouls_away, away) > 0);
+    assert!(count_in_slot(&frame, table.fouls_home, home) > 0);
+    let warning = pack(colors.clock_warning);
+    assert_eq!(count_in_slot(&frame, table.fouls_away, warning), 0);
+    assert_eq!(count_in_slot(&frame, table.fouls_home, warning), 0);
+    assert_eq!(count_in_slot(&frame, table.timeouts_away, away), 6 * 4);
+    assert_eq!(count_in_slot(&frame, table.timeouts_away, BURNED), 4);
+    assert_eq!(count_in_slot(&frame, table.timeouts_home, home), 5 * 4);
+    assert_eq!(count_in_slot(&frame, table.timeouts_home, BURNED), 2 * 4);
+
+    // The court: its lines, the half-court line, wood inside, a rim each end
+    // — the away side's with a mark on it.
+    let court = table.court;
+    assert_eq!(frame.pixel(court.x, court.y), LINES);
+    assert_eq!(frame.pixel(court.x + 1, court.y + 1), WOOD);
+    assert_eq!(frame.pixel(64, court.mid()), LINES);
+    let (home_rim_x, mid) = rim(Side::Home);
+    assert_eq!(frame.pixel(home_rim_x, mid), IRON);
+    let (away_rim_x, _) = rim(Side::Away);
+    assert_eq!(frame.pixel(away_rim_x, mid), mix(IRON, away, MARK_ALPHA));
+    assert_eq!(
+        frame.pixel(away_rim_x - 1, mid - 1),
+        mix(WOOD, away, MARK_ALPHA),
+        "a 2 x 2 mark whose bottom-right pixel is the point"
+    );
+    // The corner three lands on the home side's court, translucent.
+    let corner_x = court.at(
+        Side::Home.into(),
+        10.0 + scoreboard_render::court::ESPN_ORIGIN,
+    );
+    let corner_y = court.mid() + court.dy(-20.0);
+    assert_eq!(frame.pixel(corner_x, corner_y), mix(WOOD, home, MARK_ALPHA));
+
+    // Nothing to say: the floor's half-court line runs through the caption's
+    // rows untouched.
+    assert_eq!(frame.pixel(64, table.caption.y + 3), LINES);
+    assert_eq!(edge_lit(&frame), 0);
+}
+
+/// §3.3's display rule: a side's dots go red when the opponent is in the
+/// bonus — this side has no fouls to give — and D6's BONUS caption points
+/// at the side that shoots.
+#[test]
+fn foul_rows_turn_red_when_the_opponent_is_in_the_bonus() {
+    let mut game = nba_live(&[]);
+    let mut ledger = game.ledger.unwrap();
+    ledger.away.in_bonus = true;
+    ledger.away.fouls = 3;
+    ledger.home.fouls = 5;
+    game.ledger = Some(ledger);
+    let mut harness = basketball(&[game]);
+    let (away, home) = nba_sides(&harness);
+    let warning = pack(harness.snapshot.ui_colors.clock_warning);
+    let frame = harness.draw();
+    let table = NBA_LIVE;
+
+    assert!(
+        count_in_slot(&frame, table.fouls_home, warning) > 0,
+        "CLE has none to give"
+    );
+    assert_eq!(count_in_slot(&frame, table.fouls_home, home), 0);
+    assert!(
+        count_in_slot(&frame, table.fouls_away, away) > 0,
+        "NY still has fouls to give"
+    );
+
+    // BONUS on the floor in NY's colour, the arrow at the slot's left edge —
+    // toward NY's crest — and no arrow at the right.
+    let slot = table.caption;
+    assert!(count_in_slot(&frame, slot, away) > 0);
+    assert_eq!(frame.pixel(slot.x, slot.y + 3), away, "the arrow's tip");
+    assert_eq!(frame.pixel(slot.x + slot.width - 1, slot.y + 3), WOOD);
+    // The box erased the half-court line under the caption.
+    assert_eq!(frame.pixel(64, slot.y - 1), WOOD);
+
+    // Both in the penalty: both arrows, each in its own colour, the word in
+    // the primary.
+    ledger.home.in_bonus = true;
+    game.ledger = Some(ledger);
+    let mut harness = basketball(&[game]);
+    let frame = harness.draw();
+    assert_eq!(frame.pixel(slot.x, slot.y + 3), away);
+    assert_eq!(frame.pixel(slot.x + slot.width - 1, slot.y + 3), home);
+    assert!(count_in_slot(&frame, slot, pack(harness.snapshot.ui_colors.primary)) > 0);
+}
+
+/// §3.3's hold: a poll without a ledger keeps the last one, and a first look
+/// without one shows none.
+#[test]
+fn a_missing_ledger_keeps_the_last_one_but_a_first_look_shows_none() {
+    let with = nba_live(&[]);
+    let without = nba::Live {
+        ledger: None,
+        ..nba_live(&[])
+    };
+    let mut harness = basketball(&[with, without]);
+    let (away, _) = nba_sides(&harness);
+    let frame = harness.draw();
+    assert!(count_in_slot(&frame, NBA_LIVE.fouls_away, away) > 0, "held");
+    assert_eq!(count_in_slot(&frame, NBA_LIVE.timeouts_away, away), 6 * 4);
+
+    let mut harness = basketball(&[without]);
+    let frame = harness.draw();
+    for slot in [
+        NBA_LIVE.fouls_away,
+        NBA_LIVE.fouls_home,
+        NBA_LIVE.timeouts_away,
+        NBA_LIVE.timeouts_home,
+    ] {
+        assert_eq!(
+            lit_in_slot(&frame, slot),
+            0,
+            "{slot:?}: nothing beats a fake seven"
+        );
+    }
+}
+
+/// §3.5: from eight unanswered points the running side's score breathes
+/// between the primary and its colour on the wall rail; the caption reads
+/// "N-0 RUN" with the arrow toward that side, from six.
+#[test]
+fn a_run_glows_the_running_sides_score_and_captions_itself() {
+    let run = |points| nba::Live {
+        run: Some(nba::Run {
+            side: Side::Home,
+            points,
+        }),
+        ..nba_live(&[])
+    };
+    let mut harness = basketball(&[run(8)]);
+    let (_, home) = nba_sides(&harness);
+    let primary = pack(harness.snapshot.ui_colors.primary);
+    let table = NBA_LIVE;
+
+    // At the view's anchor the pulse is at zero: the primary. Half a cycle
+    // on, the breath reaches 200/256 of the way to CLE's blue.
+    let frame = harness.draw();
+    assert!(count_in_slot(&frame, table.score_home, primary) > 0);
+    harness.now = WallMs(COMMIT_MS + 600);
+    let frame = harness.draw();
+    let peak = mix(primary, home, 200);
+    assert!(
+        count_in_slot(&frame, table.score_home, peak) > 0,
+        "the breath"
+    );
+    assert_eq!(count_in_slot(&frame, table.score_home, primary), 0);
+    assert!(
+        count_in_slot(&frame, table.score_away, primary) > 0,
+        "NY's score stands still"
+    );
+
+    let slot = table.caption;
+    assert!(count_in_slot(&frame, slot, home) > 0, "8-0 RUN");
+    assert_eq!(
+        frame.pixel(slot.x + slot.width - 1, slot.y + 3),
+        home,
+        "the arrow toward CLE"
+    );
+    assert_eq!(frame.pixel(slot.x, slot.y + 3), WOOD);
+
+    // Six is a run worth a caption but not yet a glow.
+    let mut harness = basketball(&[run(6)]);
+    harness.now = WallMs(COMMIT_MS + 600);
+    let frame = harness.draw();
+    assert!(count_in_slot(&frame, table.score_home, primary) > 0);
+    assert!(count_in_slot(&frame, slot, home) > 0, "6-0 RUN");
+    assert_eq!(edge_lit(&frame), 0);
+}
+
+/// NY's layup at 26-30 is the newest score: play 500 on the previous poll,
+/// play 501 now.
+fn news<'a>(seq: u32, makes: &'a [nba::Make]) -> nba::Live<'a> {
+    nba::Live {
+        newest_score: Some(nba::NewestScore {
+            side: Side::Home,
+            scorer_points: 18,
+            seq,
+            marked: true,
+            scorer: "MOBLEY",
+        }),
+        ..nba_live(makes)
+    }
+}
+
+/// §3.6: a changed key stamps the news window, during which the caption
+/// names the scorer in the side's colour and the newest mark blinks opaque
+/// white at 400 ms; a first look stamps nothing.
+#[test]
+fn the_newest_score_captions_and_blinks_while_it_is_news() {
+    let makes = [AWAY_LAYUP, HOME_LAYUP];
+    let mut harness = basketball(&[news(500, &makes), news(501, &makes)]);
+    let (_, home) = nba_sides(&harness);
+    assert_eq!(
+        harness.snapshot.nba_live.score_ms, COMMIT_MS,
+        "stamped on the change"
+    );
+    let table = NBA_LIVE;
+    let slot = table.caption;
+    let (rim_x, mid) = rim(Side::Home);
+
+    // On: the mark is white, the caption up.
+    let frame = harness.draw();
+    for (x, y) in [
+        (rim_x, mid),
+        (rim_x - 1, mid),
+        (rim_x, mid - 1),
+        (rim_x - 1, mid - 1),
+    ] {
+        assert_eq!(frame.pixel(x, y), WHITE, "({x}, {y})");
+    }
+    assert!(count_in_slot(&frame, slot, home) > 0, "MOBLEY 18");
+    assert_eq!(
+        frame.pixel(64, slot.y - 1),
+        WOOD,
+        "the box erased the half-court line"
+    );
+
+    // Off: the mark is back to its translucent self; the caption stays.
+    harness.now = WallMs(COMMIT_MS + 400);
+    let frame = harness.draw();
+    assert_eq!(frame.pixel(rim_x, mid), mix(IRON, home, MARK_ALPHA));
+    assert!(count_in_slot(&frame, slot, home) > 0);
+
+    // Every frame of the blink keeps off the edge ring.
+    for step in 0..6 {
+        harness.now = WallMs(COMMIT_MS + step * 200);
+        assert_eq!(edge_lit(&harness.draw()), 0, "step {step}");
+    }
+
+    // The window closes: no caption, no blink, the half-court line is back.
+    harness.now = WallMs(COMMIT_MS + NBA_NEWS_MS);
+    let frame = harness.draw();
+    assert_eq!(count_in_slot(&frame, slot, home), 0);
+    assert_eq!(frame.pixel(64, slot.y + 3), LINES);
+    assert_eq!(frame.pixel(rim_x, mid), mix(IRON, home, MARK_ALPHA));
+
+    // A first look: the basket was on the board already.
+    let mut harness = basketball(&[news(501, &makes)]);
+    assert_eq!(harness.snapshot.nba_live.score_ms, 0);
+    let frame = harness.draw();
+    assert_eq!(count_in_slot(&frame, slot, home), 0);
+    assert_eq!(frame.pixel(rim_x, mid), mix(IRON, home, MARK_ALPHA));
+}
+
+/// §3.7: while the flash is up the court hides entirely and the band stays.
+#[test]
+fn the_flash_hides_the_court_and_keeps_the_band() {
+    let makes = [AWAY_LAYUP];
+    let mut harness = basketball(&[nba_live(&makes)]);
+    let (away, _) = nba_sides(&harness);
+    harness.snapshot.play.id = text("4019099400067");
+    harness.snapshot.play.text = text("Cavaliers Full timeout");
+    harness.snapshot.play.updated_ms = COMMIT_MS;
+    let frame = harness.draw();
+    let table = NBA_LIVE;
+
+    assert_eq!(frame.pixel(table.logo_away.x, table.logo_away.y), CREST);
+    assert!(
+        count_in_slot(&frame, table.fouls_away, away) > 0,
+        "the ledger stays"
+    );
+    assert!(count_in_slot(&frame, table.timeouts_away, away) > 0);
+    let court = table.court;
+    assert_eq!(frame.pixel(court.x, court.y), BLACK, "no lines");
+    let (rim_x, mid) = rim(Side::Away);
+    assert_eq!(frame.pixel(rim_x, mid), BLACK, "no rim, no mark");
+    assert_eq!(frame.pixel(64, court.y + court.height - 2), BLACK);
+    assert!(
+        count_in_slot(
+            &frame,
+            table.strip,
+            pack(harness.snapshot.ui_colors.primary)
+        ) > 0,
+        "the flash"
+    );
+    assert_eq!(edge_lit(&frame), 0);
+}
+
+/// §3.2: HALF in the accent with the period kept; the warning colour only in
+/// the fourth and overtime, under a minute, and never for "0.0".
+#[test]
+fn the_nba_clock_reads_the_break_and_warns_late() {
+    let colors = Harness::new(Mode::NbaLive).snapshot.ui_colors;
+    let table = NBA_LIVE;
+    let clock = |period, phase, clock| nba::Live {
+        period,
+        phase,
+        clock,
+        ..nba_live(&[])
     };
 
-    let normal = harness.draw();
-    assert!(count(&normal, pack(harness.snapshot.ui_colors.clock_normal)) > 0);
+    let frame = basketball(&[clock(2, LivePhase::Halftime, "0.1")]).draw();
+    assert!(
+        count_in_slot(&frame, table.clock, pack(colors.accent)) > 0,
+        "HALF"
+    );
+    assert!(
+        count_in_slot(&frame, table.period, pack(colors.primary)) > 0,
+        "Q2 kept"
+    );
 
-    harness.snapshot.nba_live.clock_low = true;
-    let low = harness.draw();
-    assert!(count(&low, pack(harness.snapshot.ui_colors.clock_warning)) > 0);
+    let frame = basketball(&[clock(4, LivePhase::InProgress, "39.0")]).draw();
+    assert!(count_in_slot(&frame, table.clock, pack(colors.clock_warning)) > 0);
 
-    // Accent wins over low: a break is a break even at 0:00.
-    harness.snapshot.nba_live.clock_accent = true;
-    let accent = harness.draw();
-    assert!(count(&accent, pack(harness.snapshot.ui_colors.accent)) > 0);
+    let frame = basketball(&[clock(4, LivePhase::InProgress, "0.0")]).draw();
+    assert!(
+        count_in_slot(&frame, table.clock, pack(colors.clock_normal)) > 0,
+        "the frozen clock is not crunch time"
+    );
+
+    let frame = basketball(&[clock(1, LivePhase::InProgress, "39.0")]).draw();
+    assert!(
+        count_in_slot(&frame, table.clock, pack(colors.clock_normal)) > 0,
+        "the first quarter cannot end the game"
+    );
+}
+
+/// SA at NY, Finals Game 4: Brunson's 36, Wembanyama's 14 boards.
+fn nba_final(leaders: bool, series: bool, records: bool) -> Harness {
+    let game = nba::Final {
+        game_id: "401859966",
+        periods_played: 4,
+        away: FinalTeam {
+            abbreviation: "SA",
+            score: 106,
+            colors: TeamColors {
+                primary: 0xC4_CED4,
+                alternate: 0,
+            },
+            line_score: &[28, 25, 27, 26],
+        },
+        home: FinalTeam {
+            abbreviation: "NY",
+            score: 107,
+            colors: TeamColors {
+                primary: 0x1D_428A,
+                alternate: 0,
+            },
+            line_score: &[30, 24, 26, 27],
+        },
+        leaders: leaders.then_some(nba::Leaders {
+            points: nba::Leader {
+                side: Side::Home,
+                value: 36,
+                name: "J. Brunson",
+            },
+            rebounds: nba::Leader {
+                side: Side::Away,
+                value: 14,
+                name: "V. Wembanyama",
+            },
+            assists: nba::Leader {
+                side: Side::Home,
+                value: 9,
+                name: "J. Brunson",
+            },
+        }),
+        series: series.then_some("NY leads series 3-1"),
+        records: records.then_some(nba::Records {
+            away: WireRecord { wins: 1, losses: 3 },
+            home: WireRecord { wins: 3, losses: 1 },
+        }),
+    };
+    let mut store = Store::new();
+    commit_nba(
+        &mut store,
+        GameDetail::Nba(nba::Game::Final(game)),
+        COMMIT_MS,
+    );
+    from_store(Mode::NbaFinal, &store)
+}
+
+#[test]
+fn the_leaders_final_colors_the_winner_and_names_the_leaders() {
+    let mut harness = nba_final(true, true, true);
+    let shared = &harness.snapshot.linescore_final;
+    let (away, home) = (pack(shared.away_color), pack(shared.home_color));
+    let colors = harness.snapshot.ui_colors;
+    let (primary, secondary, accent) = (
+        pack(colors.primary),
+        pack(colors.secondary),
+        pack(colors.accent),
+    );
+    let frame = harness.draw();
+    let table = NBA_FINAL;
+
+    assert!(
+        count_in_slot(&frame, table.score_home, home) > 0,
+        "the winner"
+    );
+    assert!(
+        count_in_slot(&frame, table.score_away, DIM_GRAY) > 0,
+        "the loser"
+    );
+    assert!(
+        count_in_slot(&frame, table.final_label, accent) > 0,
+        "FINAL"
+    );
+    assert_eq!(frame.pixel(table.divider_x, 30), secondary);
+    assert_eq!(frame.pixel(100, table.rule_y), secondary);
+
+    // PTS / REB / AST labels in the secondary, each leader in their own
+    // team's colour, winner or not.
+    for row in table.leader_rows {
+        let label = Slice {
+            x: table.leader_label_x,
+            width: row.x - table.leader_label_x,
+            ..row
+        };
+        assert!(
+            count_in_slot(&frame, label, secondary) > 0,
+            "{row:?}'s label"
+        );
+    }
+    assert!(
+        count_in_slot(&frame, table.leader_rows[0], home) > 0,
+        "Brunson"
+    );
+    assert!(
+        count_in_slot(&frame, table.leader_rows[1], away) > 0,
+        "Wembanyama"
+    );
+    assert!(
+        count_in_slot(&frame, table.leader_rows[2], home) > 0,
+        "Brunson"
+    );
+
+    // The series centred in the primary, the records under it: SA's at the
+    // left in silver, NY's ending at the last legal column in blue.
+    assert!(count_in_slot(&frame, table.series, primary) > 0);
+    let records = table.records;
+    let (left, right) = (
+        Slice {
+            width: records.width / 2,
+            ..records
+        },
+        Slice {
+            x: records.x + records.width / 2,
+            width: records.width / 2,
+            ..records
+        },
+    );
+    assert!(count_in_slot(&frame, left, away) > 0, "1-3");
+    assert!(count_in_slot(&frame, right, home) > 0, "3-1");
+    assert_eq!(edge_lit(&frame), 0);
+}
+
+/// Outside the playoffs the records take the band's middle alone; without
+/// the leaders the quarter rows stand in, so the final reads as finished.
+#[test]
+fn a_final_without_a_series_or_leaders_fills_what_it_has() {
+    let mut harness = nba_final(true, false, true);
+    let shared = &harness.snapshot.linescore_final;
+    let (away, home) = (pack(shared.away_color), pack(shared.home_color));
+    let primary = pack(harness.snapshot.ui_colors.primary);
+    let frame = harness.draw();
+    let table = NBA_FINAL;
+    // No series line: nothing in the primary between the rule and the
+    // records, which have moved up into the band's middle.
+    assert_eq!(
+        frame.count(
+            table.series.x..WIDTH as i32,
+            table.rule_y + 1..table.records_alone.y,
+            primary
+        ),
+        0
+    );
+    assert!(count_in_slot(&frame, table.records_alone, away) > 0);
+    assert!(count_in_slot(&frame, table.records_alone, home) > 0);
+
+    let mut harness = nba_final(false, false, false);
+    let shared = &harness.snapshot.linescore_final;
+    let (away, home) = (pack(shared.away_color), pack(shared.home_color));
+    let secondary = pack(harness.snapshot.ui_colors.secondary);
+    let frame = harness.draw();
+    assert!(
+        count_in_slot(&frame, table.linescore_rows[0], secondary) > 0,
+        "1 2 3 4"
+    );
+    assert!(
+        count_in_slot(&frame, table.linescore_rows[1], DIM_GRAY) > 0,
+        "SA's quarters"
+    );
+    assert!(
+        count_in_slot(&frame, table.linescore_rows[2], home) > 0,
+        "NY's quarters"
+    );
+    assert_eq!(count_in_slot(&frame, table.linescore_rows[1], away), 0);
+    assert_eq!(lit_in_slot(&frame, table.records_alone), 0);
+    assert_eq!(lit_in_slot(&frame, table.series), 0);
+    assert_eq!(edge_lit(&frame), 0);
 }
 
 // -- Football ----------------------------------------------------------------
@@ -1973,6 +2583,7 @@ fn every_mode_has_a_renderer() {
         Mode::SoccerLive,
         Mode::SoccerFinal,
         Mode::NbaLive,
+        Mode::NbaFinal,
         Mode::FootballLive,
         Mode::HockeyLive,
         Mode::HockeyFinal,

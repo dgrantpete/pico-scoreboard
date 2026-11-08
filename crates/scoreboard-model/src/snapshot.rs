@@ -32,6 +32,7 @@ use crate::text::Text;
 pub use scoreboard_wire::Side;
 pub use scoreboard_wire::hockey::Shots;
 pub use scoreboard_wire::mlb::InningHalf;
+pub use scoreboard_wire::nba::{Ledger, Run, TeamLedger};
 
 /// Milliseconds from an arbitrary boot-relative origin — `embassy_time`'s
 /// monotonic clock, as `time.ticks_ms()` was. Absolute stamps only; elapsed
@@ -121,6 +122,7 @@ default_from_new!(
     SoccerLiveView,
     SoccerFinalView,
     NbaLiveView,
+    NbaFinalView,
     HockeyLiveView,
     ShootoutRow,
     HockeyFinalView,
@@ -136,9 +138,10 @@ pub const MENU_ROWS: usize = 5;
 /// Detail lines on the error screen.
 pub const ERROR_LINES: usize = 4;
 
-/// Which screen the renderer draws. `Final` is shared by MLB, NBA and
-/// football — one line-score screen distinguished by [`FinalView::sport`];
-/// soccer's full-time screen and hockey's three stars are their own shapes.
+/// Which screen the renderer draws. `Final` is shared by MLB and football —
+/// one line-score screen distinguished by [`FinalView::sport`]; soccer's
+/// full-time screen, hockey's three stars and the NBA's game leaders are
+/// their own shapes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
     #[default]
@@ -154,6 +157,7 @@ pub enum Mode {
     SoccerLive,
     SoccerFinal,
     NbaLive,
+    NbaFinal,
     FootballLive,
     HockeyLive,
     HockeyFinal,
@@ -448,12 +452,13 @@ impl PregameView {
     }
 }
 
-/// The line-score final screen, shared by MLB, NBA and football.
+/// The line-score final screen, shared by MLB and football.
 ///
 /// A hockey final commits here too (NHL.md §3.10): its stars screen draws the
 /// scores, colors and result label from this view, and the rows — hockey's own
 /// "OT" and "SO" columns — stand in for the stars while ESPN has not named
-/// them yet.
+/// them yet. An NBA final does the same for its leaders screen (NBA.md §3.9),
+/// with the quarter rows standing in for the leaders.
 ///
 /// The three rows are equal-length strings, 3 chars per period, so they
 /// measure identically in the fixed-width font and scroll in lockstep with no
@@ -570,20 +575,57 @@ impl SoccerFinalView {
     }
 }
 
-/// Live NBA. No clock anchor: a stop-clock has no run signal to extrapolate
-/// from, so the poll-time string is redrawn until the next poll.
+/// Live NBA: the court screen (NBA.md §6.4). No clock anchor: a stop-clock
+/// has no run signal to extrapolate from, so the poll-time string is redrawn
+/// until the next poll.
+///
+/// Everything from the summary — the ledger, the run, the newest score and
+/// the makes — rides the wire's `ext=2` block and is absent below it, so a
+/// payload from an older backend draws the band and a bare court.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NbaLiveView {
     pub away_score: u16,
     pub home_score: u16,
-    /// "Q3" / "OT" / "2OT"; empty at halftime.
+    pub away_color: Rgb888,
+    pub home_color: Rgb888,
+    /// "Q3" / "OT" / "2OT" — during a break, the period that just ended.
     pub phase_text: Text<SHORT>,
-    /// "4:37" / "53.0", or "HT" / "END" during a break.
+    /// "4:37" / "53.0", or "HALF" / "END" during a break.
     pub clock_text: Text<CLOCK>,
     /// Break state: draw the clock in the accent color.
     pub clock_accent: bool,
-    /// Sub-minute in-play clock: draw it in the warning color.
+    /// Sub-minute in the fourth quarter or overtime, and not the frozen
+    /// "0.0" (§3.2): draw the clock in the warning color.
     pub clock_low: bool,
+    /// Team fouls, bonus and timeouts (§3.3). `None` draws no dots and no
+    /// blocks: a first look without a summary, or a payload below `ext=2`.
+    /// A later poll of the same game without one keeps this one.
+    pub ledger: Option<Ledger>,
+    /// Unanswered points by one side, from six (§3.5). State, not news: a
+    /// first look shows it.
+    pub run: Option<Run>,
+    /// Who scored last, free throws included (§3.6). `None` before the first
+    /// score and when the summary was not fetched.
+    pub last_score: Option<Side>,
+    /// The caption for the newest score, composed once: "BRUNSON 36", or
+    /// "BRUNSON" while the boxscore has not listed him, or empty when the
+    /// play named no one. The renderer draws this string and the prepared
+    /// view measures it, so the two cannot disagree about its width.
+    pub caption: Text<PLAYER>,
+    /// The newest scoring play's `sequenceNumber`: the news window's key,
+    /// compared across commits of the same game and kept through a poll
+    /// whose summary was missing, so a group that comes back unchanged is
+    /// not news again.
+    pub score_seq: u32,
+    /// When the key last changed on the wall rail; 0 = no window. The
+    /// window's length is the renderer's (the prepared view's).
+    pub score_ms: Millis,
+    /// Whether the newest scoring play is also the newest mark, so the blink
+    /// has a mark to blink; a free throw has none.
+    pub newest_marked: bool,
+    /// Every made field goal with a coordinate, oldest first: the court's
+    /// heat map (§3.4).
+    pub marks: heapless::Vec<CourtMark, { scoreboard_wire::nba::MAX_MAKES }, u8>,
 }
 
 impl NbaLiveView {
@@ -591,12 +633,66 @@ impl NbaLiveView {
         Self {
             away_score: 0,
             home_score: 0,
+            away_color: Rgb888::WHITE,
+            home_color: Rgb888::WHITE,
             phase_text: Text::new(),
             clock_text: Text::new(),
             clock_accent: false,
             clock_low: false,
+            ledger: None,
+            run: None,
+            last_score: None,
+            caption: Text::new(),
+            score_seq: 0,
+            score_ms: 0,
+            newest_marked: false,
+            marks: heapless::Vec::new(),
         }
     }
+}
+
+/// One make's mark on the court: where it was made, in feet from the centre
+/// line (`x`, the home side's already negated — §3.4's rotation) and from
+/// the backboard plane toward half court (`y`). The renderer projects it onto
+/// the court it draws, as it projects a goal onto the rink. Whether it was a
+/// three stays on the wire: every mark is drawn alike (D5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CourtMark {
+    pub side: Side,
+    pub x: i8,
+    pub y: i8,
+}
+
+/// The game-leaders final (NBA.md D2): what the NBA adds to the shared final
+/// in [`FinalView`], which carries the scores, colors, result label and the
+/// line-score rows that stand in while ESPN has not posted the leaders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NbaFinalView {
+    /// Points, rebounds, assists — all three or none (§3.9).
+    pub leaders: Option<[LeaderLine; 3]>,
+    /// "NY LEADS SERIES 3-1"; empty outside the playoffs.
+    pub series: Text<SERIES>,
+    /// Away, then home; `None` when the feed did not carry both.
+    pub records: Option<[Record; 2]>,
+}
+
+impl NbaFinalView {
+    pub const fn new() -> Self {
+        Self {
+            leaders: None,
+            series: Text::new(),
+            records: None,
+        }
+    }
+}
+
+/// One leaders row, composed once: "J. Brunson 36", in the player's team
+/// color — hockey's `goal_line` arrangement, so the renderer scrolls one
+/// string rather than formatting a number beside a name every frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaderLine {
+    pub text: Text<PLAYER>,
+    pub side: Side,
 }
 
 /// Live hockey: both layouts, and the shootout inside each (NHL.md §6.4).
@@ -980,6 +1076,7 @@ pub struct ScoreboardSnapshot {
     pub soccer_live: SoccerLiveView,
     pub soccer_final: SoccerFinalView,
     pub nba_live: NbaLiveView,
+    pub nba_final: NbaFinalView,
     pub hockey_live: HockeyLiveView,
     pub hockey_final: HockeyFinalView,
     pub football_live: FootballLiveView,
@@ -1010,6 +1107,7 @@ impl ScoreboardSnapshot {
             soccer_live: SoccerLiveView::new(),
             soccer_final: SoccerFinalView::new(),
             nba_live: NbaLiveView::new(),
+            nba_final: NbaFinalView::new(),
             hockey_live: HockeyLiveView::new(),
             hockey_final: HockeyFinalView::new(),
             football_live: FootballLiveView::new(),

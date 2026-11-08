@@ -347,8 +347,9 @@ attacking end" of a side is the basket under its own crest (D5).
   unanswered through a timeout or a quarter change).
 - `run = Some(side, points)` when `points ≥ 6` (`RUN_SHOW`), else `None`.
   The renderer breathes the running side's score from `points ≥ 8`
-  (`RUN_GLOW`): `mix(white, team, pulse(now − animation_start_ms, 1200) ×
-  200/256)` on the wall rail. A run is **state, not news**: a first look
+  (`RUN_GLOW`): `mix(primary, team, pulse(now − animation_start_ms, 1200) ×
+  200/256)` on the wall rail, where `primary` is the UI primary every
+  screen's scores wear (white by default). A run is **state, not news**: a first look
   shows it, and it is shown during the flash too (the band stays).
 - Points are capped at 255; the caption reads "N-0 RUN".
 
@@ -386,9 +387,14 @@ attacking end" of a side is the basket under its own crest (D5).
   name is read once in full. Wall rail; no core-1 state.
 - **Caption priority** (D7): the run (while `run` is `Some`) → the newest
   score (while its window is open) → `BONUS` with the arrow at the side
-  that shoots, both arrows when both sides are in the bonus → nothing. Text
-  is in the side's team colour; the arrow is football's 3 × 5 triangle at
-  the slot's edge nearest that side's crest. The slot is painted wood first
+  that shoots, both arrows when both sides are in the bonus → nothing. The
+  run and BONUS carry football's 3 × 5 arrow at the slot's edge nearest the
+  side's crest, text in that side's colour (both arrows and the text in the
+  UI primary when both sides are in the bonus); the scorer's line carries no
+  arrow — it scrolls through the whole slot and reads its side from its
+  colour — and its scroll counts from the news stamp on the wall rail, so
+  the window the prepared view sized is the one it scrolls through and a
+  long name is read once in full. The slot is painted wood first
   (it erases the half-court line and any mark under it), and nothing is
   painted when there is nothing to say.
 
@@ -541,6 +547,10 @@ decodes with that block absent (the extension rule above).
   records). **≈ +650 B per copy, ≈ +2.6 KB total.** Update the pinned numbers in the
   same commit; record in BUDGET.md. This makes the NBA live view the
   largest and BACKLOG 103 (views as a sum) worth its measurement.
+  **Measured (6.4, 2026-11-08):** `NbaLiveView` 496 B (marks 385, caption
+  42, colours 8, ledger 6, the rest the run, side, key, anchor and flags),
+  `NbaFinalView` 182 B; the snapshot 3,208 → 3,848 B a slot (+640), the
+  channel 9,632 → 11,552 B; the slate unchanged at 4,664 B.
 - Flash: no sprites (the court is procedural, D14; the leaders screen
   reuses the stars' silhouette); the court drawing, the two screens, the
   model and the wire decode ≈ 15–25 KB, hockey's non-extractor cost.
@@ -633,7 +643,22 @@ too), `game_response_ext` takes the level, `wire_corpus.rs` arms for the
 three levels, OpenAPI schemas. The logo route needs nothing. Deploy with
 6.8.
 
-### 6.4 `scoreboard-model`
+### 6.4 `scoreboard-model` — done 2026-11-08
+As below, with these shapes as built: `Ledger`/`TeamLedger`/`Run` are the
+wire's types re-exported (plain `Copy` data, the crate's rule for `Side`
+and `Shots`); `CourtMark { side, x, y }` (the three-point bit stays on the
+wire, every mark draws alike); `LeaderLine { text: Text<PLAYER>, side }`
+is one composed string ("J. Brunson 36"), hockey's `goal_line`
+arrangement, so the renderer formats nothing per frame; `records:
+Option<[Record; 2]>` reuses the model's record. The news key is adopted
+silently the first time a look learns it — with the first look or with the
+first summary after a summary-less one — and survives a poll whose summary
+was missing, so a group coming back unchanged is not news again; the
+caption, side and mark flag clear on such a poll. `set_break_clock` takes
+the sport's halftime word (football "HT" with the chip blanked, the NBA
+"HALF" with the chip kept) rather than growing a copy;
+`fill_linescore_final` is the shared final's one implementation under both
+`commit_linescore_final` and `commit_nba_final`.
 `Mode::NbaFinal`; `NbaLiveView` grows (ledger `Option`, run, `last_score`,
 scorer text + points, `score_ms`, `newest_marked`, the make ring, team
 colours; period/clock texts as today with the HALF word); `NbaFinalView`;
@@ -644,7 +669,18 @@ shared `FinalView` and the leaders; the news window computed beside the
 flash window in the prepared view; bounds tests; the size pin and BUDGET.md
 (§5).
 
-### 6.5 `scoreboard-render`
+### 6.5 `scoreboard-render` — done 2026-11-08 (6.5a widgets and court, 6.5b screens)
+As built: `NBA_FINAL`'s slots are `final_label`, `leader_label_x` (53),
+`leader_rows` (`rect(73, y, 54, 8)` at y 14/24/34), `linescore_rows`
+(`rect(53, y, 74, 8)`, the fallback), `rule_y` 43, `series`, `records`
+(y 54) and `records_alone` (y 51); the category labels are in the UI
+secondary (the labels' role, hockey's "SHOTS"), the series in the primary;
+the fallback rows hold still while they fit and scroll in lockstep when a
+2OT line does not. `font::digits_width` is shared (hockey's private copy
+moved there) so the caption's "N-0 RUN" and the records' "W-L" draw their
+numbers in place with no string built on the render path. The prepared
+view sizes `news_window_ms` beside the flash window (`NBA_NEWS_MS` 8 s or
+one caption cycle, whichever is longer).
 `game/nba.rs` rewritten (live B5, final leaders), `geometry.rs` tables
 `NBA_LIVE` (B5) and `NBA_FINAL`, `bottom_strip(Mode::NbaLive)` = the
 court's flash slot. New shared widgets (D11), each landing in its own

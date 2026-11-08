@@ -39,7 +39,8 @@
 use crate::font::{self, Scroll};
 use crate::generated::{SPLEEN_5X8, UNSCII_16};
 use crate::geometry::{
-    self, PLAY_SCROLL_PAUSE_MS, PREGAME, PREGAME_INFO_DWELL_MS, PREGAME_SCROLL, RenderSettings,
+    self, NBA_CAPTION_PAUSE_MS, NBA_LIVE, PLAY_SCROLL_PAUSE_MS, PREGAME, PREGAME_INFO_DWELL_MS,
+    PREGAME_SCROLL, RenderSettings,
 };
 use crate::qr::{self, QrBitmap};
 use scoreboard_model::snapshot::SSID;
@@ -56,6 +57,7 @@ pub struct PreparedView {
     /// Reed-Solomon for an identical bitmap.
     qr_ssid: Text<SSID>,
     play_window_ms: Millis,
+    news_window_ms: Millis,
     pregame: PregameCycle,
 }
 
@@ -66,6 +68,7 @@ impl PreparedView {
             qr: QrBitmap::empty(),
             qr_ssid: Text::new(),
             play_window_ms: 0,
+            news_window_ms: 0,
             pregame: PregameCycle::EMPTY,
         }
     }
@@ -103,6 +106,7 @@ impl PreparedView {
             geometry::bottom_strip(snapshot.mode).width,
             settings,
         );
+        self.news_window_ms = news_window_ms(&snapshot.nba_live.caption, settings);
         self.pregame = PregameCycle::build(
             &snapshot.pregame.info_primary,
             &snapshot.pregame.info_secondary,
@@ -117,6 +121,12 @@ impl PreparedView {
     /// How long the current play flash stays up.
     pub fn play_window_ms(&self) -> Millis {
         self.play_window_ms
+    }
+
+    /// How long the NBA's newest score is news: the caption shows and the
+    /// newest mark blinks for this long after the news stamp.
+    pub fn news_window_ms(&self) -> Millis {
+        self.news_window_ms
     }
 
     /// The pregame info line's phase schedule.
@@ -167,6 +177,22 @@ pub fn play_window_ms(text: &str, window: i32, settings: &RenderSettings) -> Mil
         window,
         settings.game_scroll(PLAY_SCROLL_PAUSE_MS),
     )
+}
+
+/// The least a newest score stays news (NBA.md §3.6).
+pub const NBA_NEWS_MS: Millis = 8_000;
+
+/// How long the NBA's newest score is news: [`NBA_NEWS_MS`], or one scroll
+/// cycle of its caption through the court's caption slot when that is
+/// longer, so a long name is read once in full before the caption goes. The
+/// flash window's arithmetic, against the caption's font and slot.
+pub fn news_window_ms(caption: &str, settings: &RenderSettings) -> Millis {
+    scroll_cycle_ms(
+        font::measure(caption, &SPLEEN_5X8),
+        NBA_LIVE.caption.width,
+        settings.game_scroll(NBA_CAPTION_PAUSE_MS),
+    )
+    .max(NBA_NEWS_MS)
 }
 
 /// One full `calculate_scroll_offset` cycle for text of `text_width` in a

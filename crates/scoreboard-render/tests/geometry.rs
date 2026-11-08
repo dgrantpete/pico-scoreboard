@@ -119,7 +119,33 @@ fn every_slot_fits_on_the_panel() {
         mlb.batter_name,
     ]);
     let nba = geometry::NBA_LIVE;
-    slots.extend([nba.score_home, nba.phase, nba.clock]);
+    slots.extend([
+        nba.logo_away,
+        nba.logo_home,
+        nba.fouls_away,
+        nba.fouls_home,
+        nba.score_away,
+        nba.score_home,
+        nba.timeouts_away,
+        nba.timeouts_home,
+        nba.period,
+        nba.clock,
+        nba.caption,
+        nba.caption_box,
+    ]);
+    let nba_final = geometry::NBA_FINAL;
+    slots.extend([
+        nba_final.logo_away,
+        nba_final.logo_home,
+        nba_final.score_away,
+        nba_final.score_home,
+        nba_final.final_label,
+        nba_final.series,
+        nba_final.records,
+        nba_final.records_alone,
+    ]);
+    slots.extend(nba_final.leader_rows);
+    slots.extend(nba_final.linescore_rows);
     let football = geometry::FOOTBALL_LIVE;
     slots.extend([
         football.logo_home,
@@ -252,6 +278,60 @@ fn the_hockey_screens_keep_off_the_edge_ring() {
     assert!(live.shootout_rink_y + 9 < geometry::HEIGHT - 1);
     // Seven attempts fit between the crests.
     assert!(live.shootout_away.x + SHOOTOUT_ROW_WIDTH < live.logo_home.x);
+}
+
+/// Both NBA screens were born under the edge rule too (NBA.md §6.5): the
+/// court's lines are its outer ring, so the court itself must keep off the
+/// panel's.
+#[test]
+fn the_nba_screens_keep_off_the_edge_ring() {
+    let (live, fin) = (geometry::NBA_LIVE, geometry::NBA_FINAL);
+    let court = scoreboard_render::Slice {
+        x: live.court.x,
+        y: live.court.y,
+        width: live.court.width,
+        height: live.court.height,
+    };
+    let mut slots = vec![
+        live.logo_away,
+        live.logo_home,
+        live.fouls_away,
+        live.fouls_home,
+        live.score_away,
+        live.score_home,
+        live.timeouts_away,
+        live.timeouts_home,
+        live.period,
+        live.clock,
+        live.caption,
+        live.caption_box,
+        live.strip,
+        court,
+        fin.logo_away,
+        fin.logo_home,
+        fin.score_away,
+        fin.score_home,
+        fin.final_label,
+        fin.series,
+        fin.records,
+        fin.records_alone,
+    ];
+    slots.extend(fin.leader_rows);
+    slots.extend(fin.linescore_rows);
+    for slot in slots {
+        assert!(inside_the_edge_ring(slot), "{slot:?} touches the edge ring");
+    }
+    // The caption and its box sit on the floor, inside the court's lines.
+    assert!(live.caption_box.y > live.court.y);
+    assert!(live.caption_box.y + live.caption_box.height < live.court.y + live.court.height);
+    // The flash's 16 px line is centred in the court's rows: unscii_16 inks
+    // rows 1–12 of its cell, so the cell starts six rows above the middle.
+    assert_eq!(live.strip.y, live.court.y + (live.court.height - 1) / 2 - 6);
+    // The flash slot is the one the prepared view sizes the window by.
+    assert_eq!(
+        geometry::bottom_strip(scoreboard_model::Mode::NbaLive),
+        live.strip
+    );
 }
 
 /// Both claimants of the bottom strip draw into the slot the selector names,
