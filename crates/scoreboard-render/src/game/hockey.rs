@@ -9,11 +9,12 @@
 //!
 //! # Projection
 //!
-//! The model carries goal coordinates in feet — semantics — and the rink art
-//! in `hockey_layout.aseprite` is a 200 × 85 ft sheet squashed into its
-//! 124 × 15 px `POSITION`. [`mark_at`] maps one to the other here, per frame,
-//! as football's renderer maps a yardline: a few integer operations against
-//! the art's own rectangle.
+//! The model carries goal coordinates in feet — semantics — and [`crate::rink`]
+//! owns the pixels: a 200 × 85 ft sheet squashed into the 124 × 15 px strip
+//! under the shots bar. [`mark_at`] maps one to the other per frame, as
+//! football's renderer maps a yardline, through the same `x_at` and `dy` that
+//! place the rink's lines — a few integer operations, so a goal on the goal
+//! line lands on the goal line.
 //!
 //! # No renderer state
 //!
@@ -26,14 +27,14 @@
 use super::{Scene, Strip};
 use crate::blit::{Canvas, Slice};
 use crate::font::{self, Align, FontFace, Style};
-use crate::generated::layout;
 use crate::geometry::{
     self, EDGE_INSET, HOCKEY_FINAL, HOCKEY_LIVE, HOCKEY_SCROLL_PAUSE_MS, HOCKEY_STARS_SCROLL,
     HockeyLiveGeometry, SHOOTOUT_MARK, SHOOTOUT_PITCH,
 };
+use crate::rink::{self, Rink};
 use crate::time::WallMs;
 use crate::widgets::{arrow, count_dots};
-use crate::{BLACK, Rgb888, WHITE, generated, mix, scale, toast};
+use crate::{BLACK, Rgb888, WHITE, count_dot, generated, mix, scale, star, toast};
 use scoreboard_model::UiColors;
 use scoreboard_model::snapshot::{
     BannerKind, GoalMark, HockeyLiveView, ShootoutRow, ShootoutView, ShotMark, Side,
@@ -144,12 +145,12 @@ fn skater_dots(
     view: &HockeyLiveView,
     table: &HockeyLiveGeometry,
 ) {
-    let pitch = layout::dot::SPRITE.width + 1;
+    let pitch = count_dot::SIZE + 1;
     let five = Slice {
         x: 0,
         y: table.skaters_y,
         width: 5 * pitch - 1,
-        height: layout::dot::SPRITE.height,
+        height: count_dot::SIZE,
     };
     let accent = scene.snapshot.ui_colors.accent;
     for (side, count, color) in [
@@ -225,66 +226,30 @@ fn situation(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &HockeyLiveView, 
 
 // -- The rink ------------------------------------------------------------------
 
-const RINK: Slice = layout::rink::POSITION;
+/// The live screen's rink: its rectangle and its projection.
+const RINK: Rink = rink::STRIP;
 
-/// The rink's length and width in feet: the sheet the art squashes.
-const RINK_LENGTH_FT: i32 = 200;
-const RINK_WIDTH_FT: i32 = 85;
-
-/// The art's placeholder ends, found by *value* — `compile_layout` assigns
-/// palette indices in first-seen order, so an art edit can reorder them — and
-/// at build time, so drifted art fails `cargo build`. Football's endzones work
-/// the same way. The ice is found too: the glow redraws the art with it
-/// see-through.
-const AWAY_END: usize = rink_index(Rgb888::new(255, 0, 0));
-const HOME_END: usize = rink_index(Rgb888::new(0, 0, 255));
-const ICE: usize = rink_index(Rgb888::new(14, 22, 34));
-
-const fn rink_index(color: Rgb888) -> usize {
-    let palette = &layout::rink::PALETTE;
-    let mut index = 0;
-    while index < palette.len() {
-        if let Some(entry) = palette[index]
-            && entry.0 == color.0
-        {
-            return index;
-        }
-        index += 1;
-    }
-    panic!("rink palette: a placeholder color is missing");
-}
-
-/// x of a position along the rink, in feet from the left boards — the art's
-/// own mapping (`tools/hockey_layout.lua`).
-const fn rink_x(feet: i32) -> i32 {
-    RINK.x + (RINK.width - 1) * feet / RINK_LENGTH_FT
-}
-
-/// The top-left pixel of a goal's 2 × 2 mark. The model's feet are from
-/// center ice with the away side attacking +x (§3.5), and the y scale leaves
-/// the boards' rows out of the sheet's width.
+/// The top-left pixel of a goal's 2 × 2 mark, whose bottom-right pixel is the
+/// projected point. The model's feet are from center ice with the away side
+/// attacking +x (§3.5).
 pub fn mark_at(mark: GoalMark) -> (i32, i32) {
-    let x = rink_x(RINK_LENGTH_FT / 2 + mark.x as i32) - 1;
-    let y = RINK.y + RINK.height / 2 - mark.y as i32 * (RINK.height - 3) / RINK_WIDTH_FT - 1;
+    let x = RINK.x_at(rink::CENTER_FT + mark.x as i32) - 1;
+    let y = RINK.mid() + RINK.dy(mark.y as i32) - 1;
     (x, y)
 }
 
-/// The art with each team's end tinted a third of the team's color: enough to
-/// say whose net is whose without outshining the goals plotted there.
-fn rink_palette(view: &HockeyLiveView) -> [Option<Rgb888>; layout::rink::PALETTE.len()] {
-    let mut palette = layout::rink::PALETTE;
-    palette[AWAY_END] = Some(scale(view.away_color, 1, 3));
-    palette[HOME_END] = Some(scale(view.home_color, 1, 3));
-    palette
+/// Each team's end, tinted a third of the team's color: enough to say whose
+/// net is whose without outshining the goals plotted there.
+fn end_tints(view: &HockeyLiveView) -> (Rgb888, Rgb888) {
+    (scale(view.away_color, 1, 3), scale(view.home_color, 1, 3))
 }
 
-/// The rink strip: the art, the advantaged side's attacking zone glowing
-/// during a power play or an empty net, then every goal's mark in play order,
-/// the newest blinking while the lamp burns.
+/// The rink strip: the ice and lines, the advantaged side's attacking zone
+/// glowing during a power play or an empty net, then every goal's mark in
+/// play order, the newest blinking while the lamp burns.
 fn rink(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &HockeyLiveView) {
-    let sprite = layout::rink::SPRITE;
-    let palette = rink_palette(view);
-    canvas.blit(&sprite.tinted(&palette), RINK.x, RINK.y);
+    let (away_end, home_end) = end_tints(view);
+    RINK.draw(canvas, away_end, home_end);
 
     let advantaged = view.banner.and_then(|banner| match banner.kind {
         BannerKind::PowerPlay(side) | BannerKind::EmptyNet(side) => Some(side),
@@ -300,19 +265,17 @@ fn rink(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &HockeyLiveView) {
         // The zone the side attacks — away attacks right — from inside its
         // far blue line to just short of the goal line, a row in from the
         // boards.
-        let (blue_line, goal_line) = match side {
-            Side::Away => (125, 189),
-            Side::Home => (11, 75),
+        let (from, to) = match side {
+            Side::Away => (
+                rink::LENGTH_FT - rink::BLUE_LINE_FT,
+                rink::LENGTH_FT - rink::GOAL_LINE_FT,
+            ),
+            Side::Home => (rink::GOAL_LINE_FT, rink::BLUE_LINE_FT),
         };
-        let (left, right) = (rink_x(blue_line) + 2, rink_x(goal_line) - 1);
+        let (left, right) = (RINK.x_at(from) + 2, RINK.x_at(to) - 1);
         canvas.fill_rect(left, RINK.y + 2, right - left + 1, RINK.height - 4, glow);
-        // The lines and creases the glow covered come back: the art again,
-        // with its ice and ends see-through.
-        let mut lines = palette;
-        for index in [ICE, AWAY_END, HOME_END] {
-            lines[index] = None;
-        }
-        canvas.blit(&sprite.tinted(&lines), RINK.x, RINK.y);
+        // The lines and creases the glow covered come back on top of it.
+        RINK.draw_lines(canvas);
     }
 
     for mark in &view.marks {
@@ -332,10 +295,10 @@ fn rink(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &HockeyLiveView) {
     }
 }
 
-/// The rows of the rink art that make the shootout's nine-row rink: the top
-/// three and the bottom three, which carry the rounded corners, and the three
+/// The rows of the rink that make the shootout's nine-row rink: the top three
+/// and the bottom three, which carry the rounded corners, and the three
 /// through the creases. The mockup's shorter rink is exactly these rows, so
-/// the shootout costs no second sprite.
+/// the shootout draws the same rink, three rows at a time.
 const SHORT_RINK_BANDS: [i32; 3] = [0, 6, 12];
 const SHORT_RINK_BAND: i32 = 3;
 
@@ -344,9 +307,10 @@ const _: () = {
     assert!(SHORT_RINK_BANDS[1] + SHORT_RINK_BAND / 2 == RINK.height / 2);
 };
 
+/// Each band is a three-row region with the rink drawn into it shifted up by
+/// the band's first row; the region clips the rest.
 fn short_rink(canvas: &mut Canvas<'_>, view: &HockeyLiveView, y: i32) {
-    let palette = rink_palette(view);
-    let source = layout::rink::SPRITE.tinted(&palette);
+    let (away_end, home_end) = end_tints(view);
     for (index, from) in SHORT_RINK_BANDS.into_iter().enumerate() {
         let mut band = canvas.region(
             0,
@@ -354,7 +318,7 @@ fn short_rink(canvas: &mut Canvas<'_>, view: &HockeyLiveView, y: i32) {
             geometry::WIDTH,
             SHORT_RINK_BAND,
         );
-        band.blit(&source, RINK.x, -from);
+        Rink { y: -from, ..RINK }.draw(&mut band, away_end, home_end);
     }
 }
 
@@ -569,10 +533,9 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     let face = &generated::SPLEEN_5X8;
     match &view.stars {
         Some(stars) => {
-            let star = layout::star::SPRITE.source();
             for (rank, (line, slot)) in stars.iter().zip(table.star_rows).enumerate() {
                 for count in 0..=rank as i32 {
-                    canvas.blit(&star, table.star_x + count * table.star_pitch, slot.y + 1);
+                    star::draw(canvas, table.star_x + count * table.star_pitch, slot.y + 1);
                 }
                 // A star's name is in its own team's color, winner or not.
                 let color = match line.side {

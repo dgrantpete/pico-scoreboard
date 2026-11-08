@@ -5,6 +5,7 @@ use scoreboard_render::geometry::{
     SHOOTOUT_ROW_WIDTH, SOCCER_LIVE, is_smooth,
 };
 use scoreboard_render::menu::thumb;
+use scoreboard_render::rink::STRIP;
 
 /// The tables are laid out for the panel the driver drives. This is the whole
 /// reason `hub75` is a dev-dependency.
@@ -235,7 +236,7 @@ fn the_football_screen_keeps_off_the_edge_ring() {
         football.clock,
         football.situation,
         football.strip,
-        scoreboard_render::generated::layout::football_field::POSITION,
+        football.field,
     ] {
         assert!(inside_the_edge_ring(slot), "{slot:?} touches the edge ring");
     }
@@ -257,7 +258,12 @@ fn the_hockey_screens_keep_off_the_edge_ring() {
         live.shootout_away,
         live.shootout_home,
         live.strip,
-        scoreboard_render::generated::layout::rink::POSITION,
+        scoreboard_render::Slice {
+            x: STRIP.x,
+            y: STRIP.y,
+            width: STRIP.width,
+            height: STRIP.height,
+        },
         fin.logo_away,
         fin.logo_home,
         fin.score_away,

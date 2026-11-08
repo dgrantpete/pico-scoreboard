@@ -18,7 +18,7 @@ use crate::geometry::WIDTH;
 use crate::prepared::PreparedView;
 use crate::time::WallMs;
 use crate::widgets::{count_dots, progress_bar};
-use crate::{BLACK, Rgb888, generated, toast};
+use crate::{BLACK, Rgb888, count_dot, generated, toast};
 use core::fmt::Write as _;
 use scoreboard_model::{ScoreboardSnapshot, SetupReason};
 
@@ -51,7 +51,7 @@ const QR_TEXT_GAP: i32 = 4;
 /// y = 31) and the operation line (y = 42). Sized for exactly three dots —
 /// coupled to `max_retries = 3` in the station-mode loop.
 const STARTUP_DOTS: Slice = {
-    let width = 3 * (generated::layout::dot::SPRITE.width + 1) - 1;
+    let width = 3 * (count_dot::SIZE + 1) - 1;
     rect((WIDTH - width) / 2, 34, width, 4)
 };
 

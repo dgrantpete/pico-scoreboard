@@ -16,7 +16,7 @@
 use super::{Scene, Strip};
 use crate::blit::Canvas;
 use crate::font::{self, Align, Style};
-use crate::generated::layout;
+use crate::generated::art;
 use crate::geometry::{self, FOOTBALL_LIVE};
 use crate::widgets::{arrow, timeout_blocks};
 use crate::{BLACK, DIM_GRAY, Rgb888, generated, toast};
@@ -31,15 +31,15 @@ const FIRST_DOWN: Rgb888 = Rgb888::new(255, 255, 0);
 const TIMEOUTS: u8 = 3;
 
 /// The endzone blocks ship as pure red (away) and pure blue (home) placeholders.
-/// Their palette indices are found by *value*, because `compile_layout` assigns
-/// indices in first-seen order and an art edit can reorder them. MicroPython
+/// Their palette indices are found by *value*, because the art compiler numbers
+/// colours in first-seen order and a PNG edit can reorder them. MicroPython
 /// discovered them at import and raised there; a `const fn` moves that to build
 /// time, so drifted art fails `cargo build` rather than a boot.
 const AWAY_ENDZONE: usize = endzone_index(Rgb888::new(255, 0, 0));
 const HOME_ENDZONE: usize = endzone_index(Rgb888::new(0, 0, 255));
 
 const fn endzone_index(placeholder: Rgb888) -> usize {
-    let palette = &layout::football_field::PALETTE;
+    let palette = &art::football_field::PALETTE;
     let mut index = 0;
     while index < palette.len() {
         if let Some(color) = palette[index]
@@ -52,10 +52,17 @@ const fn endzone_index(placeholder: Rgb888) -> usize {
     panic!("football field palette: an endzone placeholder color is missing");
 }
 
-const FIELD_TOP_Y: i32 = layout::football_field::POSITION.y;
-const FIELD_BOTTOM_Y: i32 = FIELD_TOP_Y + layout::football_field::POSITION.height - 1;
-const BALL_Y: i32 = FIELD_TOP_Y - layout::football_ball::SPRITE.height - 2;
-const BALL_HALF_WIDTH: i32 = layout::football_ball::SPRITE.width / 2;
+const FIELD_TOP_Y: i32 = FOOTBALL_LIVE.field.y;
+const FIELD_BOTTOM_Y: i32 = FIELD_TOP_Y + FOOTBALL_LIVE.field.height - 1;
+const BALL_Y: i32 = FIELD_TOP_Y - art::football_ball::SPRITE.height - 2;
+const BALL_HALF_WIDTH: i32 = art::football_ball::SPRITE.width / 2;
+
+/// The table's field strip is the art's size: a PNG edit that resizes the
+/// strip fails the build until the table follows.
+const _: () = {
+    let (at, sprite) = (FOOTBALL_LIVE.field, art::football_field::SPRITE);
+    assert!(at.width == sprite.width && at.height == sprite.height);
+};
 
 pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     canvas.fill(BLACK);
@@ -149,11 +156,11 @@ fn situation(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &FootballLiveView
 /// The field strip: endzones tinted to the teams, then the two perspective
 /// lines, then the ball riding the top end of the scrimmage line.
 fn field(canvas: &mut Canvas<'_>, view: &FootballLiveView) {
-    let sprite = layout::football_field::SPRITE;
-    let mut palette = layout::football_field::PALETTE;
+    let sprite = art::football_field::SPRITE;
+    let mut palette = art::football_field::PALETTE;
     palette[AWAY_ENDZONE] = Some(view.away_color);
     palette[HOME_ENDZONE] = Some(view.home_color);
-    let at = layout::football_field::POSITION;
+    let at = FOOTBALL_LIVE.field;
     canvas.blit(&sprite.tinted(&palette), at.x, at.y);
 
     let Some(field) = view.situation.map(Field::project) else {
@@ -181,7 +188,7 @@ fn field(canvas: &mut Canvas<'_>, view: &FootballLiveView) {
         );
     }
 
-    let ball = layout::football_ball::SPRITE;
+    let ball = art::football_ball::SPRITE;
     canvas.blit(
         &ball.source(),
         field.scrimmage_top_x - BALL_HALF_WIDTH,

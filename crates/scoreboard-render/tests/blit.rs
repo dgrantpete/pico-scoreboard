@@ -12,7 +12,7 @@ use goldens::{PACKED_CASES, RGB565_COLORS, RGB565_PACKED};
 use scoreboard_render::blit::{
     BYTES_PER_PIXEL, Canvas, FADE_TERMS, PixelFormat, Source, expand_rgb565,
 };
-use scoreboard_render::{BLACK, Rgb888, WHITE, generated::layout};
+use scoreboard_render::{BLACK, Rgb888, WHITE, generated::art};
 
 const TEAL: Rgb888 = Rgb888::new(0x12, 0x34, 0x56);
 const AMBER: Rgb888 = Rgb888::new(0xFF, 0xBF, 0x00);
@@ -201,12 +201,10 @@ fn every_colour_a_palette_can_hold_draws() {
 #[test]
 fn every_transparent_sprite_reserves_a_see_through_index_0() {
     for (name, sprite) in [
-        ("dot", layout::dot::SPRITE),
-        ("base_marker", layout::base_marker::SPRITE),
-        ("field", layout::field::SPRITE),
-        ("football_field", layout::football_field::SPRITE),
-        ("toast_spinner", layout::toast_spinner::SPRITE),
-        ("toast_lock_closed", layout::toast_lock_closed::SPRITE),
+        ("base_marker", art::base_marker::SPRITE),
+        ("field", art::field::SPRITE),
+        ("football_ball", art::football_ball::SPRITE),
+        ("football_field", art::football_field::SPRITE),
     ] {
         let palette = sprite.palette.expect("paletted sprite");
         assert_eq!(palette[0], None, "{name} reserves index 0 as see-through");

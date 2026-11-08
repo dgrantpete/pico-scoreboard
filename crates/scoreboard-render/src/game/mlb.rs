@@ -8,10 +8,10 @@
 use super::{Scene, Strip};
 use crate::blit::{Canvas, Slice};
 use crate::font::{self, Align, Style};
-use crate::generated::layout;
+use crate::generated::art;
 use crate::geometry::{MLB_LIVE, PLAY_SCROLL_PAUSE_MS};
 use crate::widgets::count_dots;
-use crate::{BLACK, DIM_GRAY, generated, screens, toast};
+use crate::{BLACK, DIM_GRAY, generated, inning_arrow, screens, toast};
 use scoreboard_model::Rgb888;
 use scoreboard_model::snapshot::InningHalf;
 use scoreboard_model::snapshot::MlbLiveView;
@@ -41,12 +41,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
 
     super::column_dividers(canvas, scene, table.divider_x, table.separator_y);
 
-    let field = layout::field::SPRITE;
-    canvas.blit(
-        &field.source(),
-        layout::field::POSITION.x,
-        layout::field::POSITION.y,
-    );
+    canvas.blit(&art::field::SPRITE.source(), table.field.x, table.field.y);
     base_markers(canvas, view);
 
     super::both_logos(canvas, scene, table.logo_away, table.logo_home);
@@ -54,13 +49,9 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     // The inning arrow: up while the away side bats, down while the home side
     // does, nothing between halves.
     match view.half {
-        InningHalf::Top => {
-            let at = layout::inning_top::POSITION;
-            canvas.blit(&layout::inning_top::SPRITE.source(), at.x, at.y);
-        }
+        InningHalf::Top => inning_arrow::draw(canvas, inning_arrow::X, inning_arrow::UP_Y, true),
         InningHalf::Bottom => {
-            let at = layout::inning_bottom::POSITION;
-            canvas.blit(&layout::inning_bottom::SPRITE.source(), at.x, at.y);
+            inning_arrow::draw(canvas, inning_arrow::X, inning_arrow::DOWN_Y, false);
         }
         InningHalf::Middle | InningHalf::End => {}
     }
@@ -169,9 +160,13 @@ fn warm_red(saturation: u32, value: u32) -> Rgb888 {
 /// restored them in a `finally` so a throwing blit could not leave later frames
 /// tinted. The palette is copied into a local here, so there is nothing to
 /// restore and nothing to leak.
+///
+/// The PNG's palette numbers its colours in row-major first-seen order, and
+/// the marker's top-left lit pixel is body, then the highlight under it, then
+/// the shade at the lower right: entries 1, 2 and 3.
 fn base_markers(canvas: &mut Canvas<'_>, view: &MlbLiveView) {
-    let sprite = layout::base_marker::SPRITE;
-    let mut palette = layout::base_marker::PALETTE;
+    let sprite = art::base_marker::SPRITE;
+    let mut palette = art::base_marker::PALETTE;
     if let Some(color) = view.bat_color {
         let (body, highlight, shade) = marker_shades(color);
         palette[1] = Some(body);
@@ -180,16 +175,31 @@ fn base_markers(canvas: &mut Canvas<'_>, view: &MlbLiveView) {
     }
     let source = sprite.tinted(&palette);
 
-    for (occupied, at) in [
-        (view.bases.first, layout::first_base::SLICE),
-        (view.bases.second, layout::second_base::SLICE),
-        (view.bases.third, layout::third_base::SLICE),
-    ] {
+    let bases = view.bases;
+    for (occupied, at) in [bases.first, bases.second, bases.third]
+        .into_iter()
+        .zip(MLB_LIVE.bases)
+    {
         if occupied {
             canvas.blit(&source, at.x, at.y);
         }
     }
 }
+
+/// The table's rectangles are the art's sizes: a PNG edit that resizes a
+/// sprite fails the build until the table follows.
+const _: () = {
+    let field = art::field::SPRITE;
+    assert!(MLB_LIVE.field.width == field.width && MLB_LIVE.field.height == field.height);
+    let marker = art::base_marker::SPRITE;
+    let mut base = 0;
+    while base < MLB_LIVE.bases.len() {
+        let at = MLB_LIVE.bases[base];
+        assert!(at.width == marker.width && at.height == marker.height);
+        base += 1;
+    }
+    assert!(art::base_marker::PALETTE.len() == 4);
+};
 
 /// Ball body, highlight and edge shade from the batting side's color, in the
 /// relationships the original gold sprite had: the highlight is 7/8 of the way

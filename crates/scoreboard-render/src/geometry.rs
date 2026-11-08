@@ -1,14 +1,17 @@
 //! Where every text slot and drawn primitive goes on the panel — the port of
 //! `screen_geometry.py`.
 //!
-//! # The convention split
+//! # Every coordinate is code
 //!
-//! Coordinates registered to sprite *art* live in the Aseprite file and reach
-//! this crate through [`crate::generated::layout`]. Coordinates registered to
-//! *text slots and drawn primitives* — score windows, dividers, count-dot rows
-//! — live here, as code. A live screen therefore draws its sprites from the
-//! art's own positions and places every string from a table below; the pregame
-//! and final screens carry no sprites at all.
+//! Text slots, drawn primitives and the hand-drawn sprites alike are placed
+//! from here. A sprite compiled from `art/*.png` ([`crate::generated::art`])
+//! carries no position, so where it lands is a field of its screen's table,
+//! beside the slots around it. A procedural drawing takes its rectangle from
+//! the table that hands it one ([`crate::court`]) or from its own module, when
+//! the rectangle is also its projection ([`crate::rink::STRIP`]) or its shape
+//! is registered to one chip ([`crate::inning_arrow`]). Until 2026-11-08
+//! (BACKLOG 116) sprite positions lived in Aseprite files and arrived as
+//! compiled slices.
 //!
 //! # One design per screen
 //!
@@ -422,6 +425,11 @@ pub struct MlbLiveGeometry {
     pub pitcher_name: Slice,
     pub batter_label: Slice,
     pub batter_name: Slice,
+    /// The diamond, `art/field.png`.
+    pub field: Slice,
+    /// An occupied base's marker, `art/base_marker.png`, on first, second
+    /// and third.
+    pub bases: [Slice; 3],
     /// The bottom strip the play flash takes over: the
     /// pitcher/batter rows.
     pub strip: Slice,
@@ -445,6 +453,8 @@ pub const MLB_LIVE: MlbLiveGeometry = MlbLiveGeometry {
     pitcher_name: rect(77, 41, 50, 8),
     batter_label: rect(51, 54, 24, 7),
     batter_name: rect(77, 54, 50, 8),
+    field: rect(86, 3, 39, 30),
+    bases: [rect(111, 16, 5, 5), rect(103, 8, 5, 5), rect(95, 16, 5, 5)],
     strip: COLUMN_STRIP,
 };
 
@@ -608,6 +618,9 @@ pub struct FootballLiveGeometry {
     pub clock: Slice,
     /// "3RD & 7", centered; the possession arrow sits beside it.
     pub situation: Slice,
+    /// The field strip, `art/football_field.png`: the drive's lines and the
+    /// ball ride it.
+    pub field: Slice,
     /// The bottom strip the play flash takes over. The field strip (and the
     /// ball riding it) is skipped while the flash shows, and there
     /// is no identity column, so it is every legal column of the band under
@@ -626,6 +639,7 @@ pub const FOOTBALL_LIVE: FootballLiveGeometry = FootballLiveGeometry {
     phase: rect(26, 3, 26, 8),
     clock: rect(52, 2, 50, 16),
     situation: rect(26, 30, 77, 8),
+    field: rect(3, 52, 121, 11),
     strip: rect(1, 44, 126, 16),
 };
 
@@ -664,7 +678,7 @@ pub struct HockeyLiveGeometry {
     /// side's score. The tally takes the clock's slot (§3.2).
     pub shootout_away: Slice,
     pub shootout_home: Slice,
-    /// The shootout's rink, under the rows: the art squashed to nine rows by
+    /// The shootout's rink, under the rows: the rink squashed to nine rows by
     /// dropping six from its middle, which its rounded corners survive.
     pub shootout_rink_y: i32,
     /// The bottom strip the play flash takes over: every legal column under

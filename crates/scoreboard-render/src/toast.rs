@@ -17,10 +17,9 @@
 //! requests hard-cap at 15 s, so 20 s is only reachable through a logic error.
 
 use crate::blit::{Canvas, FADE_TERMS};
-use crate::generated::layout;
 use crate::geometry::{HEIGHT, WIDTH};
 use crate::time::WallMs;
-use crate::{pulse, scale};
+use crate::{padlock, pulse, scale, spinner};
 use scoreboard_model::snapshot::{TOAST_DISPLAY_MS, TOAST_STICKY_MAX_MS, ToastView};
 use scoreboard_model::{Millis, Rgb888, ScoreboardSnapshot, ToastKind};
 
@@ -51,57 +50,13 @@ const CENTER_Y: i32 = HEIGHT / 2;
 const SPINNER_PERIOD_MS: Millis = 1000;
 /// Dots of fading tail behind the head, leaving a 2-dot gap.
 const SPINNER_TRAIL: u32 = 10;
-/// Dots on the ring.
-const SPINNER_DOTS: usize = 12;
 
-const SPINNER_X: i32 = CENTER_X - layout::toast_spinner::SPRITE.width / 2;
-const SPINNER_Y: i32 = CENTER_Y - layout::toast_spinner::SPRITE.height / 2;
-const LOCK_X: i32 = CENTER_X - layout::toast_lock_closed::SPRITE.width / 2;
-/// Sprite row 12 (the lock body's top) lands on y = 31.
+/// The ring and the padlock, centred on the panel.
+const SPINNER_X: i32 = CENTER_X - spinner::WIDTH / 2;
+const SPINNER_Y: i32 = CENTER_Y - spinner::HEIGHT / 2;
+const LOCK_X: i32 = CENTER_X - padlock::WIDTH / 2;
+/// The padlock's row 12 (its body's top) lands on y = 31.
 const LOCK_Y: i32 = 19;
-
-/// Angular dot index → palette index.
-///
-/// `tools/gen_toast_icons.py` bakes dot *k*'s color as pure blue `8 * (k + 1)`
-/// — an RGB565 value of exactly `k + 1`, which is how MicroPython read it —
-/// while `compile_layout.py` assigns palette indices in
-/// row-major first-seen order — which is not angular order. MicroPython
-/// inverted the compiled palette once at import and raised there if the
-/// contract had drifted. Doing it in a `const fn` moves that check from import
-/// time to build time: recolored dots or a wrong count fail `cargo build`.
-const SPINNER_ORDER: [u8; SPINNER_DOTS] = spinner_order();
-
-const fn spinner_order() -> [u8; SPINNER_DOTS] {
-    let palette = &layout::toast_spinner::PALETTE;
-    assert!(
-        palette.len() == SPINNER_DOTS + 1,
-        "the spinner sprite must have one transparent entry plus one per dot"
-    );
-    let mut order = [0u8; SPINNER_DOTS];
-    let mut seen = [false; SPINNER_DOTS];
-    let mut entry = 1;
-    while entry <= SPINNER_DOTS {
-        let angular = match palette[entry] {
-            Some(color) if color.red() == 0 && color.green() == 0 && color.blue() % 8 == 0 => {
-                (color.blue() / 8) as usize
-            }
-            _ => 0,
-        };
-        assert!(
-            angular >= 1 && angular <= SPINNER_DOTS,
-            "a spinner dot's baked color is not its angular index — regenerate \
-             the icons with tools/gen_toast_icons.py"
-        );
-        assert!(
-            !seen[angular - 1],
-            "two spinner dots claim one angular slot"
-        );
-        seen[angular - 1] = true;
-        order[angular - 1] = entry as u8;
-        entry += 1;
-    }
-    order
-}
 
 /// Whether a toast is currently up. `updated_ms == 0` means one was never set.
 pub fn is_active(toast: &ToastView, now: WallMs) -> bool {
@@ -182,46 +137,26 @@ pub fn overlay(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: Wall
 /// point, and it is the one thing on the panel that visibly gains from the
 /// frame rate, since the ring is driven off the wall clock and simply gets
 /// three times as many samples per revolution. Dots outside the trail get no
-/// colour at all, so the blit skips them entirely.
+/// colour at all, so they are not drawn.
 fn spinner(canvas: &mut Canvas<'_>, elapsed: Millis, dim: u8, primary: Rgb888) {
-    let sprite = layout::toast_spinner::SPRITE;
-    let mut palette = layout::toast_spinner::PALETTE;
-
-    let head =
-        ((elapsed % SPINNER_PERIOD_MS) * (SPINNER_DOTS as u64 * 256) / SPINNER_PERIOD_MS) as u32;
+    let full_turn = spinner::DOTS as u32 * 256;
+    let head = ((elapsed % SPINNER_PERIOD_MS) * full_turn as u64 / SPINNER_PERIOD_MS) as u32;
     let span = SPINNER_TRAIL * 256;
-    for (dot, entry) in SPINNER_ORDER.iter().enumerate() {
-        let full_turn = SPINNER_DOTS as u32 * 256;
+    spinner::draw(canvas, SPINNER_X, SPINNER_Y, |dot| {
         let lag = (head + full_turn - dot as u32 * 256) % full_turn;
-        let entry = *entry as usize;
         if lag >= span {
-            palette[entry] = None;
-            continue;
+            return None;
         }
         let mut value = 255 - (lag * 255) / span;
         if dim != 255 {
             value = (value * dim as u32) >> 8;
         }
-        palette[entry] = Some(scale(primary, value, 255));
-    }
-    canvas.blit(&sprite.tinted(&palette), SPINNER_X, SPINNER_Y);
+        Some(scale(primary, value, 255))
+    });
 }
 
 /// A padlock centered on the panel. Open lifts the shackle's left leg out of
-/// the body; both sprites share a canvas, so one blit position serves.
+/// the body; both states share one rectangle, so one position serves.
 fn lock(canvas: &mut Canvas<'_>, color: Rgb888, open: bool) {
-    let (sprite, defaults) = if open {
-        (
-            layout::toast_lock_open::SPRITE,
-            layout::toast_lock_open::PALETTE,
-        )
-    } else {
-        (
-            layout::toast_lock_closed::SPRITE,
-            layout::toast_lock_closed::PALETTE,
-        )
-    };
-    let mut palette = defaults;
-    palette[1] = Some(color);
-    canvas.blit(&sprite.tinted(&palette), LOCK_X, LOCK_Y);
+    padlock::draw(canvas, LOCK_X, LOCK_Y, open, color);
 }

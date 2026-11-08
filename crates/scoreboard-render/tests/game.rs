@@ -17,7 +17,7 @@ use scoreboard_render::game::{LOGO_BYTES, LogoSlot, Logos, Scene};
 use scoreboard_render::geometry::{self, RenderSettings};
 use scoreboard_render::prepared::{PregameLine, PreparedView};
 use scoreboard_render::time::{FrameElapsed, WallMs};
-use scoreboard_render::{BLACK, DIM_GRAY, SkipMemo, frame};
+use scoreboard_render::{BLACK, DIM_GRAY, SkipMemo, frame, inning_arrow};
 
 const AWAY_TEAM: Rgb888 = Rgb888::new(255, 0, 0);
 const HOME_TEAM: Rgb888 = Rgb888::new(0, 0, 255);
@@ -229,7 +229,12 @@ fn between_halves_the_markers_and_labels_go_gray() {
         "the PIT label falls back to gray"
     );
     // The inning arrow is drawn for neither half.
-    let arrow = scoreboard_render::generated::layout::inning_top::POSITION;
+    let arrow = Slice {
+        x: inning_arrow::X,
+        y: inning_arrow::UP_Y,
+        width: inning_arrow::WIDTH,
+        height: inning_arrow::HEIGHT,
+    };
     assert_eq!(
         frame.lit_in(
             arrow.x..arrow.x + arrow.width,
@@ -1653,7 +1658,7 @@ fn the_football_screen_tints_its_endzones_and_bars() {
     );
 
     // The endzone blocks sit outside the 100-yard span, at the strip's ends.
-    let field = scoreboard_render::generated::layout::football_field::POSITION;
+    let field = geometry::FOOTBALL_LIVE.field;
     assert!(
         frame.count(
             field.x..field.x + 11,
@@ -1703,7 +1708,7 @@ fn the_red_zone_warns_on_the_situation_and_its_arrow() {
 #[test]
 fn the_play_flash_replaces_the_field_strip() {
     let mut harness = football();
-    let field = scoreboard_render::generated::layout::football_field::POSITION;
+    let field = geometry::FOOTBALL_LIVE.field;
     let flash = geometry::FOOTBALL_LIVE.strip;
     // The field's rows below the flash strip: no glyph reaches them, so only
     // the field itself can light them, and they say whether it drew at all.
@@ -1755,9 +1760,10 @@ fn the_football_flash_spans_the_full_width() {
 use scoreboard_model::snapshot::GoalMark;
 use scoreboard_model::{GameDetail, LeagueId, LocalClock, Logos as CommitLogos, Store};
 use scoreboard_render::game::hockey::mark_at;
-use scoreboard_render::generated::layout;
 use scoreboard_render::geometry::{HOCKEY_FINAL, HOCKEY_LIVE};
+use scoreboard_render::rink::STRIP as RINK;
 use scoreboard_render::{Slice, WHITE, mix};
+use scoreboard_render::{count_dot, star};
 use scoreboard_wire::hockey as wire;
 use scoreboard_wire::{LivePhase, TeamColors, TeamState};
 
@@ -1929,7 +1935,7 @@ fn goal_marks_composite_over_the_rink_in_play_order() {
         y: -4,
     });
     // The away side attacks the right-hand net.
-    assert!(x > layout::rink::POSITION.x + layout::rink::POSITION.width / 2);
+    assert!(x > RINK.x + RINK.width / 2);
     for (px, py) in [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)] {
         assert_eq!(one.pixel(px, py), mix(bare.pixel(px, py), away, 141));
         assert_eq!(two.pixel(px, py), mix(one.pixel(px, py), away, 141));
@@ -1991,7 +1997,7 @@ fn the_newest_mark_blinks_white_while_the_lamp_burns() {
         y: 7,
     });
     // The home side attacks the left-hand net.
-    assert!(x < layout::rink::POSITION.x + layout::rink::POSITION.width / 2);
+    assert!(x < RINK.x + RINK.width / 2);
     for (at, white) in [
         (0, true),
         (399, true),
@@ -2037,7 +2043,7 @@ fn a_power_play_glows_the_attacking_zone_and_points_at_the_advantage() {
     assert!(frame.count(text_x - 6..text_x - 3, slot.y..slot.y + 6, away) > 0);
 
     // Five dots for the away side, four and an empty slot for the home side.
-    let unfilled = layout::dot::PALETTE[2].expect("the unfilled dot is opaque");
+    let unfilled = count_dot::UNFILLED;
     let row = HOCKEY_LIVE.skaters_y;
     assert_eq!(frame.count(1..26, row..row + 4, unfilled), 0);
     assert!(frame.count(103..127, row..row + 4, unfilled) > 0);
@@ -2109,7 +2115,7 @@ fn three_on_three_overtime_is_play_as_usual_with_the_clock_running_out() {
     // No banner: the newest goal, in its scorer's color.
     assert!(count_in_slot(&frame, HOCKEY_LIVE.situation, home) > 0);
     // Three filled dots and two empty slots a side.
-    let unfilled = layout::dot::PALETTE[2].expect("the unfilled dot is opaque");
+    let unfilled = count_dot::UNFILLED;
     let row = HOCKEY_LIVE.skaters_y;
     assert!(frame.count(1..26, row..row + 4, unfilled) > 0);
     assert!(frame.count(103..127, row..row + 4, unfilled) > 0);
@@ -2333,7 +2339,7 @@ fn the_stars_final_colors_the_winner_and_names_the_stars() {
 
     // One gold star for the first, three for the third — the star's top pixel
     // is its middle column.
-    let gold = layout::star::PALETTE[1].expect("the star is opaque");
+    let gold = star::GOLD;
     for (rank, row) in table.star_rows.iter().enumerate() {
         for count in 0..3 {
             let x = table.star_x + count * table.star_pitch + 2;
@@ -2362,7 +2368,7 @@ fn a_final_without_its_stars_shows_the_line_score_in_their_place() {
     let secondary = harness.snapshot.ui_colors.secondary;
     let frame = harness.draw();
     let table = HOCKEY_FINAL;
-    let gold = layout::star::PALETTE[1].expect("the star is opaque");
+    let gold = star::GOLD;
     assert_eq!(frame.count(49..127, 10..43, gold), 0);
     let [header, away_row, home_row] = table.linescore_rows;
     assert!(count_in_slot(&frame, header, secondary) > 0, " 1  2  3 OT");
