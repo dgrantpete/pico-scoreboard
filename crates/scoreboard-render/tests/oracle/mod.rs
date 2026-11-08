@@ -83,7 +83,7 @@ impl Art {
             })
             .collect();
         Art {
-            name: path.file_stem().unwrap().to_string_lossy().into_owned(),
+            name: path.file_name().unwrap().to_string_lossy().into_owned(),
             width: frame.width as i32,
             height: frame.height as i32,
             pixels,
@@ -106,6 +106,45 @@ impl Art {
             }
         }
         seen
+    }
+
+    /// This art with every pixel of the given colours made transparent — what
+    /// a draw that skips those colours should leave.
+    pub fn without(&self, colors: &[Rgb888]) -> Art {
+        let dropped: Vec<[u8; 3]> = colors.iter().map(|&c| channels(c)).collect();
+        for color in &dropped {
+            assert!(
+                self.colors().contains(color),
+                "{}: no {color:?} to drop",
+                self.name
+            );
+        }
+        Art {
+            name: format!("{} without {dropped:?}", self.name),
+            pixels: self
+                .pixels
+                .iter()
+                .map(|pixel| pixel.filter(|color| !dropped.contains(color)))
+                .collect(),
+            ..*self
+        }
+    }
+
+    /// The `width` × `height` window of this art whose top-left is `(x, y)`.
+    pub fn crop(&self, x: i32, y: i32, width: i32, height: i32) -> Art {
+        assert!(x >= 0 && y >= 0 && x + width <= self.width && y + height <= self.height);
+        let mut pixels = Vec::with_capacity((width * height) as usize);
+        for row in y..y + height {
+            for col in x..x + width {
+                pixels.push(self.at(col, row));
+            }
+        }
+        Art {
+            name: format!("{} at ({x}, {y}) {width}x{height}", self.name),
+            width,
+            height,
+            pixels,
+        }
     }
 }
 
@@ -155,7 +194,7 @@ pub fn assert_quantized(canvas: &Canvas<'_>, x0: i32, y0: i32, art: &Art, what: 
     }
     assert!(
         wrong.is_empty(),
-        "{what}: {} of {} pixels differ from {}.png\n{}",
+        "{what}: {} of {} pixels differ from {}\n{}",
         wrong.len(),
         art.width * art.height,
         art.name,
@@ -194,8 +233,65 @@ pub fn assert_drawn(
     colors.sort_unstable();
     assert_eq!(
         constants, colors,
-        "{what}: the colour constants are not exactly {}.png's 8-bit colours",
+        "{what}: the colour constants are not exactly the 8-bit colours of {}",
         art.name
     );
     assert_quantized(canvas, x0, y0, art, what);
+}
+
+/// Every pixel of `canvas` outside the `width` × `height` window at
+/// `(x0, y0)` still holds [`SENTINEL`]: the draw stayed inside its rectangle.
+pub fn assert_untouched_outside(
+    canvas: &Canvas<'_>,
+    (x0, y0, width, height): (i32, i32, i32, i32),
+    what: &str,
+) {
+    for y in 0..canvas.height() {
+        for x in 0..canvas.width() {
+            let inside = (x0..x0 + width).contains(&x) && (y0..y0 + height).contains(&y);
+            if !inside {
+                assert_eq!(
+                    canvas.pixel_at(x, y),
+                    Some(SENTINEL),
+                    "{what}: drew outside its rectangle at ({x}, {y})"
+                );
+            }
+        }
+    }
+}
+
+/// Two frames of one size are the same, pixel for pixel: the procedural draw
+/// and the compiled sprite blitted through the palette a renderer tints.
+/// Lists every pixel that differs.
+pub fn assert_same_frame(drawn: &Canvas<'_>, blitted: &Canvas<'_>, what: &str) {
+    assert_eq!(
+        (drawn.width(), drawn.height()),
+        (blitted.width(), blitted.height())
+    );
+    let mut wrong = Vec::new();
+    for y in 0..drawn.height() {
+        for x in 0..drawn.width() {
+            let (a, b) = (drawn.pixel_at(x, y), blitted.pixel_at(x, y));
+            if a != b {
+                wrong.push(format!("  ({x}, {y}): drawn {a:04x?}, blitted {b:04x?}"));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{what}: {} pixels differ from the tinted sprite\n{}",
+        wrong.len(),
+        wrong[..wrong.len().min(24)].join("\n")
+    );
+}
+
+/// The 8-bit colour whose [`rgb565`] packing is `packed`, rebuilt by putting
+/// each field back in its channel's top bits — how a test hands a draw that
+/// takes 8-bit colours the very value a renderer computed in 565.
+pub fn widen(packed: u16) -> Rgb888 {
+    Rgb888::new(
+        ((packed >> 11) as u8 & 0x1F) << 3,
+        ((packed >> 5) as u8 & 0x3F) << 2,
+        (packed as u8 & 0x1F) << 3,
+    )
 }
