@@ -2,8 +2,8 @@
 
 Every sprite `tools/compile_layout.py` compiles into
 `src/generated/layout.rs`, at full 8-bit RGBA, as the test fixtures the art's
-replacements are pinned to. `tests/art_oracle.rs` proves each one, quantized
-with `rgb565()`, is its compiled sprite pixel for pixel — so this directory is
+replacements are pinned to. `tests/art_oracle.rs` proves each one is its
+compiled sprite pixel for pixel, exactly — so this directory is
 what the panel shows today, at the precision the source art had.
 
 ## Where they came from (2026-11-08, from main at 2a34275)

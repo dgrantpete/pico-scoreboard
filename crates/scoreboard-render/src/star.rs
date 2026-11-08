@@ -12,7 +12,6 @@
 //! name beside it carries the team.
 
 use crate::blit::Canvas;
-use crate::rgb565;
 use scoreboard_model::Rgb888;
 
 /// The star's square edge, in pixels.
@@ -28,20 +27,13 @@ pub const LEGS: i32 = 1;
 
 pub const GOLD: Rgb888 = Rgb888::new(255, 200, 40);
 
-/// An exact 8-bit colour as the canvas stores it: this module's only contact
-/// with the pixel format, so the canvas's widening (BACKLOG 115) is this line.
-const fn ink(color: Rgb888) -> u16 {
-    rgb565(color.red(), color.green(), color.blue())
-}
-
 /// A star with its top-left at `(x, y)`.
 pub fn draw(canvas: &mut Canvas<'_>, x: i32, y: i32) {
-    let gold = ink(GOLD);
     let center = x + CENTER;
     for (row, reach) in ROWS.into_iter().enumerate() {
-        canvas.hline(center - reach, y + row as i32, 2 * reach + 1, gold);
+        canvas.hline(center - reach, y + row as i32, 2 * reach + 1, GOLD);
     }
     let legs = y + ROWS.len() as i32;
-    canvas.pixel(center - LEGS, legs, gold);
-    canvas.pixel(center + LEGS, legs, gold);
+    canvas.pixel(center - LEGS, legs, GOLD);
+    canvas.pixel(center + LEGS, legs, GOLD);
 }

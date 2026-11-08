@@ -1,19 +1,19 @@
 //! The procedural padlock and spinner ring (BACKLOG 116), pinned to the
-//! toast PNGs they replace: pixel for pixel against the PNGs in `tests/art/`
-//! (quantized today, exact for after BACKLOG 115), and against the compiled
-//! sprites through every palette `toast.rs` builds for them — the padlock's
-//! one colour, and the spinner's per-dot comet with keyed-out dots.
+//! toast PNGs they replace: exact at eight bits against the PNGs in
+//! `tests/art/`, and against the compiled sprites through every palette
+//! `toast.rs` builds for them — the padlock's one colour, and the spinner's
+//! per-dot comet with see-through dots.
 
 mod oracle;
 
-use oracle::{Art, assert_drawn, assert_same_frame, assert_untouched_outside, buffer, widen};
+use oracle::{Art, assert_drawn, assert_same_frame, assert_untouched_outside, buffer};
 use scoreboard_model::Rgb888;
 use scoreboard_render::blit::Canvas;
 use scoreboard_render::generated::layout;
 use scoreboard_render::geometry::{HEIGHT, WIDTH};
 use scoreboard_render::padlock::{self, COLOR};
+use scoreboard_render::scale;
 use scoreboard_render::spinner::{self, DOTS};
-use scoreboard_render::{MAGENTA, pack, pack_scaled};
 
 /// Where `toast.rs` centres each icon on the panel.
 const LOCK_AT: (i32, i32) = (WIDTH / 2 - padlock::WIDTH / 2, 19);
@@ -22,12 +22,12 @@ const SPINNER_AT: (i32, i32) = (
     HEIGHT / 2 - spinner::HEIGHT / 2,
 );
 
-/// Primaries at toast brightnesses, as `toast.rs` packs them.
-fn toast_colors() -> impl Iterator<Item = u16> {
+/// Primaries at toast brightnesses, as `toast.rs` scales them.
+fn toast_colors() -> impl Iterator<Item = Rgb888> {
     [0xffffff, 0x4e008e, 0xffb000, 0x10c060]
         .into_iter()
         .flat_map(|primary| {
-            [255, 200, 128, 33].map(move |brightness| pack_scaled(Rgb888(primary), brightness, 255))
+            [255, 200, 128, 33].map(move |brightness| scale(Rgb888(primary), brightness, 255))
         })
 }
 
@@ -47,7 +47,7 @@ fn the_padlocks_are_their_pngs() {
 
 #[test]
 fn the_padlock_takes_every_colour_the_toast_gives_it() {
-    for color in toast_colors() {
+    for color in std::iter::once(COLOR).chain(toast_colors()) {
         for (sprite, defaults, open) in [
             (
                 layout::toast_lock_closed::SPRITE,
@@ -61,19 +61,19 @@ fn the_padlock_takes_every_colour_the_toast_gives_it() {
             ),
         ] {
             let mut palette = defaults;
-            palette[1] = color;
+            palette[1] = Some(color);
             let (x, y) = LOCK_AT;
             let (mut drawn, mut blitted) = (buffer(WIDTH, HEIGHT), buffer(WIDTH, HEIGHT));
             let mut drawn = Canvas::new(&mut drawn, WIDTH, HEIGHT);
             let mut blitted = Canvas::new(&mut blitted, WIDTH, HEIGHT);
-            padlock::draw(&mut drawn, x, y, open, widen(color));
+            padlock::draw(&mut drawn, x, y, open, color);
             blitted.blit(&sprite.tinted(&palette), x, y);
             assert_same_frame(&drawn, &blitted, "tinted padlock");
         }
     }
 }
 
-/// Dot `k`'s colour in the PNG: `(0, 0, 8(k + 1))`, RGB565 `k + 1`.
+/// Dot `k`'s colour in the PNG: `(0, 0, 8(k + 1))`.
 fn baked(dot: usize) -> Rgb888 {
     Rgb888::new(0, 0, 8 * (dot as u8 + 1))
 }
@@ -94,35 +94,35 @@ fn the_ring_is_its_png() {
 
 /// A comet drawn dot by dot is the compiled ring blitted through the palette
 /// `toast.rs` builds — each dot's entry, found by its baked value, set to the
-/// dot's colour or to the key — wherever the head is and however long the
+/// dot's colour or to nothing — wherever the head is and however long the
 /// trail.
 #[test]
 fn the_ring_takes_every_comet_the_toast_gives_it() {
     let entry_of = |dot: usize| {
         layout::toast_spinner::PALETTE
             .iter()
-            .position(|&entry| entry == pack(baked(dot)))
+            .position(|&entry| entry == Some(baked(dot)))
             .expect("every dot has a palette entry")
     };
     for primary in [0xffffff, 0x4e008e, 0xffb000] {
         for head in 0..DOTS {
             for trail in [0, 1, 10, DOTS] {
-                let comet = |dot: usize| -> Option<u16> {
+                let comet = |dot: usize| -> Option<Rgb888> {
                     let lag = (head + DOTS - dot) % DOTS;
                     (lag < trail).then(|| {
                         let value = 255 - (lag as u32 * 255) / trail as u32;
-                        pack_scaled(Rgb888(primary), value, 255)
+                        scale(Rgb888(primary), value, 255)
                     })
                 };
                 let mut palette = layout::toast_spinner::PALETTE;
                 for dot in 0..DOTS {
-                    palette[entry_of(dot)] = comet(dot).unwrap_or(MAGENTA);
+                    palette[entry_of(dot)] = comet(dot);
                 }
                 let (x, y) = SPINNER_AT;
                 let (mut drawn, mut blitted) = (buffer(WIDTH, HEIGHT), buffer(WIDTH, HEIGHT));
                 let mut drawn = Canvas::new(&mut drawn, WIDTH, HEIGHT);
                 let mut blitted = Canvas::new(&mut blitted, WIDTH, HEIGHT);
-                spinner::draw(&mut drawn, x, y, |dot| comet(dot).map(widen));
+                spinner::draw(&mut drawn, x, y, comet);
                 blitted.blit(&layout::toast_spinner::SPRITE.tinted(&palette), x, y);
                 assert_same_frame(&drawn, &blitted, "comet");
             }

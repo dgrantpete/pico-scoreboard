@@ -19,7 +19,6 @@
 //! each dot in its baked colour.
 
 use crate::blit::Canvas;
-use crate::rgb565;
 use scoreboard_model::Rgb888;
 
 /// The ring's bounding box.
@@ -45,12 +44,6 @@ pub const RING: [(i32, i32); DOTS] = [
     (21, 5),
 ];
 
-/// An exact 8-bit colour as the canvas stores it: this module's only contact
-/// with the pixel format, so the canvas's widening (BACKLOG 115) is this line.
-const fn ink(color: Rgb888) -> u16 {
-    rgb565(color.red(), color.green(), color.blue())
-}
-
 /// The ring with its bounding box's top-left at `(x, y)`; dot `k` in
 /// `color(k)`, or not drawn at all where that is `None`.
 pub fn draw(
@@ -61,7 +54,7 @@ pub fn draw(
 ) {
     for (dot, (dx, dy)) in RING.into_iter().enumerate() {
         if let Some(color) = color(dot) {
-            canvas.fill_rect(x + dx, y + dy, DOT, DOT, ink(color));
+            canvas.fill_rect(x + dx, y + dy, DOT, DOT, color);
         }
     }
 }

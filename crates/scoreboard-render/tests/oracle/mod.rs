@@ -4,16 +4,14 @@
 //! `tests/art/` holds the Aseprite exports the procedural replacements are
 //! pinned to (see its README); `art/` holds the hand-drawn sources. Both read
 //! the same way: a pixel is transparent when its alpha is 0 — the layout
-//! compiler's rule (`flatten_rgba`), and every file here has only 0 or 255 —
-//! and otherwise carries its exact 8-bit colour.
+//! compiler's rule, and every file here has only 0 or 255 — and otherwise
+//! carries its exact 8-bit colour.
 //!
-//! The comparison has two halves. [`assert_quantized`] is today's: the canvas
-//! is RGB565, so a drawn pixel must equal the oracle's colour through
-//! [`rgb565`], and a transparent one must still hold [`SENTINEL`]. And
-//! [`assert_drawn`] adds the 8-bit half for code that draws from named
-//! constants: the constants must be exactly the oracle's colours, no more and
-//! no fewer, with distinct 565 packings — so the 565 value a pixel holds names
-//! the one constant that drew it, and the draw is exact at eight bits too.
+//! The canvas is eight bits a channel (BACKLOG 115), so the comparison is
+//! exact: [`assert_art`] wants every opaque pixel to be the art's colour and
+//! every transparent one to still hold [`SENTINEL`]. [`assert_drawn`] adds,
+//! for code that draws from named constants, that the constants are exactly
+//! the art's colours — no more and no fewer.
 
 #![allow(dead_code)]
 
@@ -22,19 +20,18 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use scoreboard_model::Rgb888;
-use scoreboard_render::blit::Canvas;
-use scoreboard_render::rgb565;
+use scoreboard_render::blit::{BYTES_PER_PIXEL, Canvas};
 
-/// A frame-buffer value no art here quantizes to, written under every draw so
-/// that a pixel the draw must leave alone is seen to survive it.
-pub const SENTINEL: u16 = rgb565(8, 4, 8);
+/// A colour no art here uses, written under every draw so that a pixel the
+/// draw must leave alone is seen to survive it.
+pub const SENTINEL: Rgb888 = Rgb888::new(1, 2, 3);
 
 /// One decoded image: `None` for a transparent pixel, else its exact colour.
 pub struct Art {
     pub name: String,
     pub width: i32,
     pub height: i32,
-    pixels: Vec<Option<[u8; 3]>>,
+    pixels: Vec<Option<Rgb888>>,
 }
 
 impl Art {
@@ -79,7 +76,7 @@ impl Art {
                     "{}: partial alpha {alpha} has no meaning on the panel",
                     path.display()
                 );
-                (alpha == 255).then(|| [pixel[0], pixel[1], pixel[2]])
+                (alpha == 255).then(|| Rgb888::new(pixel[0], pixel[1], pixel[2]))
             })
             .collect();
         Art {
@@ -91,14 +88,14 @@ impl Art {
     }
 
     /// The colour at `(x, y)`, or `None` where the art is transparent.
-    pub fn at(&self, x: i32, y: i32) -> Option<[u8; 3]> {
+    pub fn at(&self, x: i32, y: i32) -> Option<Rgb888> {
         assert!(x >= 0 && y >= 0 && x < self.width && y < self.height);
         self.pixels[(y * self.width + x) as usize]
     }
 
     /// The distinct opaque colours, in row-major first-seen order — the order
     /// `compile_layout.py` numbered its palettes in.
-    pub fn colors(&self) -> Vec<[u8; 3]> {
+    pub fn colors(&self) -> Vec<Rgb888> {
         let mut seen = Vec::new();
         for color in self.pixels.iter().flatten() {
             if !seen.contains(color) {
@@ -111,8 +108,7 @@ impl Art {
     /// This art with every pixel of the given colours made transparent — what
     /// a draw that skips those colours should leave.
     pub fn without(&self, colors: &[Rgb888]) -> Art {
-        let dropped: Vec<[u8; 3]> = colors.iter().map(|&c| channels(c)).collect();
-        for color in &dropped {
+        for color in colors {
             assert!(
                 self.colors().contains(color),
                 "{}: no {color:?} to drop",
@@ -120,11 +116,11 @@ impl Art {
             );
         }
         Art {
-            name: format!("{} without {dropped:?}", self.name),
+            name: format!("{} without {colors:?}", self.name),
             pixels: self
                 .pixels
                 .iter()
-                .map(|pixel| pixel.filter(|color| !dropped.contains(color)))
+                .map(|pixel| pixel.filter(|color| !colors.contains(color)))
                 .collect(),
             ..*self
         }
@@ -152,41 +148,28 @@ fn crate_path(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
 }
 
-/// A `width` × `height` RGB565 frame filled with [`SENTINEL`].
+/// A `width` × `height` frame filled with [`SENTINEL`].
 pub fn buffer(width: i32, height: i32) -> Vec<u8> {
-    SENTINEL.to_le_bytes().repeat((width * height) as usize)
-}
-
-/// The 8-bit triple of a model colour.
-pub fn channels(color: Rgb888) -> [u8; 3] {
-    [color.red(), color.green(), color.blue()]
+    let pixel: [u8; BYTES_PER_PIXEL] = [SENTINEL.red(), SENTINEL.green(), SENTINEL.blue()];
+    pixel.repeat((width * height) as usize)
 }
 
 /// The window of `canvas` whose top-left is `(x0, y0)` is `art`, pixel for
-/// pixel: every opaque pixel is its colour through [`rgb565`], every
-/// transparent one still [`SENTINEL`]. Lists every mismatch, not the first.
-pub fn assert_quantized(canvas: &Canvas<'_>, x0: i32, y0: i32, art: &Art, what: &str) {
-    for color in art.colors() {
-        assert_ne!(
-            rgb565(color[0], color[1], color[2]),
-            SENTINEL,
-            "{what}: the sentinel collides with an art colour"
-        );
-    }
+/// pixel and bit for bit: every opaque pixel its colour, every transparent
+/// one still [`SENTINEL`]. Lists every mismatch, not the first.
+pub fn assert_art(canvas: &Canvas<'_>, x0: i32, y0: i32, art: &Art, what: &str) {
+    assert!(
+        !art.colors().contains(&SENTINEL),
+        "{what}: the sentinel collides with an art colour"
+    );
     let mut wrong = Vec::new();
     for y in 0..art.height {
         for x in 0..art.width {
-            let want = match art.at(x, y) {
-                Some([r, g, b]) => rgb565(r, g, b),
-                None => SENTINEL,
-            };
+            let want = art.at(x, y).unwrap_or(SENTINEL);
             let got = canvas.pixel_at(x0 + x, y0 + y);
             if got != Some(want) {
-                let got = got.map_or("nothing (outside the canvas)".into(), |v| {
-                    format!("{v:#06x}")
-                });
                 wrong.push(format!(
-                    "  ({x}, {y}): want {want:#06x} ({:?}), got {got}",
+                    "  ({x}, {y}): want {want:?} ({:?}), got {got:?}",
                     art.at(x, y)
                 ));
             }
@@ -202,10 +185,8 @@ pub fn assert_quantized(canvas: &Canvas<'_>, x0: i32, y0: i32, art: &Art, what: 
     );
 }
 
-/// [`assert_quantized`], plus the 8-bit half: `palette` — the colour
-/// constants the draw was given — is exactly the art's set of colours, and no
-/// two of them pack to one 565 value. Then the 565 value at each pixel can only
-/// have come from the constant that equals the oracle's 8-bit colour there.
+/// [`assert_art`], plus: `palette` — the colour constants the draw was given
+/// — is exactly the art's set of colours.
 pub fn assert_drawn(
     canvas: &Canvas<'_>,
     x0: i32,
@@ -214,29 +195,16 @@ pub fn assert_drawn(
     palette: &[Rgb888],
     what: &str,
 ) {
-    let packed: Vec<u16> = palette
-        .iter()
-        .map(|&color| {
-            let [r, g, b] = channels(color);
-            rgb565(r, g, b)
-        })
-        .collect();
-    for (i, a) in packed.iter().enumerate() {
-        assert!(
-            !packed[i + 1..].contains(a),
-            "{what}: two palette colours share the 565 value {a:#06x}"
-        );
-    }
-    let mut constants: Vec<[u8; 3]> = palette.iter().map(|&c| channels(c)).collect();
-    let mut colors = art.colors();
+    let mut constants: Vec<u32> = palette.iter().map(|color| color.0).collect();
+    let mut colors: Vec<u32> = art.colors().iter().map(|color| color.0).collect();
     constants.sort_unstable();
     colors.sort_unstable();
     assert_eq!(
         constants, colors,
-        "{what}: the colour constants are not exactly the 8-bit colours of {}",
+        "{what}: the colour constants are not exactly the colours of {}",
         art.name
     );
-    assert_quantized(canvas, x0, y0, art, what);
+    assert_art(canvas, x0, y0, art, what);
 }
 
 /// Every pixel of `canvas` outside the `width` × `height` window at
@@ -273,7 +241,7 @@ pub fn assert_same_frame(drawn: &Canvas<'_>, blitted: &Canvas<'_>, what: &str) {
         for x in 0..drawn.width() {
             let (a, b) = (drawn.pixel_at(x, y), blitted.pixel_at(x, y));
             if a != b {
-                wrong.push(format!("  ({x}, {y}): drawn {a:04x?}, blitted {b:04x?}"));
+                wrong.push(format!("  ({x}, {y}): drawn {a:?}, blitted {b:?}"));
             }
         }
     }
@@ -283,15 +251,4 @@ pub fn assert_same_frame(drawn: &Canvas<'_>, blitted: &Canvas<'_>, what: &str) {
         wrong.len(),
         wrong[..wrong.len().min(24)].join("\n")
     );
-}
-
-/// The 8-bit colour whose [`rgb565`] packing is `packed`, rebuilt by putting
-/// each field back in its channel's top bits — how a test hands a draw that
-/// takes 8-bit colours the very value a renderer computed in 565.
-pub fn widen(packed: u16) -> Rgb888 {
-    Rgb888::new(
-        ((packed >> 11) as u8 & 0x1F) << 3,
-        ((packed >> 5) as u8 & 0x3F) << 2,
-        (packed as u8 & 0x1F) << 3,
-    )
 }

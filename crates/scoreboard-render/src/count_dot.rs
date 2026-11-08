@@ -14,7 +14,6 @@
 //! and to the compiled sprite through the palette entries the renderers edit.
 
 use crate::blit::Canvas;
-use crate::rgb565;
 use scoreboard_model::Rgb888;
 
 /// The dot's square edge, in pixels.
@@ -24,16 +23,9 @@ pub const SIZE: i32 = 4;
 pub const OUTLINE: Rgb888 = Rgb888::new(255, 255, 255);
 pub const UNFILLED: Rgb888 = Rgb888::new(86, 86, 86);
 
-/// An exact 8-bit colour as the canvas stores it: this module's only contact
-/// with the pixel format, so the canvas's widening (BACKLOG 115) is this line.
-const fn ink(color: Rgb888) -> u16 {
-    rgb565(color.red(), color.green(), color.blue())
-}
-
 /// A dot with its top-left at `(x, y)`; the four corner pixels are left as
 /// they were.
 pub fn draw(canvas: &mut Canvas<'_>, x: i32, y: i32, outline: Rgb888, interior: Rgb888) {
-    let (outline, interior) = (ink(outline), ink(interior));
     let inner = SIZE - 2;
     canvas.hline(x + 1, y, inner, outline);
     canvas.hline(x + 1, y + SIZE - 1, inner, outline);

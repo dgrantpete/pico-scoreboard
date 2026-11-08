@@ -17,7 +17,6 @@
 //! brightness — with [`COLOR`] the PNGs' white.
 
 use crate::blit::Canvas;
-use crate::rgb565;
 use scoreboard_model::Rgb888;
 
 /// The padlock's rectangle, open or closed.
@@ -43,16 +42,8 @@ pub const LEFT_LEG: i32 = BODY_TOP - SHACKLE_TOP - BAR;
 /// The untinted padlock.
 pub const COLOR: Rgb888 = Rgb888::new(255, 255, 255);
 
-/// An exact 8-bit colour as the canvas stores it: this module's only contact
-/// with the pixel format, so the canvas's widening (BACKLOG 115) is this line.
-const fn ink(color: Rgb888) -> u16 {
-    rgb565(color.red(), color.green(), color.blue())
-}
-
 /// A padlock with its top-left at `(x, y)`, open or closed, in `color`.
 pub fn draw(canvas: &mut Canvas<'_>, x: i32, y: i32, open: bool, color: Rgb888) {
-    let color = ink(color);
-
     // The body, as the four rectangles around the keyhole.
     let (hole_x, hole_y, hole_width, hole_height) = KEYHOLE;
     let below = hole_y + hole_height;

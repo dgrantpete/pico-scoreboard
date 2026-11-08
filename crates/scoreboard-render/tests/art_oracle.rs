@@ -1,7 +1,7 @@
 //! The true-colour oracle is the truth (BACKLOG 116): every sprite
 //! `tools/compile_layout.py` compiled into `generated/layout.rs`, decoded
 //! through the same `Source`/`blit` path the renderers use, equals its 8-bit
-//! export quantized by `rgb565()` — pixel for pixel, with every transparent
+//! export exactly, at eight bits — pixel for pixel, with every transparent
 //! pixel left untouched. If this holds, a replacement pinned to the export is
 //! pinned to what the panel shows today, and stays exact at eight bits once
 //! the canvas is (BACKLOG 115).
@@ -12,7 +12,7 @@
 
 mod oracle;
 
-use oracle::{Art, assert_quantized, buffer};
+use oracle::{Art, assert_art, buffer};
 use scoreboard_render::blit::{Canvas, Slice, Sprite};
 use scoreboard_render::generated::layout;
 
@@ -47,7 +47,7 @@ fn assert_is_sprite(art: &Art, sprite: Sprite) {
     let mut pixels = buffer(art.width, art.height);
     let mut canvas = Canvas::new(&mut pixels, art.width, art.height);
     canvas.blit(&sprite.source(), 0, 0);
-    assert_quantized(&canvas, 0, 0, art, name);
+    assert_art(&canvas, 0, 0, art, name);
 }
 
 #[test]

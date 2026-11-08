@@ -48,7 +48,6 @@
 //! core 1.
 
 use crate::blit::Canvas;
-use crate::rgb565;
 use scoreboard_model::Rgb888;
 
 /// The rink's rectangle on the panel — the boards are its outer ring — and
@@ -96,12 +95,6 @@ pub const CREASE: Rgb888 = Rgb888::new(70, 140, 255);
 pub const AWAY_END: Rgb888 = Rgb888::new(255, 0, 0);
 pub const HOME_END: Rgb888 = Rgb888::new(0, 0, 255);
 
-/// An exact 8-bit colour as the canvas stores it: this module's only contact
-/// with the pixel format, so the canvas's widening (BACKLOG 115) is this line.
-const fn ink(color: Rgb888) -> u16 {
-    rgb565(color.red(), color.green(), color.blue())
-}
-
 impl Rink {
     /// x of a point `feet` along the sheet from the left boards, `0..=200`.
     pub const fn x_at(&self, feet: i32) -> i32 {
@@ -136,14 +129,13 @@ impl Rink {
 
     /// The whole rink: ice, each end in its tint, then [`Rink::draw_lines`].
     pub fn draw(&self, canvas: &mut Canvas<'_>, away_end: Rgb888, home_end: Rgb888) {
-        let (ice, away_end, home_end) = (ink(ICE), ink(away_end), ink(home_end));
         let away_goal = self.x_at(GOAL_LINE_FT);
         let home_goal = self.x_at(LENGTH_FT - GOAL_LINE_FT);
         for row in 1..self.height - 1 {
             let y = self.y + row;
             let left = self.x + self.inset(row);
             let right = self.x + self.width - 1 - self.inset(row);
-            canvas.hline(left + 1, y, right - left - 1, ice);
+            canvas.hline(left + 1, y, right - left - 1, ICE);
             canvas.hline(left + 1, y, away_goal - left - 1, away_end);
             canvas.hline(home_goal + 1, y, right - home_goal - 1, home_end);
         }
@@ -153,12 +145,11 @@ impl Rink {
     /// The boards, the lines across the ice and the creases, and nothing
     /// under them: what a fill over the ice needs put back on top.
     pub fn draw_lines(&self, canvas: &mut Canvas<'_>) {
-        let boards = ink(BOARDS);
         let (left, right) = (self.x, self.x + self.width - 1);
         let bottom = self.y + self.height - 1;
         // The long boards, top and bottom, between the corners.
         for y in [self.y, bottom] {
-            canvas.hline(left + CORNER[0], y, self.width - 2 * CORNER[0], boards);
+            canvas.hline(left + CORNER[0], y, self.width - 2 * CORNER[0], BOARDS);
         }
         // The end boards and the corners' curve, inward from the inset on
         // each side.
@@ -169,8 +160,8 @@ impl Rink {
             } else {
                 1
             };
-            canvas.hline(left + inset, self.y + row, run, boards);
-            canvas.hline(right - inset - (run - 1), self.y + row, run, boards);
+            canvas.hline(left + inset, self.y + row, run, BOARDS);
+            canvas.hline(right - inset - (run - 1), self.y + row, run, BOARDS);
         }
 
         let away_goal = self.x_at(GOAL_LINE_FT);
@@ -193,18 +184,16 @@ impl Rink {
 
         // Each crease: a bar against the goal line, toward centre ice, and a
         // pixel in front of the bar's middle.
-        let crease = ink(CREASE);
         let mid = self.mid();
         for (goal_line, toward_center) in [(away_goal, 1), (home_goal, -1)] {
-            canvas.vline(goal_line + toward_center, mid - 1, 3, crease);
-            canvas.pixel(goal_line + 2 * toward_center, mid, crease);
+            canvas.vline(goal_line + toward_center, mid - 1, 3, CREASE);
+            canvas.pixel(goal_line + 2 * toward_center, mid, CREASE);
         }
     }
 
     /// A one-pixel line across the ice at column `x`, inside the boards on
     /// every row — so a line near an end would stop short of the corners.
     fn across(&self, canvas: &mut Canvas<'_>, x: i32, color: Rgb888) {
-        let color = ink(color);
         for row in 1..self.height - 1 {
             let inset = self.inset(row);
             if x > self.x + inset && x < self.x + self.width - 1 - inset {

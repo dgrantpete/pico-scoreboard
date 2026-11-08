@@ -12,7 +12,6 @@
 //! exports pixel for pixel. Not tinted.
 
 use crate::blit::Canvas;
-use crate::rgb565;
 use scoreboard_model::Rgb888;
 
 /// The triangle's base and height, in pixels.
@@ -27,18 +26,11 @@ pub const DOWN_Y: i32 = 33;
 
 pub const COLOR: Rgb888 = Rgb888::new(255, 255, 255);
 
-/// An exact 8-bit colour as the canvas stores it: this module's only contact
-/// with the pixel format, so the canvas's widening (BACKLOG 115) is this line.
-const fn ink(color: Rgb888) -> u16 {
-    rgb565(color.red(), color.green(), color.blue())
-}
-
 /// An arrow with its top-left at `(x, y)`, pointing up or down.
 pub fn draw(canvas: &mut Canvas<'_>, x: i32, y: i32, points_up: bool) {
-    let color = ink(COLOR);
     let center = x + WIDTH / 2;
     for step in 0..HEIGHT {
         let row = if points_up { step } else { HEIGHT - 1 - step };
-        canvas.hline(center - step, y + row, 2 * step + 1, color);
+        canvas.hline(center - step, y + row, 2 * step + 1, COLOR);
     }
 }
