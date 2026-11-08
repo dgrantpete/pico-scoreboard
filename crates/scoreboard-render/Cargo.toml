@@ -28,3 +28,7 @@ hub75 = { path = "../hub75", features = ["simulator"] }
 # The hockey screens' pixel tests commit hand-built wire games through the
 # real model, until the backend's hockey goldens exist.
 scoreboard-wire = { path = "../scoreboard-wire" }
+# Reads the art tests' 8-bit RGBA PNGs (`tests/art/`, `art/`): the true-colour
+# oracle the procedural replacements are pinned to (BACKLOG 116). Test-only;
+# the version the backend's `image` already locks, pinned exactly per SPEC §14.
+png = "=0.18.0"
