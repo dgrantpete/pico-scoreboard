@@ -15,8 +15,9 @@ a network hiccup in `bun install` would look like a Rust build failure. The
 artifact is 54 KB and changes when the frontend changes, which is rarely.
 
 The MicroPython firmware made the same call for the same reason —
-`tools/build.py` copies `frontend/build/index.html.gz` into the deploy
-directory rather than building it as part of the firmware build.
+`tools/build.py` copied `frontend/build/index.html.gz` into the deploy
+directory rather than building it as part of the firmware build, until that
+build was retired (BACKLOG 116).
 
 ## Regenerating it
 

@@ -23,6 +23,7 @@ bun run build          # writes build/index.html.gz
 ```
 
 `adapter-static` with `bundleStrategy: 'inline'` and `precompress` produces the
-single file; `tools/build.py` then copies it into the MicroPython firmware
-(`firmware/src/index.html.gz`), and the Rust firmware embeds its own committed
-copy at `firmware-rs/app/assets/index.html.gz` (see that directory's README).
+single file. The Rust firmware embeds its own committed copy at
+`firmware-rs/app/assets/index.html.gz` (see that directory's README); the
+MicroPython firmware's copy came from `tools/build.py`, whose app build was
+retired with the sprite sources (BACKLOG 116).
