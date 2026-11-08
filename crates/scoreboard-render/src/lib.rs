@@ -32,25 +32,35 @@
 //! | MicroPython bucket | Rust form | What enforces it |
 //! |---|---|---|
 //! | `LoopState` — all cross-frame state | the app's loop-local struct (Phase 3), holding a [`FrameRail`] | it is a local; renderers take `WallMs`/`FrameElapsed` **values**, never the struct, so they cannot reach it |
-//! | Registered scratch (`scratch_buffers()`, `SCRATCH_PALETTE_ENTRIES`) | plain locals: a two-entry palette in [`font::text_into`], a copied sprite palette in [`toast::overlay`] | a local cannot outlive the call, so "scratch silently promoted to cross-frame state" is not expressible |
+//! | Registered scratch (`scratch_buffers()`, `SCRATCH_PALETTE_ENTRIES`) | plain locals: a two-entry palette in [`font::text_into`], a copied sprite palette in [`game::mlb`]'s base markers | a local cannot outlive the call, so "scratch silently promoted to cross-frame state" is not expressible |
 //! | Draw targets | [`Canvas`], holding `&mut [u8]` | the borrow checker: exactly one canvas over a given region at a time |
 //! | `ThreadHealth.frame_seq` | an `AtomicU32` the app owns (Phase 3) | not this crate's business |
 //!
 //! The load-bearing consequence: **this crate mutates no static, ever.** Every
-//! generated table is `&'static` immutable data, and the sprite palettes that
-//! MicroPython tinted in place — count dots, base markers, endzone tints, the
-//! spinner comet — are copied into a caller-owned array first. That deletes
-//! the `try`/`finally` restores (`_draw_count_dots`, `_draw_base_markers`,
-//! `_draw_football_field`), the scratch registry, and the poisoning tripwire
-//! that existed to catch violations of a rule Rust makes unstatable.
+//! generated table is `&'static` immutable data. Of the sprite palettes that
+//! MicroPython tinted in place, the base markers' and the endzones' are copied
+//! into a caller-owned array first; the count dots and the spinner comet are
+//! drawn in code now, and their tints are arguments (BACKLOG 116). That
+//! deletes the `try`/`finally` restores (`_draw_count_dots`,
+//! `_draw_base_markers`, `_draw_football_field`), the scratch registry, and
+//! the poisoning tripwire that existed to catch violations of a rule Rust
+//! makes unstatable.
 //!
 //! # What is generated
 //!
 //! [`generated`] holds committed build products — glyph tables from
-//! `tools/compile_fonts.py`, sprites and slices from `tools/compile_layout.py`.
-//! They are committed (unlike their MicroPython counterparts, which are
-//! gitignored) so that regenerating needs Python, freetype and the Aseprite
-//! CLI but *building* needs only cargo. Same pattern as `hub75`'s goldens.
+//! `tools/compile_fonts.py`, and the four hand-drawn sprites (the MLB diamond
+//! and base marker, the football and its field) compiled from
+//! `crates/scoreboard-render/art/*.png` by the `tests/art_compile.rs` test.
+//! They are committed so that regenerating needs Python and freetype, or a
+//! test run, but *building* needs only cargo. Same pattern as `hub75`'s
+//! goldens.
+//!
+//! Everything else the panel shows is drawn in code: the rink ([`rink`]), the
+//! court ([`court`]), the three-stars [`star`], the [`count_dot`], the
+//! [`inning_arrow`]s and the toasts' [`padlock`] and [`spinner`], each pinned
+//! to exact pixels by its tests. Until 2026-11-08 most of them were Aseprite
+//! layers compiled by a Python script; BACKLOG 116 retired that pipeline.
 //!
 //! # Colour
 //!

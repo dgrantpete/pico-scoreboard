@@ -3,9 +3,9 @@
 Every number this emits is produced by running the REAL reference — never by
 transcribing it:
 
-* packed sprite bytes come from `tools/compile_layout.py`'s `pack_*` functions,
-  which are the normative definition of the five formats' bit layouts (the
-  MicroPython framebuf shim is pinned against these same functions);
+* packed sprite bytes come from the `pack_*` functions below, the normative
+  definition of the five formats' bit layouts — `tools/compile_layout.py`'s,
+  frozen here when BACKLOG 116 deleted it (see "Frozen references");
 * glyph records come from `tools/compile_fonts.py`'s `build_blobs`, resolved
   through the same index arithmetic the Rust `FontFace` performs, so a wrong
   offset or a missed absent-glyph fallback shows up as different bits;
@@ -22,7 +22,7 @@ parameters, then `rustfmt` the output (the generator emits it unformatted):
 
     py crates/scoreboard-render/tests/gen_goldens.py
 
-Needs: Pillow (compile_layout imports it), freetype, and `qrcode`.
+Needs: freetype and `qrcode`.
 """
 
 import sys
@@ -32,15 +32,124 @@ REPO = Path(__file__).resolve().parents[3]
 OUT_PATH = Path(__file__).resolve().parent / "goldens" / "mod.rs"
 sys.path.insert(0, str(REPO))
 
-from tools.compile_layout import (  # noqa: E402
-    pack_gs2_hmsb,
-    pack_gs4_hmsb,
-    pack_gs8,
-    pack_mono_hlsb,
-    pack_rgb565,
-    rgb565,
-)
 from tools.compile_fonts import ABSENT, MINCHAR, build_blobs  # noqa: E402
+
+
+# --- Frozen references -------------------------------------------------------
+#
+# The packers below are `tools/compile_layout.py`'s, and the HSV packer is
+# `tools/preview/shims/misc_shims.py`'s, copied here verbatim on 2026-11-08
+# when BACKLOG 116 deleted both tools. They are the references the goldens were
+# first produced from — the packers the normative definition of the five
+# formats' bit layouts that every compiled sprite was packed with, the HSV
+# packer the pure-Python stand-in for `hub75.native.pack_hsv_to_rgb565` that was
+# verified against the real `.mpy` on device — and they are frozen: nothing
+# else runs them any more, so they change only if the goldens' meaning does.
+
+
+def rgb565(r: int, g: int, b: int) -> int:
+    """Convert RGB888 to RGB565 (matches firmware rgb565 function)."""
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+
+
+def pack_mono_hlsb(indices: list, width: int, height: int) -> bytes:
+    """Pack indexed pixels as MONO_HLSB (1 bit/pixel, MSB=leftmost)."""
+    row_bytes = (width + 7) // 8
+    data = bytearray(row_bytes * height)
+    for y in range(height):
+        for x in range(width):
+            if indices[y * width + x]:
+                byte_pos = y * row_bytes + x // 8
+                bit_pos = 7 - (x % 8)
+                data[byte_pos] |= 1 << bit_pos
+    return bytes(data)
+
+
+def pack_gs2_hmsb(indices: list, width: int, height: int) -> bytes:
+    """Pack indexed pixels as GS2_HMSB (2 bits/pixel).
+
+    Four pixels per byte. Matches MicroPython's framebuf GS2_HMSB layout
+    (see extmod/modframebuf.c): the leftmost pixel in each byte occupies
+    the LOW two bits, with successive pixels moving toward the high end.
+    So x%4==0 occupies bits 1-0, x%4==1 occupies bits 3-2, x%4==2 occupies
+    bits 5-4, and x%4==3 occupies bits 7-6.
+
+    Note this differs from GS4_HMSB, which puts the leftmost pixel in the
+    HIGH nibble. The two formats have inconsistent conventions in the
+    MicroPython source, and we must match each one exactly.
+    """
+    row_bytes = (width + 3) // 4
+    data = bytearray(row_bytes * height)
+    for y in range(height):
+        for x in range(width):
+            idx = indices[y * width + x] & 0x03
+            byte_pos = y * row_bytes + x // 4
+            shift = (x % 4) * 2
+            data[byte_pos] |= idx << shift
+    return bytes(data)
+
+
+def pack_gs4_hmsb(indices: list, width: int, height: int) -> bytes:
+    """Pack indexed pixels as GS4_HMSB (4 bits/pixel, high nibble=leftmost)."""
+    row_bytes = (width + 1) // 2
+    data = bytearray(row_bytes * height)
+    for y in range(height):
+        for x in range(width):
+            idx = indices[y * width + x] & 0x0F
+            byte_pos = y * row_bytes + x // 2
+            if x % 2 == 0:
+                data[byte_pos] |= idx << 4
+            else:
+                data[byte_pos] |= idx
+    return bytes(data)
+
+
+def pack_gs8(indices: list, width: int, height: int) -> bytes:
+    """Pack indexed pixels as GS8 (1 byte/pixel)."""
+    data = bytearray(width * height)
+    for i, idx in enumerate(indices):
+        data[i] = idx & 0xFF
+    return bytes(data)
+
+
+def pack_rgb565(rgb_pixels: list, width: int, height: int) -> bytes:
+    """Pack a flat list of (r, g, b) tuples as little-endian RGB565."""
+    data = bytearray(width * height * 2)
+    for i, (r, g, b) in enumerate(rgb_pixels):
+        val = rgb565(r, g, b)
+        data[i * 2] = val & 0xFF
+        data[i * 2 + 1] = (val >> 8) & 0xFF
+    return bytes(data)
+
+
+def _hsv_to_rgb(h: int, s: int, v: int):
+    """HSV (each 0..255) -> (r, g, b) 0..255. s == 0 returns (v, v, v) exactly."""
+    if s == 0:
+        return v, v, v
+    h6 = (h / 255.0) * 6.0
+    i = int(h6) % 6
+    f = h6 - int(h6)
+    sf = s / 255.0
+    p = int(round(v * (1.0 - sf)))
+    q = int(round(v * (1.0 - sf * f)))
+    t = int(round(v * (1.0 - sf * (1.0 - f))))
+    if i == 0:
+        return v, t, p
+    if i == 1:
+        return q, v, p
+    if i == 2:
+        return p, v, t
+    if i == 3:
+        return p, q, v
+    if i == 4:
+        return t, p, v
+    return v, p, q
+
+
+def pack_hsv_to_rgb565(hue: int, saturation: int, value: int) -> int:
+    """Pack an HSV triple (each 0..255) into little-endian RGB565."""
+    r, g, b = _hsv_to_rgb(hue, saturation, value)
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
 
 FONTS = [
     ("UNSCII_8", "unscii_8.pcf", 8),
@@ -111,7 +220,7 @@ def packed_cases() -> str:
     colors = [rgb565(*p) for p in pixels]
 
     return (
-        "/// Index patterns packed by `tools/compile_layout.py`'s `pack_*`\n"
+        "/// Index patterns packed by `gen_goldens.py`'s frozen `pack_*`\n"
         "/// functions — the normative definition of each format's bit order.\n"
         "pub const PACKED_CASES: &[PackedCase] = &[\n"
         + "\n".join(cases)
@@ -242,15 +351,12 @@ def pulse_golden() -> str:
     """The warm-red tint the MLB count dots pulse through.
 
     `display.py` packs it with `hub75.native.pack_hsv_to_rgb565`, which ships as
-    an opaque precompiled `.mpy`. The preview's pure-Python stand-in reproduces
-    that helper's documented contract and is verified against the real module on
-    device (see `misc_shims`' own docstring), which makes it the best oracle
-    available. Every saturation/value pair the pulse can produce is covered:
+    an opaque precompiled `.mpy`. The frozen pure-Python stand-in above
+    reproduces that helper's documented contract (saturation 0 is grayscale and
+    exact by construction) and was verified against the real module on device,
+    which makes it the best oracle available. Every saturation/value pair the pulse can produce is covered:
     there are only 257 of them, one per step of the triangle wave.
     """
-    sys.path.insert(0, str(REPO / "tools" / "preview"))
-    from shims.misc_shims import pack_hsv_to_rgb565
-
     rows = []
     for step in range(257):
         value = 191 + ((step * 64) >> 8)
@@ -259,7 +365,7 @@ def pulse_golden() -> str:
         rows.append(f"    PulseCase {{ step: {step}, packed: 0x{packed:04x} }},")
     return (
         "/// The count-dot pulse, one entry per step of the triangle wave, as\n"
-        "/// the preview's stand-in for `hub75.native.pack_hsv_to_rgb565` packs\n"
+        "/// the frozen stand-in for `hub75.native.pack_hsv_to_rgb565` packs\n"
         "/// it. `step` is the triangle's value; the saturation and brightness\n"
         "/// the renderer derives from it are part of what is being checked.\n"
         "pub const PULSE_CASES: &[PulseCase] = &[\n" + "\n".join(rows) + "\n];\n"
@@ -269,9 +375,9 @@ def pulse_golden() -> str:
 HEADER = """\
 // GENERATED by tests/gen_goldens.py -- do not edit by hand.
 //
-// Values produced by running the real references: tools/compile_layout.py's
-// packers, tools/compile_fonts.py's font builder, the preview's stand-in for
-// the native HSV packer, and the independent `qrcode` package.
+// Values produced by running the real references: the frozen packers and HSV
+// stand-in in tests/gen_goldens.py, tools/compile_fonts.py's font builder, and
+// the independent `qrcode` package.
 #![allow(dead_code)]
 
 pub struct PackedCase {

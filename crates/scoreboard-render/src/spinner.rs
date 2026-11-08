@@ -11,12 +11,12 @@
 //! Every colour is the caller's: [`draw`] asks for each dot's in angular
 //! order and leaves a dot undrawn when it gets `None` — the dots outside the
 //! comet's trail — so there is no untinted spinner and no default colour.
-//! That is all the compiled sprite's palette did, minus an inversion:
-//! `tools/gen_toast_icons.py` baked dot `k`'s colour as `(0, 0, 8(k + 1))`,
+//! That is all the compiled sprite's palette did, minus an inversion: the
+//! script that drew the sprite baked dot `k`'s colour as `(0, 0, 8(k + 1))`,
 //! whose RGB565 value is `k + 1`, and `toast.rs` inverted the compiled
-//! palette to learn which entry was which dot. Here a dot is its index.
-//! `tests/toast_art.rs` pins the ring to that PNG pixel for pixel, drawing
-//! each dot in its baked colour.
+//! palette to learn which entry was which dot. Here a dot is its index; the
+//! sprite and its script went with the Aseprite pipeline (BACKLOG 116).
+//! `tests/toast_art.rs` pins the ring pixel for pixel, dot by dot.
 
 use crate::blit::Canvas;
 use scoreboard_model::Rgb888;

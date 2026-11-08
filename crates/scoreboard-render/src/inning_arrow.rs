@@ -8,8 +8,9 @@
 //! points away from it.
 //!
 //! They were the `inning_top__absolute` and `inning_bottom__absolute` layers
-//! of `mlb_layout.aseprite`; `tests/mlb_art.rs` pins this to their 8-bit
-//! exports pixel for pixel. Not tinted.
+//! of `mlb_layout.aseprite` until BACKLOG 116 retired the Aseprite pipeline;
+//! their place is these constants now. `tests/mlb_art.rs` pins both pixel
+//! for pixel. Not tinted.
 
 use crate::blit::Canvas;
 use scoreboard_model::Rgb888;

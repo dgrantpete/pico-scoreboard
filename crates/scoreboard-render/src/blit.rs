@@ -1,25 +1,26 @@
 //! The pixel path: an RGB888 draw surface, clipping sub-views, and blits from
-//! the five packed source formats the generated art and the crests use.
+//! the five packed source formats the fonts, the hand-drawn art and the
+//! crests use.
 //!
 //! This is the port of MicroPython's `framebuf` module as the firmware
 //! actually used it — `display.py`'s `Region`, the `blit`/`fill_rect`/`line`
-//! calls under it, and the packing conventions
-//! `tools/compile_layout.py` emits. The normative reference for those
-//! conventions is the layout compiler's `pack_*` functions; the pure-Python
-//! oracle `tools/preview/shims/framebuf_shim.py` is pinned against them by its
-//! own tests, and this module's tests are a port of that pinning.
+//! calls under it, and the packing conventions its layout compiler emitted.
+//! The normative reference for those conventions is the `pack_*` functions
+//! frozen in `tests/gen_goldens.py` (the layout compiler's own, kept when
+//! BACKLOG 116 retired it), and this module's tests pin the decoder to what
+//! they pack.
 //!
 //! Three details are load-bearing and easy to get wrong:
 //!
 //! 1. **The bit orders disagree between formats.** `MONO_HLSB` puts the
 //!    leftmost pixel in the *most* significant bit; `GS2_HMSB` puts it in the
 //!    *low* two bits; `GS4_HMSB` puts it in the *high* nibble. That is
-//!    MicroPython's own inconsistency, and the compiled sprites are packed to
+//!    MicroPython's own inconsistency, and the fonts and art are packed to
 //!    match it.
 //! 2. **Transparency is a palette entry, not a colour.** A see-through pixel
-//!    is one whose palette entry is `None` — index 0 of every compiled sprite
-//!    with transparency, the background of a text draw that has none, any
-//!    entry a renderer blanks to reveal what is under a sprite. MicroPython
+//!    is one whose palette entry is `None` — index 0 of every compiled
+//!    sprite, the background of a text draw that has none, any entry a
+//!    renderer blanks to reveal what is under a sprite. MicroPython
 //!    keyed on the mapped colour magenta instead, which made every colour that
 //!    packed to the key undrawable (BACKLOG 112, gone with it).
 //! 3. **Rows are byte-whole.** A source's stride rounds up to a whole number
@@ -195,8 +196,8 @@ impl Sprite {
     }
 }
 
-/// A named rectangle from the source art — an Aseprite slice, or an
-/// `__absolute` layer's authoritative position.
+/// A named rectangle on the panel: a slot in a geometry table, or where a
+/// sprite lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Slice {
     pub x: i32,

@@ -1,10 +1,10 @@
-//! Pinning tests for the blitter, ported from
-//! `tools/preview/tests/test_framebuf_shim.py`.
+//! Pinning tests for the blitter, ported from the MicroPython preview's
+//! framebuf-shim tests.
 //!
-//! The shim those tests cover is itself pinned against `compile_layout.py`'s
-//! packers, and the goldens here come from running those same packers — so the
-//! chain from "what the compiler wrote" to "what the panel shows" is checked
-//! end to end without either side transcribing the other.
+//! The goldens here come from running the layout compiler's own packers, kept
+//! frozen in `tests/gen_goldens.py` since BACKLOG 116 retired the compiler —
+//! so the chain from "what the packer wrote" to "what the panel shows" is
+//! checked end to end without either side transcribing the other.
 
 mod goldens;
 
@@ -70,7 +70,7 @@ fn packed_sources_read_back_the_indices_that_were_packed() {
 
 #[test]
 fn gs2_puts_the_leftmost_pixel_in_the_low_bits() {
-    // The formats disagree, and the compiled sprites are packed to match each
+    // The formats disagree, and the fonts and art are packed to match each
     // one exactly — GS2 low, GS4 high. Getting either backwards mirrors sprites
     // within every byte.
     let case = PACKED_CASES

@@ -11,8 +11,9 @@
 //! gap under it. Both states share one rectangle with the body in the same
 //! rows, so one position serves both and the body does not jump.
 //!
-//! It was two PNGs `tools/gen_toast_icons.py` wrote; this is that script's
-//! geometry, and `tests/toast_art.rs` pins it to those PNGs pixel for pixel.
+//! It was two PNGs a Python script drew from these same numbers, retired with
+//! the Aseprite pipeline (BACKLOG 116); `tests/toast_art.rs` pins both states
+//! pixel for pixel.
 //! The colour is the toast's to pick — the palette's primary at the toast's
 //! brightness — with [`COLOR`] the PNGs' white.
 

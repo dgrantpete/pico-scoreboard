@@ -39,13 +39,14 @@
 //! # Why code, not art
 //!
 //! The rink was drawn in code three times before this: the NHL mockup drew
-//! it procedurally, `tools/hockey_layout.lua` re-authored it as Aseprite
-//! layers from the same numbers, and `game/hockey.rs` re-derived the goal
-//! projection from the compiled sprite's `POSITION`. This module is the Lua
-//! script's port, number for number, and the place the projection's numbers
-//! live; `tests/hockey_art.rs` pins it to the compiled sprite's 8-bit export
-//! pixel for pixel. Integer arithmetic only: it is drawn every frame on
-//! core 1.
+//! it procedurally, a Lua script re-authored it as Aseprite layers from the
+//! same numbers, and `game/hockey.rs` re-derived the goal projection from the
+//! compiled sprite's rectangle. This module is the Lua script's port, number
+//! for number, and the one place the projection's numbers live; the script,
+//! the layers and the sprite went with the Aseprite pipeline (BACKLOG 116).
+//! `tests/hockey_art.rs` pins the rink pixel for pixel and the projection to
+//! the numbers the sprite carried. Integer arithmetic only: it is drawn every
+//! frame on core 1.
 
 use crate::blit::Canvas;
 use scoreboard_model::Rgb888;

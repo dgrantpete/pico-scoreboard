@@ -36,11 +36,10 @@
 //!
 //! # Why code, not art
 //!
-//! The rink is Aseprite art compiled to bytes, with its projection restated
-//! in `hockey.rs` against the art's rectangle. The court is BACKLOG 116's
-//! first step (NBA.md C4): the number that places a line is the number that
-//! places a mark, in one file, and the rink's procedural rewrite takes this
-//! shape next. The mockup's `court.rs` (`data/nba-design/mockup-harness`) is
+//! The court was BACKLOG 116's first step (NBA.md C4): the number that
+//! places a line is the number that places a mark, in one file. The rink,
+//! which was Aseprite art with its projection restated in `hockey.rs` against
+//! the art's rectangle, followed in this shape (`rink.rs`). The mockup's `court.rs` (`data/nba-design/mockup-harness`) is
 //! the reference implementation this ports; `tests/court.rs` pins the two to
 //! the byte. The mockup's study knobs — the filled paint, the detail toggle,
 //! the optional wood — belonged to designs that were not chosen and are not

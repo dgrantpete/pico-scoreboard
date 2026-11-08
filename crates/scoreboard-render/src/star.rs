@@ -6,10 +6,10 @@
 //! two legs a column either side of the centre on the last row. At this size
 //! the legs are what make it a star rather than a diamond.
 //!
-//! It was a layer of `hockey_layout.aseprite` drawn by
-//! `tools/hockey_layout.lua` from a five-row picture; `tests/hockey_art.rs`
-//! pins this to that layer's 8-bit export pixel for pixel. Not tinted: the
-//! name beside it carries the team.
+//! It was a layer of `hockey_layout.aseprite`, drawn by a Lua script from a
+//! five-row picture, until BACKLOG 116 retired the Aseprite pipeline;
+//! `tests/hockey_art.rs` pins it to that picture. Not tinted: the name beside
+//! it carries the team.
 
 use crate::blit::Canvas;
 use scoreboard_model::Rgb888;

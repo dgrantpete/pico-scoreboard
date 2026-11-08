@@ -9,9 +9,9 @@
 //! counts and [`UNFILLED`] when it does not, so an empty slot still shows as
 //! a ring around something.
 //!
-//! It was the `dot__relative` layer of `mlb_layout.aseprite`;
-//! `tests/mlb_art.rs` pins this to that layer's 8-bit export pixel for pixel,
-//! and to the compiled sprite through the palette entries the renderers edit.
+//! It was the `dot__relative` layer of `mlb_layout.aseprite` until BACKLOG
+//! 116 retired the Aseprite pipeline. `tests/mlb_art.rs` pins it pixel for
+//! pixel, alone and as `widgets::count_dots` lays a row of them out.
 
 use crate::blit::Canvas;
 use scoreboard_model::Rgb888;
