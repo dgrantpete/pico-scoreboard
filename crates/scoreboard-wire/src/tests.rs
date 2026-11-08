@@ -7,12 +7,13 @@
 //! reproduce the value — so the two halves cannot drift apart.
 
 use std::string::String;
-use std::{format, vec::Vec};
+use std::{format, vec, vec::Vec};
 
 use crate::error::{DecodeError, DecodeErrorKind};
 use crate::{
-    BufferFull, FinalTeam, GameState, LastPlay, LivePhase, Record, Side, SliceSink, TeamColors,
-    TeamState, clamp_temperature, football, hockey, list, mlb, nba, saturate_score, soccer,
+    BufferFull, EXT_LEVEL_MAX, FinalTeam, GameState, LastPlay, LivePhase, Record, Side, SliceSink,
+    TeamColors, TeamState, clamp_temperature, football, hockey, list, mlb, nba, saturate_score,
+    soccer,
 };
 
 /// Every corpus payload fits comfortably; the largest is a soccer live game
@@ -416,9 +417,10 @@ fn soccer_final_flavor_byte_is_the_only_difference() {
 
 const GOLDEN_NBA_LIVE: &str = "02010103004b004d00c17a0000243bef0040220e0024c5fe0009343031383131303337034f4b430344454e04343a33370c3430313831313033373431312a5a656b65204e6e616a69206f7574206f6620626f756e6473206261642070617373207475726e6f766572";
 
-#[test]
-fn nba_live_with_last_play() {
-    let game = nba::Game::Live(nba::Live {
+/// OKC @ DEN in the third with a last play: the frozen live golden's game.
+/// Its `ext=2` groups are empty — what a v2 payload decodes to.
+fn nba_live() -> nba::Game<'static> {
+    nba::Game::Live(nba::Live {
         game_id: "401811037",
         period: 3,
         phase: LivePhase::InProgress,
@@ -429,17 +431,27 @@ fn nba_live_with_last_play() {
             id: "401811037411",
             text: "Zeke Nnaji out of bounds bad pass turnover",
         }),
-    });
-    assert_eq!(encoded(|out| nba::encode(&game, out)), GOLDEN_NBA_LIVE);
-    assert_eq!(nba::decode(&unhex(GOLDEN_NBA_LIVE)).unwrap(), game);
+        ledger: None,
+        run: None,
+        newest_score: None,
+        makes: nba::Makes::new(&[]),
+    })
+}
+
+#[test]
+fn nba_live_with_last_play() {
+    assert_eq!(
+        encoded(|out| nba::encode(&nba_live(), out)),
+        GOLDEN_NBA_LIVE
+    );
+    assert_eq!(nba::decode(&unhex(GOLDEN_NBA_LIVE)).unwrap(), nba_live());
 }
 
 const GOLDEN_NBA_HALFTIME: &str = "020100020134004a00a9765d0012b1f5008e004e001ba0f90009343031383131303336034d454d045554414803302e30";
 
-#[test]
-fn nba_halftime_without_last_play() {
-    // Break state: flags 0 (no last play), phase 1, clock reads "0.0".
-    let game = nba::Game::Live(nba::Live {
+/// Break state: flags 0 (no last play), phase 1, clock reads "0.0".
+fn nba_halftime() -> nba::Game<'static> {
+    nba::Game::Live(nba::Live {
         game_id: "401811036",
         period: 2,
         phase: LivePhase::Halftime,
@@ -447,9 +459,23 @@ fn nba_halftime_without_last_play() {
         away: team("MEM", 52, 0x5D76A9, 0xF5B112),
         home: team("UTAH", 74, 0x4E008E, 0xF9A01B),
         last_play: None,
-    });
-    assert_eq!(encoded(|out| nba::encode(&game, out)), GOLDEN_NBA_HALFTIME);
-    assert_eq!(nba::decode(&unhex(GOLDEN_NBA_HALFTIME)).unwrap(), game);
+        ledger: None,
+        run: None,
+        newest_score: None,
+        makes: nba::Makes::new(&[]),
+    })
+}
+
+#[test]
+fn nba_halftime_without_last_play() {
+    assert_eq!(
+        encoded(|out| nba::encode(&nba_halftime(), out)),
+        GOLDEN_NBA_HALFTIME
+    );
+    assert_eq!(
+        nba::decode(&unhex(GOLDEN_NBA_HALFTIME)).unwrap(),
+        nba_halftime()
+    );
 }
 
 fn nba_pregame() -> nba::Game<'static> {
@@ -457,6 +483,7 @@ fn nba_pregame() -> nba::Game<'static> {
         game_id: "401811040",
         start_time: 1_775_874_600,
         venue: "crypto.com Arena",
+        info_secondary: "",
         away: nba::PregameTeam {
             abbreviation: "PHX",
             colors: TeamColors {
@@ -586,43 +613,869 @@ fn nba_ext_has_nothing_for_live_or_final() {
 }
 
 #[test]
-fn nba_ext_rejects_unknown_flag_bits_and_bytes_past_the_lines() {
+fn nba_lines_block_rejects_unknown_flag_bits() {
     let unknown = unhex(&format!("{GOLDEN_NBA_PRE}04"));
     assert_eq!(
         nba::decode(&unknown).unwrap_err(),
         DecodeError {
             offset: unknown.len() - 1,
             kind: DecodeErrorKind::InvalidCode {
-                field: "pregame extension flags",
+                field: "team lines flags",
                 code: 4,
             },
         }
     );
-    let trailing = unhex(&format!("{GOLDEN_NBA_PRE_EXT}00"));
+    // A byte after the lines opens the `ext=2` info line, so a lone one is a
+    // truncated string, not a trailing byte (the trailing check sits after
+    // the last block the decoder knows: see the `ext=2` tests).
+    let cut = unhex(&format!("{GOLDEN_NBA_PRE_EXT}01"));
     assert_eq!(
-        nba::decode(&trailing).unwrap_err().kind,
-        DecodeErrorKind::Trailing(1)
-    );
-    // A live game defines no extension: anything after it is still trailing.
-    let live = unhex(&format!("{GOLDEN_NBA_LIVE}00"));
-    assert_eq!(
-        nba::decode(&live).unwrap_err().kind,
-        DecodeErrorKind::Trailing(1)
+        nba::decode(&cut).unwrap_err().kind,
+        DecodeErrorKind::TruncatedString {
+            field: "info secondary",
+            need: 1,
+            have: 0,
+        }
     );
 }
 
 const GOLDEN_NBA_FINAL: &str = "0202040404760064008a421d002e10c800a88c000060111d001e1c1e1e19191919093430313831313032360344455403434841";
 
-#[test]
-fn nba_final_regulation() {
-    let game = nba::Game::Final(nba::Final {
+/// DET 118, CHA 100 in regulation: the frozen final golden's game.
+fn nba_final() -> nba::Game<'static> {
+    nba::Game::Final(nba::Final {
         game_id: "401811026",
         periods_played: 4,
         away: final_team("DET", 118, 0x1D428A, 0xC8102E, &[30, 28, 30, 30]),
         home: final_team("CHA", 100, 0x008CA8, 0x1D1160, &[25, 25, 25, 25]),
+        leaders: None,
+        series: None,
+        records: None,
+    })
+}
+
+#[test]
+fn nba_final_regulation() {
+    assert_eq!(
+        encoded(|out| nba::encode(&nba_final(), out)),
+        GOLDEN_NBA_FINAL
+    );
+    assert_eq!(nba::decode(&unhex(GOLDEN_NBA_FINAL)).unwrap(), nba_final());
+}
+
+// --- NBA, `ext=2` ---
+//
+// No deployed encoder writes these blocks yet; the goldens were worked out by
+// hand from the layout tables in `nba.rs` (NBA.md §4), byte by byte, before
+// the encoder ran — which is what makes them a contract rather than a
+// snapshot. Each is a frozen v2 golden above with its block appended; the
+// derivation is spelled out beside each block constant.
+
+static NBA_MAKES: [nba::Make; 2] = [
+    nba::Make {
+        side: Side::Away,
+        three: false,
+        x: -5,
+        y: 12,
+    },
+    nba::Make {
+        side: Side::Home,
+        three: true,
+        x: 22,
+        y: 3,
+    },
+];
+
+/// The live golden's game with a ledger (OKC in the bonus), DEN on an 8-0 run
+/// and two makes on the court; no newest score.
+fn nba_live_ext() -> nba::Game<'static> {
+    let nba::Game::Live(live) = nba_live() else {
+        unreachable!()
+    };
+    nba::Game::Live(nba::Live {
+        ledger: Some(nba::Ledger {
+            away: nba::TeamLedger {
+                fouls: 3,
+                in_bonus: true,
+                timeouts: 4,
+            },
+            home: nba::TeamLedger {
+                fouls: 5,
+                in_bonus: false,
+                timeouts: 2,
+            },
+        }),
+        run: Some(nba::Run {
+            side: Side::Home,
+            points: 8,
+        }),
+        newest_score: None,
+        makes: nba::Makes::new(&NBA_MAKES),
+        ..live
+    })
+}
+
+/// The `ext=2` live block of [`nba_live_ext`], by hand: `03` flags (ledger,
+/// run) · `03 05` fouls · `01` bonus (away) · `04 02` timeouts · `02 08` run
+/// (home, 8) · `00 00 00000000` newest-score placeholder · `02` N; then
+/// `00 fb 0c` (away two at −5, 12) and `03 16 03` (home three at 22, 3). No
+/// scorer: bit2 is clear.
+const NBA_LIVE_EXT2_BLOCK: &str = "03030501040202080000000000000200fb0c031603";
+
+#[test]
+fn nba_live_ext2_carries_the_ledger_the_run_and_the_makes() {
+    let golden = format!("{GOLDEN_NBA_LIVE}{NBA_LIVE_EXT2_BLOCK}");
+    assert_eq!(
+        encoded(|out| nba::encode_at(&nba_live_ext(), 2, out)),
+        golden
+    );
+    let bytes = unhex(&golden);
+    let decoded = nba::decode(&bytes).unwrap();
+    assert_eq!(decoded, nba_live_ext());
+    let nba::Game::Live(live) = decoded else {
+        unreachable!()
+    };
+    assert_eq!(live.makes.len(), 2);
+    assert_eq!(live.makes.get(0), Some(NBA_MAKES[0]));
+    assert_eq!(live.makes.last(), Some(NBA_MAKES[1]));
+    assert_eq!(live.makes.iter().next_back(), Some(NBA_MAKES[1]));
+    assert_eq!(live.makes.get(2), None);
+}
+
+static NBA_NEWEST_MAKE: [nba::Make; 1] = [nba::Make {
+    side: Side::Away,
+    three: true,
+    x: -24,
+    y: 27,
+}];
+
+/// The live golden's game with only the newest score: a corner three that is
+/// also the newest make (so it blinks), the scorer's 36th point, play 123456.
+fn nba_live_newest_score() -> nba::Game<'static> {
+    let nba::Game::Live(live) = nba_live() else {
+        unreachable!()
+    };
+    nba::Game::Live(nba::Live {
+        newest_score: Some(nba::NewestScore {
+            side: Side::Away,
+            scorer_points: 36,
+            seq: 123_456,
+            marked: true,
+            scorer: "GILGEOUS-ALEXANDER",
+        }),
+        makes: nba::Makes::new(&NBA_NEWEST_MAKE),
+        ..live
+    })
+}
+
+/// By hand: `0c` flags (newest score, marked) · `00 00 00 00 00` ledger
+/// placeholder · `00 00` run placeholder · `01` away · `24` 36 points ·
+/// `40 e2 01 00` 123456 little-endian · `01` N; `02 e8 1b` (away three at
+/// −24, 27); then `12` and the 18-byte scorer.
+const NBA_LIVE_NEWEST_BLOCK: &str =
+    "0c00000000000000012440e201000102e81b1247494c47454f55532d414c4558414e444552";
+
+#[test]
+fn nba_live_ext2_carries_the_newest_score_and_its_scorer() {
+    let golden = format!("{GOLDEN_NBA_LIVE}{NBA_LIVE_NEWEST_BLOCK}");
+    assert_eq!(
+        encoded(|out| nba::encode_at(&nba_live_newest_score(), 2, out)),
+        golden
+    );
+    assert_eq!(
+        nba::decode(&unhex(&golden)).unwrap(),
+        nba_live_newest_score()
+    );
+}
+
+/// Fifteen zero bytes: every group absent and no makes — a game the summary
+/// has nothing for yet, at level 2.
+const NBA_LIVE_EMPTY_BLOCK: &str = "000000000000000000000000000000";
+
+#[test]
+fn nba_live_ext2_with_nothing_is_fifteen_zero_bytes() {
+    let golden = format!("{GOLDEN_NBA_HALFTIME}{NBA_LIVE_EMPTY_BLOCK}");
+    assert_eq!(
+        encoded(|out| nba::encode_at(&nba_halftime(), 2, out)),
+        golden
+    );
+    assert_eq!(nba::decode(&unhex(&golden)).unwrap(), nba_halftime());
+}
+
+/// The pregame golden with both lines and a Cup note.
+fn nba_pregame_ext() -> nba::Game<'static> {
+    let nba::Game::Pregame(mut pregame) = nba_pregame_with_lines() else {
+        unreachable!()
+    };
+    pregame.info_secondary = "NBA CUP - GROUP PLAY";
+    nba::Game::Pregame(pregame)
+}
+
+/// By hand: after the `ext=1` lines block (its golden above), one string —
+/// `14` and the 20 bytes of "NBA CUP - GROUP PLAY".
+const NBA_PRE_EXT2_BLOCK: &str = "144e424120435550202d2047524f555020504c4159";
+
+#[test]
+fn nba_pregame_ext2_carries_the_second_info_line() {
+    let golden = format!("{GOLDEN_NBA_PRE_EXT}{NBA_PRE_EXT2_BLOCK}");
+    assert_eq!(
+        encoded(|out| nba::encode_at(&nba_pregame_ext(), 2, out)),
+        golden
+    );
+    assert_eq!(nba::decode(&unhex(&golden)).unwrap(), nba_pregame_ext());
+}
+
+#[test]
+fn nba_pregame_ext2_with_nothing_is_two_zero_bytes() {
+    // `00` lines flags, `00` an empty info line.
+    let golden = format!("{GOLDEN_NBA_PRE}0000");
+    assert_eq!(
+        encoded(|out| nba::encode_at(&nba_pregame(), 2, out)),
+        golden
+    );
+    assert_eq!(nba::decode(&unhex(&golden)).unwrap(), nba_pregame());
+}
+
+/// The final golden's game as a playoff game: Cunningham led the points and
+/// Ivey the assists for DET, Williams the rebounds for CHA; both records; the
+/// series.
+fn nba_final_ext() -> nba::Game<'static> {
+    let nba::Game::Final(game) = nba_final() else {
+        unreachable!()
+    };
+    nba::Game::Final(nba::Final {
+        leaders: Some(nba::Leaders {
+            points: nba::Leader {
+                side: Side::Away,
+                value: 34,
+                name: "C. Cunningham",
+            },
+            rebounds: nba::Leader {
+                side: Side::Home,
+                value: 12,
+                name: "M. Williams",
+            },
+            assists: nba::Leader {
+                side: Side::Away,
+                value: 9,
+                name: "J. Ivey",
+            },
+        }),
+        series: Some("DET leads series 2-1"),
+        records: Some(nba::Records {
+            away: Record {
+                wins: 44,
+                losses: 38,
+            },
+            home: Record {
+                wins: 19,
+                losses: 63,
+            },
+        }),
+        ..game
+    })
+}
+
+/// By hand: `07` flags (leaders, series, records) · `19` sides (points away
+/// = 1, rebounds home = 2 << 2, assists away = 1 << 4) · `22 0c 09` values ·
+/// `2c00 2600 1300 3f00` records (44-38, 19-63); then the three names (13,
+/// 11 and 7 bytes, each behind its length) and the 20-byte series.
+const NBA_FINAL_EXT2_BLOCK: &str = "0719220c092c00260013003f000d432e2043756e6e696e6768616d0b4d2e2057696c6c69616d73074a2e204976657914444554206c656164732073657269657320322d31";
+
+#[test]
+fn nba_final_ext2_carries_the_leaders_the_series_and_the_records() {
+    let golden = format!("{GOLDEN_NBA_FINAL}{NBA_FINAL_EXT2_BLOCK}");
+    assert_eq!(
+        encoded(|out| nba::encode_at(&nba_final_ext(), 2, out)),
+        golden
+    );
+    assert_eq!(nba::decode(&unhex(&golden)).unwrap(), nba_final_ext());
+}
+
+/// Thirteen zero bytes: no leaders, series or records.
+const NBA_FINAL_EMPTY_BLOCK: &str = "00000000000000000000000000";
+
+#[test]
+fn nba_final_ext2_with_nothing_is_thirteen_zero_bytes() {
+    let golden = format!("{GOLDEN_NBA_FINAL}{NBA_FINAL_EMPTY_BLOCK}");
+    assert_eq!(encoded(|out| nba::encode_at(&nba_final(), 2, out)), golden);
+    assert_eq!(nba::decode(&unhex(&golden)).unwrap(), nba_final());
+}
+
+// The level mechanism: what each level writes, and what a payload ending at
+// each level decodes to.
+
+#[test]
+fn nba_levels_zero_and_one_are_encode_and_encode_ext() {
+    // Byte for byte, on every fixture: the backend's two entry points can
+    // move to the level without a byte moving. The `ext=2` fixtures drop
+    // their groups below level 2.
+    let pre_without_lines = format!("{GOLDEN_NBA_PRE}00");
+    let fixtures = [
+        (nba_live(), GOLDEN_NBA_LIVE, GOLDEN_NBA_LIVE),
+        (nba_halftime(), GOLDEN_NBA_HALFTIME, GOLDEN_NBA_HALFTIME),
+        (nba_pregame(), GOLDEN_NBA_PRE, pre_without_lines.as_str()),
+        (nba_pregame_with_lines(), GOLDEN_NBA_PRE, GOLDEN_NBA_PRE_EXT),
+        (nba_final(), GOLDEN_NBA_FINAL, GOLDEN_NBA_FINAL),
+        (nba_live_ext(), GOLDEN_NBA_LIVE, GOLDEN_NBA_LIVE),
+        (nba_live_newest_score(), GOLDEN_NBA_LIVE, GOLDEN_NBA_LIVE),
+        (nba_pregame_ext(), GOLDEN_NBA_PRE, GOLDEN_NBA_PRE_EXT),
+        (nba_final_ext(), GOLDEN_NBA_FINAL, GOLDEN_NBA_FINAL),
+    ];
+    for (game, v2, ext1) in fixtures {
+        assert_eq!(encoded(|out| nba::encode_at(&game, 0, out)), v2);
+        assert_eq!(encoded(|out| nba::encode(&game, out)), v2);
+        assert_eq!(encoded(|out| nba::encode_at(&game, 1, out)), ext1);
+        assert_eq!(encoded(|out| nba::encode_ext(&game, out)), ext1);
+    }
+}
+
+#[test]
+fn nba_levels_above_the_maximum_write_the_maximum() {
+    for game in [nba_live_ext(), nba_pregame_ext(), nba_final_ext()] {
+        let at_max = encoded(|out| nba::encode_at(&game, EXT_LEVEL_MAX, out));
+        for level in [EXT_LEVEL_MAX + 1, u8::MAX] {
+            assert_eq!(encoded(|out| nba::encode_at(&game, level, out)), at_max);
+        }
+    }
+}
+
+/// `game` as a payload written at `level` decodes: the groups the level does
+/// not carry are gone, the rest intact.
+fn nba_at_level(game: &nba::Game<'static>, level: u8) -> nba::Game<'static> {
+    match *game {
+        nba::Game::Live(live) if level < 2 => nba::Game::Live(nba::Live {
+            ledger: None,
+            run: None,
+            newest_score: None,
+            makes: nba::Makes::new(&[]),
+            ..live
+        }),
+        nba::Game::Pregame(mut pregame) => {
+            if level < 1 {
+                pregame.away.line = None;
+                pregame.home.line = None;
+            }
+            if level < 2 {
+                pregame.info_secondary = "";
+            }
+            nba::Game::Pregame(pregame)
+        }
+        nba::Game::Final(game) if level < 2 => nba::Game::Final(nba::Final {
+            leaders: None,
+            series: None,
+            records: None,
+            ..game
+        }),
+        game => game,
+    }
+}
+
+/// Every state with its `ext=2` groups present and absent.
+fn nba_fixtures() -> [nba::Game<'static>; 8] {
+    [
+        nba_live_ext(),
+        nba_live_newest_score(),
+        nba_live(),
+        nba_halftime(),
+        nba_pregame_ext(),
+        nba_pregame(),
+        nba_final_ext(),
+        nba_final(),
+    ]
+}
+
+#[test]
+fn nba_every_state_round_trips_at_every_level() {
+    for game in nba_fixtures() {
+        for level in 0..=EXT_LEVEL_MAX {
+            let bytes = unhex(&encoded(|out| nba::encode_at(&game, level, out)));
+            assert_eq!(
+                nba::decode(&bytes).unwrap(),
+                nba_at_level(&game, level),
+                "level {level} of {game:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nba_each_ext2_group_travels_alone() {
+    let (nba::Game::Live(full), nba::Game::Live(newest), nba::Game::Live(bare)) =
+        (nba_live_ext(), nba_live_newest_score(), nba_live())
+    else {
+        unreachable!()
+    };
+    let lives = [
+        nba::Live {
+            ledger: full.ledger,
+            ..bare
+        },
+        nba::Live {
+            run: full.run,
+            ..bare
+        },
+        // An unmarked newest score with no scorer: a goaltending award.
+        nba::Live {
+            newest_score: newest.newest_score.map(|score| nba::NewestScore {
+                marked: false,
+                scorer: "",
+                ..score
+            }),
+            ..bare
+        },
+        nba::Live {
+            makes: full.makes,
+            ..bare
+        },
+    ];
+    for live in lives {
+        let game = nba::Game::Live(live);
+        let bytes = unhex(&encoded(|out| nba::encode_at(&game, 2, out)));
+        assert_eq!(nba::decode(&bytes).unwrap(), game);
+    }
+
+    let (nba::Game::Final(full), nba::Game::Final(bare)) = (nba_final_ext(), nba_final()) else {
+        unreachable!()
+    };
+    let finals = [
+        nba::Final {
+            leaders: full.leaders,
+            ..bare
+        },
+        nba::Final {
+            series: full.series,
+            ..bare
+        },
+        nba::Final {
+            records: full.records,
+            ..bare
+        },
+    ];
+    for game in finals {
+        let game = nba::Game::Final(game);
+        let bytes = unhex(&encoded(|out| nba::encode_at(&game, 2, out)));
+        assert_eq!(nba::decode(&bytes).unwrap(), game);
+    }
+}
+
+/// A fixture's level-2 payload and the lengths at which it is a complete
+/// shorter payload: the end of the v2 bytes (level 0) and, for a pregame, the
+/// end of the lines block (level 1). Live and final have no `ext=1` block, so
+/// their one boundary is both levels.
+struct Level2Payload {
+    game: nba::Game<'static>,
+    bytes: Vec<u8>,
+    /// Each length with the level a prefix of that length decodes as.
+    boundaries: Vec<(usize, u8)>,
+}
+
+fn nba_level2_payloads() -> Vec<Level2Payload> {
+    nba_fixtures()
+        .into_iter()
+        .map(|game| {
+            let at = |level| unhex(&encoded(|out| nba::encode_at(&game, level, out)));
+            let (v2, ext1, ext2) = (at(0), at(1), at(2));
+            let mut boundaries = vec![(v2.len(), 0)];
+            if ext1.len() != v2.len() {
+                boundaries.push((ext1.len(), 1));
+            }
+            Level2Payload {
+                game,
+                bytes: ext2,
+                boundaries,
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn nba_truncation_at_every_offset_is_a_clean_error_except_at_a_block_boundary() {
+    for Level2Payload {
+        game,
+        bytes,
+        boundaries,
+    } in nba_level2_payloads()
+    {
+        for len in 0..bytes.len() {
+            match boundaries.iter().find(|(at, _)| *at == len) {
+                Some(&(_, level)) => assert_eq!(
+                    nba::decode(&bytes[..len]).unwrap(),
+                    nba_at_level(&game, level),
+                    "prefix {len} of {game:?} is its level-{level} payload"
+                ),
+                None => {
+                    let error = nba::decode(&bytes[..len])
+                        .expect_err("a prefix inside a block is never a payload");
+                    assert!(
+                        matches!(
+                            error.kind,
+                            DecodeErrorKind::Empty
+                                | DecodeErrorKind::Truncated(_)
+                                | DecodeErrorKind::TruncatedFixed { .. }
+                                | DecodeErrorKind::TruncatedLength(_)
+                                | DecodeErrorKind::TruncatedString { .. }
+                                | DecodeErrorKind::TruncatedLineScores { .. }
+                                | DecodeErrorKind::TruncatedRecords { .. }
+                        ),
+                        "prefix {len} of {} reported {error}",
+                        bytes.len()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn nba_a_payload_ending_after_any_block_decodes_as_that_level() {
+    // The pregame has three ends: after `venue`, after the lines, after the
+    // info line. Each shorter one is an older backend's answer.
+    let bytes = unhex(&format!("{GOLDEN_NBA_PRE_EXT}{NBA_PRE_EXT2_BLOCK}"));
+    let (v2, ext1) = (GOLDEN_NBA_PRE.len() / 2, GOLDEN_NBA_PRE_EXT.len() / 2);
+    assert_eq!(nba::decode(&bytes[..v2]).unwrap(), nba_pregame());
+    assert_eq!(
+        nba::decode(&bytes[..ext1]).unwrap(),
+        nba_pregame_with_lines()
+    );
+    assert_eq!(nba::decode(&bytes).unwrap(), nba_pregame_ext());
+
+    // Live and final have two: after the v2 strings and after the block.
+    let bytes = unhex(&format!("{GOLDEN_NBA_LIVE}{NBA_LIVE_EXT2_BLOCK}"));
+    assert_eq!(
+        nba::decode(&bytes[..GOLDEN_NBA_LIVE.len() / 2]).unwrap(),
+        nba_live()
+    );
+    assert_eq!(nba::decode(&bytes).unwrap(), nba_live_ext());
+
+    let bytes = unhex(&format!("{GOLDEN_NBA_FINAL}{NBA_FINAL_EXT2_BLOCK}"));
+    assert_eq!(
+        nba::decode(&bytes[..GOLDEN_NBA_FINAL.len() / 2]).unwrap(),
+        nba_final()
+    );
+    assert_eq!(nba::decode(&bytes).unwrap(), nba_final_ext());
+}
+
+#[test]
+fn nba_trailing_bytes_after_the_last_block_are_rejected() {
+    for Level2Payload { mut bytes, .. } in nba_level2_payloads() {
+        let end = bytes.len();
+        bytes.push(0);
+        assert_eq!(
+            nba::decode(&bytes).unwrap_err(),
+            DecodeError {
+                offset: end,
+                kind: DecodeErrorKind::Trailing(1),
+            }
+        );
+    }
+    // One byte past the v2 live or final bytes opens a block: a truncated
+    // fixed section, not a trailing byte.
+    for golden in [GOLDEN_NBA_LIVE, GOLDEN_NBA_FINAL] {
+        let bytes = unhex(&format!("{golden}00"));
+        assert!(matches!(
+            nba::decode(&bytes).unwrap_err().kind,
+            DecodeErrorKind::TruncatedFixed { .. }
+        ));
+    }
+}
+
+/// Where the live `ext=2` block starts in the live golden.
+fn nba_live_block_at() -> usize {
+    GOLDEN_NBA_LIVE.len() / 2
+}
+
+#[test]
+fn nba_truncated_make_records_report_the_shortfall() {
+    let bytes = unhex(&format!("{GOLDEN_NBA_LIVE}{NBA_LIVE_EXT2_BLOCK}"));
+    let records_at = nba_live_block_at() + 15;
+    assert_eq!(
+        nba::decode(&bytes[..records_at + 3]).unwrap_err(),
+        DecodeError {
+            offset: records_at,
+            kind: DecodeErrorKind::TruncatedRecords {
+                field: "make records",
+                need: 6,
+                have: 3,
+            },
+        }
+    );
+}
+
+fn nba_live_ext_err(block: &str, edit: impl FnOnce(&mut Vec<u8>)) -> DecodeError {
+    let mut bytes = unhex(&format!("{GOLDEN_NBA_LIVE}{block}"));
+    edit(&mut bytes);
+    nba::decode(&bytes).expect_err("payload must be rejected")
+}
+
+fn nba_final_ext_err(edit: impl FnOnce(&mut Vec<u8>)) -> DecodeError {
+    let mut bytes = unhex(&format!("{GOLDEN_NBA_FINAL}{NBA_FINAL_EXT2_BLOCK}"));
+    edit(&mut bytes);
+    nba::decode(&bytes).expect_err("payload must be rejected")
+}
+
+#[test]
+fn nba_ext2_undefined_flag_bits_are_rejected() {
+    let at = nba_live_block_at();
+    for bit in [0x10, 0x20, 0x40, 0x80] {
+        assert_eq!(
+            nba_live_ext_err(NBA_LIVE_EXT2_BLOCK, |bytes| bytes[at] |= bit),
+            invalid(at, "live extension flags", 0x03 | bit)
+        );
+    }
+    // The mark without a newest score to mark.
+    assert_eq!(
+        nba_live_ext_err(NBA_LIVE_EXT2_BLOCK, |bytes| bytes[at] = 0x08),
+        invalid(at, "live extension flags", 0x08)
+    );
+
+    let at = GOLDEN_NBA_FINAL.len() / 2;
+    for bit in [0x08, 0x10, 0x20, 0x40, 0x80] {
+        assert_eq!(
+            nba_final_ext_err(|bytes| bytes[at] |= bit),
+            invalid(at, "final extension flags", 0x07 | bit)
+        );
+    }
+}
+
+#[test]
+fn nba_ext2_side_codes_outside_away_and_home_are_rejected() {
+    let at = nba_live_block_at();
+    for code in [0, 3, 0xFF] {
+        assert_eq!(
+            nba_live_ext_err(NBA_LIVE_EXT2_BLOCK, |bytes| bytes[at + 6] = code),
+            invalid(at + 6, "run side", code)
+        );
+        assert_eq!(
+            nba_live_ext_err(NBA_LIVE_NEWEST_BLOCK, |bytes| bytes[at + 8] = code),
+            invalid(at + 8, "newest score side", code)
+        );
+    }
+
+    // A zero for each leader in turn, a 3 for each, and the two spare bits.
+    let at = GOLDEN_NBA_FINAL.len() / 2;
+    for sides in [0x18, 0x11, 0x09, 0x1B, 0x2D, 0x39, 0x59, 0x99] {
+        assert_eq!(
+            nba_final_ext_err(|bytes| bytes[at + 1] = sides),
+            invalid(at + 1, "leader sides", sides)
+        );
+    }
+}
+
+#[test]
+fn nba_ext2_values_outside_their_ranges_are_rejected() {
+    let at = nba_live_block_at();
+    for points in [0u8, 5] {
+        assert_eq!(
+            nba_live_ext_err(NBA_LIVE_EXT2_BLOCK, |bytes| bytes[at + 7] = points),
+            out_of_range(at + 7, "run points", points as i32)
+        );
+    }
+    for bonus in [0x04, 0xFF] {
+        assert_eq!(
+            nba_live_ext_err(NBA_LIVE_EXT2_BLOCK, |bytes| bytes[at + 3] = bonus),
+            invalid(at + 3, "bonus", bonus)
+        );
+    }
+    assert_eq!(
+        nba_live_ext_err(NBA_LIVE_EXT2_BLOCK, |bytes| bytes[at + 14] = 129),
+        out_of_range(at + 14, "make count", 129)
+    );
+    // The first make record sits at +15 with a zero head byte.
+    for bits in [0x04, 0x80] {
+        assert_eq!(
+            nba_live_ext_err(NBA_LIVE_EXT2_BLOCK, |bytes| bytes[at + 15] |= bits),
+            invalid(at + 15, "make side/three", bits)
+        );
+    }
+    for x in [26i8, -26] {
+        assert_eq!(
+            nba_live_ext_err(NBA_LIVE_EXT2_BLOCK, |bytes| bytes[at + 16] = x as u8),
+            out_of_range(at + 16, "make x", x as i32)
+        );
+    }
+    for y in [48i8, -9] {
+        assert_eq!(
+            nba_live_ext_err(NBA_LIVE_EXT2_BLOCK, |bytes| bytes[at + 17] = y as u8),
+            out_of_range(at + 17, "make y", y as i32)
+        );
+    }
+}
+
+#[test]
+fn nba_ext2_absent_groups_are_placeholders_decode_never_reads() {
+    // Football's rule: clear every flag, then poison the thirteen group bytes
+    // with values each check would reject if it ran.
+    let at = nba_live_block_at();
+    let mut bytes = unhex(&format!("{GOLDEN_NBA_LIVE}{NBA_LIVE_EXT2_BLOCK}"));
+    bytes[at] = 0;
+    bytes[at + 1..at + 14]
+        .copy_from_slice(&[9, 9, 0xFF, 9, 9, 7, 1, 7, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+    let nba::Game::Live(live) = nba::decode(&bytes).unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(
+        (live.ledger, live.run, live.newest_score),
+        (None, None, None)
+    );
+    assert_eq!(live.makes.len(), 2);
+
+    let at = GOLDEN_NBA_FINAL.len() / 2;
+    let mut bytes = unhex(&format!("{GOLDEN_NBA_FINAL}{NBA_FINAL_EMPTY_BLOCK}"));
+    bytes[at + 1..at + 13].fill(0xFF);
+    let nba::Game::Final(game) = nba::decode(&bytes).unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(
+        (game.leaders, game.series, game.records),
+        (None, None, None)
+    );
+}
+
+// Encode-side bounds: encode clamps rather than fail, and what it writes
+// always decodes — to the clamped value.
+
+#[test]
+fn nba_makes_keep_the_newest_128() {
+    let makes: Vec<nba::Make> = (0..130i32)
+        .map(|n| nba::Make {
+            side: if n % 2 == 0 { Side::Away } else { Side::Home },
+            three: n % 3 == 0,
+            x: (n % 51 - 25) as i8,
+            y: (n % 56 - 8) as i8,
+        })
+        .collect();
+    let view = nba::Makes::new(&makes);
+    assert_eq!(view.len(), nba::MAX_MAKES);
+    assert_eq!(view.get(0), Some(makes[2]));
+    let nba::Game::Live(live) = nba_live() else {
+        unreachable!()
+    };
+    let game = nba::Game::Live(nba::Live {
+        makes: view,
+        ..live
     });
-    assert_eq!(encoded(|out| nba::encode(&game, out)), GOLDEN_NBA_FINAL);
-    assert_eq!(nba::decode(&unhex(GOLDEN_NBA_FINAL)).unwrap(), game);
+    let bytes = unhex(&encoded(|out| nba::encode_at(&game, 2, out)));
+    let nba::Game::Live(decoded) = nba::decode(&bytes).unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(decoded.makes.iter().collect::<Vec<_>>(), makes[2..]);
+}
+
+#[test]
+fn nba_coordinates_clamp_to_the_court() {
+    let wild = [
+        nba::Make {
+            side: Side::Away,
+            three: true,
+            x: 60,
+            y: 90,
+        },
+        nba::Make {
+            side: Side::Home,
+            three: false,
+            x: -128,
+            y: -128,
+        },
+    ];
+    let nba::Game::Live(live) = nba_live() else {
+        unreachable!()
+    };
+    let game = nba::Game::Live(nba::Live {
+        makes: nba::Makes::new(&wild),
+        ..live
+    });
+    let bytes = unhex(&encoded(|out| nba::encode_at(&game, 2, out)));
+    let nba::Game::Live(decoded) = nba::decode(&bytes).unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(
+        decoded.makes.iter().collect::<Vec<_>>(),
+        [
+            nba::Make {
+                side: Side::Away,
+                three: true,
+                x: 25,
+                y: 47,
+            },
+            nba::Make {
+                side: Side::Home,
+                three: false,
+                x: -25,
+                y: -8,
+            },
+        ]
+    );
+    // The clamped game is its own round trip.
+    assert_eq!(
+        encoded(|out| nba::encode_at(&nba::Game::Live(decoded), 2, out)),
+        hex(&bytes)
+    );
+}
+
+#[test]
+fn nba_a_run_under_six_is_not_a_run_on_the_wire() {
+    let nba::Game::Live(live) = nba_live() else {
+        unreachable!()
+    };
+    let game = nba::Game::Live(nba::Live {
+        run: Some(nba::Run {
+            side: Side::Away,
+            points: 5,
+        }),
+        ..live
+    });
+    let golden = format!("{GOLDEN_NBA_LIVE}{NBA_LIVE_EMPTY_BLOCK}");
+    assert_eq!(encoded(|out| nba::encode_at(&game, 2, out)), golden);
+    assert_eq!(nba::decode(&unhex(&golden)).unwrap(), nba_live());
+}
+
+/// The receive buffer's detail half (`poll::DETAIL_BYTES` in
+/// scoreboard-model), which the largest live payload must fit.
+const DETAIL_BYTES: usize = 2048;
+
+#[test]
+fn nba_worst_case_live_payload_fits_the_detail_buffer() {
+    // 128 makes, a 255-byte play text, a 40-byte scorer, every group present:
+    // 2 header + 23 fixed + 10 game_id + 4 + 4 abbreviations + 6 clock +
+    // 13 play id + 256 play text = 318 of v2, then 15 + 384 make records +
+    // 41 scorer = 440 of `ext=2`: 758 bytes.
+    let makes = vec![
+        nba::Make {
+            side: Side::Home,
+            three: true,
+            x: 25,
+            y: 47,
+        };
+        nba::MAX_MAKES
+    ];
+    let text = "x".repeat(255);
+    let scorer = "G".repeat(40);
+    let nba::Game::Live(live) = nba_live_ext() else {
+        unreachable!()
+    };
+    let game = nba::Game::Live(nba::Live {
+        clock: "10:08",
+        last_play: Some(LastPlay {
+            id: "401811037411",
+            text: &text,
+        }),
+        newest_score: Some(nba::NewestScore {
+            side: Side::Home,
+            scorer_points: 255,
+            seq: u32::MAX,
+            marked: true,
+            scorer: &scorer,
+        }),
+        makes: nba::Makes::new(&makes),
+        ..live
+    });
+    let mut buf = [0u8; DETAIL_BYTES];
+    let mut sink = SliceSink::new(&mut buf);
+    nba::encode_at(&game, 2, &mut sink).expect("fits the detail half");
+    assert_eq!(sink.len(), 758);
+    assert!(sink.len() < DETAIL_BYTES);
+    assert_eq!(nba::decode(sink.written()).unwrap(), game);
 }
 
 // --- Football ---
@@ -1170,6 +2023,10 @@ fn hockey_live_extends_the_nba_fixed_section() {
         away: live.away,
         home: live.home,
         last_play: live.last_play,
+        ledger: None,
+        run: None,
+        newest_score: None,
+        makes: nba::Makes::new(&[]),
     });
     let hockey_bytes = unhex(&encoded(|out| {
         hockey::encode(&hockey::Game::Live(live), out)
@@ -1276,6 +2133,7 @@ fn hockey_pregame_extends_the_nba_fixed_section() {
         game_id: pregame.game_id,
         start_time: pregame.start_time,
         venue: pregame.venue,
+        info_secondary: "",
         away: nba_team(pregame.away),
         home: nba_team(pregame.home),
     });
@@ -1385,6 +2243,9 @@ fn hockey_final_embeds_the_shared_final_whole() {
         periods_played: game.periods_played,
         away: game.away,
         home: game.home,
+        leaders: None,
+        series: None,
+        records: None,
     });
     let hockey_bytes = unhex(&encoded(|out| {
         hockey::encode(&hockey::Game::Final(game), out)

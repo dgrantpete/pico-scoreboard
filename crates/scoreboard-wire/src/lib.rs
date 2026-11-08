@@ -16,16 +16,27 @@
 //!
 //! # Extensions
 //!
-//! New data reaches new devices without touching the frozen layout. A client
-//! that can decode extensions asks for them with
-//! `Accept: application/x-scoreboard-struct; ext=1`
-//! ([`STRUCT_CONTENT_TYPE_EXT`]); the server then appends, after a payload's
-//! last v2 field, the extension that payload's module defines, and answers with
-//! the plain [`STRUCT_CONTENT_TYPE`] either way. Without the parameter the bytes
-//! are exactly v2 — the gift fleet and every firmware before 2026-10-12 never
-//! send it. Each module's `encode` writes v2 and `encode_ext` adds the
-//! extension; `decode` accepts both. Defined today: the [`nba`] pregame's team
-//! lines. A new sport needs none: no deployed decoder has ever requested its
+//! New data reaches new devices without touching the frozen layout. The
+//! `Accept` media type carries an extension **level**, `ext=N`
+//! (`Accept: application/x-scoreboard-struct; ext=2`): the server appends,
+//! after a payload's last v2 field, the blocks that payload's module defines
+//! for each level up to the **highest it knows, capped by the request** — a
+//! device asking for a level the backend predates gets the highest the backend
+//! has — and answers with the plain [`STRUCT_CONTENT_TYPE`] either way. Without
+//! the parameter the bytes are exactly v2: the gift fleet and every firmware
+//! before 2026-10-12 never send it. Each level's block follows the one before,
+//! so a payload is v2, then the `ext=1` block, then the `ext=2` block, and a
+//! decoder **accepts a payload that ends after any complete block**, with the
+//! groups a shorter payload does not carry absent. That is what lets any
+//! backend answer any device: an older backend's plain v2 or `ext=1` decodes
+//! on a newer device, and a newer backend never has to know which device asked.
+//!
+//! Only [`nba`] defines levels — `ext=1` its pregame team lines, `ext=2` its
+//! live, pregame and final blocks — so [`EXT_LEVEL_MAX`] is its ceiling. Its
+//! `encode_at(game, level, out)` writes a payload at a level; `encode` and
+//! `encode_ext` are levels 0 and 1 by name, and `decode` accepts every level.
+//! The other modules' `encode` writes plain v2 whatever the request, and a new
+//! sport needs no extension: no deployed decoder has ever requested its
 //! endpoint, so its first v2 layout carries everything ([`hockey`]).
 //!
 //! # Header
@@ -77,13 +88,20 @@ pub use error::{BufferFull, DecodeError, DecodeErrorKind};
 /// The `Accept` / `Content-Type` value that selects this format over JSON.
 pub const STRUCT_CONTENT_TYPE: &str = "application/x-scoreboard-struct";
 
-/// The `Accept` value that selects this format *with* the per-module
-/// extensions (see the crate docs). It contains [`STRUCT_CONTENT_TYPE`], so a
-/// server that predates extensions still serves plain v2 to it.
+/// The `Accept` value that asks for extension level 1 — what the shipping Rust
+/// firmware sends. It contains [`STRUCT_CONTENT_TYPE`], so a server that
+/// predates extensions still serves plain v2 to it.
 pub const STRUCT_CONTENT_TYPE_EXT: &str = "application/x-scoreboard-struct; ext=1";
 
-/// The media-type parameter that asks for extensions.
+/// The level-1 media-type parameter, whole: what the backend matches verbatim
+/// today. The parameter is a level (`ext=N`, see the crate docs), and reading
+/// the number is the backend's side of the rule.
 pub const EXT_PARAM: &str = "ext=1";
+
+/// The highest extension level any module defines (see the crate docs): a
+/// server caps a request's level here, and [`nba::encode_at`] writes this
+/// level for anything above it.
+pub const EXT_LEVEL_MAX: u8 = 2;
 
 pub const WIRE_VERSION: u8 = 2;
 

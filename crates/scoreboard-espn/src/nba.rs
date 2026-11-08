@@ -248,6 +248,7 @@ impl Extract {
                 game_id: self.game_id.as_str(),
                 start_time: game.start_time,
                 venue: game.venue.as_str(),
+                info_secondary: "",
                 away: wire_pregame_team(&game.away),
                 home: wire_pregame_team(&game.home),
             }),
@@ -262,12 +263,21 @@ impl Extract {
                     id: play.id.as_str(),
                     text: play.text.as_str(),
                 }),
+                // The `ext=2` groups are the summary extractor's; this
+                // scoreboard-only extract leaves them empty.
+                ledger: None,
+                run: None,
+                newest_score: None,
+                makes: wire::nba::Makes::new(&[]),
             }),
             Kind::Final(game) => wire::nba::Game::Final(wire::nba::Final {
                 game_id: self.game_id.as_str(),
                 periods_played: game.periods_played,
                 away: wire_final_team(&game.away),
                 home: wire_final_team(&game.home),
+                leaders: None,
+                series: None,
+                records: None,
             }),
         }
     }

@@ -158,8 +158,11 @@
 use core::fmt;
 
 use crate::codec::{Sink, SinkExt, color_pairs, le_u16, le_u32};
-use crate::common::{self, FinalParts, payload_reader, read_header, write_header};
-use crate::error::{BufferFull, DecodeError, DecodeErrorKind};
+use crate::common::{
+    self, FinalParts, check_flags, invalid_code, out_of_range, payload_reader, read_header,
+    side_code, side_from_code, write_header,
+};
+use crate::error::{BufferFull, DecodeError};
 use crate::{FinalTeam, GameState, HEADER_LEN, LastPlay, LivePhase, Side, TeamColors, TeamState};
 
 /// The goals a live payload carries: the newest 16 (NHL.md §3.5).
@@ -210,12 +213,6 @@ const GOAL_HOME: u8 = 0x01;
 const GOAL_TAG_SHIFT: u32 = 1;
 const GOAL_COORDINATE: u8 = 0x08;
 const GOAL_BITS: u8 = 0x0F;
-
-/// The three-way side code the next shooter and each star use: a side, or
-/// none (the shootout is over; ESPN did not say whose star).
-const SIDE_NONE: u8 = 0;
-const SIDE_AWAY: u8 = 1;
-const SIDE_HOME: u8 = 2;
 
 /// Two bits per star, three stars; bits 6–7 must stay clear.
 const STAR_SIDE_BITS: u32 = 2;
@@ -706,7 +703,7 @@ fn write_live<S: Sink + ?Sized>(out: &mut S, game: &Live<'_>) -> Result<(), Buff
 fn read_live(buf: &[u8]) -> Result<Live<'_>, DecodeError> {
     let mut reader = payload_reader(buf);
     let fixed = reader.fixed::<LIVE_LEN>()?;
-    let flags = check_flags(fixed[0], FLAGS, "live flags")?;
+    let flags = check_flags(HEADER_LEN, fixed[0], FLAGS, "live flags")?;
     let phase = LivePhase::from_code(fixed[2])
         .ok_or_else(|| invalid_code(HEADER_LEN + 2, "live phase", fixed[2]))?;
     let (away_colors, home_colors) = color_pairs(fixed, 7);
@@ -877,7 +874,7 @@ fn write_pregame<S: Sink + ?Sized>(out: &mut S, game: &Pregame<'_>) -> Result<()
 fn read_pregame(buf: &[u8]) -> Result<Pregame<'_>, DecodeError> {
     let mut reader = payload_reader(buf);
     let fixed = reader.fixed::<PRE_LEN>()?;
-    let flags = check_flags(fixed[0], PRE_FLAGS, "pregame flags")?;
+    let flags = check_flags(HEADER_LEN, fixed[0], PRE_FLAGS, "pregame flags")?;
     let (away_colors, home_colors) = color_pairs(fixed, 13);
 
     let game_id = reader.string("game_id")?;
@@ -972,7 +969,7 @@ fn write_final<S: Sink + ?Sized>(out: &mut S, game: &Final<'_>) -> Result<(), Bu
 fn read_final(buf: &[u8]) -> Result<Final<'_>, DecodeError> {
     let mut reader = payload_reader(buf);
     let prefix = reader.fixed::<FINAL_PREFIX_LEN>()?;
-    let flags = check_flags(prefix[0], FINAL_FLAGS, "final flags")?;
+    let flags = check_flags(HEADER_LEN, prefix[0], FINAL_FLAGS, "final flags")?;
     let star_sides = if flags & FINAL_FLAG_STARS != 0 {
         Some(
             star_sides(prefix[3])
@@ -1035,46 +1032,4 @@ fn star_sides(byte: u8) -> Option<[Option<Side>; 3]> {
     }
     let side = |index: u32| side_from_code((byte >> (index * STAR_SIDE_BITS)) & 0x03);
     Some([side(0)?, side(1)?, side(2)?])
-}
-
-fn side_code(side: Option<Side>) -> u8 {
-    match side {
-        None => SIDE_NONE,
-        Some(Side::Away) => SIDE_AWAY,
-        Some(Side::Home) => SIDE_HOME,
-    }
-}
-
-/// The outer `None` is an unknown code; the inner one is the code for none.
-fn side_from_code(code: u8) -> Option<Option<Side>> {
-    match code {
-        SIDE_NONE => Some(None),
-        SIDE_AWAY => Some(Some(Side::Away)),
-        SIDE_HOME => Some(Some(Side::Home)),
-        _ => None,
-    }
-}
-
-/// A flags byte must not set a bit its layout leaves undefined — a decoder
-/// that ignored one would silently drop whatever a newer encoder meant by it.
-fn check_flags(flags: u8, defined: u8, field: &'static str) -> Result<u8, DecodeError> {
-    if flags & !defined != 0 {
-        Err(invalid_code(HEADER_LEN, field, flags))
-    } else {
-        Ok(flags)
-    }
-}
-
-fn invalid_code(offset: usize, field: &'static str, code: u8) -> DecodeError {
-    DecodeError::at(offset, DecodeErrorKind::InvalidCode { field, code })
-}
-
-fn out_of_range(offset: usize, field: &'static str, value: impl Into<i32>) -> DecodeError {
-    DecodeError::at(
-        offset,
-        DecodeErrorKind::OutOfRange {
-            field,
-            value: value.into(),
-        },
-    )
 }

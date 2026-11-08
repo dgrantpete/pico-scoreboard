@@ -36,6 +36,12 @@ impl<'a> From<&'a NbaLiveGame> for wire::nba::Live<'a> {
             away: (&game.away).into(),
             home: (&game.home).into(),
             last_play: game.last_play.as_ref().map(Into::into),
+            // The `ext=2` groups come with the summary data path; nothing here
+            // fills them yet, so a level-2 payload carries them empty.
+            ledger: None,
+            run: None,
+            newest_score: None,
+            makes: wire::nba::Makes::new(&[]),
         }
     }
 }
@@ -46,6 +52,7 @@ impl<'a> From<&'a NbaPregameGame> for wire::nba::Pregame<'a> {
             game_id: &game.game_id,
             start_time: game.start_time,
             venue: &game.venue,
+            info_secondary: "",
             away: (&game.away).into(),
             home: (&game.home).into(),
         }
@@ -70,6 +77,9 @@ impl<'a> From<&'a NbaFinalGame> for wire::nba::Final<'a> {
             periods_played: game.periods_played,
             away: final_team(&game.away),
             home: final_team(&game.home),
+            leaders: None,
+            series: None,
+            records: None,
         }
     }
 }

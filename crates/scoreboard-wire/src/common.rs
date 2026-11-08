@@ -238,3 +238,64 @@ pub(crate) fn read_final_parts<'a>(reader: &mut Reader<'a>) -> Result<FinalParts
         },
     })
 }
+
+/// A flags byte must not set a bit its layout leaves undefined — a decoder
+/// that ignored one would silently drop whatever a newer encoder meant by it.
+/// `at` is the byte's own offset, which the extension blocks only know at
+/// run time.
+pub(crate) fn check_flags(
+    at: usize,
+    flags: u8,
+    defined: u8,
+    field: &'static str,
+) -> Result<u8, DecodeError> {
+    if flags & !defined != 0 {
+        Err(invalid_code(at, field, flags))
+    } else {
+        Ok(flags)
+    }
+}
+
+pub(crate) fn invalid_code(offset: usize, field: &'static str, code: u8) -> DecodeError {
+    DecodeError::at(offset, DecodeErrorKind::InvalidCode { field, code })
+}
+
+pub(crate) fn out_of_range(
+    offset: usize,
+    field: &'static str,
+    value: impl Into<i32>,
+) -> DecodeError {
+    DecodeError::at(
+        offset,
+        DecodeErrorKind::OutOfRange {
+            field,
+            value: value.into(),
+        },
+    )
+}
+
+/// The three-way side code a byte, or a 2-bit field, carries where a side can
+/// be unknown or not apply: hockey's next shooter and star sides, the NBA
+/// extension's run, newest-score and leader sides. A flag bit (football's
+/// possession, a goal or make record's side) is the two-way form.
+pub(crate) const SIDE_NONE: u8 = 0;
+pub(crate) const SIDE_AWAY: u8 = 1;
+pub(crate) const SIDE_HOME: u8 = 2;
+
+pub(crate) fn side_code(side: Option<Side>) -> u8 {
+    match side {
+        None => SIDE_NONE,
+        Some(Side::Away) => SIDE_AWAY,
+        Some(Side::Home) => SIDE_HOME,
+    }
+}
+
+/// The outer `None` is an unknown code; the inner one is the code for none.
+pub(crate) fn side_from_code(code: u8) -> Option<Option<Side>> {
+    match code {
+        SIDE_NONE => Some(None),
+        SIDE_AWAY => Some(Some(Side::Away)),
+        SIDE_HOME => Some(Some(Side::Home)),
+        _ => None,
+    }
+}
