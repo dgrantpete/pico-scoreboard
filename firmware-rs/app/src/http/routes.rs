@@ -35,8 +35,8 @@
 //! # `GET` and `PUT /api/timezone`
 //!
 //! The one route with no counterpart in `api_routes.py`: the browser tells the
-//! device what timezone it is in, because nothing upstream can (BACKLOG 95,
-//! SPEC §9's fourth key, and [`crate::timezone`]'s module docs for the whole
+//! device what timezone it is in, because nothing upstream knows it as well
+//! (SPEC §9's fourth key, and [`crate::timezone`]'s module docs for the whole
 //! argument). The contract, in full:
 //!
 //! ```text

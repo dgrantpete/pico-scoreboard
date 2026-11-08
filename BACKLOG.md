@@ -917,7 +917,7 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     (4 KB chunks through `BlockingPartition` + software SHA-512 at
     opt-level 3). The fed-chunk loop makes the duration harmless, so this is
     curiosity with a payoff only if verify time ever matters (fleet-scale
-    OTA windows, or a Phase S device that hashes more often): profile whether
+    OTA windows): profile whether
     the flash read path (driver overhead vs. a straight XIP memcpy) or the
     64-bit-arithmetic hash core dominates, and whether the RP2350's SHA-256
     accelerator plus a scheme change could collapse it. Wants a bench probe
@@ -981,12 +981,10 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     scoreboard participate in the house's smart home — the obvious shapes are
     Home Assistant discovery, MQTT state/command topics (power, brightness,
     current game), or both, and the right one is a design conversation before
-    it is a crate choice. Worth deciding alongside Phase S planning, since
-    both add always-on outbound connections to the same radio and RAM budget.
-    DECIDED in part (owner, 2026-08-16, Phase S kickoff): Phase S reserves
-    the headroom — ~1 socket + 10–15 KB unspoken-for after it lands, folded
-    into item 94's re-earn target — and the design conversation itself stays
-    deferred. See `firmware-rs/PHASE-S-CHECKLIST.md`.
+    it is a crate choice. It adds always-on outbound connections to the same
+    radio and RAM budget the poller uses. DECIDED in part (owner, 2026-08-16):
+    its headroom is reserved — ~1 socket + 10–15 KB, folded into item 94's
+    re-earn target — and the design conversation itself stays deferred.
 
 92. **Sensor and input state in the frontend.** Surface what the hardware
     already knows on the settings SPA: the VEML7700's live lux reading (and
@@ -1014,46 +1012,27 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     product levers (Store fold 2,848 B, crest pool halving 18,432 B) were
     priced and deliberately NOT taken. Residual: headroom beyond the 40 %
     floor is 14,544 B, which covers item 91's smarthome reservation at the
-    10 KB reading and is 816 B short at 15 KB — and `ram-exec` at S3 would
-    want 5-10 KB more. If either forces a lever, the Store fold is the
-    cheapest but couples the state machine to the cross-core channel
-    (BUDGET's own caution); the ring log at 200 slots (28,812 B) is the
-    biggest untouched line whose size is a product choice. Decide when S3
-    prices ram-exec, not before.
-
-95. **Browser-seeded timezone (owner proposal, 2026-08-16).** The settings
-    SPA runs on a device that lives in the scoreboard's own household, so let
-    it answer the question ESPN never can: on load, client JS posts the
-    timezone in the background and the Pico stores it. One refinement makes
-    it robust across sparse visits: post an offset *schedule*, not a bare
-    offset — current UTC offset, the instant of the next DST transition, and
-    the offset after it (all computable client-side by probing `Date` over
-    the coming months). The Pico stores three numbers and flips at the
-    timestamp, no tz database aboard, and every visit refreshes the horizon.
-    Write to storage only when the values changed (flash discipline);
-    last-writer-wins is fine for a household device. Today the backend's
-    GeoIP `/time` answers this, so the item is not urgent — it is the Phase S
-    answer, replacing both the MaxMind dependency and the manual-dropdown
-    fallback PHASE-S.md proposed.
+    10 KB reading and is 816 B short at 15 KB. If that forces a lever, the
+    Store fold is the cheapest but couples the state machine to the
+    cross-core channel (BUDGET's own caution); the ring log at 200 slots
+    (28,812 B) is the biggest untouched line whose size is a product choice.
+    Decide when item 91 is designed, not before.
 
 96. **Parse-perf follow-ups after the tokenizer lever landed (2026-08-17
     afternoon).** The SWAR scan was pulled and validated (fork branch
     `perf/tokenizer-swar-scan`: `ca799df` + the `ram-exec` feature
     `8fb8a76`, stacked on the batched drive; pushed 2026-08-17 evening) — host
     3.1×, silicon 1.3–2.5× with `ram-exec`, full story and tables in
-    `firmware-rs/PARSE-PERF.md`. What remains in its orbit:
+    `firmware-rs/PARSE-PERF.md` (history: the on-device parse went with
+    direct mode on 2026-11-08, and `ram-exec` for the firmware with it).
+    What remains in its orbit:
     (a) ~~push the fork branches upstream~~ DONE 2026-08-17 evening (PR
     #99 stacked on #98; SWAR offered as follow-up; ram-exec held — item
-    97); the `[patch.crates-io]` git pins (root + bench) move to a release
-    when one carries the fixes;
-    (b) **decide `ram-exec` for the real firmware at S3 integration** —
-    ~5–10 KB of RAM buys 1.3–2.5× parse and kills the ±30% XIP layout
-    lottery the bench exposed; it is a BUDGET.md line, owner's call;
-    (c) the FCS missing-`alternateColor` events that drop real games from
-    the college board (a fallback color would show them — behavior change,
-    owner's call). Related instrument: item 87 (the RP2350 keeps teaching
-    that per-unit overhead — now instruction fetch — dominates streaming
-    loops).
+    97); the root `[patch.crates-io]` git pin moves to a release when one
+    carries the fixes;
+    (b) the FCS missing-`alternateColor` events that drop real games from
+    the college board — live, since the backend runs the same extractor (a
+    fallback color would show them — behavior change, owner's call).
 
 97. **Open-source stewardship ledger (owner-requested, 2026-08-17).** What
     this project carries from the community and what it owes back, kept
@@ -1067,16 +1046,7 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     in the upstream stack: it expands API surface, so gauge interest with an
     issue after the perf PRs land rather than growing the stack.
     *Standing debts:* drop `[patch.crates-io]` pins when releases land —
-    picojson (root `Cargo.toml` + `firmware-rs/bench`) after a release
-    carries #98/#99; embedded-tls (`firmware-rs/tls-spike`, fork
-    `dgrantpete/embedded-tls` `port/der-0.8-stable`) after a release
-    carries their PR #196 AND a reqwless release accepts it — our der fix
-    duplicates #196 (found before filing, rule below), and our second
-    commit (advertise RSA sigalgs unconditionally, the fix that makes
-    no-verify clients work against ESPN's RSA edge) is a behavior change:
-    open an ISSUE upstream to gauge it, don't lead with a PR. Also
-    flag-only from that lane: their openssl dev-dep blocks `cargo test`
-    on vcpkg-less Windows, a possible QoL PR. picoserve
+    picojson (root `Cargo.toml`) after a release carries #98/#99; picoserve
     (`firmware-rs/app`) after the next release
     (upstream fixed the select duplication independently on development,
     47be022 — no PR owed there, and the near-miss is the lesson: **check the
@@ -1109,17 +1079,6 @@ archived legacy art via the aseprite-io harness (repos/aseprite-io-feasibility,
     bench before any fielded device takes it. Targeting a single friend's
     unit wants `X-Device-Id` on the events request (today only `/fw/*` sends
     it).
-100. **Delete the Phase S direct-to-ESPN code from main (owner, 2026-10-01:
-    "the version with the explicit backend won out").** Backend mode is the
-    only supported mode; nothing maintains direct mode any more. Remove the
-    `scoreboard-direct` crate, the app's `direct` feature and everything gated
-    on it (SNTP fetch swap, direct crest fetch), and the direct-only surface of
-    `scoreboard-espn` (`crest_url`/combiner, `DirectExtract` plumbing) — keep
-    what the backend uses (the extractors, `crest_path`, `dark_crest_path`).
-    Then archive the `phase-s` branch and mark PHASE-S*.md / S3-DESIGN.md as
-    history. `png-stream` and the picojson/embedded-tls forks go if nothing
-    else needs them. Until then, treat that code as frozen: no adaptation work
-    (e.g. dark crests stay backend-only).
 101. **Back off the link-silence reset when the internet, not the Wi-Fi, is
     down (2026-10-14).** Since the health gate became mandatory on fleet
     builds (item 69's 2026-10-14 note), a unit whose router is up but whose

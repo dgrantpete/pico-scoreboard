@@ -1,5 +1,11 @@
 # scoreboard-espn — the shared ESPN transform (Phase S1)
 
+> **The backend is this crate's only consumer.** The firmware's direct feed
+> (S3), which parts of this design were written for, was deleted from `main`
+> on 2026-11-08 with the rest of Phase S (code at the git tag
+> `archive/phase-s`). Where this document speaks of the device, S3 or S4,
+> read it as history; the parity contract and the rulings are live.
+
 Written 2026-08-16 by the S1 orchestrator, before any implementation. This
 is the design the lanes build against; deviations go through the
 orchestrator. Strategy context: `firmware-rs/PHASE-S.md`; tracker:
@@ -7,9 +13,9 @@ orchestrator. Strategy context: `firmware-rs/PHASE-S.md`; tracker:
 
 ## What this crate is
 
-One `no_std` implementation of the ESPN-JSON → game-model transform, shared
-by the backend (today) and the firmware's direct feed (S3) — the same move
-`scoreboard-wire` made for the wire format in Phase 0. The ESPN-specific
+One `no_std` implementation of the ESPN-JSON → game-model transform, used by
+the backend (it was `no_std` so the firmware's direct feed could share it,
+the move `scoreboard-wire` made for the wire format in Phase 0). The ESPN-specific
 knowledge lives in one declarative const path table per sport plus the
 semantic mapping around it; everything else is a small streaming engine.
 
@@ -59,14 +65,10 @@ raw-ESPN-shaped. Two consumers:
   `wire.rs`, handlers, and DTOs unchanged; per-sport serde `types.rs` is
   deleted. Lenient parsing is preserved by the engine's skip-unknown
   default plus per-field Option/default rules from the inventory.
-- **Firmware (S3)**: `impl Extract { pub fn as_game(&self) -> wire::Game<'_> }`
-  — a borrowed wire-shaped view over the extract's own storage, so `Store`
-  and `GameDetail` are untouched. `GameFeed::detail(&[u8])` is *not*
-  implemented by the direct path (a 300–450 KB streamed body never exists
-  as a slice); the extract struct + `as_game()` IS the seam. Recorded for
-  S4: when the wire codec is deleted on `phase-s`, the `Game` struct
-  *definitions* should be re-homed (wire = codec dies, vocabulary
-  survives) rather than rewriting `Store` — decide there, not here.
+- **The wire view**: `impl Extract { pub fn as_game(&self) -> wire::Game<'_> }`
+  — a borrowed wire-shaped view over the extract's own storage, which the
+  backend encodes. It was designed as the firmware's (S3) seam, so `Store`
+  and `GameDetail` would be untouched; that consumer is gone.
 
 Streaming forbids borrowing from the receive buffer, so every extracted
 value is copied into the extract immediately — the discipline PHASE-S.md
@@ -106,16 +108,15 @@ The implementer owns the mechanism; these are the contract:
 
 ## Decisions recorded here so nobody relitigates them mid-lane
 
-- **Soccer commentary**: direct mode fetches the per-event summary for live
-  soccer, streamed like everything else (~450 KB is a non-issue streamed;
+- **Soccer commentary**: the per-event summary is fetched for live soccer
+  (by direct mode, as designed; by the backend, as built), streamed like
+  everything else (~450 KB is a non-issue streamed;
   the CPU is ~30 ms). The soccer lane's tables cover both the scoreboard
   event and the summary's commentary paths. (Owner may veto; recorded in
   the checklist as resolved-by-design.)
 - **Numbers**: picojson default features (`int64` + `float`). ESPN encodes
   many numerics as JSON strings; per-field handling comes from the
   inventory, and `Value::Num` hands the sink raw text so nothing is lost.
-- **One table serves both deployments.** No device-side feature-gating of
-  DTO-only fields in S1; revisit at S3 only if a field measurably hurts.
 
 ## Rulings (2026-08-16, after the football + NBA inventories)
 
@@ -158,8 +159,7 @@ a set of cross-sport questions. Answered here once so no lane relitigates:
 7. **Behavior changes are out of scope, all of them.** Line-score period
    gaps, NFL tie-record drops, OT phase labels, absent-vs-explicit-null
    leniency, device-side bad-color policy: S1 reproduces today's behavior
-   bit for bit; each becomes a BACKLOG candidate for the owner. (Device
-   error *policy* is S3's layer anyway.)
+   bit for bit; each becomes a BACKLOG candidate for the owner.
 8. **`is_college` is a call parameter** of the football extractor, not a
    table row; conditional logic gates in the sink.
 9. **The parity oracle is the existing golden harness.**
@@ -185,8 +185,7 @@ Added after the MLB + soccer inventories, same day:
     today); the chrono property test covers those forms explicitly.
 13. **Extractors report ok/failed event counts**, because
     `find_event`'s 404-vs-502 rule (a glitched scoreboard must never look
-    like "game ended") needs the failure count — on the backend today and
-    on the device at S3. And every sport lane must pin the tie-break
+    like "game ended") needs the failure count. And every sport lane must pin the tie-break
     semantics with named tests: `max_by`/`max_by_key` keep the LAST of
     equal maxima, sorts are stable — the soccer goldens encode both, so a
     fold-based max or `sort_unstable` silently breaks bytes.
@@ -358,7 +357,7 @@ relitigates it:
   without a summary, so a degraded poll flashes less, never more. The
   filter is applied where the scoreboard play is built, so `Live::last_play`
   is already the filtered play and no unfiltered copy exists for the wire
-  view, the backend's JSON DTO or direct mode to disagree over (phase 6.3
+  view or the backend's JSON DTO to disagree over (phase 6.3
   re-blessed every golden under it; the gift fleet's level-0 payload flashes
   timeouts-and-news too, NBA.md §3.7). Trailing whitespace is trimmed at the
   wire view (the defensive three-seconds technical's text ends in a

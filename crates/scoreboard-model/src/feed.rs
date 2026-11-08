@@ -1,9 +1,8 @@
 //! The data-source seam.
 //!
 //! Everything upstream of the state machine reaches it through [`GameFeed`].
-//! The parity firmware supplies [`WireFeed`], which decodes the backend's
-//! packed format; Phase S's direct-to-ESPN fallback supplies its own
-//! implementation and this crate does not change (SPEC §13). The trait is
+//! The firmware supplies [`WireFeed`], which decodes the backend's packed
+//! format — the backend is the only data path (SPEC §13). The trait is
 //! deliberately about *decoding bytes into games*, not about fetching: URLs,
 //! ETags, sockets and retry policy stay in the app, where the I/O is.
 

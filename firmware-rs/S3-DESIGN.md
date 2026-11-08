@@ -1,5 +1,10 @@
 # S3 — the direct feed: design and lane plan
 
+> **History only.** Direct-to-ESPN mode (Phase S) was deleted from `main` on
+> 2026-11-08 (BACKLOG 100); the backend is the only data path. The code this
+> document describes is preserved at the git tag `archive/phase-s`. Nothing
+> here describes the current tree or a live plan.
+
 Written 2026-08-18, the night S2's numbers landed and the owner called for
 code completion to pixels. This is the working design for S3
 (PHASE-S-CHECKLIST.md is the tracker; this file is the how). House rules

@@ -976,7 +976,12 @@ by SWD snapshots of the defmt ring plus `/api/status` polling.
 - **Download-to-confirmed, end to end: ~132 s** (35 download + 11 verify +
   5 countdown + 41 dark + ~30 trial-to-confirm).
 
-## Phase S2 — what TLS 1.3 actually costs, measured 2026-08-17 night
+## Phase S2 — what TLS 1.3 actually costs, measured 2026-08-17 night (history)
+
+History: direct mode (Phase S) was deleted from `main` on 2026-11-08, and the
+spike with it (preserved at the git tag `archive/phase-s`); where this
+section says S3, nothing follows. The receive-window finding still holds for
+any bulk transfer through `api_client` (BACKLOG 99 leans on it).
 
 `firmware-rs/tls-spike` (standalone, bench pattern) on the seated unit's
 RP2350 over real Wi-Fi: embedded-tls via reqwless, `TlsVerify::None` (the

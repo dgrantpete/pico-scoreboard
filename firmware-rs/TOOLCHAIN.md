@@ -315,7 +315,8 @@ The release profile keeps `debug = 2` for probe-rs, so `size -A` also lists
 
 ## On-silicon benchmarking — the XIP layout noise floor
 
-Learned 2026-08-17 (full story in `PARSE-PERF.md`): code executes from flash
+Learned 2026-08-17 on direct mode's parse bench (full story in `PARSE-PERF.md`,
+now history; the bench is at the tag `archive/phase-s`): code executes from flash
 through a 16 KB XIP cache, so when a benchmark's hot path overflows that
 cache, its speed depends on where the linker happened to place things. Two
 builds of **identical** hot code — the second differed only by an unrelated
@@ -328,12 +329,12 @@ The discipline that follows:
   Believe a cross-build comparison only when the direction is consistent
   across many lanes/bodies, or when one of the remedies below is in play.
 - **Remedies**: compile both variants into one binary and A/B within it
-  (the bench's `RAMSRC`/`CTRL` sections are the pattern); or take the hot
+  (the parse bench's `RAMSRC`/`CTRL` sections were the pattern); or take the hot
   loop out of the lottery by executing it from SRAM (`.data` placement —
   picojson's `ram-exec` feature is the worked example, ~4.6 KB RAM per
   monomorphization for 1.3–2.5× and stable numbers).
 - **The floor scales with overflow.** A loop that fits comfortably in 16 KB
   (the HUB75 driver) won't see this; a 30–40 KB monomorphized pipeline
-  (streaming parse, and almost certainly S2's TLS handshake crypto) will.
+  (streaming parse, TLS handshake crypto) will.
   Estimate the hot footprint (`nm --print-size --size-sort`) before trusting
   any single-digit-percent conclusion about it.

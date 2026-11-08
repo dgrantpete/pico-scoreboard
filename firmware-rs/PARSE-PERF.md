@@ -1,5 +1,13 @@
 # Parse performance — measured reality, the batched drive, and the lever still on the table
 
+> **History only.** Direct-to-ESPN mode (Phase S) was deleted from `main` on
+> 2026-11-08 (BACKLOG 100); the backend is the only data path. The code this
+> document describes is preserved at the git tag `archive/phase-s`. Nothing
+> here describes the current tree or a live plan.
+>
+> The on-device parse it measured was direct mode's; the backend parses on
+> the server. The XIP-layout lesson outlived it and lives in TOOLCHAIN.md.
+
 Written 2026-08-17, the morning after the owner's benchmark-everything
 night. This is the onboarding document for anyone (human or agent) picking
 up on-device parsing performance: what was measured, what was already

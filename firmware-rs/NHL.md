@@ -23,7 +23,8 @@ collector → corpus → `scoreboard-espn` extractor → `scoreboard-wire` →
 backend routes → `scoreboard-model` → `scoreboard-render` → config / input /
 app poller → frontend → mock/staging → docs. The Rust firmware is the only
 firmware that gets hockey (the MicroPython tree is frozen), and the backend is
-the only data path (the Phase S direct mode is legacy — BACKLOG 100).
+the only data path (the Phase S direct mode was legacy then, and was deleted
+on 2026-11-08).
 
 Out of scope: college hockey, AHL/PWHL (the league registry shape in §6.4
 leaves room), and the MicroPython gift fleet (§1 D7).
@@ -639,7 +640,7 @@ snapshot anchors and the wall rail; no renderer state.
   that fails when a tenth is registered: NHL on by default would otherwise
   have pushed a fully configured unit's World Cup out of rotation. `probe.rs`
   mode names; crest pool unchanged.
-- No `scoreboard-direct` work: direct mode is legacy (BACKLOG 100).
+- No `scoreboard-direct` work: direct mode was legacy (deleted 2026-11-08).
 
 ### 6.7 Frontend — done 2026-10-15
 `SportsCard.svelte`: an NHL row in `ENABLED_SPORTS`, rendered only when

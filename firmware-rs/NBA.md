@@ -30,7 +30,7 @@ existing endpoint) → backend routes (the summary fetched for live games) →
 `scoreboard-model` → `scoreboard-render` (the court, the leaders final) →
 mock/staging → docs. The Rust firmware is the only firmware that gets the
 new screens (the MicroPython tree is frozen; it keeps decoding the frozen
-NBA layout, D9), and the backend is the only data path (BACKLOG 100).
+NBA layout, D9), and the backend is the only data path.
 
 Out of scope: WNBA and college basketball (BACKLOG 51 keeps WNBA; the
 league registry shape leaves room), the lead chart (layout C, not chosen),

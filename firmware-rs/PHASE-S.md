@@ -1,5 +1,10 @@
 # Phase S — direct-to-ESPN standalone mode: feasibility notes
 
+> **History only.** Direct-to-ESPN mode (Phase S) was deleted from `main` on
+> 2026-11-08 (BACKLOG 100); the backend is the only data path. The code this
+> document describes is preserved at the git tag `archive/phase-s`. Nothing
+> here describes the current tree or a live plan.
+
 Written 2026-08-08, the night the Rust firmware became the daily driver, after
 the owner asked whether the moonshot was real. Verdict: **feasible — roughly
 two Phase-2-sized efforts, and every seam it needs already exists.** These

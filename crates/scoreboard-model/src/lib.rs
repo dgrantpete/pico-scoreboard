@@ -13,8 +13,7 @@
 //! - [`Slate`] — the merged games list and the live-first rotation over it,
 //!   and [`WarmIndex`] over the top of it: which crest an idle poller should
 //!   fetch next, so a skip lands on a game whose logos are already in the pool.
-//! - [`GameFeed`] — the one seam upstream data arrives through, so Phase S's
-//!   direct-to-ESPN mode plugs in without touching this crate.
+//! - [`GameFeed`] — the one seam upstream data arrives through.
 //!
 //! No hardware, no embassy, no allocator: everything here is `core` plus
 //! `heapless`, and every rule is exercised by host tests.

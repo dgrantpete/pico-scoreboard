@@ -24,7 +24,7 @@ with hardware forced, and those corrections are the point.
 
 ### Non-goals (for the parity release)
 
-- Direct-to-ESPN standalone mode and the streaming PNG decoder. These are Phase S (§14) and must not leak requirements into the parity design beyond the seams noted there.
+- Direct-to-ESPN standalone mode and the streaming PNG decoder. These were Phase S (§13), which was dropped and deleted from `main`; the backend is the only data path.
 - Matter/HomeKit integration (bridged via Home Assistant per existing plan; no device-side work).
 - Backend changes beyond: (a) consuming the shared wire crate, (b) serving signed whole-image OTA artifacts (§8).
 - Supporting the original RP2040 Pico W. RP2350-only simplifies flash/boot decisions.
@@ -56,8 +56,7 @@ pico-scoreboard/
 │   ├── scoreboard-config/    # no_std. The config document, its merge and its invariant
 │   ├── scoreboard-log/       # no_std. The RAM ring, and the crash breadcrumb's encoding
 │   ├── scoreboard-portal/    # no_std. Captive-portal DNS answers + the Host check
-│   ├── hub75/                # no_std. The driver: PIO programs, BCM, DMA chaining
-│   └── png-stream/           # (Phase S) no_std streaming PNG→sprite decoder
+│   └── hub75/                # no_std. The driver: PIO programs, BCM, DMA chaining
 ├── firmware-rs/
 │   ├── boot/                 # embassy-boot bootloader binary
 │   ├── layout/               # scoreboard-layout: flash/RAM constants, THE source.
@@ -413,15 +412,15 @@ embassy-boot, on published `2026.08.16-108bc85` off the `stable` channel, and
 the ≥ 2-week soak Phase 4's exit criterion asks for started that day. The
 MicroPython firmware is no longer *a* shipping firmware on that unit; it is
 still the gift fleet's, served by the backend's untouched `/app/*` surface,
-which §8 says is deleted the day the last gift unit migrates. Phase S has not
-started.
+which §8 says is deleted the day the last gift unit migrates. Phase S was
+started afterwards and then dropped (the bullet below).
 
 - **Phase 0 — Wire crate (pure win, do immediately).** Extract `scoreboard-wire`, backend consumes it, round-trip tests against `testdata/`, delete `wire_format_check.py`. *Exit: backend deployed on shared crate, zero wire diffs.*
 - **Phase 1 — `hub75` crate.** PIO + PAC-level DMA + BCM on real hardware; simulator feature; test patterns, brightness, timing probes. *Exit: stable 20 FPS test animation, timings ≥ parity with MicroPython driver, budget lines measured.*
 - **Phase 2 — Render stack on host.** `scoreboard-model` + `scoreboard-render` + fonts build pipeline; golden-image parity harness over the full testdata corpus. *Exit: pixel-parity (or reviewed-and-accepted diffs) across all sports/states — no hardware involved.*
 - **Phase 3 — App shell on device.** Wi-Fi/provisioning/captive portal, picoserve + SPA, reqwless poller, storage, inputs, brightness, supervision. First end-to-end live game on Rust. *Exit: feature-parity checklist against the MicroPython firmware, one week of continuous soak on the dev unit.*
 - **Phase 4 — Boot + OTA.** embassy-boot integration, partition layout, backend signing + endpoints, kill-and-rollback drills (pull power mid-write; ship a deliberately-broken image and watch it revert). *Exit: three consecutive successful OTA cycles + one induced rollback on the dev unit; then a ≥ 2-week soak before any gift unit is migrated.* **Met 2026-08-16** — all eight steps of DRILL.md were run on the seated unit, the measured numbers are BUDGET.md's "Drill day" section, and five firmware bugs were found and fixed in the running (the watchdog contract, the blocking DFU hash, the breadcrumb's address, the mid-trial status repaint, and the two-connection HTTP pool). The soak is running.
-- **Phase S — Stretch (separately scoped):** `png-stream` crate (streaming inflate → box-downsample → sprite), direct-ESPN degraded fallback mode. Explicitly out of parity scope; only constraint on earlier phases: the poller's data-source trait should not hard-code "backend" in `scoreboard-model` (keep the source behind one interface so S plugs in).
+- **Phase S — Stretch, dropped (history).** A direct-to-ESPN mode with no backend: the firmware streaming ESPN's JSON through `scoreboard-espn` itself, a `png-stream` crate for crests, SNTP for the clock, and TLS spiked with embedded-tls. S0–S2 landed and S3 was partly integrated behind the app's `direct` feature, until the owner decided on 2026-10-01 that the backend is the only data path ("the version with the explicit backend won out"). It was deleted from `main` on 2026-11-08; the code is preserved at the git tag `archive/phase-s`, and `PHASE-S.md`, `PHASE-S-CHECKLIST.md`, `PHASE-S-KICKOFF.md`, `S3-DESIGN.md` and `PARSE-PERF.md` are its history. What outlived it: `scoreboard-espn`, which the backend uses for every sport, and the browser-seeded timezone (`app/src/timezone.rs`).
 
 Deliberate deviation from "smallest first": Phase 1 front-loads the riskiest hardware work so any nasty surprise arrives before the mechanical bulk is invested.
 
@@ -459,20 +458,13 @@ caller-owned?* — `n/a` means the crate holds no runtime buffer at all.
 | `embedded-storage` | =0.3.1 | scoreboard-app | yes | yes | caller | `NorFlash`, for the one flash handle `storage` lends to both the config map and the firmware updater. Traits only. |
 | `embassy-net` `multicast` | =0.9.1 | scoreboard-app | yes | yes | — | Feature, not a crate: smoltcp group membership, so the interface accepts `224.0.0.251`. Without it `net::mdns` binds and receives nothing, which looks exactly like "no queries are arriving". |
 
-**Phase S0 addition (audited 2026-08-16; not yet in a lockfile — first
-consumer is S1's transform crate)**
+**Phase S0 addition (audited 2026-08-16). Phase S is gone; its transform
+crate, `scoreboard-espn`, is the backend's, and this row is now that
+crate's**
 
 | Crate | Ver | Used by | no_std | no-alloc | Buffers | Notes |
 |---|---|---|---|---|---|---|
-| `picojson` | =0.2.3 + PR #98 | Phase S transform crate (S1+) | yes | yes | caller | Streaming JSON tokenizer; the `PushParser` (SAX push — the shape network chunks want). `no_std` checked from a `#![no_std]` consumer on `thumbv8m.main-none-eabihf`; the only `Vec` in the source is test code. Zero deps in the default feature set; ships a `defmt` feature. **Split-resumability proven, not claimed**: `repos/picojson-feasibility` compares whole-parse vs 1-byte-feed vs random chunkings over the full `backend/testdata/` corpus, plus every two-chunk split of escape/surrogate/UTF-8/number nasties — identical event streams; scratch overflow is a clean `Err`. **Adoption is conditional on the `'input`-lifetime fix** ([picojson-rs#97](https://github.com/kaidokert/picojson-rs/issues/97), [PR #98](https://github.com/kaidokert/picojson-rs/pull/98)): 0.2.3 rejects chunks fed from a reused receive buffer. Until the PR lands in a release, pin the fork by rev via `[patch.crates-io]` (`dgrantpete/picojson-rs`, branch `push-parser-per-call-input`), validated by `picojson-feasibility/patched-check` — full corpus through a reused 4 KB buffer at chunk sizes 1/7/1379/4096. Fuzzing upstream is thin ("experimental" label); mitigations: the crate is ~20 small readable files, our suite pins the behavior we depend on, and the write-our-own fallback stays priced in PHASE-S.md. |
-
-**Phase S additions (audited 2026-08-17, png-stream lane; verified from
-pinned source, not README)**
-
-| Crate | Ver | Used by | no_std | no-alloc | Buffers | Notes |
-|---|---|---|---|---|---|---|
-| `miniz_oxide` | =0.8.9 | png-stream | yes | yes | caller | `default-features = false` drops `with-alloc`; what remains is the tinfl inflate state machine with every buffer caller-owned: `DecompressorOxide` (≈10.5 KiB) lives in png-stream's `Scratch`, the LZ77 window is the caller's 32 KiB ring, input is the caller's slice — `inflate::core::decompress` touches no memory it was not handed. `no_std` gated on `not(std) && not(serde)`, both off; the sole `extern crate alloc` is behind `with-alloc` (off) — verified by grep of the pinned source and `cargo check` on `thumbv8m.main-none-eabihf`. The same call validates the zlib adler32 over the decompressed pixels, which is why png-stream can skip PNG chunk CRCs (module-doc decision) without losing end-to-end pixel integrity. Already in the root lockfile via the backend's `flate2` — no new resolution surface. |
-| `adler2` | =2.0.1 | png-stream (via miniz_oxide) | yes | yes | n/a | Pulled `default-features = false` by miniz_oxide; `no_std`, zero dependencies, pure rolling checksum. Also already in the root lockfile. |
+| `picojson` | =0.2.3 + PR #98 | scoreboard-espn (the backend's transform) | yes | yes | caller | Streaming JSON tokenizer; the `PushParser` (SAX push — the shape network chunks want). `no_std` checked from a `#![no_std]` consumer on `thumbv8m.main-none-eabihf`; the only `Vec` in the source is test code. Zero deps in the default feature set; ships a `defmt` feature. **Split-resumability proven, not claimed**: `repos/picojson-feasibility` compares whole-parse vs 1-byte-feed vs random chunkings over the full `backend/testdata/` corpus, plus every two-chunk split of escape/surrogate/UTF-8/number nasties — identical event streams; scratch overflow is a clean `Err`. **Adoption is conditional on the `'input`-lifetime fix** ([picojson-rs#97](https://github.com/kaidokert/picojson-rs/issues/97), [PR #98](https://github.com/kaidokert/picojson-rs/pull/98)): 0.2.3 rejects chunks fed from a reused receive buffer. Until the PR lands in a release, pin the fork by rev via `[patch.crates-io]` (`dgrantpete/picojson-rs`, branch `push-parser-per-call-input`), validated by `picojson-feasibility/patched-check` — full corpus through a reused 4 KB buffer at chunk sizes 1/7/1379/4096. Fuzzing upstream is thin ("experimental" label); mitigations: the crate is ~20 small readable files, our suite pins the behavior we depend on, and the write-our-own fallback stays priced in PHASE-S.md. |
 
 **Evaluated and rejected**
 
@@ -565,16 +557,13 @@ pinned source, not README)**
 | `libm` | =0.2.16 | scoreboard-input | yes | yes | n/a | `logf`, for the log-scale lux curve. Already in the graph under `hub75`. |
 | `fixed` | =1.30.0 | scoreboard-app | yes | yes | n/a | The PIO clock divider's 16.8 fixed-point type. embassy-rp takes it by value in `pio::Config` and does not re-export the crate; already in the graph under embassy-rp and cyw43-pio. |
 
-**Still unpinned** — audit when it lands. The other two rows this table used to
-carry have both been resolved: `embassy-boot-rp` is pinned at `=0.10.0` in the
-Phase 4 block above, and `flip-link` is **in use** for `firmware-rs/app` (the
-`_stack_start` below the statics is the check; TOOLCHAIN.md has the command).
-`hub75-diag` still links plain, which is BACKLOG 64 and deliberate — a bench
-binary with one shallow task and no real task stacks to guard.
-
-| Crate | Ver | Phase | Notes |
-|---|---|---|---|
-| `png-stream` deps | not yet pinned | S | Out of parity scope |
+**Still unpinned** — nothing. Every row this table used to carry is resolved:
+`embassy-boot-rp` is pinned at `=0.10.0` in the Phase 4 block above,
+`flip-link` is **in use** for `firmware-rs/app` (the `_stack_start` below the
+statics is the check; TOOLCHAIN.md has the command), and the `png-stream` deps
+left with that crate when Phase S was deleted (2026-11-08). `hub75-diag` still
+links plain, which is BACKLOG 64 and deliberate — a bench binary with one
+shallow task and no real task stacks to guard.
 
 **The AP-mode DHCP server — decision record.** embassy-net has a DHCP *client*
 and no server, and MicroPython got a server for free: `network.WLAN(AP_IF)

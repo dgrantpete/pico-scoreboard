@@ -1,5 +1,10 @@
 # Phase S kickoff — orientation for the team taking this on
 
+> **History only.** Direct-to-ESPN mode (Phase S) was deleted from `main` on
+> 2026-11-08 (BACKLOG 100); the backend is the only data path. The code this
+> document describes is preserved at the git tag `archive/phase-s`. Nothing
+> here describes the current tree or a live plan.
+
 Written 2026-08-16, the day the OTA drill closed Phase 4 and the owner asked
 for this handoff. You are building **direct-to-ESPN standalone mode**: the
 device talks to `site.api.espn.com` itself — TLS, streaming JSON, logo PNGs —

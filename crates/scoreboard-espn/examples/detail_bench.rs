@@ -1,7 +1,6 @@
-//! Host A/B timing for the extraction paths the on-silicon bench exercises:
-//! list and detail (first/last target) over one real body, socket-shaped
-//! 4 KB chunks. Exists to attribute device-bench deltas to code, not
-//! silicon: run it against two picojson checkouts and compare.
+//! Host A/B timing for the football extraction paths: list and detail
+//! (first/last target) over one real body, socket-shaped 4 KB chunks. Run
+//! it against two picojson checkouts and compare.
 //!
 //! Usage: detail_bench <body.json> <first_id> <last_id> [--college] [iters]
 
