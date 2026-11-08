@@ -69,6 +69,7 @@
 //! when the surface was RGB565.
 
 pub mod blit;
+pub mod count_dot;
 pub mod court;
 pub mod event;
 pub mod font;
@@ -76,6 +77,7 @@ pub mod frame;
 pub mod game;
 pub mod generated;
 pub mod geometry;
+pub mod inning_arrow;
 pub mod menu;
 pub mod prepared;
 pub mod qr;
