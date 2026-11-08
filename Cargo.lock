@@ -1694,14 +1694,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "png-stream"
-version = "0.1.0"
-dependencies = [
- "miniz_oxide",
- "png",
-]
-
-[[package]]
 name = "potential_utf"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2142,17 +2134,6 @@ dependencies = [
  "scoreboard-render",
  "serde",
  "serde-json-core",
-]
-
-[[package]]
-name = "scoreboard-direct"
-version = "0.1.0"
-dependencies = [
- "heapless 0.9.3",
- "scoreboard-espn",
- "scoreboard-model",
- "scoreboard-wire",
- "serde_json",
 ]
 
 [[package]]

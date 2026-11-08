@@ -45,9 +45,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY backend/Cargo.toml backend/
 COPY crates/hub75/Cargo.toml crates/hub75/
-COPY crates/png-stream/Cargo.toml crates/png-stream/
 COPY crates/scoreboard-config/Cargo.toml crates/scoreboard-config/
-COPY crates/scoreboard-direct/Cargo.toml crates/scoreboard-direct/
 COPY crates/scoreboard-espn/Cargo.toml crates/scoreboard-espn/
 COPY crates/scoreboard-input/Cargo.toml crates/scoreboard-input/
 COPY crates/scoreboard-log/Cargo.toml crates/scoreboard-log/
