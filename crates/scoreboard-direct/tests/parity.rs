@@ -27,6 +27,7 @@ use scoreboard_direct::{
 };
 use scoreboard_espn::common::IgnoreQuirks;
 use scoreboard_model::feed::{GameFeed, WireFeed};
+use scoreboard_wire::SliceSink;
 
 /// The poller's receive-buffer size (S3-DESIGN decision 6 grows the TLS
 /// window to 16 KB, but the app's chunk hand-off stays 4096) — the split the
@@ -135,6 +136,38 @@ fn found(feed: Feed, game_id: &str, body: &[u8], chunk: usize) -> DirectExtract 
     }
 }
 
+/// The direct view as the golden's level can carry it. The committed NBA
+/// goldens are level 0/1 — the `ext=2` groups (a final's leaders and records,
+/// a pregame's second line) came after them — so an NBA view is projected
+/// through a level-1 encode and decode, which the wire crate defines; the
+/// other sports have no levels and pass through. Phase 6.3 re-blesses every
+/// level, and this projection goes with it.
+fn at_golden_level<'a>(detail: GameDetail<'a>, buf: &'a mut [u8]) -> GameDetail<'a> {
+    match detail {
+        GameDetail::Nba(game) => {
+            let mut sink = SliceSink::new(buf);
+            scoreboard_wire::nba::encode_at(&game, 1, &mut sink).expect("the view fits");
+            let written = sink.written().len();
+            GameDetail::Nba(scoreboard_wire::nba::decode(&buf[..written]).expect("decodes"))
+        }
+        other => other,
+    }
+}
+
+/// The same goldens predate NBA.md §3.7's flash filter, which the view now
+/// applies to the scoreboard's `lastPlay`: a golden's play the extract judges
+/// ineligible is dropped from the decoded view before the comparison, and
+/// nothing else moves.
+fn apply_flash_filter(extract: &DirectExtract, wire: &mut GameDetail<'_>) {
+    if let (DirectExtract::Nba(extract), GameDetail::Nba(scoreboard_wire::nba::Game::Live(live))) =
+        (extract, wire)
+        && let scoreboard_espn::nba::Kind::Live(raw) = &extract.kind
+        && raw.flash().is_none()
+    {
+        live.last_play = None;
+    }
+}
+
 /// Every `{sport}/{fixture}` that has a committed golden.
 fn corpus() -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
@@ -159,7 +192,8 @@ fn every_golden_decodes_to_the_view_the_direct_path_extracts() {
     for (sport, name) in &corpus {
         let (id, body) = fixture_body(sport, name);
         let extract = found(feed_for(sport, name), &id, body.as_bytes(), CHUNK);
-        let direct = extract.detail();
+        let mut buf = [0u8; 4096];
+        let direct = at_golden_level(extract.detail(), &mut buf);
 
         // Direct mode reads everything ESPN sends, so it matches the richest
         // wire form: the `ext=1` golden where the sport defines one (the NBA
@@ -172,9 +206,10 @@ fn every_golden_decodes_to_the_view_the_direct_path_extracts() {
         };
         let golden =
             std::fs::read(&path).unwrap_or_else(|e| panic!("read golden for {sport}/{name}: {e}"));
-        let wire = WireFeed
+        let mut wire = WireFeed
             .detail(sport_for(sport), &golden)
             .unwrap_or_else(|e| panic!("decode golden for {sport}/{name}: {e:?}"));
+        apply_flash_filter(&extract, &mut wire);
 
         assert_eq!(
             direct, wire,
@@ -480,7 +515,8 @@ fn commentary_is_ignored_where_there_is_no_slot() {
         assert!(!extract.wants_commentary(), "{sport}/{name}");
 
         let golden = std::fs::read(golden_path(sport, name)).unwrap();
-        let wire = WireFeed.detail(sport_for(sport), &golden).unwrap();
+        let mut wire = WireFeed.detail(sport_for(sport), &golden).unwrap();
+        apply_flash_filter(&extract, &mut wire);
 
         let mut commentary = CommentaryExtract {
             id: heapless::String::new(),
@@ -490,8 +526,9 @@ fn commentary_is_ignored_where_there_is_no_slot() {
         commentary.text.push_str("ignored").unwrap();
         extract.set_commentary(Some(commentary));
 
+        let mut buf = [0u8; 4096];
         assert_eq!(
-            extract.detail(),
+            at_golden_level(extract.detail(), &mut buf),
             wire,
             "{sport}/{name}: commentary must not perturb a view with no slot"
         );

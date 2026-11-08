@@ -52,11 +52,13 @@ pub enum Quirk {
     /// cases (puck drop's empty goalie groups, `onIce` `[]` at a period
     /// start, the shootout).
     OnIceInsane,
-    /// Hockey: a final's `altDetail` disagrees with the label its period and
-    /// season kind derive (NHL.md §3.1). The derived label is served.
+    /// Hockey and NBA: a final's `altDetail` disagrees with the label its
+    /// period (and, for hockey, season kind) derives (NHL.md §3.1, NBA.md
+    /// §3.1). The derived label is served.
     FinalDetailMismatch,
-    /// Hockey: a `status.type.name` outside the five ESPN sends; the event
-    /// followed its `state` anyway (NHL.md §3.1).
+    /// Hockey and NBA: a `status.type.name` outside the ones ESPN sends for
+    /// the league; the event followed its `state` anyway (NHL.md §3.1,
+    /// NBA.md §3.1).
     UnknownStatusName,
     /// Hockey: a FINAL with tied scores — one of ESPN's flapping finals
     /// (NHL.md §2), served as stated.
@@ -67,6 +69,19 @@ pub enum Quirk {
     /// Hockey: a goal whose team matched neither competitor was dropped; the
     /// wire has no side for it.
     UnplaceableGoal,
+    /// NBA: the summary header's penalty state is impossible — `foulsToGive`
+    /// 0 beside fewer than two team fouls — which is the shape of ESPN's
+    /// one-poll ledger reset (NBA.md §3.3). The ledger is absent; the model
+    /// holds the previous one.
+    LedgerGlitch,
+    /// NBA: a made field goal got no mark on the court — no team, the
+    /// sentinel coordinate, or a team matching neither side (NBA.md §3.4).
+    /// It still counts in the score.
+    UnplacedMake,
+    /// NBA: a play's running scores moved in a way no single basket explains
+    /// — both sides rose, or a side fell — a correction; any run ends and
+    /// none starts (NBA.md §3.5).
+    RunCorrection,
 }
 
 /// Receives quirk events. Implemented by the callers, not the tables.

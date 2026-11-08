@@ -308,7 +308,7 @@ fn detail_pass(sport: &str, league: &str, body: &[u8], id: &str, stats: &mut Sta
             }) {
                 Ok(ex) => match ex.into_detail() {
                     Some(nba::DetailOutcome::Found(extract)) => {
-                        scoreboard_wire::nba::encode(&extract.as_game(), &mut wire)
+                        scoreboard_wire::nba::encode(&extract.as_game(None), &mut wire)
                             .expect("encode");
                         "Found".into()
                     }

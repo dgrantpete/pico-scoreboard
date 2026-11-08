@@ -323,6 +323,88 @@ lane, decided here so nobody relitigates it:
   placed attempt in either direction — strict alternation determines it —
   and is dropped only when there is none.
 
+## The NBA summary lane (2026-11-08, NBA.md phase 6.2)
+
+The NBA already had a scoreboard lane with a serde predecessor (the parity
+contract above still binds every v2 byte it writes); the court screens add
+a second document. What is specific to the lane, decided here so nobody
+relitigates it:
+
+- **Two documents, one combiner.** The scoreboard event feeds
+  `nba::Extractor` as before, its table grown by the fields §3.1 and
+  §3.7–3.9 read (`season.type`, `status.type.{name,altDetail}`,
+  `series.summary`, `notes[0].headline`, `lastPlay.type.id`, the
+  competitors' `leaders[*]`); the per-event summary feeds
+  `nba::SummaryExtractor`, for **live games only** (NBA.md D3: finals and
+  pregames come from the scoreboard alone). Both produce owned extracts and
+  `Extract::as_game(&self, Option<&Summary>)` borrows the wire view from
+  them; without a summary the view is the scoreboard alone, the `ext=2`
+  groups absent.
+- **The summary extractor takes a `SummaryContext`** built by
+  `Extract::summary_context()` — the scoreboard's state, nothing else. A
+  context that is not live makes the pass a no-op (an empty `Summary`), so
+  a final's 500 KB body is never read for live facts even when a caller
+  hands one over; §3's rules themselves depend on nothing the scoreboard
+  knows (the run survives period breaks, the makes carry their own side).
+- **Nothing new fails an event.** The added scoreboard fields have no
+  serde predecessor and only decorate, so like the betting lines (ruling
+  17) a wrong type reads as absent; the deserialize and transform tiers
+  are untouched, and the committed v2 goldens still bind. Nothing in a
+  summary fails a game.
+- **The flash is §3.7's filter at both sources.** The wire's `last_play` is
+  the scoreboard's `lastPlay` when its type is in the one pinned table
+  (`nba::FLASH_TYPES`: timeout, challenge and review outcomes, technicals,
+  flagrant), else the summary's newest eligible play, else none — with and
+  without a summary, so a degraded poll flashes less, never more. The
+  extract keeps the unfiltered play (`Live::last_play`) for the backend's
+  JSON DTO and exposes the filtered one as `Live::flash()`; the committed
+  level-0 goldens carry the unfiltered text, and `nba_extract.rs` splices
+  it back for the byte comparison until phase 6.3 re-blesses every level
+  under the filter. Trailing whitespace is trimmed at the wire view (the
+  defensive three-seconds technical's text ends in a newline).
+- **The summary table** reads `header.competitions[0].competitors[*]`
+  (`team.id`, `homeAway`, `fouls.{teamFoulsCurrent,bonusState,foulsToGive}`,
+  `timeoutsRemaining` — the ledger by `homeAway` and the one team-id → side
+  mapping every play resolves through, at finish), `plays[*]` (`id`,
+  `sequenceNumber`, `type.id`, `text`, `scoringPlay`, `scoreValue`,
+  `pointsAttempted`, `coordinate.{x,y}`, `team.id`, `awayScore`, `homeScore`,
+  `participants[0].athlete.id`), and `boxscore.players[*]` (`team.id`,
+  `statistics[0].names[*]` / `keys[*]`, `statistics[0].athletes[*].
+  {athlete.id,stats[*]}`). Plays fold as they close — the run walk, the
+  make ring, the newest scoring play, the flash candidate — and are never
+  buffered whole; the PTS column is found by name (`PTS`, else the key
+  `points`), never by position, and because `names` may stream after the
+  athletes every row keeps its numeric cells until finish.
+- **Document order is play order.** `plays[]` is chronological while
+  `sequenceNumber` is posting order and not monotone (late-posted review and
+  foul rows sit at their clock with higher numbers), so §3.4–3.6's "in
+  order" is the array's. `seq` is the news key and nothing else.
+- **A step no single basket explains is a correction** (§3.5): both sides
+  rising, or a side falling — the corpus has the latter, two stale rows in
+  ORL@GS after the tying putback — ends the run with `Quirk::RunCorrection`
+  and starts none; the next clean step starts fresh.
+- **Bounds** (each documented at its constant, overflow degrades): the make
+  ring keeps the newest `MAX_MAKES` = 128 (the wire's cap) as a ring, never
+  every play; `ATHLETES_PER_TEAM` = 18 boxscore rows per team (fifteen
+  contracts and three two-way players), a nineteenth is
+  `Quirk::BoundedOverflow` and unlisted; `STAT_COLUMNS` = 16 numeric cells
+  per row (ESPN's row has fourteen), a PTS column past them is the same
+  quirk; a third header competitor or player block is a quirk and ignored;
+  strings at `MAX_STRING_BYTES` (ruling 2), compare keys at `ID_BYTES` = 24
+  (ruling 16); a coordinate outside −100..=200 ft is the sentinel.
+- **Quirks** (`common::Quirk`): `LedgerGlitch` (§3.3's impossible penalty
+  state: `foulsToGive` 0 under fewer than two team fouls — the one-poll
+  reset; two teams out of timeouts and both in the penalty is real and
+  stands), `UnplacedMake` (a made field goal with no team, the sentinel, or
+  a team matching neither side — once per body), `RunCorrection`, plus the
+  shared `UnknownStatusName` (the five NBA names and STATUS_DELAYED are
+  known), `FinalDetailMismatch` (`altDetail` against the period: none ↔ 4,
+  "OT" ↔ 5, "{n−4}OT"), `MalformedRecord` (a final's `total`, as the
+  pregame's) and `BoundedOverflow`. Quiet by design: a scoring play whose
+  text has no " makes " (a placeholder's "makes 2-foot shot", a goaltending
+  award) has no scorer and no quirk; a missing ledger field is absence, not
+  a glitch; a placeholder-typed make (91) is a make like any other.
+
 ## Lanes and validation
 
 - Engine lane: `src/path.rs` + its tests. Hard subsystem — strongest model,

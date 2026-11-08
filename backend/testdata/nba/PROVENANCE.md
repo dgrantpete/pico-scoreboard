@@ -94,6 +94,15 @@ fixture / the summary. DEN@IND was the NBA Mexico City Game (`neutralSite`,
 Every live and final fixture has its summary half; no live fixture is
 scoreboard-only.
 
+Two facts of the plays the lane found while reading them, worth knowing
+before trusting a row: `plays[]` is chronological in document order while
+`sequenceNumber` is posting order and not monotone (11 of the 20 summaries
+have late-posted review or foul rows at their clock with higher numbers),
+and the running score can go stale for a row or two — in ORL@GS the heave
+miss and the rebound after Cain's 110-110 tying putback (`end_of_fourth`,
+`overtime`, `final_ot`) still carry 108-110 before End Period reads 110-110
+again, which NBA.md §3.5 treats as a correction that ends the run.
+
 ## Extra fixtures (real states that bear on §3)
 
 | Fixture | Event | Matchup | Game day | Scoreboard poll | Summary poll | Δ s | Sizes | Evidence |

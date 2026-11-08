@@ -79,6 +79,15 @@ impl Quirks for TracingQuirks {
                 "shootout attempt with no team, goalie participant or neighbour to place it — dropped"
             }
             Quirk::UnplaceableGoal => "goal whose team matched neither competitor — dropped",
+            Quirk::LedgerGlitch => {
+                "NBA summary header has an impossible penalty state (the one-poll reset) — no ledger"
+            }
+            Quirk::UnplacedMake => {
+                "NBA made field goal with no team, the sentinel coordinate or an unknown team — no mark"
+            }
+            Quirk::RunCorrection => {
+                "NBA running score moved on both sides or fell — a correction, the run ends"
+            }
         };
         let sport = self.sport;
         match &self.event {

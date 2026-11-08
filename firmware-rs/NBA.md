@@ -186,13 +186,19 @@ below against its first fortnight and builds the corpus from it.
     `false`: **there is no possession source.** The header's `status.clock`
     is a stale sample (matched the last play's clock on 48/153 live
     summaries) and froze with the scoreboard's.
-- `plays[]` (~545 B each, 56–66 % of a final body): `id`,
-  `sequenceNumber`, `type{id,text}` (90 types; 52 shot types ids 92–282),
+- `plays[]` (~545 B each, 56–66 % of a final body) is **chronological in
+  document order; `sequenceNumber` is posting order and not monotone** (11
+  of the 20 corpus summaries: late-posted review and foul rows sit at their
+  clock with higher numbers), so "in order" below means the array's.
+  Fields: `id`, `sequenceNumber` (a string, "630"), `type{id,text}` (90
+  types; 52 shot types ids 92–282),
   `text` ("Giannis Antetokounmpo makes 3-foot driving dunk (Davion Mitchell
   assists)"), `period{number, displayValue}` ("4th Quarter", "OT"; 2OT is
   period 6), `clock.displayValue` (remaining, "M:SS" or "S.t"),
   `awayScore`/`homeScore` (**running score after the play, on every
-  play**), `scoringPlay`, `scoreValue` 0/1/2/3, `shootingPlay`,
+  play** — stale on occasion: ORL@GS 2026-11-08 carried 108-110 on the two
+  rows after the 110-110 tying putback, then 110-110 again), `scoringPlay`,
+  `scoreValue` 0/1/2/3, `shootingPlay`,
   `pointsAttempted` 0/2/3 (free throws 0), `coordinate{x,y}` (sentinel
   `x: -214748340, y: -214748365` = none), `team{id}` (98.4 %; missing on
   End Period / End Game / ref-initiated reviews), `participants[]`
@@ -255,10 +261,13 @@ attacking end" of a side is the basket under its own crest (D5).
 ### 3.1 States and periods
 
 - Dispatch on `status.type.state`: pre → Pregame; post → Final; in → Live
-  with `LivePhase::InProgress`, `Halftime` for `STATUS_HALFTIME`, or
-  `EndOfPeriod` for `STATUS_END_PERIOD`. A live body at period 0 (a delayed
-  tip; unobserved) → Pregame, hockey's rule. An unknown status name is a
-  quirk and follows its `state` as `InProgress`.
+  with the phase from `status.type.description` as today ("Halftime", "End
+  of Period", else in progress — the parity-gated rule), the status name
+  judged beside it: the five NBA names and `STATUS_DELAYED` are known,
+  anything else is a quirk and follows its `state`. A live body at period 0
+  (a delayed tip) would be Pregame by hockey's rule; **not implemented
+  until a capture shows one** (it changes a frozen dispatch for a shape
+  nobody has seen; today such a body is live at period 0).
 - Playoffs ⇔ `season.type` 3; play-in (5) is not the playoffs (no
   `series`), but its `notes` headline shows like any other.
 - Period label: 1–4 → `Q1`..`Q4`; 5 → `OT`; n ≥ 6 → `{n-4}OT`. Final
@@ -342,9 +351,11 @@ attacking end" of a side is the basket under its own crest (D5).
   step** for the side whose score rose, worth the difference. The current
   run is the side and the sum of the trailing scoring steps by the same
   side; a step by the other side starts a new run with that step's points.
-  A step on which **both** scores rose (a correction) ends any run and
-  starts none. A run **survives period breaks** (unanswered points are
-  unanswered through a timeout or a quarter change).
+  A step no single basket explains — **both** scores rose, or a side's
+  **fell** (§2's stale rows) — is a correction: it ends any run and starts
+  none, with a quirk, and the next clean step starts fresh. A run
+  **survives period breaks** (unanswered points are unanswered through a
+  timeout or a quarter change).
 - `run = Some(side, points)` when `points ≥ 6` (`RUN_SHOW`), else `None`.
   The renderer breathes the running side's score from `points ≥ 8`
   (`RUN_GLOW`): `mix(primary, team, pulse(now − animation_start_ms, 1200) ×
@@ -441,8 +452,9 @@ lines). Team colours follow the shared rule (§3.10).
 Game-leaders screen: crests + scores (winner colour / loser gray), the
 result label in the accent colour, three rows `PTS` / `REB` / `AST` each
 with the game's leader in that category — `leaders[name=points|rebounds|
-assists].leaders[0]` from **both** competitors, the higher `value` wins and
-a tie keeps the away leader — as `shortName` ("J. Brunson") and
+assists].leaders[0]` from **both** competitors, the higher `value` wins, a
+tie keeps the away leader, and a category one side alone carries is that
+side's — as `shortName` ("J. Brunson") and
 `displayValue`, in the player's team colour, scrolled with the stars'
 `Scroll`; a rule; then the series line (`series.summary`, playoffs only)
 and both records (`records[type=total].summary`, "W-L") in team colours.
@@ -612,7 +624,15 @@ at `ext=2`, `encode_ext(level)`), the three blocks, round-trip + truncation
 and the corpus goldens under `backend/testdata/wire/nba/` as `*.bin`,
 `*.ext1.bin` and `*.ext2.bin` from 6.3's `wire_corpus.rs` arms.
 
-### 6.2 `scoreboard-espn` (hardest lane — strongest model, line-by-line review)
+### 6.2 `scoreboard-espn` — done 2026-11-08 (hardest lane — strongest model, line-by-line review)
+As built: `SummaryContext` carries the scoreboard's state alone (no §3
+rule reads the period); a context that is not live makes the pass a no-op.
+`as_game(None)` applies §3.7's filter too, so a degraded poll flashes
+less, never more; the flash text is trimmed of trailing whitespace at the
+wire view (type 29's ends in a newline). The lane's section in DESIGN.md
+is the record; the private helpers it shares with hockey (`Pool`,
+`side_of`, `code`) are duplicated per ruling 15 and consolidate later
+(C10).
 `src/nba.rs`: the scoreboard table grows (leaders with `athlete.shortName`,
 `displayValue`, `value` and `team.id` per category; `series.summary`;
 `notes[0].headline`; `records` on finals; `lastPlay.type.id` for §3.7's
@@ -805,6 +825,9 @@ finding. ARCHITECTURE.md is gitignored and updated outside the repo.
 - **C9 The extension level** (D9) is the first time a sport's existing
   payload grows after deployment; the `ext_level` mechanism is now the
   documented way to do it (crate docs, §4).
+- **C10 The extractor's per-team pool, side lookup and code parsing** exist
+  in `hockey.rs` and `nba.rs` alike (DESIGN.md ruling 15: promote once a
+  second lane exists — this is it). After 6.3.
 
 ## 8. Risks
 

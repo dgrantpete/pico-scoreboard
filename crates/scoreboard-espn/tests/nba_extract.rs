@@ -105,10 +105,21 @@ fn run_list(body: &str, sizes: &[usize]) -> (Vec<(String, GameState)>, ScanStats
     (entries, stats)
 }
 
+/// Today's level-0 bytes. The committed goldens predate NBA.md §3.7's flash
+/// filter, so the scoreboard's unfiltered `lastPlay` stands in for the
+/// filtered one the view carries (phase 6.3 re-blesses every level under the
+/// filter); everything else is the `as_game(None)` view, byte for byte.
 fn encode(extract: &nba::Extract) -> Vec<u8> {
+    let mut game = extract.as_game(None);
+    if let (scoreboard_wire::nba::Game::Live(live), Kind::Live(raw)) = (&mut game, &extract.kind) {
+        live.last_play = raw.last_play.as_ref().map(|play| scoreboard_wire::LastPlay {
+            id: play.id.as_str(),
+            text: play.text.as_str(),
+        });
+    }
     let mut buf = [0u8; 4096];
     let mut sink = SliceSink::new(&mut buf);
-    scoreboard_wire::nba::encode(&extract.as_game(), &mut sink).expect("payload fits");
+    scoreboard_wire::nba::encode(&game, &mut sink).expect("payload fits");
     sink.written().to_vec()
 }
 
@@ -682,7 +693,7 @@ fn pregame_lines(body: &str, id: &str, sizes: &[usize]) -> (Option<String>, Opti
     let (outcome, stats) = run_detail(body, id, sizes);
     assert_eq!((stats.ok, stats.failed), (1, 0), "odds never fail an event");
     let extract = found(outcome);
-    let scoreboard_wire::nba::Game::Pregame(pregame) = extract.as_game() else {
+    let scoreboard_wire::nba::Game::Pregame(pregame) = extract.as_game(None) else {
         panic!("pregame fixture");
     };
     (
@@ -725,7 +736,7 @@ fn the_lines_ride_only_the_ext_encoding() {
     assert_eq!(hex(&encode(&extract)), hex(&golden("pregame")));
     let mut buf = [0u8; 4096];
     let mut sink = SliceSink::new(&mut buf);
-    scoreboard_wire::nba::encode_ext(&extract.as_game(), &mut sink).expect("payload fits");
+    scoreboard_wire::nba::encode_ext(&extract.as_game(None), &mut sink).expect("payload fits");
     let bytes = sink.written().to_vec();
     let scoreboard_wire::nba::Game::Pregame(pregame) =
         scoreboard_wire::nba::decode(&bytes).expect("ext payload decodes")

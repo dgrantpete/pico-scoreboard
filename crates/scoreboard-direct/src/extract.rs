@@ -42,7 +42,9 @@ impl DirectExtract {
     pub fn detail(&self) -> GameDetail<'_> {
         match self {
             DirectExtract::Mlb(extract) => GameDetail::Mlb(extract.as_game()),
-            DirectExtract::Nba(extract) => GameDetail::Nba(extract.as_game()),
+            // The scoreboard alone: direct mode never fetches the NBA summary
+            // (the backend is the only supported data path, BACKLOG 100).
+            DirectExtract::Nba(extract) => GameDetail::Nba(extract.as_game(None)),
             DirectExtract::Football(extract) => GameDetail::Football(extract.as_game()),
             DirectExtract::Soccer(extract) => GameDetail::Soccer(extract.as_game()),
         }
