@@ -235,8 +235,6 @@ pub struct SetupView {
     pub reason: SetupReason,
     pub ap_ssid: Text<SSID>,
     pub ap_ip: Text<IP>,
-    /// The station SSID that failed, for error context.
-    pub wifi_ssid: Text<SSID>,
     pub title: Text<TITLE>,
     /// Pre-built body lines, named for their y position on the panel.
     pub line_18: Text<LINE>,
@@ -251,7 +249,6 @@ impl SetupView {
             reason: SetupReason::NoConfig,
             ap_ssid: Text::new(),
             ap_ip: Text::new(),
-            wifi_ssid: Text::new(),
             title: Text::new(),
             line_18: Text::new(),
             line_28: Text::new(),
@@ -695,7 +692,7 @@ pub struct LeaderLine {
     pub side: Side,
 }
 
-/// Live hockey: both layouts, and the shootout inside each (NHL.md §6.4).
+/// Live hockey: the rink layout, and its shootout form (NHL.md §6.4).
 ///
 /// The clock is NBA's — the poll-time string, never extrapolated — because the
 /// feed only moves it when a play is logged (§3.2).
@@ -734,13 +731,8 @@ pub struct HockeyLiveView {
     /// Who scored the newest goal. `None` before the first one, and whenever
     /// the backend could not fetch the summary the goals come from.
     pub last_goal: Option<Side>,
-    /// "PPG 17:58 1ST": the period ledger's line over the scorer.
-    pub goal_label: Text<EVENT_LABEL>,
-    /// "PPG 17:58 M. Knies": the rink's one line, whose tail from
-    /// `scorer_at` is the ledger's scorer line — one copy of the name rather
-    /// than two in every snapshot.
+    /// "PPG 17:58 M. Knies": the newest goal's line under the rink.
     pub goal_line: Text<GOAL_LINE>,
-    pub scorer_at: u8,
     /// Present only in a regular-season shootout, which is what switches
     /// either layout to its shootout form.
     pub shootout: Option<ShootoutView>,
@@ -769,18 +761,11 @@ impl HockeyLiveView {
             marks: heapless::Vec::new(),
             newest_marked: false,
             last_goal: None,
-            goal_label: Text::new(),
             goal_line: Text::new(),
-            scorer_at: 0,
             shootout: None,
             lamp_side: None,
             lamp_ms: 0,
         }
-    }
-
-    /// The newest goal's scorer, "M. Knies"; empty when ESPN named none.
-    pub fn scorer(&self) -> &str {
-        self.goal_line.get(self.scorer_at as usize..).unwrap_or("")
     }
 }
 
@@ -892,7 +877,6 @@ pub struct StarLine {
 /// the possession arrow's position beside the down-and-distance text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldSituation {
-    pub down: u8,
     pub distance: u8,
     /// Possession-relative, 0..=100, as ESPN reports it.
     pub yard_line: u8,
@@ -1060,8 +1044,6 @@ pub struct ScoreboardSnapshot {
     /// implementation; the renderer reads it only to tell "no game yet" from
     /// "a game".
     pub game_id: Text<GAME_ID>,
-    pub away_abbr: Text<ABBR>,
-    pub home_abbr: Text<ABBR>,
     pub away_logo: Option<LogoRef>,
     pub home_logo: Option<LogoRef>,
     pub ui_colors: UiColors,
@@ -1091,8 +1073,6 @@ impl ScoreboardSnapshot {
             commit_seq: 0,
             animation_start_ms: 0,
             game_id: Text::new(),
-            away_abbr: Text::new(),
-            home_abbr: Text::new(),
             away_logo: None,
             home_logo: None,
             ui_colors: UiColors::new(),

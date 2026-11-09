@@ -1179,13 +1179,20 @@ fn an_nba_final_without_its_groups_leaves_the_leaders_view_empty() {
 fn a_drive_situation_becomes_a_down_and_distance_line() {
     let store = committed("football/nfl/in_progress");
     let view = &store.snapshot().football_live;
-    let situation = view.situation.expect("the fixture has a situation");
-    assert!(situation.down >= 1 && situation.down <= 4);
+    assert!(view.situation.is_some(), "the fixture has a situation");
+    let (league, bytes) = fixture("football/nfl/in_progress");
+    let GameDetail::Football(football::Game::Live(game)) =
+        WireFeed.detail(league.sport, &bytes).unwrap()
+    else {
+        panic!("the fixture is a live football game");
+    };
+    let down = game.situation.expect("on the wire too").down;
+    assert!((1..=4).contains(&down));
     assert!(view.situation_text.contains(" & "));
     assert!(
         view.situation_text
             .as_str()
-            .starts_with(["", "1ST", "2ND", "3RD", "4TH"][situation.down as usize])
+            .starts_with(["", "1ST", "2ND", "3RD", "4TH"][down as usize])
     );
 }
 
@@ -1372,7 +1379,9 @@ fn each_sport_fills_the_pregame_slots_with_what_it_has() {
     let view = &store.snapshot().pregame;
     assert_eq!(view.info_primary.as_str(), "WORLD CUP");
     assert!(!view.info_secondary.is_empty());
-    assert_eq!(view.away.line.as_str(), store.snapshot().away_abbr.as_str());
+    let (league, bytes) = fixture("soccer/fifa.world/pregame");
+    let detail = WireFeed.detail(league.sport, &bytes).unwrap();
+    assert_eq!(view.away.line.as_str(), detail.abbreviations().0);
     assert!(view.away.record.is_none(), "soccer carries no record");
 }
 
@@ -2222,7 +2231,14 @@ fn a_hockey_payload_decodes_through_the_wire_feed() {
     let mut store = Store::new();
     store.commit_detail(&nhl(), &detail, Logos::default(), 1_000, clock());
     assert_eq!(store.snapshot().mode, Mode::HockeyLive);
-    assert_eq!(store.snapshot().hockey_live.scorer(), "M. Zibanejad");
+    assert!(
+        store
+            .snapshot()
+            .hockey_live
+            .goal_line
+            .as_str()
+            .ends_with(" M. Zibanejad")
+    );
 }
 
 /// §3.1's period labels: the season type decides what period 5 is.
@@ -2507,7 +2523,7 @@ fn strength_becomes_a_banner_with_the_advantaged_side_counted_first() {
 }
 
 #[test]
-fn the_newest_goal_becomes_both_layouts_lines() {
+fn the_newest_goal_becomes_the_line_under_the_rink() {
     let goals = [
         goal(Side::Away, hockey::GoalTag::Goal, 1, 441),
         goal(Side::Home, hockey::GoalTag::PowerPlay, 1, 1_078),
@@ -2521,8 +2537,6 @@ fn the_newest_goal_becomes_both_layouts_lines() {
     let mut store = Store::new();
     commit_live(&mut store, live, 0);
     let view = &store.snapshot().hockey_live;
-    assert_eq!(view.goal_label.as_str(), "PPG 17:58 1ST");
-    assert_eq!(view.scorer(), "M. Knies");
     assert_eq!(view.goal_line.as_str(), "PPG 17:58 M. Knies");
     assert_eq!(view.last_goal, Some(Side::Home));
     assert_eq!(
@@ -2559,13 +2573,11 @@ fn the_newest_goal_becomes_both_layouts_lines() {
     };
     commit_live(&mut store, live, 0);
     let view = &store.snapshot().hockey_live;
-    assert_eq!(view.goal_label.as_str(), "ENG 3:12 2OT");
     assert_eq!(
         view.goal_line.as_str(),
         "ENG 3:12",
         "no scorer, no trailing space"
     );
-    assert_eq!(view.scorer(), "");
     assert_eq!(view.marks.len(), 1);
     assert!(!view.newest_marked, "the newest goal has nothing to blink");
 }
@@ -2603,7 +2615,7 @@ fn a_missing_summary_leaves_every_summary_field_empty() {
     assert_eq!((view.away_skaters, view.home_skaters), (0, 0));
     assert!(view.marks.is_empty());
     assert_eq!(view.last_goal, None);
-    assert!(view.goal_label.is_empty() && view.goal_line.is_empty() && view.scorer().is_empty());
+    assert!(view.goal_line.is_empty());
     assert!(view.shootout.is_none());
     // The play line stays as it was: an absent play changes nothing.
     assert_eq!(store.snapshot().play.id.as_str(), "p1");
@@ -3001,9 +3013,6 @@ fn every_fixture_builds_a_sane_view() {
         };
         assert_eq!(snapshot.mode, expected, "{name}");
         assert_eq!(snapshot.game_id.as_str(), detail.game_id(), "{name}");
-        let (away, home) = detail.abbreviations();
-        assert_eq!(snapshot.away_abbr.as_str(), away, "{name}");
-        assert_eq!(snapshot.home_abbr.as_str(), home, "{name}");
         assert_eq!(snapshot.animation_start_ms, 1_000, "{name}");
         // One commit for the view, plus one more when a live game brought a
         // play line with it.
@@ -3024,8 +3033,6 @@ fn every_fixture_builds_a_sane_view() {
 fn the_spot_checked_fixtures_carry_the_values_espn_sent() {
     let store = committed("mlb/live_inning");
     let view = &store.snapshot().mlb_live;
-    assert_eq!(store.snapshot().away_abbr.as_str(), "CHC");
-    assert_eq!(store.snapshot().home_abbr.as_str(), "BAL");
     assert_eq!(view.inning_text.as_str(), "8th");
     assert_eq!(view.half, mlb::InningHalf::Top);
     assert_eq!((view.balls, view.strikes, view.outs), (1, 2, 2));
@@ -3276,8 +3283,8 @@ impl Maxima {
 /// shows up as a failing test rather than as silent RAM.
 #[test]
 fn the_snapshot_stays_inside_its_budget_line() {
-    assert_eq!(ScoreboardSnapshot::SIZE, 3_848);
-    assert_eq!(crate::SnapshotChannel::SIZE, 11_552);
+    assert_eq!(ScoreboardSnapshot::SIZE, 3_760);
+    assert_eq!(crate::SnapshotChannel::SIZE, 11_288);
     assert_eq!(Slate::SIZE, 4_664);
 }
 

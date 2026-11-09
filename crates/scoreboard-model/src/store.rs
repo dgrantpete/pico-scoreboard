@@ -105,7 +105,7 @@ impl Store {
     ///
     /// `state.py` spelled this out at seven setters, one of which could have
     /// drifted from the others without anything noticing.
-    fn enter_game_view(&mut self, mode: Mode, game_id: &str, logos: Logos, now_ms: Millis) {
+    pub(crate) fn begin_game(&mut self, mode: Mode, game_id: &str, logos: Logos, now_ms: Millis) {
         let new_game = self.snapshot.game_id != game_id;
         if self.snapshot.mode != mode || new_game {
             self.snapshot.animation_start_ms = now_ms;
@@ -121,12 +121,6 @@ impl Store {
         set_folded(&mut self.snapshot.game_id, game_id);
         self.snapshot.away_logo = logos.away;
         self.snapshot.home_logo = logos.home;
-    }
-
-    /// Copy both team abbreviations into the snapshot's shared slots.
-    fn set_teams(&mut self, away: &str, home: &str) {
-        set_folded(&mut self.snapshot.away_abbr, away);
-        set_folded(&mut self.snapshot.home_abbr, home);
     }
 
     // -- Non-game screens --------------------------------------------------
@@ -203,7 +197,6 @@ impl Store {
         setup.reason = reason;
         set_folded(&mut setup.ap_ssid, ap_ssid);
         set_plain(&mut setup.ap_ip, ap_ip);
-        set_folded(&mut setup.wifi_ssid, wifi_ssid);
 
         let shown_ssid = if ap_ssid.is_empty() {
             "scoreboard"
@@ -413,19 +406,6 @@ impl Store {
 
     pub(crate) fn snapshot_mut(&mut self) -> &mut ScoreboardSnapshot {
         &mut self.snapshot
-    }
-
-    pub(crate) fn begin_game(
-        &mut self,
-        mode: Mode,
-        game_id: &str,
-        away: &str,
-        home: &str,
-        logos: Logos,
-        now_ms: Millis,
-    ) {
-        self.enter_game_view(mode, game_id, logos, now_ms);
-        self.set_teams(away, home);
     }
 
     pub(crate) fn finish_game(&mut self) {

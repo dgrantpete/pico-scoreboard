@@ -319,14 +319,7 @@ impl Store {
     // -- MLB ---------------------------------------------------------------
 
     pub fn commit_mlb_live(&mut self, game: &mlb::Live<'_>, logos: Logos, now_ms: Millis) {
-        self.begin_game(
-            Mode::MlbLive,
-            game.game_id,
-            game.away.abbreviation,
-            game.home.abbreviation,
-            logos,
-            now_ms,
-        );
+        self.begin_game(Mode::MlbLive, game.game_id, logos, now_ms);
         let away_color = Rgb888::from(game.away.colors);
         let home_color = Rgb888::from(game.home.colors);
         let view = &mut self.snapshot_mut().mlb_live;
@@ -392,14 +385,7 @@ impl Store {
     /// news (§3.6).
     pub fn commit_nba_live(&mut self, game: &nba::Live<'_>, logos: Logos, now_ms: Millis) {
         let first_look = self.mode() != Mode::NbaLive || self.snapshot().game_id != game.game_id;
-        self.begin_game(
-            Mode::NbaLive,
-            game.game_id,
-            game.away.abbreviation,
-            game.home.abbreviation,
-            logos,
-            now_ms,
-        );
+        self.begin_game(Mode::NbaLive, game.game_id, logos, now_ms);
         let view = &mut self.snapshot_mut().nba_live;
         view.away_score = game.away.score;
         view.home_score = game.home.score;
@@ -487,14 +473,7 @@ impl Store {
     /// whose rows stand in for the leaders while ESPN has not posted them
     /// (§3.9); the NBA view holds only what the NBA adds.
     pub fn commit_nba_final(&mut self, game: &nba::Final<'_>, logos: Logos, now_ms: Millis) {
-        self.begin_game(
-            Mode::NbaFinal,
-            game.game_id,
-            game.away.abbreviation,
-            game.home.abbreviation,
-            logos,
-            now_ms,
-        );
+        self.begin_game(Mode::NbaFinal, game.game_id, logos, now_ms);
         self.fill_linescore_final(&LinescoreFinal {
             sport: Sport::Nba,
             game_id: game.game_id,
@@ -528,14 +507,7 @@ impl Store {
         // game's pregame, an error screen — makes this the first look, and a
         // goal already on the board at a first look is old news (NHL.md §3.7).
         let first_look = self.mode() != Mode::HockeyLive || self.snapshot().game_id != game.game_id;
-        self.begin_game(
-            Mode::HockeyLive,
-            game.game_id,
-            game.away.abbreviation,
-            game.home.abbreviation,
-            logos,
-            now_ms,
-        );
+        self.begin_game(Mode::HockeyLive, game.game_id, logos, now_ms);
         let newest = game.goals.last();
         // A regular-season period 5 is the shootout, whose scores say nothing
         // new: the extractor holds them at the tie (§3.8).
@@ -618,25 +590,14 @@ impl Store {
         }
         view.newest_marked = newest.is_some_and(|goal| goal.coordinate.is_some());
         view.last_goal = newest.map(|goal| goal.side);
-        view.goal_label.clear();
         view.goal_line.clear();
-        view.scorer_at = 0;
         if let Some(goal) = newest {
-            let mut period = Text::<SHORT>::new();
-            set_hockey_period(&mut period, goal.period, game.playoffs);
-            let period = period.as_str();
             let tag = goal_tag(goal.tag);
             let (minutes, seconds) = (goal.elapsed / 60, goal.elapsed % 60);
-            write_text!(
-                &mut view.goal_label,
-                "{tag} {minutes}:{seconds:02} {period}"
-            );
             write_text!(&mut view.goal_line, "{tag} {minutes}:{seconds:02}");
             if !game.last_scorer.is_empty() {
                 let _ = view.goal_line.push(' ');
             }
-            // The line is GOAL_LINE bytes at most, so its length fits.
-            view.scorer_at = view.goal_line.len() as u8;
             push_folded(&mut view.goal_line, game.last_scorer);
         }
 
@@ -653,14 +614,7 @@ impl Store {
     /// holds only what hockey adds (NHL.md §3.10).
     pub fn commit_hockey_final(&mut self, game: &hockey::Final<'_>, logos: Logos, now_ms: Millis) {
         let (away, home) = (&game.away, &game.home);
-        self.begin_game(
-            Mode::HockeyFinal,
-            game.game_id,
-            away.abbreviation,
-            home.abbreviation,
-            logos,
-            now_ms,
-        );
+        self.begin_game(Mode::HockeyFinal, game.game_id, logos, now_ms);
         let view = &mut self.snapshot_mut().linescore_final;
         view.sport = Sport::Hockey;
         view.away_score = away.score;
@@ -706,14 +660,7 @@ impl Store {
         logos: Logos,
         now_ms: Millis,
     ) {
-        self.begin_game(
-            Mode::FootballLive,
-            game.game_id,
-            game.away.abbreviation,
-            game.home.abbreviation,
-            logos,
-            now_ms,
-        );
+        self.begin_game(Mode::FootballLive, game.game_id, logos, now_ms);
         let away_color = Rgb888::from(game.away.colors);
         let home_color = Rgb888::from(game.home.colors);
         let view = &mut self.snapshot_mut().football_live;
@@ -742,7 +689,6 @@ impl Store {
         view.home_timeouts = game.timeouts.map(|timeouts| timeouts.home);
 
         view.situation = game.situation.map(|situation| FieldSituation {
-            down: situation.down,
             distance: situation.distance,
             yard_line: situation.yard_line,
             possession: situation.possession,
@@ -785,14 +731,7 @@ impl Store {
     // -- Soccer ------------------------------------------------------------
 
     pub fn commit_soccer_live(&mut self, game: &soccer::Live<'_>, logos: Logos, now_ms: Millis) {
-        self.begin_game(
-            Mode::SoccerLive,
-            game.game_id,
-            game.away.abbreviation,
-            game.home.abbreviation,
-            logos,
-            now_ms,
-        );
+        self.begin_game(Mode::SoccerLive, game.game_id, logos, now_ms);
         // Stale-feed guard: if the upstream clock has not moved since the last
         // poll of this same game, stop ticking locally and hold the value.
         let stale = self
@@ -848,14 +787,7 @@ impl Store {
     }
 
     pub fn commit_soccer_final(&mut self, game: &soccer::Final<'_>, logos: Logos, now_ms: Millis) {
-        self.begin_game(
-            Mode::SoccerFinal,
-            game.game_id,
-            game.away.abbreviation,
-            game.home.abbreviation,
-            logos,
-            now_ms,
-        );
+        self.begin_game(Mode::SoccerFinal, game.game_id, logos, now_ms);
         let away_color = Rgb888::from(game.away.colors);
         let home_color = Rgb888::from(game.home.colors);
         let view = &mut self.snapshot_mut().soccer_final;
@@ -887,14 +819,7 @@ impl Store {
         logos: Logos,
         now_ms: Millis,
     ) {
-        self.begin_game(
-            Mode::Final,
-            game.game_id,
-            game.away.abbreviation,
-            game.home.abbreviation,
-            logos,
-            now_ms,
-        );
+        self.begin_game(Mode::Final, game.game_id, logos, now_ms);
         self.fill_linescore_final(game);
         self.finish_game();
     }
@@ -936,14 +861,7 @@ impl Store {
         now_ms: Millis,
         clock: LocalClock,
     ) {
-        self.begin_game(
-            Mode::Pregame,
-            game.game_id,
-            game.away.abbreviation,
-            game.home.abbreviation,
-            logos,
-            now_ms,
-        );
+        self.begin_game(Mode::Pregame, game.game_id, logos, now_ms);
         let view = &mut self.snapshot_mut().pregame;
         view.sport = game.sport;
         for (side, input) in [(&mut view.away, game.away), (&mut view.home, game.home)] {

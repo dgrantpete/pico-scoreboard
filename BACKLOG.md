@@ -1105,10 +1105,10 @@ while designing hockey and kept out of the NHL change (D8). Each is its own
 reviewed change.
 
 103. **Snapshot views as a sum (NHL.md C3).** Every sport's view lives in
-    the snapshot side by side, though only one is ever shown: 3,848 B a
-    snapshot since the NBA's court screens added 640 B on 2026-11-08 (3,224
-    after hockey's 400), and four copies resident (three channel slots and
-    the `Store`). The NBA live view is the largest at 496 B, the 128-make
+    the snapshot side by side, though only one is ever shown: 3,760 B a
+    snapshot (the NBA's court screens added 640 B on 2026-11-08, five dead
+    fields gave back 88 B on 2026-11-09; 3,224 after hockey's 400), and four
+    copies resident (three channel slots and the `Store`). The NBA live view is the largest at 496 B, the 128-make
     ring 385 B of it. An enum would make the `Mode`/view pairing
     unrepresentable when wrong, and save the difference between the sum and
     the largest view, four times over. Measure first; take it only if RAM

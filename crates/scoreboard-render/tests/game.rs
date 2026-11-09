@@ -1545,7 +1545,6 @@ fn football() -> Harness {
     view.clock_text = text("10:42");
     view.situation_text = text("3RD & 7");
     view.situation = Some(FieldSituation {
-        down: 3,
         distance: 7,
         yard_line: 35,
         possession: Side::Away,
@@ -1563,7 +1562,6 @@ fn the_field_projection_maps_yardlines_to_columns() {
     // Away possession counts up from the left goal line; home counts down from
     // the right one.
     let away = Field::project(FieldSituation {
-        down: 1,
         distance: 10,
         yard_line: 25,
         possession: Side::Away,
@@ -1574,7 +1572,6 @@ fn the_field_projection_maps_yardlines_to_columns() {
     assert!(away.attacking_right);
 
     let home = Field::project(FieldSituation {
-        down: 1,
         distance: 10,
         yard_line: 25,
         possession: Side::Home,
@@ -1588,7 +1585,6 @@ fn the_field_projection_maps_yardlines_to_columns() {
 #[test]
 fn goal_to_go_clamps_the_first_down_line_to_the_goal_line() {
     let goal_to_go = Field::project(FieldSituation {
-        down: 1,
         distance: 10,
         yard_line: 95,
         possession: Side::Away,
@@ -1601,7 +1597,6 @@ fn goal_to_go_clamps_the_first_down_line_to_the_goal_line() {
     );
 
     let home_goal_to_go = Field::project(FieldSituation {
-        down: 1,
         distance: 10,
         yard_line: 95,
         possession: Side::Home,
@@ -1618,7 +1613,6 @@ fn every_projected_line_leans_toward_the_vanishing_point() {
     for yard_line in 0..=100u8 {
         for possession in [Side::Away, Side::Home] {
             let field = Field::project(FieldSituation {
-                down: 1,
                 distance: 10,
                 yard_line,
                 possession,
