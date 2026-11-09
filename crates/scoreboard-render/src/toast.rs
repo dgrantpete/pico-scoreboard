@@ -99,7 +99,8 @@ fn brightness(toast: &ToastView, now: WallMs) -> u8 {
 /// Draw an active icon toast over the finished frame.
 ///
 /// Called last in each game-facing render so nothing paints over it. `canvas`
-/// must be the whole frame: the dim works on pixel pairs across the buffer.
+/// must be the whole frame: the dim works on four-byte words of channels
+/// across the contiguous buffer.
 pub fn overlay(canvas: &mut Canvas<'_>, snapshot: &ScoreboardSnapshot, now: WallMs) {
     let toast = &snapshot.toast;
     if toast.updated_ms == 0 {

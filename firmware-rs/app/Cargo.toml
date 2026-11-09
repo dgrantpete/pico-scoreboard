@@ -35,8 +35,9 @@ net-probe = []
 # the panel over HTTP, reads back the frame core 1 drew and the bitplane
 # buffer's per-lane bit counts, and can storm the LED's radio IOCTLs — so a
 # panel, a ribbon, a supply or a pack bug is cornered one controlled frame at a
-# time, without a reflash per experiment. Costs 32 KB of RAM for two staged
-# frames, which is why it is a feature and not a route. See `diag.rs` and
+# time, without a reflash per experiment. Costs 48 KB of RAM for two staged
+# RGB888 frames (24 KB each; 32 KB while the surface was RGB565), which is why
+# it is a feature and not a route. See `diag.rs` and
 # `tools/diag.py`.
 diag = []
 
@@ -52,7 +53,7 @@ hub75 = { path = "../../crates/hub75" }
 scoreboard-model = { path = "../../crates/scoreboard-model" }
 scoreboard-render = { path = "../../crates/scoreboard-render" }
 # The `Accept` value that selects the packed format, and the decoders behind
-# `GameFeed`. Already in the graph under `scoreboard-model`; named here because
+# `WireFeed`. Already in the graph under `scoreboard-model`; named here because
 # `net::api_client` sends the header itself.
 scoreboard-wire = { path = "../../crates/scoreboard-wire" }
 
