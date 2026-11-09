@@ -1345,9 +1345,9 @@ fn each_sport_fills_the_pregame_slots_with_what_it_has() {
     assert_eq!(
         view.info_secondary.as_str(),
         "",
-        "basketball has no weather"
+        "a plain v2 pregame carries no second line"
     );
-    assert_eq!(view.away.line.as_str(), "", "and no per-team line");
+    assert_eq!(view.away.line.as_str(), "", "nor a betting line");
     assert!(view.away.record.is_some());
 
     let store = committed("football/college-football/pregame_ranked");
@@ -2897,6 +2897,51 @@ fn a_hockey_pregame_stacks_three_record_columns_and_names_the_goalies() {
         view.info_secondary.as_str(),
         "STANLEY CUP FINAL - GAME 6 - BUF LEADS SERIES 3-2"
     );
+}
+
+/// NBA.md §3.8 (D10): the note and, in the playoffs, the series reach the
+/// info cycle's second phase. Every layer upstream carried the line from the
+/// first NBA release while this one dropped it, and the corpus's only NBA
+/// pregame has no note, so nothing noticed.
+#[test]
+fn an_nba_pregame_shows_its_note_and_series_as_the_second_line() {
+    let team = |abbreviation, line| nba::PregameTeam {
+        abbreviation,
+        colors: scoreboard_wire::TeamColors {
+            primary: 0x00_1D_42_8A,
+            alternate: 0,
+        },
+        record: Some(scoreboard_wire::Record { wins: 1, losses: 2 }),
+        line: Some(line),
+    };
+    let pregame = |info_secondary| nba::Pregame {
+        game_id: "401859966",
+        start_time: 1_781_481_600,
+        venue: "Madison Square Garden",
+        info_secondary,
+        away: team("SA", "+3.5  +140"),
+        home: team("NY", "-3.5  -165"),
+    };
+    let commit = |game| {
+        let mut store = Store::new();
+        let detail = GameDetail::Nba(nba::Game::Pregame(game));
+        store.commit_detail(&nba_league(), &detail, Logos::default(), 0, clock());
+        store
+    };
+
+    let store = commit(pregame("NBA FINALS - GAME 4 - NY LEADS SERIES 2-1"));
+    let view = &store.snapshot().pregame;
+    assert_eq!(store.snapshot().mode, Mode::Pregame);
+    assert_eq!(view.info_primary.as_str(), "Madison Square Garden");
+    assert_eq!(
+        view.info_secondary.as_str(),
+        "NBA FINALS - GAME 4 - NY LEADS SERIES 2-1"
+    );
+    assert_eq!(view.away.line.as_str(), "+3.5  +140");
+
+    // A night with no note leaves the phase empty, and the cycle skips it.
+    let store = commit(pregame(""));
+    assert_eq!(store.snapshot().pregame.info_secondary.as_str(), "");
 }
 
 #[test]

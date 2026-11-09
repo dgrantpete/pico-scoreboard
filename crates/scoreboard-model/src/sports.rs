@@ -110,16 +110,20 @@ impl<'a> PregameInput<'a> {
         }
     }
 
-    /// NBA: real stadium and records; no weather. The per-team line is the
-    /// betting line ("+3.5  +140"), which only the wire's `ext=1` carries; an
-    /// absent line is an empty slot, which the screen already handles.
+    /// NBA: real stadium and records; no weather. The second info phase is
+    /// the scoreboard's note, plus the series in the playoffs, as the wire's
+    /// `ext=2` joined it ("NBA CUP - GROUP PLAY", "NBA FINALS - GAME 4 - NY
+    /// LEADS SERIES 2-1"; NBA.md §3.8), empty on most nights and below
+    /// `ext=2`. The per-team line is the betting line ("+3.5  +140"), which
+    /// only `ext=1` carries; an absent line is an empty slot, which the screen
+    /// already handles.
     pub fn nba(game: &nba::Pregame<'a>) -> Self {
         Self {
             sport: Sport::Nba,
             game_id: game.game_id,
             start_time: game.start_time,
             info_primary: game.venue,
-            info_secondary: "",
+            info_secondary: game.info_secondary,
             temperature: None,
             away: PregameSideInput {
                 abbreviation: game.away.abbreviation,

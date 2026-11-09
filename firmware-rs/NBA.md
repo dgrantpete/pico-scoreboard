@@ -696,6 +696,10 @@ the sport's halftime word (football "HT" with the chip blanked, the NBA
 "HALF" with the chip kept) rather than growing a copy;
 `fill_linescore_final` is the shared final's one implementation under both
 `commit_linescore_final` and `commit_nba_final`.
+**Missed here, fixed 2026-11-09:** the pregame's second line (§3.8, D10).
+Every layer above carried it from the first release, but `PregameInput::nba`
+kept the August model's empty string until then; the corpus's only NBA
+pregame has no note, so no test saw it.
 `Mode::NbaFinal`; `NbaLiveView` grows (ledger `Option`, run, `last_score`,
 scorer text + points, `score_ms`, `newest_marked`, the make ring, team
 colours; period/clock texts as today with the HALF word); `NbaFinalView`;
