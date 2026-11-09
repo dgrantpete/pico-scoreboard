@@ -1264,3 +1264,14 @@ reviewed change.
     version-2 `.sbev` with three-byte palette entries is the matching change
     there, at most 256 B a clip. Neither is visibly wrong today; take them if
     a crest's banding or a clip's palette is ever noticed on the panel.
+121. **Do ESPN's football feeds carry play coordinates? (owner,
+    2026-11-09).** The basketball court plots makes from the summary's
+    `plays[].coordinate`, and nobody has looked for a football equivalent:
+    where a play starts and ends on the field, in yards or in x/y. Look in
+    the NFL and college-football summaries (their drives and plays) and the
+    core API's plays resource, over a live game and a final of each league.
+    Football collects scoreboards only today (`infra/config/targets.yml`
+    has no `follow_summaries` for `nfl` or `ncaaf`) and the backend's
+    football routes read the scoreboard alone, so this starts from ad-hoc
+    fetches or a targets flip. Findings first; a screen that uses them is
+    its own design.
