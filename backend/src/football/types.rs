@@ -20,7 +20,7 @@ pub enum FootballGame {
 }
 
 /// Pre-game snapshot: matchup, scheduled start, venue, season records, and
-/// (college only) the AP/Coaches rank line.
+/// (college only) the AP/Coaches rank lines.
 #[derive(Serialize, ToSchema)]
 pub struct FootballPregameGame {
     pub game_id: String,
@@ -41,7 +41,8 @@ pub struct FootballPregameTeam {
     /// Overall season record; absent when ESPN omits or malforms it.
     pub record: Option<Record>,
     /// Display-shaped team line: a ranked college team's poll line
-    /// ("#3 OHIO STATE"), else the betting line, spread then moneyline
+    /// ("#3 OHIO STATE"), and in a game with one ranked side the other
+    /// side's name ("MICHIGAN"); else the betting line, spread then moneyline
     /// ("+7  -305"). A game carries ranks or betting lines, never one of each.
     /// Rides the wire's pitcher slot (the record travels numerically).
     pub line: Option<String>,

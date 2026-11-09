@@ -148,14 +148,15 @@ fn corpus_byte_parity_against_goldens() {
 }
 
 /// Flag-byte canaries: live `0x17` (last play | situation | possession
-/// home | timeouts) and pregame_ranked `0x0b` (both records | home rank).
+/// home | timeouts) and pregame_ranked `0x0f` (both records | both lines:
+/// the home rank and the unranked away side's name).
 #[test]
 fn flag_byte_canaries() {
     let live = extract_bytes("nfl/in_progress", false, usize::MAX);
     assert_eq!(live[2], 0x17, "live flags: {}", hex(&live));
 
     let ranked = extract_bytes("college-football/pregame_ranked", true, usize::MAX);
-    assert_eq!(ranked[2], 0x0b, "pregame flags: {}", hex(&ranked));
+    assert_eq!(ranked[2], 0x0f, "pregame flags: {}", hex(&ranked));
 }
 
 /// Whole-buffer vs 1-byte-at-a-time (and a mid-size chunking) must produce
@@ -202,13 +203,14 @@ fn rank_line_uppercase_matches_std() {
         let wire::Game::Pregame(pregame) = extract.as_game() else {
             panic!("ranked fixture is pregame");
         };
-        // Home (#3) carries the line; away is ESPN's 99 unranked sentinel.
+        // Home (#3) carries the rank; away is ESPN's 99 unranked sentinel,
+        // so it carries its name.
         assert_eq!(
             pregame.home.line,
             Some(format!("#3 {}", name.to_uppercase()).as_str()),
             "uppercase diverged for {name:?}"
         );
-        assert_eq!(pregame.away.line, None);
+        assert_eq!(pregame.away.line, Some("MICHIGAN"));
     }
 }
 
@@ -640,15 +642,56 @@ fn ranks_win_over_betting_lines() {
         "college-football/pregame_ranked",
         odds_block("+3.5", "-3.5", "+140", "-166"),
     );
-    // A ranked home team: rank lines only, never one rank and one line.
+    // A ranked home team: the rank and the other side's name, never one
+    // rank and one betting line.
     assert_eq!(
         pregame_lines(&event, true, usize::MAX),
-        (None, Some("#3 OHIO STATE".into()))
+        (Some("MICHIGAN".into()), Some("#3 OHIO STATE".into()))
     );
     // The same game polled as NFL has no ranks, so the lines take over.
     assert_eq!(
         pregame_lines(&event, false, usize::MAX),
         (Some("+3.5  +140".into()), Some("-3.5  -166".into()))
+    );
+}
+
+/// The rank block reads as a matchup: one ranked side names the other, two
+/// ranked sides both show ranks, and an unranked side with no short name
+/// to show stays empty rather than inventing one.
+#[test]
+fn one_ranked_side_names_the_other() {
+    let event = fixture_json("college-football/pregame_ranked");
+    let mutate = |edit: &dyn Fn(&mut serde_json::Value)| {
+        let mut value: serde_json::Value = serde_json::from_str(&event).unwrap();
+        edit(&mut value["competitions"][0]["competitors"][1]);
+        serde_json::to_string(&value).unwrap()
+    };
+
+    // Both ranked: both ranks, no names.
+    let both = mutate(&|away| away["curatedRank"]["current"] = serde_json::json!(12));
+    assert_eq!(
+        pregame_lines(&both, true, usize::MAX),
+        (Some("#12 MICHIGAN".into()), Some("#3 OHIO STATE".into()))
+    );
+
+    // The unranked side carries no short name: nothing to show, so its line
+    // stays empty and the betting lines still do not mix in.
+    let nameless = mutate(&|away| {
+        away["team"]
+            .as_object_mut()
+            .unwrap()
+            .remove("shortDisplayName");
+    });
+    assert_eq!(
+        pregame_lines(&nameless, true, usize::MAX),
+        (None, Some("#3 OHIO STATE".into()))
+    );
+
+    // The name is upper-cased like a rank line's, and fed in one byte at a
+    // time it comes out the same.
+    assert_eq!(
+        pregame_lines(&event, true, 1),
+        (Some("MICHIGAN".into()), Some("#3 OHIO STATE".into()))
     );
 }
 
