@@ -242,7 +242,8 @@ impl PregameCycle {
     fn build(primary: &str, secondary: &str) -> Self {
         let mut cycle = Self::EMPTY;
         let mut running = 0;
-        // Empty lines are skipped, not drawn blank: NBA fills only the first.
+        // Empty lines are skipped, not drawn blank: most nights have no note,
+        // so the NBA and hockey usually fill only the first.
         for (line, text) in [
             (PregameLine::Primary, primary),
             (PregameLine::Secondary, secondary),
