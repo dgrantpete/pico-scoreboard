@@ -479,6 +479,15 @@ fn extra_innings_and_overtime_get_their_own_final_text() {
     let view = &store.snapshot().linescore_final;
     assert_eq!(view.final_text.as_str(), "F/OT");
     assert_eq!(view.sport, Sport::Football);
+
+    // The NBA spells its one overtime out and counts the rest (NBA.md §3.1).
+    let store = committed("nba/final_ot");
+    assert_eq!(
+        store.snapshot().linescore_final.final_text.as_str(),
+        "FINAL/OT"
+    );
+    let store = committed("nba/final_2ot");
+    assert_eq!(store.snapshot().linescore_final.final_text.as_str(), "F/2OT");
 }
 
 // =========================================================================

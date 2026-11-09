@@ -1082,12 +1082,14 @@ fn set_break_clock(
 }
 
 /// The banner over a line-score final. Baseball counts innings past nine;
-/// the four-period sports count overtimes. (Soccer never reaches here — its
-/// full-time screen is its own shape.)
+/// the four-period sports count overtimes, and the NBA spells its single
+/// overtime out (NBA.md §3.1: `FINAL`, `FINAL/OT`, `F/{n}OT`). (Soccer never
+/// reaches here — its full-time screen is its own shape.)
 fn set_final_text(dst: &mut Text<SHORT>, sport: Sport, periods: u8) {
     match (sport, periods) {
         (Sport::Mlb, 10..) => write_text!(dst, "F/{periods}"),
         (Sport::Mlb, _) | (_, 0..=4) => set_plain(dst, "FINAL"),
+        (Sport::Nba, 5) => set_plain(dst, "FINAL/OT"),
         (_, 5) => set_plain(dst, "F/OT"),
         (_, _) => {
             let overtimes = periods - 4;
