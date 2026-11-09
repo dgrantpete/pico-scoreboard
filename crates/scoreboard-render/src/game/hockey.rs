@@ -28,8 +28,8 @@ use super::{Scene, Strip};
 use crate::blit::{Canvas, Slice};
 use crate::font::{self, Align, FontFace, Style};
 use crate::geometry::{
-    self, EDGE_INSET, HOCKEY_FINAL, HOCKEY_LIVE, HOCKEY_SCROLL_PAUSE_MS, HOCKEY_STARS_SCROLL,
-    HockeyLiveGeometry, SHOOTOUT_MARK, SHOOTOUT_PITCH,
+    self, EDGE_INSET, HOCKEY_FINAL, HOCKEY_LIVE, HOCKEY_SCROLL_PAUSE_MS, HockeyLiveGeometry,
+    SHOOTOUT_MARK, SHOOTOUT_PITCH, STARS_SCROLL,
 };
 use crate::rink::{self, Rink};
 use crate::time::WallMs;
@@ -550,7 +550,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
                     Align::Left,
                     scene.view.motion(),
                     Style::new(face, color),
-                    HOCKEY_STARS_SCROLL,
+                    STARS_SCROLL,
                 );
             }
         }
@@ -584,7 +584,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             Align::Center,
             scene.view.motion(),
             Style::new(face, colors.secondary),
-            HOCKEY_STARS_SCROLL,
+            STARS_SCROLL,
         );
     }
     if let Some(shots) = view.shots {

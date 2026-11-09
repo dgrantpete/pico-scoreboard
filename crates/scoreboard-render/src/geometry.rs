@@ -183,15 +183,16 @@ pub const HOCKEY_SCROLL_PAUSE_MS: u64 = 1500;
 /// once in full before the caption goes.
 pub const NBA_CAPTION_PAUSE_MS: u64 = 1500;
 
-/// The three-stars final's names and series line: a fixed feel, like the
-/// pregame lines, slow enough to read a name off.
-pub const HOCKEY_STARS_SCROLL: Scroll = Scroll {
+/// The hockey three-stars final's names and series line, and the NBA leaders
+/// final's rows: a fixed feel, like the pregame lines, slow enough to read a
+/// name off.
+pub const STARS_SCROLL: Scroll = Scroll {
     pause_ms: 1500,
     pixels_per_second: 20,
 };
 
 const _: () = assert!(
-    is_smooth(HOCKEY_STARS_SCROLL.pixels_per_second),
+    is_smooth(STARS_SCROLL.pixels_per_second),
     "the three stars scroll at a speed that stutters at this frame rate"
 );
 

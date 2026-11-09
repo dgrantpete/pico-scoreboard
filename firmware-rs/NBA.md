@@ -774,7 +774,7 @@ and `(1, 38)`; scores `rect(25, 6, 25, 16)` / `rect(25, 42, 25, 16)` in
 `winner_colors`; rule at x 51 rows 1–62 in the secondary colour; label
 `rect(53, 2, 74, 8)` (`chip`, accent); rows at y 14 / 24 / 34: the category
 label at x 53 in gray (`spleen_5x8`), "NAME value" in `rect(73, y, 54, 8)`
-scrolled with `HOCKEY_STARS_SCROLL` (renamed to the shared stars scroll) in
+scrolled with the shared `STARS_SCROLL` (hockey's, renamed 2026-11-09) in
 the player's team colour; rule y 43 from x 52; with a series line:
 `rect(53, 46, 74, 8)` centred white, records at y 54; without: records at
 y 51 — away at x 53, home right-aligned to x 126, each in its team colour.

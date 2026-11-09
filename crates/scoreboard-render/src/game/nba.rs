@@ -33,8 +33,8 @@ use crate::blit::{Canvas, Slice};
 use crate::court::{ESPN_ORIGIN, End, WOOD};
 use crate::font::{self, Align, Style};
 use crate::geometry::{
-    self, EDGE_INSET, FINAL_LINESCORE_SCROLL, HOCKEY_STARS_SCROLL, NBA_CAPTION_PAUSE_MS, NBA_FINAL,
-    NBA_LIVE, NbaLiveGeometry,
+    self, EDGE_INSET, FINAL_LINESCORE_SCROLL, NBA_CAPTION_PAUSE_MS, NBA_FINAL, NBA_LIVE,
+    NbaLiveGeometry, STARS_SCROLL,
 };
 use crate::widgets::{arrow, count_dots, timeout_blocks};
 use crate::{BLACK, Rgb888, WHITE, generated, mix, toast};
@@ -406,7 +406,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
                     Align::Left,
                     scene.view.motion(),
                     Style::new(face, color),
-                    HOCKEY_STARS_SCROLL,
+                    STARS_SCROLL,
                 );
             }
         }
@@ -451,7 +451,7 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
             Align::Center,
             scene.view.motion(),
             Style::new(face, colors.primary),
-            HOCKEY_STARS_SCROLL,
+            STARS_SCROLL,
         );
     }
     if let Some([away, home]) = view.records {
