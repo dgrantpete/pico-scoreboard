@@ -32,6 +32,7 @@ KNOWN_LEAGUES = {
     "nba": League("basketball", "nba"),
     "wnba": League("basketball", "wnba"),
     "ncaab": League("basketball", "mens-college-basketball"),
+    "ncaaw": League("basketball", "womens-college-basketball"),
     "nfl": League("football", "nfl"),
     "ncaaf": League("football", "college-football"),
     "nhl": League("hockey", "nhl"),

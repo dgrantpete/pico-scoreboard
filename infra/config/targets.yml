@@ -35,6 +35,10 @@ targets:
     sport: basketball
     league: mens-college-basketball
     follow_summaries: true
+  - name: ncaaw
+    kind: scoreboard
+    sport: basketball
+    league: womens-college-basketball
   - name: nfl
     kind: scoreboard
     sport: football
