@@ -81,6 +81,9 @@ the core API's `situation`, and the collector's first college summaries
   separated; D7 never paints it).
 - `competitors[].curatedRank.current`: 1–25 ranked, **99 unranked** (98,278
   ranked vs 190,112 unranked competitor rows) — football's field and rule.
+  **In the NCAA tournament it carries the seed** (2026-03-20: LIU 16 vs
+  Arizona 1; the Final Four 1 vs 1), so the pregame's "#N" reads as the seed
+  in March, as broadcasts show it.
 - `competitors[].team`: **10 % of competitor rows carry no `color` and no
   `alternateColor`, another 5 % no `alternateColor`** (288,390 rows): on the
   latest body per game day over 7 days, **19 of 74 games** have such a team
@@ -123,8 +126,9 @@ the core API's `situation`, and the collector's first college summaries
   Same half-court frame in feet (x 0–50, y toward half court), but a fit of
   417 "N-foot" shot texts puts the rim at **(25, 0.25)** against the NBA
   corpus's **(25, 1.0)** by the same method (700 texts), and a free scale
-  fits **1.0** in both: a 0.75 ft translation, nothing else. Re-check on the
-  B0 corpus before pinning.
+  fits **1.0** in both: a 0.75 ft translation, nothing else. Re-checked on
+  the B0 corpus (five other games, 417 texts): rim (25, 0.25), scale 1.0,
+  0.31 ft mean error — pinned.
 - `boxscore.players[].statistics[0]`: 13 labels (no "+/-"; PTS still found by
   name); **14–18 athletes a team, one non-Division-I side listed 37** — the
   extractor's `ATHLETES_PER_TEAM = 18` overflows.
