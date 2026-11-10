@@ -1113,12 +1113,6 @@ reviewed change.
     unrepresentable when wrong, and save the difference between the sum and
     the largest view, four times over. Measure first; take it only if RAM
     wants it.
-104. **Line-score OT headers for NBA and football (NHL.md C4).** Their finals
-    label overtime columns "5", "6". Hockey's header row already says "OT"
-    and "SO" (`build_hockey_linescore`); NBA and football could adopt "OT"
-    for their first overtime. Since 2026-11-08 the NBA's rows show only as
-    the leaders final's fallback (a final ESPN posted without leaders), so
-    football's final is the one a viewer sees.
 105. **Shootout markers for soccer penalties (NHL.md C5).** Soccer shows only
     "PENS". Hockey's shootout marker row is sport-neutral and could carry the
     kick-by-kick sequence, which needs the penalty sequence from the soccer

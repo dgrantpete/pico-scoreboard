@@ -149,8 +149,10 @@ otherwise. "Rules" are §1 D2's properties, resolved from the league.
   or 1ST/2ND); period `regulation + 1` is **OT**, `regulation + n` is
   **{n}OT**. Final banner: **FINAL** through regulation, **F/OT**, **F/{n}OT**
   (the shared `set_final_text`; football passes `QUARTERS`).
-- Line-score headers: the period numbers through regulation, then **OT**,
-  **2OT** … (closes BACKLOG 104's NBA half; football follows).
+- Line-score headers: the period numbers through regulation, then one
+  **OT** column summing every overtime — hockey's rule, which keeps the
+  three-character columns (the banner carries "F/2OT"). Closes BACKLOG 104
+  for basketball and football.
 - The extractor's `altDetail` cross-check uses the league's regulation.
 
 ### 3.2 Clock

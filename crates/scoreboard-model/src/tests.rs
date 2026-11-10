@@ -4389,3 +4389,45 @@ fn the_crunch_clock_is_under_a_minute_in_either_shape_and_never_all_zeros() {
         assert!(!crunch_clock(clock), "{clock} is not");
     }
 }
+
+#[test]
+fn a_line_score_gathers_every_overtime_into_one_column() {
+    // Football's overtime: four quarters numbered, then "OT".
+    let store = committed("football/nfl/final_ot");
+    let header = store.snapshot().linescore_final.header_row.as_str().to_string();
+    assert!(header.ends_with("OT "), "{header:?}");
+    assert!(header.starts_with(" 1  2  3  4 "), "{header:?}");
+
+    // Two overtimes on halves (NCAAB.md §3.1): "1 2 OT", the overtimes summed.
+    let team = scoreboard_wire::FinalTeam {
+        abbreviation: "AWY",
+        score: 80,
+        colors: scoreboard_wire::TeamColors {
+            primary: 0x00_FF_00_00,
+            alternate: 0,
+        },
+        line_score: &[35, 30, 8, 7],
+    };
+    let mut store = Store::new();
+    store.commit_linescore_final(
+        &LinescoreFinal {
+            sport: Sport::Basketball,
+            game_id: "g1",
+            periods: 4,
+            regulation: 2,
+            away: team,
+            home: scoreboard_wire::FinalTeam {
+                score: 82,
+                line_score: &[33, 32, 8, 9],
+                ..team
+            },
+        },
+        Logos::default(),
+        0,
+    );
+    let view = &store.snapshot().linescore_final;
+    assert_eq!(view.header_row.as_str(), " 1  2 OT ");
+    assert_eq!(view.away_row.as_str(), "35 30 15 ");
+    assert_eq!(view.home_row.as_str(), "33 32 17 ");
+    assert_eq!(view.final_text.as_str(), "F/2OT");
+}

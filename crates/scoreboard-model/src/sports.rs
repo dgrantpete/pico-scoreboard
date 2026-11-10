@@ -862,11 +862,16 @@ impl Store {
         view.away_color = away_color;
         view.home_color = home_color;
         set_final_text(&mut view.final_text, game.sport, game.periods, game.regulation);
+        // Baseball numbers every inning it plays; the others number regulation
+        // and gather every overtime into one "OT" column, hockey's rule
+        // (BACKLOG 104) — a second overtime is the banner's "F/2OT".
+        let overtime_from = (game.sport != Sport::Mlb).then_some(game.regulation);
         build_linescore(
             &mut view.header_row,
             &mut view.away_row,
             &mut view.home_row,
             game.periods,
+            overtime_from,
             away.line_score,
             home.line_score,
         );
@@ -1104,22 +1109,31 @@ fn build_linescore(
     away_row: &mut Text<LINESCORE>,
     home_row: &mut Text<LINESCORE>,
     periods: u8,
+    overtime_from: Option<u8>,
     away_line: &[u8],
     home_line: &[u8],
 ) {
     header.clear();
     away_row.clear();
     home_row.clear();
-    for period in 0..periods.min(MAX_PERIODS) {
-        let number = period as u16 + 1;
-        crate::text::write_args(header, format_args!("{number:>2} "));
+    let periods = periods.min(MAX_PERIODS) as usize;
+    let numbered = overtime_from.map_or(periods, |regulation| periods.min(regulation as usize));
+    let regulation = (0..numbered).map(|period| (period as u16 + 1, period..period + 1));
+    let overtime = (periods > numbered).then_some((0, numbered..periods));
+    for (number, range) in regulation.chain(overtime) {
+        if number == 0 {
+            crate::text::write_args(header, format_args!("OT "));
+        } else {
+            crate::text::write_args(header, format_args!("{number:>2} "));
+        }
         for (row, line) in [(&mut *away_row, away_line), (&mut *home_row, home_line)] {
-            match line.get(period as usize) {
-                Some(&score) => {
-                    let score = score.min(MAX_PERIOD_SCORE);
-                    crate::text::write_args(row, format_args!("{score:>2} "));
+            match line.get(range.start..range.end.min(line.len())) {
+                Some(points) if !points.is_empty() => {
+                    let total = points.iter().map(|&p| p as u16).sum::<u16>();
+                    let total = total.min(MAX_PERIOD_SCORE as u16);
+                    crate::text::write_args(row, format_args!("{total:>2} "));
                 }
-                None => crate::text::write_args(row, format_args!(" X ")),
+                _ => crate::text::write_args(row, format_args!(" X ")),
             }
         }
     }
