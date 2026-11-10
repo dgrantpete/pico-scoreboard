@@ -13,6 +13,22 @@ color clock_normal 0 255 0
 color clock_warning 255 10 10
 scroll_px_per_sec 20
 logo_slots 33
+# College basketball rows read the level-2 goldens, as the NBA's do: two
+# halves, no ledger (the band's scores centred), the NCAA court.
+# College crests: one slot per team, alphabetical (ALA 0 ... WCBC 15).
+game basketball__mens-college-basketball__end_of_regulation basketball mens-college-basketball backend/testdata/wire/basketball/mens-college-basketball/end_of_regulation.ext2.bin 6 13
+game basketball__mens-college-basketball__final basketball mens-college-basketball backend/testdata/wire/basketball/mens-college-basketball/final.ext2.bin 11 12
+game basketball__mens-college-basketball__final_ot basketball mens-college-basketball backend/testdata/wire/basketball/mens-college-basketball/final_ot.ext2.bin 9 2
+game basketball__mens-college-basketball__final_tournament basketball mens-college-basketball backend/testdata/wire/basketball/mens-college-basketball/final_tournament.ext2.bin 4 8
+game basketball__mens-college-basketball__halftime basketball mens-college-basketball backend/testdata/wire/basketball/mens-college-basketball/halftime.ext2.bin 11 12
+game basketball__mens-college-basketball__in_progress basketball mens-college-basketball backend/testdata/wire/basketball/mens-college-basketball/in_progress.ext2.bin 6 13
+game basketball__mens-college-basketball__placeholder_play basketball mens-college-basketball backend/testdata/wire/basketball/mens-college-basketball/placeholder_play.ext2.bin 6 13
+game basketball__mens-college-basketball__pregame_colourless basketball mens-college-basketball backend/testdata/wire/basketball/mens-college-basketball/pregame_colourless.ext2.bin 15 3
+game basketball__mens-college-basketball__pregame_ranked basketball mens-college-basketball backend/testdata/wire/basketball/mens-college-basketball/pregame_ranked.ext2.bin 5 1
+game basketball__mens-college-basketball__run basketball mens-college-basketball backend/testdata/wire/basketball/mens-college-basketball/run.ext2.bin 14 7
+game basketball__mens-college-basketball__team_timeout basketball mens-college-basketball backend/testdata/wire/basketball/mens-college-basketball/team_timeout.ext2.bin 11 12
+game basketball__mens-college-basketball__tip basketball mens-college-basketball backend/testdata/wire/basketball/mens-college-basketball/tip.ext2.bin 10 0
+game basketball__mens-college-basketball__tv_timeout basketball mens-college-basketball backend/testdata/wire/basketball/mens-college-basketball/tv_timeout.ext2.bin 11 12
 game football__college-football__pregame_ranked football college-football backend/testdata/wire/football/college-football/pregame_ranked.bin 0 1
 game football__nfl__end_of_period football nfl backend/testdata/wire/football/nfl/end_of_period.bin 2 3
 game football__nfl__final football nfl backend/testdata/wire/football/nfl/final.bin 2 3
