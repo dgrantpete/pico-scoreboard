@@ -1,4 +1,5 @@
-//! Committed build products: glyph tables and the hand-drawn sprites.
+//! Committed build products: glyph tables, the hand-drawn sprites and the
+//! arena court's static pixels.
 //!
 //! Nothing in here is hand-written, and each file says what wrote it:
 //!
@@ -7,15 +8,19 @@
 //!   Rust module beside it from one pass over the same bytes;
 //! - [`art`], from `crates/scoreboard-render/art/*.png` by
 //!   `tests/art_compile.rs`, a cargo test that also fails whenever the
-//!   committed module is not what the PNGs compile to (BACKLOG 116).
+//!   committed module is not what the PNGs compile to (BACKLOG 116);
+//! - [`court`], drawn on the host by `tests/court_compile.rs` — the court's
+//!   code: its camera, the rule books, the hoops — and failing the same way
+//!   when stale (NCAAB.md E1).
 //!
 //! ```text
 //! py tools/compile_fonts.py    # needs freetype
 //! SCOREBOARD_BLESS_ART=1 cargo test -p scoreboard-render --test art_compile
+//! SCOREBOARD_BLESS_COURT=1 cargo test -p scoreboard-render --test court_compile
 //! ```
 //!
-//! Everything else the panel draws is code: the rink, the court, the count
-//! dots, the toasts' icons — see their modules.
+//! Everything else the panel draws is code: the rink, the count dots, the
+//! toasts' icons — see their modules.
 //!
 //! # Why these are committed
 //!
@@ -35,6 +40,7 @@
 //! forbids `unsafe`.
 
 pub mod art;
+pub mod court;
 pub mod spleen_5x8;
 pub mod unscii_16;
 pub mod unscii_8;

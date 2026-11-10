@@ -1,53 +1,35 @@
-//! The procedural court (NBA.md D14): pinned to the mockup harness it ports,
-//! and to its own rules — nothing outside its rectangle, mirrored ends, an
-//! arc that is one staircase, the rim beside the board at a coarse ratio,
-//! D5's alpha climb, and marks that stay inside the lines.
+//! The arena court (NCAAB.md §3.11), held to its own rules whatever the
+//! tables hold: nothing outside rows 25–62 and columns 1–126, mirrored ends,
+//! an unbroken boundary that only the hoops stand in front of, a caption
+//! floor that leaves the arcs whole, a dark pixel between every hoop and
+//! every line, makes that land on the floor and share pixels with the lines
+//! they were made on, D5's alpha climb, and each rule book's own lines.
+//! `court_compile.rs` holds the drawing itself; B7's oracle matched it to the
+//! reviewed prototype byte for byte.
 
 use scoreboard_model::Rgb888;
 use scoreboard_model::basketball::CourtLines;
 use scoreboard_model::snapshot::Side;
 use scoreboard_render::blit::Canvas;
 use scoreboard_render::court::{
-    BACKBOARD, Court, ESPN_ORIGIN, End, IRON, LENGTH, LINES, RIM, WOOD,
+    self, BOARD, BOARD_FACE, Camera, End, IRON, LENGTH, LINES, NET, ORIGIN, PAD, PAD_BASE, RIM,
+    WOOD,
 };
-use scoreboard_render::geometry::{HEIGHT, WIDTH};
-use scoreboard_render::{WHITE, scale};
+use scoreboard_render::geometry::{BASKETBALL_LIVE, HEIGHT, WIDTH};
+use scoreboard_render::{BLACK, WHITE, scale};
 
-/// NBA.md §6.5's B5 court: rows 26–62, columns 2–125.
-const B5: Court = Court {
-    x: 2,
-    y: 26,
-    width: 124,
-    height: 37,
-};
 /// Utah purple and Oklahoma City blue, brightened as the model stores a team
-/// colour: the inputs the reference bitmaps were drawn with.
+/// colour.
 const AWAY: u32 = 0x4e008e;
 const HOME: u32 = 0x007ac1;
 /// D5's mark opacity.
 const ALPHA: u32 = 96;
+const RULE_BOOKS: [CourtLines; 2] = [CourtLines::NBA, CourtLines::NCAA];
 
-/// The reference bitmaps: the B5 court's 124 × 37 rectangle, RGB888 (three
-/// bytes a pixel), row-major, with `AWAY` and `HOME` above, then `MARKS` at
-/// `ALPHA` and the `BLINK`.
-///
-/// First drawn on 2026-11-08 as RGB565 by the mockup harness's own
-/// `Court::draw`, `plot_over` and `plot` (`data/nba-design/mockup-harness/
-/// src/court.rs`, included by path into a throwaway binary against this
-/// checkout's crates), which this court matched byte for byte. Re-drawn the
-/// same day at eight bits a channel when the drawing surface left RGB565
-/// (BACKLOG 115), after an oracle check rather than by eye: with the two blends
-/// the move changes — the lanes' `scale` and the makes' `mix` — swapped for
-/// RGB565-emulating twins, both courts truncated back to RGB565 were the
-/// mockup's bytes exactly. The geometry is the mockup's; only the lane and
-/// make colours carry the extra bits.
-const BARE: &[u8] = include_bytes!("court/b5_bare.bin");
-const MARKED: &[u8] = include_bytes!("court/b5_marks.bin");
-
-/// `(home, along, across)`, as the reference drew them: a dunk, a long two,
-/// a corner three, the baseline corner, a half-court heave, five stacked at
-/// the other rim, the other corner, and a point past the far baseline.
-const MARKS: [(bool, f32, f32); 12] = [
+/// `(home, along, across)`: a dunk, a long two, a corner three, the baseline
+/// corner, a half-court heave, five stacked at the other rim, the other
+/// corner, and points past the far baseline and both sidelines.
+const MARKS: [(bool, f32, f32); 14] = [
     (false, 5.25, 0.0),
     (false, 27.0, 0.0),
     (false, 10.0, 22.5),
@@ -60,38 +42,10 @@ const MARKS: [(bool, f32, f32); 12] = [
     (true, 5.25, 0.0),
     (true, 14.0, -22.0),
     (true, 94.0, 10.0),
+    (true, -3.0, 30.0),
+    (false, 40.0, -31.0),
 ];
 const BLINK: (bool, f32, f32) = (true, 20.0, 5.0);
-
-/// The other strips the mockups drew the court into, for the rules that have
-/// to hold at every ratio: B (124 × 17), B2 (124 × 29), B4 (62 × 33, true
-/// proportion) and the rink's 15-row strip.
-const STRIPS: [Court; 4] = [
-    Court {
-        x: 2,
-        y: 46,
-        width: 124,
-        height: 17,
-    },
-    Court {
-        x: 2,
-        y: 34,
-        width: 124,
-        height: 29,
-    },
-    Court {
-        x: 33,
-        y: 14,
-        width: 62,
-        height: 33,
-    },
-    Court {
-        x: 2,
-        y: 47,
-        width: 124,
-        height: 15,
-    },
-];
 
 struct Frame(Vec<u8>);
 
@@ -105,7 +59,7 @@ impl Frame {
     }
 
     fn new() -> Self {
-        Self::filled(Rgb888::new(0, 0, 0))
+        Self::filled(BLACK)
     }
 
     fn canvas(&mut self) -> Canvas<'_> {
@@ -115,18 +69,6 @@ impl Frame {
     fn pixel(&self, x: i32, y: i32) -> Rgb888 {
         let index = ((y * WIDTH + x) * 3) as usize;
         Rgb888::new(self.0[index], self.0[index + 1], self.0[index + 2])
-    }
-
-    /// The court's rectangle, row-major, as the reference bitmaps are laid out.
-    fn rect_bytes(&self, court: Court) -> Vec<u8> {
-        let mut out = Vec::new();
-        for y in court.y..court.y + court.height {
-            for x in court.x..court.x + court.width {
-                let pixel = self.pixel(x, y);
-                out.extend_from_slice(&[pixel.red(), pixel.green(), pixel.blue()]);
-            }
-        }
-        out
     }
 }
 
@@ -138,208 +80,315 @@ fn end(home: bool) -> End {
     if home { End::Right } else { End::Left }
 }
 
-fn bare(court: Court, away: Rgb888, home: Rgb888) -> Frame {
+fn camera() -> Camera {
+    Camera::new(&BASKETBALL_LIVE.court)
+}
+
+fn bare(lines: CourtLines, away: Rgb888, home: Rgb888) -> Frame {
     let mut frame = Frame::new();
-    court.draw(&mut frame.canvas(), CourtLines::NBA, away, home);
+    court::raster(lines).draw_floor(&mut frame.canvas(), away, home);
     frame
 }
 
-/// The B5 court with `MARKS` and the `BLINK`, over `background`.
-fn marked(background: Rgb888) -> Frame {
+/// §3.11's whole draw over `background`: the floor, `MARKS` and the `BLINK`,
+/// the caption's floor, the hoops — or all but the hoops.
+fn full(lines: CourtLines, background: Rgb888, hoops: bool) -> Frame {
     let (away, home) = teams();
+    let cam = camera();
+    let raster = court::raster(lines);
     let mut frame = Frame::filled(background);
     let mut canvas = frame.canvas();
-    B5.draw(&mut canvas, CourtLines::NBA, away, home);
+    raster.draw_floor(&mut canvas, away, home);
     for (home_side, along, across) in MARKS {
         let color = if home_side { home } else { away };
-        B5.plot_over(&mut canvas, end(home_side), along, across, color, ALPHA);
+        cam.plot_over(&mut canvas, end(home_side), along, across, color, ALPHA);
     }
-    B5.plot(&mut canvas, end(BLINK.0), BLINK.1, BLINK.2, WHITE);
+    cam.plot(&mut canvas, end(BLINK.0), BLINK.1, BLINK.2, WHITE);
+    raster.clear_caption(&mut canvas);
+    if hoops {
+        court::draw_hoops(&mut canvas);
+    }
     frame
 }
 
-/// Where a court bitmap first disagrees with its reference.
-fn assert_same_bytes(court: Court, got: &[u8], want: &[u8], what: &str) {
-    assert_eq!(
-        got.len(),
-        want.len(),
-        "{what}: the reference is not a {court:?}"
-    );
-    let differing = got
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .zip(want.as_chunks::<3>().0)
-        .enumerate()
-        .filter(|(_, (have, need))| have != need)
-        .collect::<Vec<_>>();
-    if let Some((index, (have, need))) = differing.first() {
-        let index = *index as i32;
-        let (x, y) = (court.x + index % court.width, court.y + index / court.width);
-        panic!(
-            "{what}: {} px differ from the reference, first at ({x}, {y}): drew {have:02x?}, \
-             reference {need:02x?}",
-            differing.len(),
-        );
+/// The boundary's pixels: the far and near sidelines whole, each baseline's
+/// pixel on every row between.
+fn boundary() -> Vec<(i32, i32)> {
+    let cam = camera();
+    let court = cam.court();
+    let (top, bottom) = (court.y, court.y + court.height - 1);
+    let mut pixels = Vec::new();
+    for y in top..=bottom {
+        let (l, r) = cam.edges(y);
+        if y == top || y == bottom {
+            pixels.extend((l..=r).map(|x| (x, y)));
+        } else {
+            pixels.extend([(l, y), (r, y)]);
+        }
     }
+    pixels
+}
+
+/// The board, net and rim's colours: what the knockout keeps lines off.
+const FRONT: [Rgb888; 4] = [BOARD_FACE, BOARD, NET, IRON];
+
+fn beside(frame: &Frame, x: i32, y: i32, colors: &[Rgb888]) -> bool {
+    (-1..=1).any(|dy| {
+        (-1..=1).any(|dx| {
+            let (nx, ny) = (x + dx, y + dy);
+            (dx, dy) != (0, 0)
+                && (0..WIDTH).contains(&nx)
+                && (0..HEIGHT).contains(&ny)
+                && colors.contains(&frame.pixel(nx, ny))
+        })
+    })
 }
 
 #[test]
-fn the_bare_b5_court_is_the_mockups_byte_for_byte() {
-    let (away, home) = teams();
-    let frame = bare(B5, away, home);
-    assert_same_bytes(B5, &frame.rect_bytes(B5), BARE, "bare court");
-}
-
-#[test]
-fn the_marks_are_the_mockups_byte_for_byte() {
-    let frame = marked(Rgb888::new(0, 0, 0));
-    assert_same_bytes(B5, &frame.rect_bytes(B5), MARKED, "marked court");
-}
-
-#[test]
-fn nothing_is_drawn_outside_the_court() {
+fn nothing_is_drawn_outside_rows_25_to_62_and_columns_1_to_126() {
     let sentinel = Rgb888::new(8, 248, 8);
-    let frame = marked(sentinel);
-    let (away, home) = teams();
-    let floor = [WOOD, LINES, IRON, scale(away, 2, 3), scale(home, 2, 3)];
-    let bare = bare(B5, away, home);
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let inside =
-                (B5.x..B5.x + B5.width).contains(&x) && (B5.y..B5.y + B5.height).contains(&y);
-            if inside {
-                assert!(floor.contains(&bare.pixel(x, y)), "({x}, {y}) is not floor");
-            } else {
-                assert_eq!(frame.pixel(x, y), sentinel, "({x}, {y}) was touched");
-            }
-        }
-    }
-}
-
-#[test]
-fn the_ends_mirror() {
-    // The same colour at both ends, so the mirror is exact — except on the
-    // two middle columns: the court is an even width, so the one-pixel
-    // half-court line falls on one of them and its mirror is wood.
-    let color = Rgb888::new(200, 40, 40);
-    let (x0, x1) = (B5.x, B5.x + B5.width - 1);
-    let centre = B5.fx(LENGTH / 2.0);
-    let frame = bare(B5, color, color);
-    for y in B5.y..B5.y + B5.height {
-        for x in (x0..=x1).filter(|&x| x != centre && x0 + x1 - x != centre) {
-            assert_eq!(frame.pixel(x, y), frame.pixel(x0 + x1 - x, y), "({x}, {y})");
-        }
-    }
-    // §6.5's numbers: the half-court line, the middle row, the two rims.
-    assert_eq!(B5.fx(LENGTH / 2.0), 64);
-    assert_eq!(B5.mid(), 44);
-    assert_eq!(B5.at(End::Left, RIM), 9);
-    assert_eq!(B5.at(End::Right, RIM), 118);
-}
-
-/// The arc's run in one row at one end: the line-coloured pixels between the
-/// baseline and the half-court line, the backboard's three left out. Asserts
-/// the run is unbroken.
-fn arc_run(frame: &Frame, court: Court, end: End, y: i32) -> (i32, i32) {
-    let centre = court.fx(LENGTH / 2.0);
-    let (lo, hi) = match end {
-        End::Left => (court.x + 1, centre),
-        End::Right => (centre + 1, court.x + court.width - 1),
-    };
-    let board = court.at(end, BACKBOARD);
-    let is_board = |x: i32| x == board && (court.mid() - 1..=court.mid() + 1).contains(&y);
-    let xs: Vec<i32> = (lo..hi)
-        .filter(|&x| !is_board(x) && frame.pixel(x, y) == LINES)
-        .collect();
-    let (first, last) = (xs[0], xs[xs.len() - 1]);
-    assert_eq!(
-        xs.len() as i32,
-        last - first + 1,
-        "{court:?} row {y}: a broken run"
-    );
-    (first, last)
-}
-
-/// Each row's run joins the previous row's and never steps past its own x:
-/// from the corner rows in, the run begins where the last one ended (or one
-/// past it) and ends no sooner.
-#[test]
-fn the_arc_is_one_staircase_without_nubs() {
-    let (away, home) = teams();
-    for court in STRIPS.into_iter().chain([B5]) {
-        let frame = bare(court, away, home);
-        let corner_rows = -court.dy(CourtLines::NBA.corner.feet());
-        for end in [End::Left, End::Right] {
-            let toward_centre = match end {
-                End::Left => 1,
-                End::Right => -1,
-            };
-            for half in [-1, 1] {
-                let mut prev: Option<(i32, i32)> = None;
-                for row in (0..=corner_rows).rev() {
-                    let y = court.mid() + half * row;
-                    let (first, last) = arc_run(&frame, court, end, y);
-                    // The run's near end (toward the baseline) and far end.
-                    let (near, far) = match end {
-                        End::Left => (first, last),
-                        End::Right => (last, first),
-                    };
-                    match prev {
-                        None => assert_eq!(
-                            near,
-                            court.at(end, 0.0) + toward_centre,
-                            "{court:?} {end:?}: the corner segment starts at the baseline"
-                        ),
-                        Some((_, prev_far)) => assert!(
-                            near == prev_far || near == prev_far + toward_centre,
-                            "{court:?} {end:?} row {y}: run {first}..={last} does not join the row before, which ended at {prev_far}"
-                        ),
-                    }
-                    prev = Some((near, far));
+    for lines in RULE_BOOKS {
+        let frame = full(lines, sentinel, true);
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let inside = (1..=WIDTH - 2).contains(&x) && (25..=HEIGHT - 2).contains(&y);
+                if !inside {
+                    assert_eq!(
+                        frame.pixel(x, y),
+                        sentinel,
+                        "{lines:?} ({x}, {y}) was touched"
+                    );
                 }
             }
         }
     }
 }
 
+/// The camera sits on the half-court line, so the ends mirror about column
+/// 63.5 — except on columns 63 and 64: the one-pixel half-court line rounds
+/// onto 64 and its mirror is wood.
 #[test]
-fn the_rim_takes_the_next_column_when_it_rounds_onto_the_board() {
-    let (away, home) = teams();
-    // B4's 0.65 px/ft: the premise is that the board and the rim share a column.
-    let coarse = STRIPS[2];
-    assert_eq!(coarse.at(End::Left, BACKBOARD), coarse.at(End::Left, RIM));
-    let frame = bare(coarse, away, home);
-    for (end, toward_centre) in [(End::Left, 1), (End::Right, -1)] {
-        let (board, mid) = (coarse.at(end, BACKBOARD), coarse.mid());
-        for y in mid - 1..=mid + 1 {
-            assert_eq!(
-                frame.pixel(board, y),
-                LINES,
-                "{end:?}: the board stays whole"
+fn the_ends_mirror() {
+    let color = Rgb888::new(200, 40, 40);
+    let cam = camera();
+    assert_eq!(cam.px(LENGTH / 2.0, 0.0, 0.0).0, 64, "the half-court line");
+    for lines in RULE_BOOKS {
+        let mut frame = bare(lines, color, color);
+        court::draw_hoops(&mut frame.canvas());
+        for y in 0..HEIGHT {
+            for x in (0..WIDTH).filter(|x| !(63..=64).contains(x)) {
+                assert_eq!(
+                    frame.pixel(x, y),
+                    frame.pixel(WIDTH - 1 - x, y),
+                    "{lines:?} ({x}, {y})"
+                );
+            }
+        }
+    }
+}
+
+/// §3.11's numbers, as the camera fits them to B5's rectangle: the near
+/// sideline 118 px, the far 97 (98 between its rounded ends), the far half
+/// 16 rows and the near half 20.
+#[test]
+fn the_camera_fits_the_b5_rectangle() {
+    let cam = camera();
+    let court = cam.court();
+    let (top, bottom) = (court.y, court.y + court.height - 1);
+    assert_eq!((top, bottom), (26, 62));
+    let (l, r) = cam.edges(bottom);
+    assert_eq!(r - l + 1, 118, "near sideline");
+    let (l, r) = cam.edges(top);
+    assert_eq!(r - l + 1, 98, "far sideline");
+    let centre = cam.px(LENGTH / 2.0, 0.0, 0.0).1;
+    assert_eq!((centre - top, bottom - centre), (16, 20));
+    // The floor's inverse lands back on the pixel it came from.
+    for row in top..=bottom {
+        for column in [20, 64, 100] {
+            let (x, y) = (cam.floor_x(column, row), cam.floor_y(row));
+            assert_eq!(cam.px(x, y, 0.0), (column, row));
+        }
+    }
+}
+
+/// The sidelines and baselines draw last and nothing on the floor crosses
+/// them — no lane colour, no mark, no caption. Only the hoops stand in front
+/// of the far end of each baseline: there a boundary pixel is the hoop's, or
+/// knocked back to wood beside it.
+#[test]
+fn the_boundary_is_unbroken_and_only_the_hoops_stand_in_front_of_it() {
+    for lines in RULE_BOOKS {
+        let floor = full(lines, BLACK, false);
+        for &(x, y) in &boundary() {
+            assert_eq!(floor.pixel(x, y), LINES, "{lines:?} ({x}, {y})");
+        }
+        let frame = full(lines, BLACK, true);
+        let hoop = [PAD_BASE, PAD, BOARD_FACE, BOARD, NET, IRON];
+        let mut behind = 0;
+        for &(x, y) in &boundary() {
+            let pixel = frame.pixel(x, y);
+            if pixel == LINES {
+                continue;
+            }
+            behind += 1;
+            assert!(
+                hoop.contains(&pixel) || (pixel == WOOD && beside(&frame, x, y, &FRONT)),
+                "{lines:?} ({x}, {y}) is {pixel:?}"
+            );
+            assert!(
+                y < camera().px(0.0, 0.0, 0.0).1,
+                "only the far half: ({x}, {y})"
             );
         }
-        assert_eq!(
-            frame.pixel(board + toward_centre, mid),
-            IRON,
-            "{end:?}: the rim steps in"
-        );
+        assert!(behind > 0, "the boards stand in front of the baselines");
     }
-    // B5 has the room: the rim sits on its own column.
-    assert_ne!(B5.at(End::Left, BACKBOARD), B5.at(End::Left, RIM));
-    let frame = bare(B5, away, home);
-    for end in [End::Left, End::Right] {
-        assert_eq!(frame.pixel(end_rim(end).0, end_rim(end).1), IRON, "{end:?}");
+}
+
+/// The caption's floor erases marks and the half-court line under the text
+/// but stops at the three-point arcs: of the lines, it covers only the
+/// half-court line's column.
+#[test]
+fn the_caption_floor_leaves_every_line_but_half_court_whole() {
+    let (away, home) = teams();
+    let half_court = camera().px(LENGTH / 2.0, 0.0, 0.0).0;
+    let slot = BASKETBALL_LIVE.caption_box;
+    for lines in RULE_BOOKS {
+        let floor = bare(lines, away, home);
+        let mut cleared = 0;
+        for run in court::raster(lines).caption {
+            let (first, last) = run.ends();
+            let y = run.y as i32;
+            assert!((slot.y..slot.y + slot.height).contains(&y));
+            assert!(
+                first >= slot.x && last < slot.x + slot.width,
+                "{lines:?} row {y}"
+            );
+            for x in first..=last {
+                let under = floor.pixel(x, y);
+                assert!(
+                    under == WOOD || (under == LINES && x == half_court),
+                    "{lines:?}: the caption covers ({x}, {y}), {under:?}"
+                );
+                cleared += usize::from(under == LINES);
+            }
+        }
         assert_eq!(
-            frame.pixel(B5.at(end, BACKBOARD), B5.mid()),
-            LINES,
-            "{end:?}"
+            cleared, slot.height as usize,
+            "{lines:?}: the half-court line under the box"
         );
     }
 }
 
-fn end_rim(end: End) -> (i32, i32) {
-    (B5.at(end, RIM), B5.mid())
+/// The knockout: after the whole draw no line pixel touches the board, the
+/// net or the rim, even where a mark sits beside them.
+#[test]
+fn the_knockout_leaves_a_dark_pixel_between_hoop_and_line() {
+    for lines in RULE_BOOKS {
+        let frame = full(lines, BLACK, true);
+        let mut front = 0;
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                if FRONT.contains(&frame.pixel(x, y)) {
+                    front += 1;
+                }
+                if frame.pixel(x, y) == LINES {
+                    assert!(
+                        !beside(&frame, x, y, &FRONT),
+                        "{lines:?}: the line at ({x}, {y}) touches the hoop"
+                    );
+                }
+            }
+        }
+        assert!(front > 40, "{lines:?}: both hoops drew");
+    }
+}
+
+/// Every make lands on the floor, held off the boundary: in the corners, on
+/// the baselines, past them and past the sidelines, from both ends.
+#[test]
+fn a_make_lands_inside_the_court() {
+    let cam = camera();
+    let color = Rgb888::new(200, 40, 40);
+    let base = bare(CourtLines::NBA, color, color);
+    let mut along = -10.0;
+    while along <= LENGTH + 10.0 {
+        let mut across = -30.0;
+        while across <= 30.0 {
+            for side in [End::Left, End::Right] {
+                let mut frame = bare(CourtLines::NBA, color, color);
+                cam.plot(&mut frame.canvas(), side, along, across, WHITE);
+                let lit: Vec<(i32, i32)> = (0..HEIGHT)
+                    .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
+                    .filter(|&(x, y)| frame.pixel(x, y) == WHITE)
+                    .collect();
+                assert_eq!(lit.len(), 4, "{side:?} {along} {across}");
+                for (x, y) in lit {
+                    assert_ne!(base.pixel(x, y), BLACK, "off the floor at ({x}, {y})");
+                    assert!(
+                        !boundary().contains(&(x, y)),
+                        "on the boundary at ({x}, {y})"
+                    );
+                }
+            }
+            across += 2.5;
+        }
+        along += 2.5;
+    }
+}
+
+/// One projection draws the lines and places the marks, so a make where a
+/// projected line is shares its pixel: the mark's bottom-right pixel is the
+/// point, and at the top of the arc, in both corners and at half court that
+/// pixel is the line's. (The keys are regions digitised by pixel centre, so
+/// their edges sit up to half a pixel inside the true shape — NCAAB.md §8.)
+#[test]
+fn a_make_and_a_line_in_the_same_place_share_a_pixel() {
+    let cam = camera();
+    let (away, home) = teams();
+    for lines in RULE_BOOKS {
+        let floor = bare(lines, away, home);
+        let (arc, corner) = (RIM + lines.arc.feet(), lines.corner.feet());
+        for side in [End::Left, End::Right] {
+            for (along, across) in [
+                (arc, 0.0),
+                (10.0, corner),
+                (10.0, -corner),
+                (LENGTH / 2.0, 0.0),
+            ] {
+                let (x, y) = cam.px(side.feet_from_left(along), across, 0.0);
+                let what = format!("{lines:?} {side:?} ({along}, {across})");
+                assert_eq!(floor.pixel(x, y), LINES, "{what}: the line");
+                let mut frame = bare(lines, away, home);
+                cam.plot(&mut frame.canvas(), side, along, across, WHITE);
+                assert_eq!(frame.pixel(x, y), WHITE, "{what}: the point");
+                assert_eq!(
+                    frame.pixel(x - 1, y - 1),
+                    WHITE,
+                    "{what}: up and left of it"
+                );
+            }
+        }
+    }
+}
+
+/// The wire's `y = 1` is the rim: through `ORIGIN` a make lands on the rim's
+/// floor point at either end, the away side's on the left (D5).
+#[test]
+fn a_make_at_the_wires_rim_lands_under_the_rim() {
+    let cam = camera();
+    assert_eq!(1.0 + ORIGIN, RIM);
+    for side in [Side::Away, Side::Home] {
+        let end = End::from(side);
+        let (x, y) = cam.px(end.feet_from_left(RIM), 0.0, 0.0);
+        let mut frame = Frame::new();
+        cam.plot(&mut frame.canvas(), end, 1.0 + ORIGIN, 0.0, WHITE);
+        for (px, py) in [(x, y), (x - 1, y), (x, y - 1), (x - 1, y - 1)] {
+            assert_eq!(frame.pixel(px, py), WHITE, "{side:?} ({px}, {py})");
+        }
+    }
+    assert_eq!(End::from(Side::Away), End::Left);
+    assert!(cam.px(End::Left.feet_from_left(RIM), 0.0, 0.0).0 < 64);
+    assert!(cam.px(End::Right.feet_from_left(RIM), 0.0, 0.0).0 > 64);
 }
 
 /// The compositing restated — per channel, at 256ths — so the test does not
@@ -358,12 +407,13 @@ fn over(under: Rgb888, color: Rgb888, alpha: u32) -> Rgb888 {
 /// 96/256, one mark reading back what the last one wrote.
 #[test]
 fn marks_climb_toward_the_team_colour_at_d5s_alpha() {
+    let cam = camera();
     let (away, home) = teams();
     // A spot on bare wood, past the arc.
     let (end, along, across) = (End::Left, 30.0, 10.0);
-    let (x, y) = (B5.at(end, along), B5.mid() + B5.dy(across));
+    let (x, y) = cam.px(end.feet_from_left(along), across, 0.0);
     let spot = [(x - 1, y - 1), (x, y - 1), (x - 1, y), (x, y)];
-    let base = bare(B5, away, home);
+    let base = bare(CourtLines::NBA, away, home);
     for (px, py) in spot {
         assert_eq!(base.pixel(px, py), WOOD, "({px}, {py}) is wood");
     }
@@ -384,10 +434,10 @@ fn marks_climb_toward_the_team_colour_at_d5s_alpha() {
         "the hand-worked values of one, two and five marks"
     );
     for count in 1..=5 {
-        let mut frame = bare(B5, away, home);
+        let mut frame = bare(CourtLines::NBA, away, home);
         let mut canvas = frame.canvas();
         for _ in 0..count {
-            B5.plot_over(&mut canvas, end, along, across, WHITE, ALPHA);
+            cam.plot_over(&mut canvas, end, along, across, WHITE, ALPHA);
         }
         for (px, py) in spot {
             assert_eq!(
@@ -397,86 +447,43 @@ fn marks_climb_toward_the_team_colour_at_d5s_alpha() {
             );
         }
     }
-    // The prose, within a percent: the red channel's climb from wood to
-    // white. It was four while the surface truncated every step to five bits.
-    let red = |c: Rgb888| c.red() as f32;
-    for (value, nominal) in [(climb[0], 37.5), (climb[1], 60.9), (climb[4], 90.5)] {
-        let climbed = (red(value) - red(WOOD)) / (255.0 - red(WOOD)) * 100.0;
-        assert!(
-            (climbed - nominal).abs() < 1.0,
-            "{climbed:.1} % against {nominal} %"
-        );
-    }
 }
 
+/// Where the rule books differ the courts do (§3.11): the NBA's lane is
+/// 16 ft and the NCAA's 12, so its key spans more rows; the NBA's arc is
+/// 23.75 ft about the rim and the NCAA's 22.146, so at the middle row it
+/// reaches further from the baseline. Everything else — the floor, the
+/// half-court line, the oval, the boundary — is the same court.
 #[test]
-fn marks_stay_inside_the_lines() {
-    let (away, home) = teams();
-    let (x0, x1) = (B5.x, B5.x + B5.width - 1);
-    let (y0, y1) = (B5.y, B5.y + B5.height - 1);
-    let base = bare(B5, away, home);
-    let mut frame = bare(B5, away, home);
-    let mut canvas = frame.canvas();
-    // On the baseline, in both its corners, a heave to the far baseline, and
-    // the heave the model clamps to half court (§3.4), from both ends.
-    for (along, across) in [
-        (0.0, 0.0),
-        (0.0, 25.0),
-        (0.0, -25.0),
-        (LENGTH, 0.0),
-        (47.0 + ESPN_ORIGIN, 3.0),
-    ] {
-        B5.plot(&mut canvas, End::Left, along, across, WHITE);
-        B5.plot(&mut canvas, End::Right, along, across, WHITE);
-    }
-    // The lines are untouched.
-    for x in x0..=x1 {
-        for y in [y0, y1] {
-            assert_eq!(frame.pixel(x, y), base.pixel(x, y), "({x}, {y})");
+fn each_rule_book_draws_its_own_lines() {
+    let cam = camera();
+    let color = Rgb888::new(200, 40, 40);
+    let lane = scale(color, 2, 3);
+    let mid = cam.px(LENGTH / 2.0, 0.0, 0.0).1;
+    let key_rows = |frame: &Frame| -> Vec<i32> {
+        (0..HEIGHT)
+            .filter(|&y| (0..64).any(|x| frame.pixel(x, y) == lane))
+            .collect()
+    };
+    let arc_column = |frame: &Frame| -> i32 {
+        // The middle row's lines left of half court: the baseline, the arc's
+        // top, the oval's left edge.
+        let lines: Vec<i32> = (0..64).filter(|&x| frame.pixel(x, mid) == LINES).collect();
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        lines[1]
+    };
+    let (nba, ncaa) = (
+        bare(CourtLines::NBA, color, color),
+        bare(CourtLines::NCAA, color, color),
+    );
+    let (nba_rows, ncaa_rows) = (key_rows(&nba), key_rows(&ncaa));
+    assert_eq!((nba_rows[0], nba_rows[nba_rows.len() - 1]), (37, 48));
+    assert_eq!((ncaa_rows[0], ncaa_rows[ncaa_rows.len() - 1]), (39, 46));
+    assert_eq!((arc_column(&nba), arc_column(&ncaa)), (43, 41));
+    // Away from the keys and the arcs the courts are one.
+    for y in 0..HEIGHT {
+        for x in (54..=73).chain([0, 127]) {
+            assert_eq!(nba.pixel(x, y), ncaa.pixel(x, y), "({x}, {y})");
         }
     }
-    for y in y0..=y1 {
-        for x in [x0, x1] {
-            assert_eq!(frame.pixel(x, y), base.pixel(x, y), "({x}, {y})");
-        }
-    }
-    // The marks landed, pressed against them: the baseline make, the two
-    // corners and the far heave at each end, the half-court heave on the
-    // floor just past the line.
-    for (x, y) in [
-        (x0 + 1, B5.mid()),
-        (x0 + 1, y0 + 1),
-        (x0 + 1, y1 - 1),
-        (x1 - 1, B5.mid()),
-        (x1 - 1, y0 + 1),
-        (x1 - 1, y1 - 1),
-        (69, 42),
-        (58, 42),
-    ] {
-        assert_eq!(frame.pixel(x, y), WHITE, "({x}, {y})");
-    }
-}
-
-/// ESPN's `y = 1` is the rim (§3.4): through `ESPN_ORIGIN` it lands on the
-/// rim pixel at either end, the mark's bottom-right pixel being the point.
-#[test]
-fn a_make_at_espns_rim_sits_on_the_rim() {
-    let (away, home) = teams();
-    let along = 1.0 + ESPN_ORIGIN;
-    assert_eq!(B5.at(End::Left, along), B5.at(End::Left, RIM));
-    for side in [Side::Away, Side::Home] {
-        let end = End::from(side);
-        let mut frame = bare(B5, away, home);
-        B5.plot(&mut frame.canvas(), end, along, 0.0, WHITE);
-        let (x, y) = end_rim(end);
-        for (px, py) in [(x, y), (x - 1, y), (x, y - 1), (x - 1, y - 1)] {
-            assert_eq!(frame.pixel(px, py), WHITE, "{side:?} ({px}, {py})");
-        }
-        assert_ne!(frame.pixel(x + 1, y), WHITE);
-        assert_ne!(frame.pixel(x - 2, y), WHITE);
-    }
-    // Away attacks the left basket, home the right (D5).
-    assert_eq!(End::from(Side::Away), End::Left);
-    assert!(B5.at(End::Left, RIM) < B5.fx(LENGTH / 2.0));
-    assert!(B5.at(End::Right, RIM) > B5.fx(LENGTH / 2.0));
 }

@@ -459,12 +459,13 @@ pub const MLB_LIVE: MlbLiveGeometry = MlbLiveGeometry {
     strip: COLUMN_STRIP,
 };
 
-/// NBA live, "Court" (NBA.md D1, the B5 layout): football's broadcast
+/// Basketball live, "Court" (NBA.md D1, the B5 layout): football's broadcast
 /// corners as one 24-row band — crests, each score column a team ledger
 /// (foul dots over the score over timeout blocks), the period over the clock
-/// between them — and a top-down court under it carrying every made field
-/// goal where it was made. Rows 1–62 and columns 1–126 only: the edge rule,
-/// checked over every mockup frame.
+/// between them — and the arena court under it carrying every made field
+/// goal where it was made (NCAAB.md D5). A league without a ledger (D3) has
+/// no tracks and its scores centred on the crests. Rows 1–62 and columns
+/// 1–126 only: the edge rule, checked over every mockup frame.
 ///
 /// The band's arithmetic, for whoever touches it: 2 × 24 px of crest and
 /// 2 × 24 px of three-digit score leave 30 px in the middle, and a
@@ -479,6 +480,10 @@ pub struct BasketballLiveGeometry {
     pub fouls_home: Slice,
     pub score_away: Slice,
     pub score_home: Slice,
+    /// The scores of a league without foul and timeout tracks: two rows up,
+    /// their ink (rows 7–17) centred on the crests' middle, 12.5.
+    pub score_away_centred: Slice,
+    pub score_home_centred: Slice,
     /// Seven 2 × 2 timeout blocks at a 3 px pitch, in the rows the score's
     /// cell leaves dark; the home row ends a pixel short of its score's
     /// right edge.
@@ -488,12 +493,13 @@ pub struct BasketballLiveGeometry {
     /// middle row.
     pub period: Slice,
     pub clock: Slice,
-    /// The court: 124 × 37, so 1.31 px/ft along and 0.72 across.
+    /// The rectangle the arena court's camera is fitted to: 124 × 37, the
+    /// far sideline on its top row and the near on its bottom row.
     pub court: Court,
     /// The caption on the floor at the bottom centre — 56 px, what the arcs'
     /// reach leaves at the court's outer rows — and the wood box painted
-    /// under it, a row taller, which erases the half-court line and any mark
-    /// beneath (§3.6).
+    /// under it, a row taller and clipped between the three-point arcs, which
+    /// erases the half-court line and any mark beneath (§3.6).
     pub caption: Slice,
     pub caption_box: Slice,
     /// The bottom strip the play flash takes over: the court's rows at full
@@ -509,6 +515,8 @@ pub const BASKETBALL_LIVE: BasketballLiveGeometry = BasketballLiveGeometry {
     fouls_home: rect(78, 2, 24, 4),
     score_away: rect(25, 7, 24, 16),
     score_home: rect(79, 7, 24, 16),
+    score_away_centred: rect(25, 5, 24, 16),
+    score_home_centred: rect(79, 5, 24, 16),
     timeouts_away: rect(27, 21, 20, 2),
     timeouts_home: rect(81, 21, 20, 2),
     period: rect(49, 5, 30, 8),

@@ -127,6 +127,8 @@ fn every_slot_fits_on_the_panel() {
         basketball.fouls_home,
         basketball.score_away,
         basketball.score_home,
+        basketball.score_away_centred,
+        basketball.score_home_centred,
         basketball.timeouts_away,
         basketball.timeouts_home,
         basketball.period,
@@ -286,9 +288,9 @@ fn the_hockey_screens_keep_off_the_edge_ring() {
     assert!(live.shootout_away.x + SHOOTOUT_ROW_WIDTH < live.logo_home.x);
 }
 
-/// Both NBA screens were born under the edge rule too (NBA.md §6.5): the
-/// court's lines are its outer ring, so the court itself must keep off the
-/// panel's.
+/// Both basketball screens were born under the edge rule too (NBA.md §6.5):
+/// the court's rectangle keeps off the panel's ring, and so does the arena
+/// court drawn in it (`tests/court.rs`).
 #[test]
 fn the_basketball_screens_keep_off_the_edge_ring() {
     let (live, fin) = (geometry::BASKETBALL_LIVE, geometry::BASKETBALL_FINAL);
@@ -305,6 +307,8 @@ fn the_basketball_screens_keep_off_the_edge_ring() {
         live.fouls_home,
         live.score_away,
         live.score_home,
+        live.score_away_centred,
+        live.score_home_centred,
         live.timeouts_away,
         live.timeouts_home,
         live.period,

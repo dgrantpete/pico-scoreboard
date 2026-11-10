@@ -1,23 +1,27 @@
-//! Live basketball — the court (NBA.md D1, the B5 layout) — and the
-//! game-leaders final (D2).
+//! Live basketball — the court (NBA.md D1, the B5 layout; NCAAB.md D5's
+//! arena court) — and the game-leaders final (D2).
 //!
 //! # The live screen
 //!
 //! Football's broadcast corners as one 24-row band: crests, scores, the
-//! period over the clock, and each score column a team ledger — five foul
-//! dots over the score, seven timeout blocks under it. Below the band the
-//! court carries every made field goal where it was made, translucent so the
-//! paint grades into a heat map (D5), and one caption slot on the floor says
-//! the one thing worth saying (D7): a run while it lasts, else the newest
-//! score while it is news, else BONUS while a side is in it, else bare floor.
+//! period over the clock, and — in a league with a ledger — each score
+//! column a team ledger, five foul dots over the score and seven timeout
+//! blocks under it; a league without one (NCAAB.md D3) draws no tracks and
+//! centres its scores on the crests. Below the band the court carries every
+//! made field goal where it was made, translucent so the paint grades into a
+//! heat map (D5), and one caption slot on the floor says the one thing worth
+//! saying (D7): a run while it lasts, else the newest score while it is
+//! news, else BONUS while a side is in it, else bare floor.
 //!
 //! # Projection
 //!
-//! The model carries a make in ESPN's feet — `x` from the centre line, the
-//! home side's already negated (§3.4), `y` from the backboard plane — and
-//! [`crate::court`] owns the pixels: `along = y + ESPN_ORIGIN`, `across = x`,
-//! at the side's own basket ([`End::from`]). Nothing here knows how many
-//! pixels a foot is.
+//! The model carries a make in the wire's feet — `x` from the centre line,
+//! the home side's already negated (§3.4), `y` from the backboard plane, the
+//! rim at 1 in every league — and [`crate::court`] owns the pixels: `along =
+//! y + ORIGIN`, `across = x`, at the side's own basket ([`End::from`]),
+//! through the frame's [`Camera`]. Nothing here knows how many pixels a foot
+//! is, or which rule book the lines follow: the view's court picks the
+//! raster.
 //!
 //! # No renderer state
 //!
@@ -30,7 +34,7 @@
 
 use super::{Scene, Strip};
 use crate::blit::{Canvas, Slice};
-use crate::court::{ESPN_ORIGIN, End, WOOD};
+use crate::court::{self, Camera, CourtRaster, End, ORIGIN};
 use crate::font::{self, Align, Style};
 use crate::geometry::{
     self, BASKETBALL_CAPTION_PAUSE_MS, BASKETBALL_FINAL, BASKETBALL_LIVE, BasketballLiveGeometry,
@@ -117,13 +121,16 @@ pub fn clock_color(colors: &UiColors, accent: bool, low: bool) -> Rgb888 {
 /// opponent is in the bonus — this side has no fouls to give — else the team
 /// colour; the blocks count the timeouts left, burned ones dark. No ledger,
 /// no dots and no blocks: a first look without its summary shows the band
-/// bare rather than a fake seven.
+/// bare rather than a fake seven. A league without tracks draws none at all.
 fn ledger(
     canvas: &mut Canvas<'_>,
     view: &BasketballLiveView,
     colors: &UiColors,
     table: &BasketballLiveGeometry,
 ) {
+    if !view.ledger_tracks {
+        return;
+    }
     let Some(ledger) = view.ledger else {
         return;
     };
@@ -159,7 +166,8 @@ fn ledger(
 
 /// Both scores in the primary — or, for a side on a run of [`RUN_GLOW`] or
 /// more, breathing between the primary and its team colour on the wall rail
-/// from the view's anchor (§3.5), as the goal lamp pulses.
+/// from the view's anchor (§3.5), as the goal lamp pulses. Between the tracks
+/// in a league with a ledger, else centred on the crests (NCAAB.md D3).
 fn scores(
     canvas: &mut Canvas<'_>,
     scene: &Scene<'_>,
@@ -168,19 +176,14 @@ fn scores(
     table: &BasketballLiveGeometry,
 ) {
     let since = scene.now.since(scene.snapshot.animation_start_ms).0;
+    let (away_slot, home_slot) = if view.ledger_tracks {
+        (table.score_away, table.score_home)
+    } else {
+        (table.score_away_centred, table.score_home_centred)
+    };
     for (side, slot, score, team) in [
-        (
-            Side::Away,
-            table.score_away,
-            view.away_score,
-            view.away_color,
-        ),
-        (
-            Side::Home,
-            table.score_home,
-            view.home_score,
-            view.home_color,
-        ),
+        (Side::Away, away_slot, view.away_score, view.away_color),
+        (Side::Home, home_slot, view.home_score, view.home_color),
     ] {
         let color = match view.run {
             Some(run) if run.side == side && run.points >= RUN_GLOW => mix(
@@ -194,23 +197,25 @@ fn scores(
     }
 }
 
-/// The floor and everything on it: every mark in play order, the newest
-/// blinking while its score is news, then the caption.
+/// The floor and everything on it, in §3.11's order: the league's court,
+/// every mark in play order, the newest blinking while its score is news,
+/// the caption, and the hoops over all of it.
 fn court(
     canvas: &mut Canvas<'_>,
     scene: &Scene<'_>,
     view: &BasketballLiveView,
     table: &BasketballLiveGeometry,
 ) {
-    let court = table.court;
+    let raster = court::raster(view.court);
+    let camera = Camera::new(&table.court);
     let (away, home) = (view.away_color, view.home_color);
-    court.draw(canvas, view.court, away, home);
+    raster.draw_floor(canvas, away, home);
     for mark in &view.marks {
         let color = match mark.side {
             Side::Away => away,
             Side::Home => home,
         };
-        court.plot_over(
+        camera.plot_over(
             canvas,
             End::from(mark.side),
             along(mark),
@@ -223,7 +228,7 @@ fn court(
     if let (Some(since), true, Some(newest)) = (news, view.newest_marked, view.marks.last())
         && (since / BLINK_MS).is_multiple_of(2)
     {
-        court.plot(
+        camera.plot(
             canvas,
             End::from(newest.side),
             along(newest),
@@ -231,13 +236,14 @@ fn court(
             WHITE,
         );
     }
-    caption(canvas, scene, view, news.is_some(), table);
+    caption(canvas, scene, view, news.is_some(), raster, table);
+    court::draw_hoops(canvas);
 }
 
-/// Feet along the court from the attacked baseline: ESPN's `y = 1` is the
-/// rim, [`ESPN_ORIGIN`] feet in (§3.4).
+/// Feet along the court from the attacked baseline: the wire's `y = 1` is
+/// the rim, [`ORIGIN`] feet in (§3.4).
 fn along(mark: &CourtMark) -> f32 {
-    mark.y as f32 + ESPN_ORIGIN
+    mark.y as f32 + ORIGIN
 }
 
 /// Feet across from the centre line, as the model already rotated them.
@@ -259,9 +265,9 @@ fn news(view: &BasketballLiveView, scene: &Scene<'_>) -> Option<u64> {
 
 /// The one line on the floor (D7): the run while it lasts, else the newest
 /// scorer while the score is news, else BONUS while a side is in it, else
-/// nothing. Each is painted on a wood box first, which erases the half-court
-/// line and any mark under it; nothing is painted when there is nothing to
-/// say.
+/// nothing. Each is painted on bare floor first, which erases the half-court
+/// line and any mark under it but stops at the three-point arcs; nothing is
+/// painted when there is nothing to say.
 ///
 /// The run and BONUS carry football's arrow at the slot's edge nearest the
 /// side's crest; the scorer's line does not — it scrolls through the whole
@@ -271,6 +277,7 @@ fn caption(
     scene: &Scene<'_>,
     view: &BasketballLiveView,
     news: bool,
+    raster: &CourtRaster,
     table: &BasketballLiveGeometry,
 ) {
     let slot = table.caption;
@@ -280,7 +287,7 @@ fn caption(
         Side::Home => view.home_color,
     };
     if let Some(run) = view.run {
-        wood_box(canvas, table);
+        raster.clear_caption(canvas);
         let color = team(run.side);
         let style = Style::new(face, color);
         // "N-0 RUN", the number drawn in place.
@@ -296,7 +303,7 @@ fn caption(
         && !view.caption.is_empty()
         && let Some(side) = view.last_score
     {
-        wood_box(canvas, table);
+        raster.clear_caption(canvas);
         let mut region = canvas.slice(slot);
         // The scroll counts from the news stamp, so the window the prepared
         // view sized — one full cycle at least — is the one the line scrolls
@@ -318,7 +325,7 @@ fn caption(
     if !(away || home) {
         return;
     }
-    wood_box(canvas, table);
+    raster.clear_caption(canvas);
     // One side shooting takes its colour; both, the primary, with each
     // side's arrow in its own.
     let color = match (away, home) {
@@ -334,12 +341,6 @@ fn caption(
     if home {
         edge_arrow(canvas, slot, Side::Home, team(Side::Home));
     }
-}
-
-/// Bare floor under the caption: the slot and the row above it.
-fn wood_box(canvas: &mut Canvas<'_>, table: &BasketballLiveGeometry) {
-    let wood = table.caption_box;
-    canvas.fill_rect(wood.x, wood.y, wood.width, wood.height, WOOD);
 }
 
 /// Football's 3 × 5 triangle at the slot's edge nearest `side`'s crest,

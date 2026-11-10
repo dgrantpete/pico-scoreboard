@@ -908,7 +908,7 @@ fn the_period_chip_sits_in_the_identity_column_and_leaves_during_a_break() {
 // level-0 goldens carry no `ext=2` groups — each naming the ESPN moment it
 // stands for (NBA.md §3, §6.5).
 
-use scoreboard_render::court::{IRON, LINES, WOOD};
+use scoreboard_render::court::{Camera, End, IRON, LINES, ORIGIN, RIM, WOOD};
 use scoreboard_render::geometry::{BASKETBALL_FINAL, BASKETBALL_LIVE};
 use scoreboard_render::prepared::BASKETBALL_NEWS_MS;
 use scoreboard_wire::{FinalTeam, Record as WireRecord, basketball};
@@ -979,7 +979,11 @@ const HOME_CORNER: basketball::Make = basketball::Make {
 };
 
 fn commit_basketball(store: &mut Store, detail: GameDetail<'_>, now_ms: u64) {
-    let league = LeagueId::from_slug(Sport::Basketball, "nba");
+    commit_basketball_league(store, "nba", detail, now_ms);
+}
+
+fn commit_basketball_league(store: &mut Store, slug: &str, detail: GameDetail<'_>, now_ms: u64) {
+    let league = LeagueId::from_slug(Sport::Basketball, slug);
     let logos = CommitLogos {
         away: Some(LogoRef(0)),
         home: Some(LogoRef(0)),
@@ -1007,12 +1011,23 @@ fn basketball_sides(harness: &Harness) -> (Rgb888, Rgb888) {
     (view.away_color, view.home_color)
 }
 
-/// The rim pixel at each basket: the away side attacks the left one.
+fn camera() -> Camera {
+    Camera::new(&BASKETBALL_LIVE.court)
+}
+
+/// The floor point under the rim at each basket — where a make at the rim
+/// lands: the away side attacks the left one.
 fn rim(side: Side) -> (i32, i32) {
+    camera().px(End::from(side).feet_from_left(RIM), 0.0, 0.0)
+}
+
+/// IRON pixels — the rims — left and right of half court.
+fn rims(frame: &Frame) -> (usize, usize) {
     let court = BASKETBALL_LIVE.court;
+    let rows = court.y - 1..court.y + court.height;
     (
-        court.at(side.into(), scoreboard_render::court::RIM),
-        court.mid(),
+        frame.count(0..64, rows.clone(), IRON),
+        frame.count(64..WIDTH as i32, rows, IRON),
     )
 }
 
@@ -1059,27 +1074,34 @@ fn the_court_screen_draws_its_band_and_its_court() {
     assert_eq!(count_in_slot(&frame, table.timeouts_home, home), 5 * 4);
     assert_eq!(count_in_slot(&frame, table.timeouts_home, BURNED), 2 * 4);
 
-    // The court: its lines, the half-court line, wood inside, a rim each end
-    // — the away side's with a mark on it.
+    // The court: both sidelines and the half-court line, wood inside, a hoop
+    // each end, and the away side's layup on the floor under its rim.
     let court = table.court;
-    assert_eq!(frame.pixel(court.x, court.y), LINES);
-    assert_eq!(frame.pixel(court.x + 1, court.y + 1), WOOD);
-    assert_eq!(frame.pixel(64, court.mid()), LINES);
-    let (home_rim_x, mid) = rim(Side::Home);
-    assert_eq!(frame.pixel(home_rim_x, mid), IRON);
-    let (away_rim_x, _) = rim(Side::Away);
-    assert_eq!(frame.pixel(away_rim_x, mid), mix(IRON, away, MARK_ALPHA));
+    let camera = camera();
+    let centre = camera.px(47.0, 0.0, 0.0).1;
+    assert_eq!(frame.pixel(64, court.y), LINES, "the far sideline");
     assert_eq!(
-        frame.pixel(away_rim_x - 1, mid - 1),
-        mix(WOOD, away, MARK_ALPHA),
-        "a 2 x 2 mark whose bottom-right pixel is the point"
+        frame.pixel(64, court.y + court.height - 1),
+        LINES,
+        "the near"
     );
+    assert_eq!(frame.pixel(64, centre), LINES);
+    let (x, y) = camera.px(30.0, 10.0, 0.0);
+    assert_eq!(frame.pixel(x, y), WOOD);
+    let (left, right) = rims(&frame);
+    assert!(left > 0 && right > 0, "a rim each end");
+    let (home_rim_x, home_rim_y) = rim(Side::Home);
+    assert_eq!(frame.pixel(home_rim_x, home_rim_y), WOOD);
+    let (away_rim_x, away_rim_y) = rim(Side::Away);
+    for (x, y) in [(away_rim_x, away_rim_y), (away_rim_x - 1, away_rim_y - 1)] {
+        assert_eq!(
+            frame.pixel(x, y),
+            mix(WOOD, away, MARK_ALPHA),
+            "a 2 x 2 mark whose bottom-right pixel is the point"
+        );
+    }
     // The corner three lands on the home side's court, translucent.
-    let corner_x = court.at(
-        Side::Home.into(),
-        10.0 + scoreboard_render::court::ESPN_ORIGIN,
-    );
-    let corner_y = court.mid() + court.dy(-20.0);
+    let (corner_x, corner_y) = camera.px(End::Right.feet_from_left(10.0 + ORIGIN), -20.0, 0.0);
     assert_eq!(frame.pixel(corner_x, corner_y), mix(WOOD, home, MARK_ALPHA));
 
     // Nothing to say: the floor's half-court line runs through the caption's
@@ -1253,15 +1275,15 @@ fn the_newest_score_captions_and_blinks_while_it_is_news() {
     );
     let table = BASKETBALL_LIVE;
     let slot = table.caption;
-    let (rim_x, mid) = rim(Side::Home);
+    let (rim_x, rim_y) = rim(Side::Home);
 
     // On: the mark is white, the caption up.
     let frame = harness.draw();
     for (x, y) in [
-        (rim_x, mid),
-        (rim_x - 1, mid),
-        (rim_x, mid - 1),
-        (rim_x - 1, mid - 1),
+        (rim_x, rim_y),
+        (rim_x - 1, rim_y),
+        (rim_x, rim_y - 1),
+        (rim_x - 1, rim_y - 1),
     ] {
         assert_eq!(frame.pixel(x, y), WHITE, "({x}, {y})");
     }
@@ -1275,7 +1297,7 @@ fn the_newest_score_captions_and_blinks_while_it_is_news() {
     // Off: the mark is back to its translucent self; the caption stays.
     harness.now = WallMs(COMMIT_MS + 400);
     let frame = harness.draw();
-    assert_eq!(frame.pixel(rim_x, mid), mix(IRON, home, MARK_ALPHA));
+    assert_eq!(frame.pixel(rim_x, rim_y), mix(WOOD, home, MARK_ALPHA));
     assert!(count_in_slot(&frame, slot, home) > 0);
 
     // Every frame of the blink keeps off the edge ring.
@@ -1289,14 +1311,14 @@ fn the_newest_score_captions_and_blinks_while_it_is_news() {
     let frame = harness.draw();
     assert_eq!(count_in_slot(&frame, slot, home), 0);
     assert_eq!(frame.pixel(64, slot.y + 3), LINES);
-    assert_eq!(frame.pixel(rim_x, mid), mix(IRON, home, MARK_ALPHA));
+    assert_eq!(frame.pixel(rim_x, rim_y), mix(WOOD, home, MARK_ALPHA));
 
     // A first look: the basket was on the board already.
     let mut harness = basketball(&[news(501, &makes)]);
     assert_eq!(harness.snapshot.basketball_live.score_ms, 0);
     let frame = harness.draw();
     assert_eq!(count_in_slot(&frame, slot, home), 0);
-    assert_eq!(frame.pixel(rim_x, mid), mix(IRON, home, MARK_ALPHA));
+    assert_eq!(frame.pixel(rim_x, rim_y), mix(WOOD, home, MARK_ALPHA));
 }
 
 /// §3.7: while the flash is up the court hides entirely and the band stays.
@@ -1318,14 +1340,77 @@ fn the_flash_hides_the_court_and_keeps_the_band() {
     );
     assert!(count_in_slot(&frame, table.timeouts_away, away) > 0);
     let court = table.court;
-    assert_eq!(frame.pixel(court.x, court.y), BLACK, "no lines");
-    let (rim_x, mid) = rim(Side::Away);
-    assert_eq!(frame.pixel(rim_x, mid), BLACK, "no rim, no mark");
+    assert_eq!(frame.pixel(64, court.y), BLACK, "no lines");
+    let (rim_x, rim_y) = rim(Side::Away);
+    assert_eq!(frame.pixel(rim_x, rim_y), BLACK, "no mark");
+    assert_eq!(rims(&frame), (0, 0), "no hoops: the flash takes them too");
     assert_eq!(frame.pixel(64, court.y + court.height - 2), BLACK);
     assert!(
         count_in_slot(&frame, table.strip, harness.snapshot.ui_colors.primary) > 0,
         "the flash"
     );
+    assert_eq!(edge_lit(&frame), 0);
+}
+
+/// NCAAB.md D3 and D5: a league without a ledger draws no tracks — even
+/// given one, since the league decides the layout, never a poll — centres its
+/// scores two rows up on the crests, and plays on its own rule book's court.
+#[test]
+fn a_league_without_a_ledger_centres_its_scores_on_its_own_court() {
+    let college = |store: &mut Store| {
+        commit_basketball_league(
+            store,
+            "mens-college-basketball",
+            GameDetail::Basketball(basketball::Game::Live(basketball_live(&[]))),
+            COMMIT_MS,
+        );
+    };
+    let mut store = Store::new();
+    college(&mut store);
+    let mut harness = from_store(Mode::BasketballLive, &store);
+    harness.snapshot.basketball_live.ledger = basketball_live(&[]).ledger;
+    assert!(!harness.snapshot.basketball_live.ledger_tracks);
+    let primary = harness.snapshot.ui_colors.primary;
+    let frame = harness.draw();
+    let mut nba = basketball(&[basketball_live(&[])]);
+    let nba_frame = nba.draw();
+    let table = BASKETBALL_LIVE;
+
+    for slot in [
+        table.fouls_away,
+        table.fouls_home,
+        table.timeouts_away,
+        table.timeouts_home,
+    ] {
+        assert_eq!(lit_in_slot(&frame, slot), 0, "{slot:?}: no tracks");
+    }
+    let ink_rows = |frame: &Frame, slot: Slice| -> (i32, i32) {
+        let rows: Vec<i32> = (1..25)
+            .filter(|&y| frame.count(slot.x..slot.x + slot.width, y..y + 1, primary) > 0)
+            .collect();
+        (rows[0], rows[rows.len() - 1])
+    };
+    for (centred, between) in [
+        (table.score_away_centred, table.score_away),
+        (table.score_home_centred, table.score_home),
+    ] {
+        let (top, bottom) = ink_rows(&frame, centred);
+        assert_eq!(ink_rows(&nba_frame, between), (top + 2, bottom + 2));
+        // The crests span rows 1–24: the ink's middle is theirs.
+        assert_eq!(top + bottom, 24, "rows {top}–{bottom}");
+    }
+
+    // The NCAA's 12 ft lane: the NBA's key reaches rows the college one
+    // does not, at both ends.
+    let (away, home) = basketball_sides(&harness);
+    let lane = |frame: &Frame, x: core::ops::Range<i32>, color: Rgb888| -> usize {
+        let key = scoreboard_render::scale(color, 2, 3);
+        (26..63)
+            .filter(|&y| frame.count(x.clone(), y..y + 1, key) > 0)
+            .count()
+    };
+    assert!(lane(&frame, 0..40, away) < lane(&nba_frame, 0..40, away));
+    assert!(lane(&frame, 88..128, home) < lane(&nba_frame, 88..128, home));
     assert_eq!(edge_lit(&frame), 0);
 }
 
