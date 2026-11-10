@@ -10,7 +10,7 @@ dirs nest per ESPN league slug for the multi-league sports (football/nfl,
 soccer/fifa.world); the single-league sport (mlb) stays flat.
 
 The pairs corpora are not generated here: `backend/testdata/hockey/nhl/` and
-`backend/testdata/nba/` hold `<name>.json` + `<name>.summary.json` pairs
+`backend/testdata/basketball/nba/` hold `<name>.json` + `<name>.summary.json` pairs
 selected from the collector and the design captures by the method their
 `PROVENANCE.md` records, and this tool must not overwrite them.
 """

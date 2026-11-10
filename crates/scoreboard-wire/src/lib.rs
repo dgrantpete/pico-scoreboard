@@ -31,7 +31,7 @@
 //! backend answer any device: an older backend's plain v2 or `ext=1` decodes
 //! on a newer device, and a newer backend never has to know which device asked.
 //!
-//! Only [`nba`] defines levels — `ext=1` its pregame team lines, `ext=2` its
+//! Only [`basketball`] defines levels — `ext=1` its pregame team lines, `ext=2` its
 //! live, pregame and final blocks — so [`EXT_LEVEL_MAX`] is its ceiling. Its
 //! `encode_at(game, level, out)` writes a payload at a level, `encode` is level
 //! 0 by name, and `decode` accepts every level.
@@ -70,12 +70,12 @@ mod common;
 #[cfg(test)]
 mod tests;
 
+pub mod basketball;
 pub mod error;
 pub mod football;
 pub mod hockey;
 pub mod list;
 pub mod mlb;
-pub mod nba;
 pub mod soccer;
 
 pub use codec::{Sink, SliceSink, truncate_utf8};
@@ -103,7 +103,7 @@ pub const STRUCT_CONTENT_TYPE_EXT: &str = "application/x-scoreboard-struct; ext=
 pub const EXT_PARAM_NAME: &str = "ext";
 
 /// The highest extension level any module defines (see the crate docs): a
-/// server caps a request's level here, and [`nba::encode_at`] writes this
+/// server caps a request's level here, and [`basketball::encode_at`] writes this
 /// level for anything above it.
 pub const EXT_LEVEL_MAX: u8 = 2;
 

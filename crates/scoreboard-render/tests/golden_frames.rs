@@ -104,7 +104,7 @@ struct Manifest {
 fn sport_from(name: &str) -> Sport {
     match name {
         "mlb" => Sport::Mlb,
-        "nba" => Sport::Nba,
+        "basketball" => Sport::Basketball,
         "hockey" => Sport::Hockey,
         "football" => Sport::Football,
         "soccer" => Sport::Soccer,

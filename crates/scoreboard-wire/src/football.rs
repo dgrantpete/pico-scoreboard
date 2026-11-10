@@ -33,7 +33,7 @@
 //!
 //! # Pregame (state = 0)
 //!
-//! Byte-identical to the [NBA pregame](crate::nba) (`<BHHHHIIIII`, 29 bytes at
+//! Byte-identical to the [NBA pregame](crate::basketball) (`<BHHHHIIIII`, 29 bytes at
 //! offset 2: flags, away wins/losses, home wins/losses, start_time, then the
 //! four colors) plus two team-line flag bits. Flags: bit0 = away record, bit1 =
 //! home record, bit2 = away line present, bit3 = home line present. Numeric

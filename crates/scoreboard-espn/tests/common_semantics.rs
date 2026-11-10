@@ -170,7 +170,7 @@ const SHAPES: &[(&str, &str)] = &[
     // backend/testdata/mlb/pregame.json
     ("baseball/mlb", "/i/teamlogos/mlb/500/scoreboard/sf.png"),
     // An NBA scoreboard body (2026-04): UTAH's four-letter key is the longest
-    // path in the family; the corpus events under backend/testdata/nba/ carry
+    // path in the family; the corpus events under backend/testdata/basketball/nba/ carry
     // the two- and three-letter ones (`gs`, `sa`, `den`, …).
     ("basketball/nba", "/i/teamlogos/nba/500/scoreboard/utah.png"),
     // A live college-football scoreboard body (captured 2026-08-16).

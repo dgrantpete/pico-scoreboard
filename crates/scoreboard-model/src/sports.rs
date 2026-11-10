@@ -3,7 +3,7 @@
 //! Each one is the Rust body of a `state.py` setter, minus the parts that
 //! turned out to be pixels (see [`crate::snapshot`] for where the line is).
 
-use scoreboard_wire::{FinalTeam, LivePhase, Side, football, hockey, mlb, nba, soccer};
+use scoreboard_wire::{FinalTeam, LivePhase, Side, basketball, football, hockey, mlb, soccer};
 
 use crate::color::Rgb888;
 use crate::feed::{GameDetail, LeagueId};
@@ -117,9 +117,9 @@ impl<'a> PregameInput<'a> {
     /// `ext=2`. The per-team line is the betting line ("+3.5  +140"), which
     /// only `ext=1` carries; an absent line is an empty slot, which the screen
     /// already handles.
-    pub fn nba(game: &nba::Pregame<'a>) -> Self {
+    pub fn basketball(game: &basketball::Pregame<'a>) -> Self {
         Self {
-            sport: Sport::Nba,
+            sport: Sport::Basketball,
             game_id: game.game_id,
             start_time: game.start_time,
             info_primary: game.venue,
@@ -257,16 +257,18 @@ impl Store {
                 self.commit_pregame(&PregameInput::mlb(game), logos, now_ms, clock);
             }
             GameDetail::Mlb(mlb::Game::Final(game)) => self.commit_mlb_final(game, logos, now_ms),
-            GameDetail::Nba(nba::Game::Live(game)) => {
-                self.commit_nba_live(game, logos, now_ms);
+            GameDetail::Basketball(basketball::Game::Live(game)) => {
+                self.commit_basketball_live(game, logos, now_ms);
                 if let Some(play) = game.last_play {
                     self.flash_play(play.id, play.text, now_ms);
                 }
             }
-            GameDetail::Nba(nba::Game::Pregame(game)) => {
-                self.commit_pregame(&PregameInput::nba(game), logos, now_ms, clock);
+            GameDetail::Basketball(basketball::Game::Pregame(game)) => {
+                self.commit_pregame(&PregameInput::basketball(game), logos, now_ms, clock);
             }
-            GameDetail::Nba(nba::Game::Final(game)) => self.commit_nba_final(game, logos, now_ms),
+            GameDetail::Basketball(basketball::Game::Final(game)) => {
+                self.commit_basketball_final(game, logos, now_ms)
+            }
             GameDetail::Hockey(hockey::Game::Live(game)) => {
                 self.commit_hockey_live(game, logos, now_ms);
                 if let Some(play) = game.last_play {
@@ -374,7 +376,7 @@ impl Store {
         );
     }
 
-    // -- NBA ---------------------------------------------------------------
+    // -- Basketball --------------------------------------------------------
 
     /// The court screen (NBA.md §3). The first-look rule is hockey's: the
     /// ledger hold and the news stamp compare against this device's previous
@@ -383,10 +385,16 @@ impl Store {
     /// first look, which shows whatever ledger the payload carries and stamps
     /// no news: a basket already on the board when the game rotates in is old
     /// news (§3.6).
-    pub fn commit_nba_live(&mut self, game: &nba::Live<'_>, logos: Logos, now_ms: Millis) {
-        let first_look = self.mode() != Mode::NbaLive || self.snapshot().game_id != game.game_id;
-        self.begin_game(Mode::NbaLive, game.game_id, logos, now_ms);
-        let view = &mut self.snapshot_mut().nba_live;
+    pub fn commit_basketball_live(
+        &mut self,
+        game: &basketball::Live<'_>,
+        logos: Logos,
+        now_ms: Millis,
+    ) {
+        let first_look =
+            self.mode() != Mode::BasketballLive || self.snapshot().game_id != game.game_id;
+        self.begin_game(Mode::BasketballLive, game.game_id, logos, now_ms);
+        let view = &mut self.snapshot_mut().basketball_live;
         view.away_score = game.away.score;
         view.home_score = game.home.score;
         view.away_color = Rgb888::from(game.away.colors);
@@ -398,7 +406,7 @@ impl Store {
             game.phase,
             game.period,
             game.clock,
-            NBA_HALFTIME,
+            BASKETBALL_HALFTIME,
         );
         // Crunch time where the clock can end the game — the fourth quarter
         // and overtime — under a minute, which ESPN signals only by the
@@ -472,16 +480,21 @@ impl Store {
     /// the result label, the quarter rows — goes to the shared final view,
     /// whose rows stand in for the leaders while ESPN has not posted them
     /// (§3.9); the NBA view holds only what the NBA adds.
-    pub fn commit_nba_final(&mut self, game: &nba::Final<'_>, logos: Logos, now_ms: Millis) {
-        self.begin_game(Mode::NbaFinal, game.game_id, logos, now_ms);
+    pub fn commit_basketball_final(
+        &mut self,
+        game: &basketball::Final<'_>,
+        logos: Logos,
+        now_ms: Millis,
+    ) {
+        self.begin_game(Mode::BasketballFinal, game.game_id, logos, now_ms);
         self.fill_linescore_final(&LinescoreFinal {
-            sport: Sport::Nba,
+            sport: Sport::Basketball,
             game_id: game.game_id,
             periods: game.periods_played,
             away: game.away,
             home: game.home,
         });
-        let view = &mut self.snapshot_mut().nba_final;
+        let view = &mut self.snapshot_mut().basketball_final;
         view.leaders = game
             .leaders
             .map(|leaders| [leaders.points, leaders.rebounds, leaders.assists].map(leader_line));
@@ -955,7 +968,7 @@ const FOOTBALL_HALFTIME: Halftime = Halftime {
 
 /// The NBA keeps the period that ended and reads "HALF" — hockey's rule, and
 /// what every mockup the owner saw read; the slot has the room (NBA.md §3.2).
-const NBA_HALFTIME: Halftime = Halftime {
+const BASKETBALL_HALFTIME: Halftime = Halftime {
     word: "HALF",
     keeps_period: true,
 };
@@ -1007,7 +1020,7 @@ fn set_final_text(dst: &mut Text<SHORT>, sport: Sport, periods: u8) {
     match (sport, periods) {
         (Sport::Mlb, 10..) => write_text!(dst, "F/{periods}"),
         (Sport::Mlb, _) | (_, 0..=4) => set_plain(dst, "FINAL"),
-        (Sport::Nba, 5) => set_plain(dst, "FINAL/OT"),
+        (Sport::Basketball, 5) => set_plain(dst, "FINAL/OT"),
         (_, 5) => set_plain(dst, "F/OT"),
         (_, _) => {
             let overtimes = periods - 4;
@@ -1018,7 +1031,7 @@ fn set_final_text(dst: &mut Text<SHORT>, sport: Sport, periods: u8) {
 
 /// One leaders row (NBA.md §3.9): the short name and the stat as one string
 /// in the player's team color — "J. Brunson 36".
-fn leader_line(leader: nba::Leader<'_>) -> LeaderLine {
+fn leader_line(leader: basketball::Leader<'_>) -> LeaderLine {
     let mut line = LeaderLine {
         text: Text::new(),
         side: leader.side,

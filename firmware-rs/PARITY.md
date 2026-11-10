@@ -55,14 +55,14 @@ bytes `display.render_frame` produced.
 | Group | Cases | Source |
 | --- | --- | --- |
 | MLB | 4 | `backend/testdata/wire/mlb/` |
-| NBA | 7 | `backend/testdata/wire/nba/` |
+| NBA | 7 | `backend/testdata/wire/basketball/nba/` |
 | Football (NFL + college) | 9 | `backend/testdata/wire/football/` |
 | Soccer (`fifa.world`) | 13 | `backend/testdata/wire/soccer/` |
 
 **2026-11-08:** the NBA's live and final screens are Rust-only designs
 now — the court and the game-leaders final of `firmware-rs/NBA.md`
 replaced the parity screens, and the seven April fixtures gave way to
-twenty-one real pairs (`backend/testdata/nba/PROVENANCE.md`) that run only
+twenty-one real pairs (`backend/testdata/basketball/nba/PROVENANCE.md`) that run only
 as Rust-owned golden frames (`tests/golden_frames.rs`), as hockey's do. The
 table above is Phase 2's record; the MicroPython comparison it describes
 covers MLB, football and soccer today.

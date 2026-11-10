@@ -370,7 +370,11 @@ fn clock(canvas: &mut Canvas<'_>, scene: &Scene<'_>, slot: Slice) {
         Align::Center,
         Style::new(
             &generated::UNSCII_16,
-            super::nba::clock_color(&scene.snapshot.ui_colors, view.clock_accent, view.clock_low),
+            super::basketball::clock_color(
+                &scene.snapshot.ui_colors,
+                view.clock_accent,
+                view.clock_low,
+            ),
         ),
     );
 }

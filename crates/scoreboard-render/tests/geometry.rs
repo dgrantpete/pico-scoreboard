@@ -119,34 +119,34 @@ fn every_slot_fits_on_the_panel() {
         mlb.pitcher_name,
         mlb.batter_name,
     ]);
-    let nba = geometry::NBA_LIVE;
+    let basketball = geometry::BASKETBALL_LIVE;
     slots.extend([
-        nba.logo_away,
-        nba.logo_home,
-        nba.fouls_away,
-        nba.fouls_home,
-        nba.score_away,
-        nba.score_home,
-        nba.timeouts_away,
-        nba.timeouts_home,
-        nba.period,
-        nba.clock,
-        nba.caption,
-        nba.caption_box,
+        basketball.logo_away,
+        basketball.logo_home,
+        basketball.fouls_away,
+        basketball.fouls_home,
+        basketball.score_away,
+        basketball.score_home,
+        basketball.timeouts_away,
+        basketball.timeouts_home,
+        basketball.period,
+        basketball.clock,
+        basketball.caption,
+        basketball.caption_box,
     ]);
-    let nba_final = geometry::NBA_FINAL;
+    let basketball_final = geometry::BASKETBALL_FINAL;
     slots.extend([
-        nba_final.logo_away,
-        nba_final.logo_home,
-        nba_final.score_away,
-        nba_final.score_home,
-        nba_final.final_label,
-        nba_final.series,
-        nba_final.records,
-        nba_final.records_alone,
+        basketball_final.logo_away,
+        basketball_final.logo_home,
+        basketball_final.score_away,
+        basketball_final.score_home,
+        basketball_final.final_label,
+        basketball_final.series,
+        basketball_final.records,
+        basketball_final.records_alone,
     ]);
-    slots.extend(nba_final.leader_rows);
-    slots.extend(nba_final.linescore_rows);
+    slots.extend(basketball_final.leader_rows);
+    slots.extend(basketball_final.linescore_rows);
     let football = geometry::FOOTBALL_LIVE;
     slots.extend([
         football.logo_home,
@@ -193,7 +193,7 @@ fn every_slot_fits_on_the_panel() {
     slots.extend([
         geometry::COLUMN_STRIP,
         mlb.strip,
-        nba.strip,
+        basketball.strip,
         football.strip,
         soccer.strip,
     ]);
@@ -290,8 +290,8 @@ fn the_hockey_screens_keep_off_the_edge_ring() {
 /// court's lines are its outer ring, so the court itself must keep off the
 /// panel's.
 #[test]
-fn the_nba_screens_keep_off_the_edge_ring() {
-    let (live, fin) = (geometry::NBA_LIVE, geometry::NBA_FINAL);
+fn the_basketball_screens_keep_off_the_edge_ring() {
+    let (live, fin) = (geometry::BASKETBALL_LIVE, geometry::BASKETBALL_FINAL);
     let court = scoreboard_render::Slice {
         x: live.court.x,
         y: live.court.y,
@@ -335,7 +335,7 @@ fn the_nba_screens_keep_off_the_edge_ring() {
     assert_eq!(live.strip.y, live.court.y + (live.court.height - 1) / 2 - 6);
     // The flash slot is the one the prepared view sizes the window by.
     assert_eq!(
-        geometry::bottom_strip(scoreboard_model::Mode::NbaLive),
+        geometry::bottom_strip(scoreboard_model::Mode::BasketballLive),
         live.strip
     );
 }
@@ -347,7 +347,10 @@ fn every_live_screen_has_its_own_bottom_strip() {
     use geometry::bottom_strip;
     use scoreboard_model::Mode;
     assert_eq!(bottom_strip(Mode::MlbLive), geometry::MLB_LIVE.strip);
-    assert_eq!(bottom_strip(Mode::NbaLive), geometry::NBA_LIVE.strip);
+    assert_eq!(
+        bottom_strip(Mode::BasketballLive),
+        geometry::BASKETBALL_LIVE.strip
+    );
     assert_eq!(
         bottom_strip(Mode::FootballLive),
         geometry::FOOTBALL_LIVE.strip

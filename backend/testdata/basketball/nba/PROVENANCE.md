@@ -16,7 +16,7 @@ time-consistent pair, hockey's convention
 Pregame has no summary (D3). Harness note: `<name>.summary.json` ends in
 `.json`, so every corpus walk (`wire_corpus.rs::fixture_names`, the espn and
 direct parity gates) skips the `.summary` stem — a summary is never an event
-fixture, for any sport. The goldens under `backend/testdata/wire/nba/` carry
+fixture, for any sport. The goldens under `backend/testdata/wire/basketball/nba/` carry
 the extension level in their name — `<name>.bin` the frozen v2 bytes,
 `pregame.ext1.bin` with the team lines, `<name>.ext2.bin` with the §3.3–3.9
 blocks — and a live fixture also pins `<name>.no_summary.ext2.bin`, the

@@ -100,7 +100,7 @@ pub fn render(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
         Align::Center,
         Style::new(
             &generated::UNSCII_16,
-            super::nba::clock_color(colors, view.clock_accent, view.clock_low),
+            super::basketball::clock_color(colors, view.clock_accent, view.clock_low),
         ),
     );
 

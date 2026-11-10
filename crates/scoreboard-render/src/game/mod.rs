@@ -26,10 +26,10 @@
 //! two lines apart, which is the clearest place in the codebase to see why the
 //! two rails exist.
 
+pub mod basketball;
 pub mod football;
 pub mod hockey;
 pub mod mlb;
-pub mod nba;
 pub mod pregame;
 pub mod score;
 pub mod soccer;

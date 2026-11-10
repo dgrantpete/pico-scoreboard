@@ -12,11 +12,11 @@
 //! this crate's root carries the architecture and the decisions.
 #![no_std]
 
+pub mod basketball;
 pub mod common;
 pub mod football;
 pub mod hockey;
 pub mod mlb;
-pub mod nba;
 pub mod path;
 pub mod soccer;
 

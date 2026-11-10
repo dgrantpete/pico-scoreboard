@@ -30,9 +30,9 @@ use crate::text::Text;
 /// `Copy` data with no borrow, and both crates are in every consumer's tree
 /// already. A parallel set here would be conversion boilerplate that can drift.
 pub use scoreboard_wire::Side;
+pub use scoreboard_wire::basketball::{Ledger, Run, TeamLedger};
 pub use scoreboard_wire::hockey::Shots;
 pub use scoreboard_wire::mlb::InningHalf;
-pub use scoreboard_wire::nba::{Ledger, Run, TeamLedger};
 
 /// Milliseconds from an arbitrary boot-relative origin — `embassy_time`'s
 /// monotonic clock, as `time.ticks_ms()` was. Absolute stamps only; elapsed
@@ -121,8 +121,8 @@ default_from_new!(
     FinalView,
     SoccerLiveView,
     SoccerFinalView,
-    NbaLiveView,
-    NbaFinalView,
+    BasketballLiveView,
+    BasketballFinalView,
     HockeyLiveView,
     ShootoutRow,
     HockeyFinalView,
@@ -156,8 +156,8 @@ pub enum Mode {
     Final,
     SoccerLive,
     SoccerFinal,
-    NbaLive,
-    NbaFinal,
+    BasketballLive,
+    BasketballFinal,
     FootballLive,
     HockeyLive,
     HockeyFinal,
@@ -182,7 +182,7 @@ impl Mode {
 pub enum Sport {
     #[default]
     Mlb,
-    Nba,
+    Basketball,
     Hockey,
     Football,
     Soccer,
@@ -580,7 +580,7 @@ impl SoccerFinalView {
 /// the makes — rides the wire's `ext=2` block and is absent below it, so a
 /// payload from an older backend draws the band and a bare court.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NbaLiveView {
+pub struct BasketballLiveView {
     pub away_score: u16,
     pub home_score: u16,
     pub away_color: Rgb888,
@@ -622,10 +622,10 @@ pub struct NbaLiveView {
     pub newest_marked: bool,
     /// Every made field goal with a coordinate, oldest first: the court's
     /// heat map (§3.4).
-    pub marks: heapless::Vec<CourtMark, { scoreboard_wire::nba::MAX_MAKES }, u8>,
+    pub marks: heapless::Vec<CourtMark, { scoreboard_wire::basketball::MAX_MAKES }, u8>,
 }
 
-impl NbaLiveView {
+impl BasketballLiveView {
     pub const fn new() -> Self {
         Self {
             away_score: 0,
@@ -664,7 +664,7 @@ pub struct CourtMark {
 /// in [`FinalView`], which carries the scores, colors, result label and the
 /// line-score rows that stand in while ESPN has not posted the leaders.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NbaFinalView {
+pub struct BasketballFinalView {
     /// Points, rebounds, assists — all three or none (§3.9).
     pub leaders: Option<[LeaderLine; 3]>,
     /// "NY LEADS SERIES 3-1"; empty outside the playoffs.
@@ -673,7 +673,7 @@ pub struct NbaFinalView {
     pub records: Option<[Record; 2]>,
 }
 
-impl NbaFinalView {
+impl BasketballFinalView {
     pub const fn new() -> Self {
         Self {
             leaders: None,
@@ -1057,8 +1057,8 @@ pub struct ScoreboardSnapshot {
     pub linescore_final: FinalView,
     pub soccer_live: SoccerLiveView,
     pub soccer_final: SoccerFinalView,
-    pub nba_live: NbaLiveView,
-    pub nba_final: NbaFinalView,
+    pub basketball_live: BasketballLiveView,
+    pub basketball_final: BasketballFinalView,
     pub hockey_live: HockeyLiveView,
     pub hockey_final: HockeyFinalView,
     pub football_live: FootballLiveView,
@@ -1086,8 +1086,8 @@ impl ScoreboardSnapshot {
             linescore_final: FinalView::new(),
             soccer_live: SoccerLiveView::new(),
             soccer_final: SoccerFinalView::new(),
-            nba_live: NbaLiveView::new(),
-            nba_final: NbaFinalView::new(),
+            basketball_live: BasketballLiveView::new(),
+            basketball_final: BasketballFinalView::new(),
             hockey_live: HockeyLiveView::new(),
             hockey_final: HockeyFinalView::new(),
             football_live: FootballLiveView::new(),

@@ -1,20 +1,22 @@
-//! NBA parity gate: every fixture in `backend/testdata/nba/` streamed
+//! NBA parity gate: every fixture in `backend/testdata/basketball/nba/` streamed
 //! through the path table must encode byte-identically to the committed
-//! golden in `backend/testdata/wire/nba/` (DESIGN.md ruling 9), whatever
+//! golden in `backend/testdata/wire/basketball/nba/` (DESIGN.md ruling 9), whatever
 //! the chunking. This lane reads the scoreboard alone, so its golden is the
 //! scoreboard-only `ext=2` form: `<stem>.no_summary.ext2.bin` where the
 //! backend would have fetched a summary (a live game), `<stem>.ext2.bin`
 //! otherwise. Plus the rejection-parity and two-tier-error pins the
 //! backend's serde + transform split implies (ruling 1).
 
-use scoreboard_espn::StreamMatcher;
+use scoreboard_espn::basketball::{
+    self, DetailOutcome, Extractor, Kind, ScanStats, TransformError,
+};
 use scoreboard_espn::common::{IgnoreQuirks, Quirk, Quirks};
-use scoreboard_espn::nba::{self, DetailOutcome, Extractor, Kind, ScanStats, TransformError};
+use scoreboard_espn::StreamMatcher;
 use scoreboard_wire::{GameState, SliceSink};
 use std::fs;
 use std::path::PathBuf;
 
-/// Every event fixture in `backend/testdata/nba/`, sorted as the backend's
+/// Every event fixture in `backend/testdata/basketball/nba/`, sorted as the backend's
 /// corpus walk lists them (`PROVENANCE.md` there). The `.summary.json` halves
 /// of the pairs are not fixtures; this lane reads the scoreboard alone.
 const STEMS: [&str; 20] = [
@@ -47,7 +49,7 @@ fn testdata(rel: &str) -> PathBuf {
 /// Raw fixture text — one EVENT object, exactly as captured (key order
 /// preserved, unlike a serde_json round trip).
 fn fixture(stem: &str) -> String {
-    fs::read_to_string(testdata(&format!("nba/{stem}.json"))).expect("fixture readable")
+    fs::read_to_string(testdata(&format!("basketball/nba/{stem}.json"))).expect("fixture readable")
 }
 
 /// The committed golden at an extension level: 0 the frozen v2 bytes, 1 the
@@ -56,14 +58,14 @@ fn fixture(stem: &str) -> String {
 /// reads; the plain `.ext2` for a pregame or final, which has none).
 fn golden_at(stem: &str, level: u8) -> Vec<u8> {
     let path = match level {
-        0 => testdata(&format!("wire/nba/{stem}.bin")),
-        1 => testdata(&format!("wire/nba/{stem}.ext1.bin")),
+        0 => testdata(&format!("wire/basketball/nba/{stem}.bin")),
+        1 => testdata(&format!("wire/basketball/nba/{stem}.ext1.bin")),
         _ => {
-            let degraded = testdata(&format!("wire/nba/{stem}.no_summary.ext2.bin"));
+            let degraded = testdata(&format!("wire/basketball/nba/{stem}.no_summary.ext2.bin"));
             if degraded.exists() {
                 degraded
             } else {
-                testdata(&format!("wire/nba/{stem}.ext2.bin"))
+                testdata(&format!("wire/basketball/nba/{stem}.ext2.bin"))
             }
         }
     };
@@ -92,7 +94,7 @@ fn feed<'c, Q: Quirks>(
 ) -> Extractor<'c, Q> {
     // extractor moves into the matcher and comes back out of finish().
     let mut scratch = vec![0u8; 16 * 1024];
-    let matcher = StreamMatcher::new(nba::PATHS, extractor, &mut scratch);
+    let matcher = StreamMatcher::new(basketball::PATHS, extractor, &mut scratch);
     let mut matcher = matcher.expect("table within engine limits");
     let input = body.as_bytes();
     let mut pos = 0;
@@ -130,20 +132,20 @@ fn run_list(body: &str, sizes: &[usize]) -> (Vec<(String, GameState)>, ScanStats
 }
 
 /// The scoreboard-only view at an extension level, byte for byte.
-fn encode_at(extract: &nba::Extract, level: u8) -> Vec<u8> {
+fn encode_at(extract: &basketball::Extract, level: u8) -> Vec<u8> {
     let mut buf = [0u8; 4096];
     let mut sink = SliceSink::new(&mut buf);
-    scoreboard_wire::nba::encode_at(&extract.as_game(None), level, &mut sink)
+    scoreboard_wire::basketball::encode_at(&extract.as_game(None), level, &mut sink)
         .expect("payload fits");
     sink.written().to_vec()
 }
 
 /// The richest scoreboard-only form, what [`golden`] holds.
-fn encode(extract: &nba::Extract) -> Vec<u8> {
+fn encode(extract: &basketball::Extract) -> Vec<u8> {
     encode_at(extract, 2)
 }
 
-fn found(outcome: DetailOutcome) -> nba::Extract {
+fn found(outcome: DetailOutcome) -> basketball::Extract {
     match outcome {
         DetailOutcome::Found(extract) => extract,
         other => panic!("expected Found, got {other:?}"),
@@ -619,7 +621,7 @@ fn pregame_lines(body: &str, id: &str, sizes: &[usize]) -> (Option<String>, Opti
     let (outcome, stats) = run_detail(body, id, sizes);
     assert_eq!((stats.ok, stats.failed), (1, 0), "odds never fail an event");
     let extract = found(outcome);
-    let scoreboard_wire::nba::Game::Pregame(pregame) = extract.as_game(None) else {
+    let scoreboard_wire::basketball::Game::Pregame(pregame) = extract.as_game(None) else {
         panic!("pregame fixture");
     };
     (
@@ -665,8 +667,8 @@ fn the_lines_ride_only_the_ext_encoding() {
             hex(&golden_at("pregame", level)),
             "level {level} golden"
         );
-        let scoreboard_wire::nba::Game::Pregame(pregame) =
-            scoreboard_wire::nba::decode(&bytes).expect("payload decodes")
+        let scoreboard_wire::basketball::Game::Pregame(pregame) =
+            scoreboard_wire::basketball::decode(&bytes).expect("payload decodes")
         else {
             panic!("pregame payload");
         };

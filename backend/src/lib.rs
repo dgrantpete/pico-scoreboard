@@ -13,6 +13,7 @@ use utoipa_scalar::{Scalar, Servable};
 
 pub mod app_update;
 pub mod auth;
+pub mod basketball;
 pub mod clock;
 pub mod config;
 pub mod error;
@@ -22,7 +23,6 @@ pub mod fw_update;
 pub mod hockey;
 pub mod logo;
 pub mod mlb;
-pub mod nba;
 pub mod shared;
 pub mod soccer;
 pub mod team;
@@ -47,8 +47,8 @@ use espn::league::AnyLeague;
         team::get_team_logo,
         mlb::handler::list_games,
         mlb::handler::get_game,
-        nba::handler::list_games,
-        nba::handler::get_game,
+        basketball::handler::list_games,
+        basketball::handler::get_game,
         hockey::handler::list_games,
         hockey::handler::get_game,
         football::handler::list_games,
@@ -88,20 +88,20 @@ use espn::league::AnyLeague;
         mlb::MlbAtBat,
         mlb::MlbInning,
         mlb::InningHalf,
-        nba::NbaGame,
-        nba::NbaLiveGame,
-        nba::NbaPregameGame,
-        nba::NbaFinalGame,
-        nba::NbaPregameTeam,
-        nba::NbaFinalTeam,
-        nba::NbaLedger,
-        nba::NbaTeamLedger,
-        nba::NbaRun,
-        nba::NbaNewestScore,
-        nba::NbaMake,
-        nba::NbaLeaders,
-        nba::NbaLeader,
-        nba::NbaRecords,
+        basketball::BasketballGame,
+        basketball::BasketballLiveGame,
+        basketball::BasketballPregameGame,
+        basketball::BasketballFinalGame,
+        basketball::BasketballPregameTeam,
+        basketball::BasketballFinalTeam,
+        basketball::BasketballLedger,
+        basketball::BasketballTeamLedger,
+        basketball::BasketballRun,
+        basketball::BasketballNewestScore,
+        basketball::BasketballMake,
+        basketball::BasketballLeaders,
+        basketball::BasketballLeader,
+        basketball::BasketballRecords,
         hockey::HockeyGame,
         hockey::HockeyLiveGame,
         hockey::HockeyPregameGame,
@@ -143,7 +143,7 @@ use espn::league::AnyLeague;
         (name = "clock", description = "Time and timezone endpoint"),
         (name = "team", description = "Team logo endpoint"),
         (name = "mlb", description = "MLB live game data (ESPN-backed)"),
-        (name = "nba", description = "NBA live game data (ESPN-backed)"),
+        (name = "basketball", description = "Basketball live game data (ESPN-backed)"),
         (name = "hockey", description = "NHL live game data (ESPN-backed)"),
         (name = "football", description = "Football live game data — NFL + NCAAF (ESPN-backed)"),
         (name = "soccer", description = "Soccer live game data (ESPN-backed)"),
@@ -311,7 +311,7 @@ async fn games_list(
 ) -> Result<Response, AppError> {
     match AnyLeague::from_path(&sport, &league)? {
         AnyLeague::Mlb => mlb::list_games(&state, &headers).await,
-        AnyLeague::Nba => nba::list_games(&state, &headers).await,
+        AnyLeague::Nba => basketball::list_games(&state, &headers).await,
         AnyLeague::Nhl => hockey::list_games(&state, &headers).await,
         AnyLeague::Football(league) => football::list_games(&state, league, &headers).await,
         AnyLeague::Soccer(league) => soccer::list_games(&state, league, &headers).await,
@@ -327,7 +327,7 @@ async fn games_detail(
 ) -> Result<Response, AppError> {
     match AnyLeague::from_path(&sport, &league)? {
         AnyLeague::Mlb => mlb::get_game(&state, &game_id, &headers).await,
-        AnyLeague::Nba => nba::get_game(&state, &game_id, &headers).await,
+        AnyLeague::Nba => basketball::get_game(&state, &game_id, &headers).await,
         AnyLeague::Nhl => hockey::get_game(&state, &game_id, &headers).await,
         AnyLeague::Football(league) => football::get_game(&state, league, &game_id, &headers).await,
         AnyLeague::Soccer(league) => soccer::get_game(&state, league, &game_id, &headers).await,

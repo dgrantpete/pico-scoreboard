@@ -8,7 +8,7 @@ use std::string::{String, ToString};
 use std::vec::Vec;
 use std::{format, vec};
 
-use scoreboard_wire::{GameState, football, mlb, nba, soccer};
+use scoreboard_wire::{GameState, basketball, football, mlb, soccer};
 
 use crate::color::Rgb888;
 use crate::feed::{GameDetail, LeagueId, ListSink, Sport, WireFeed};
@@ -58,7 +58,7 @@ fn league_of(name: &str) -> LeagueId {
     let mut parts = name.split('/');
     match parts.next().expect("sport-prefixed fixture name") {
         "mlb" => LeagueId::from_slug(Sport::Mlb, "mlb"),
-        "nba" => LeagueId::from_slug(Sport::Nba, "nba"),
+        "basketball" => LeagueId::from_slug(Sport::Basketball, parts.next().expect("league slug")),
         "hockey" => LeagueId::from_slug(Sport::Hockey, "nhl"),
         "football" => LeagueId::from_slug(Sport::Football, parts.next().expect("league slug")),
         "soccer" => LeagueId::from_slug(Sport::Soccer, parts.next().expect("league slug")),
@@ -323,12 +323,12 @@ fn a_standing_repoll_of_the_same_game_keeps_the_animation_clock() {
 
 #[test]
 fn a_different_game_restarts_the_animation_clock() {
-    let (league, bytes) = fixture("nba/in_progress");
+    let (league, bytes) = fixture("basketball/nba/in_progress");
     let detail = WireFeed.detail(league.sport, &bytes).unwrap();
     let mut store = Store::new();
     store.commit_detail(&league, &detail, Logos::default(), 1_000, clock());
 
-    let (other_league, other_bytes) = fixture("nba/halftime");
+    let (other_league, other_bytes) = fixture("basketball/nba/halftime");
     let other = WireFeed.detail(other_league.sport, &other_bytes).unwrap();
     assert_ne!(detail.game_id(), other.game_id());
     store.commit_detail(&other_league, &other, Logos::default(), 9_000, clock());
@@ -339,13 +339,13 @@ fn a_different_game_restarts_the_animation_clock() {
 fn the_same_game_in_a_new_mode_restarts_the_animation_clock() {
     // A pregame card that flips live mid-view is a mode change on one id.
     let mut store = Store::new();
-    let league = LeagueId::from_slug(Sport::Nba, "nba");
+    let league = LeagueId::from_slug(Sport::Basketball, "nba");
     let pregame = mlb_free_pregame("401", 1_721_260_000);
     store.commit_pregame(&pregame, Logos::default(), 1_000, clock());
     assert_eq!(store.snapshot().mode, Mode::Pregame);
     assert_eq!(store.snapshot().animation_start_ms, 1_000);
 
-    let (_, bytes) = fixture("nba/in_progress");
+    let (_, bytes) = fixture("basketball/nba/in_progress");
     let detail = WireFeed.detail(league.sport, &bytes).unwrap();
     store.commit_detail(&league, &detail, Logos::default(), 5_000, clock());
     assert_eq!(store.snapshot().animation_start_ms, 5_000);
@@ -380,7 +380,7 @@ fn mlb_free_pregame<'a>(game_id: &'a str, start_time: u32) -> PregameInput<'a> {
 /// rotation moved to.
 #[test]
 fn rotating_to_another_game_drops_the_last_games_play() {
-    let mut store = committed("nba/in_progress");
+    let mut store = committed("basketball/nba/in_progress");
     assert!(!store.snapshot().play.text.is_empty(), "the NBA play is up");
 
     let (league, bytes) = fixture("soccer/fifa.world/pregame");
@@ -391,7 +391,7 @@ fn rotating_to_another_game_drops_the_last_games_play() {
 
     // Rotating back is a fresh view: its latest play flashes again, the
     // catch-up `flash_play` documents.
-    let (league, bytes) = fixture("nba/in_progress");
+    let (league, bytes) = fixture("basketball/nba/in_progress");
     let detail = WireFeed.detail(league.sport, &bytes).unwrap();
     store.commit_detail(&league, &detail, Logos::default(), 3_000, clock());
     assert!(!store.snapshot().play.text.is_empty());
@@ -481,12 +481,12 @@ fn extra_innings_and_overtime_get_their_own_final_text() {
     assert_eq!(view.sport, Sport::Football);
 
     // The NBA spells its one overtime out and counts the rest (NBA.md §3.1).
-    let store = committed("nba/final_ot");
+    let store = committed("basketball/nba/final_ot");
     assert_eq!(
         store.snapshot().linescore_final.final_text.as_str(),
         "FINAL/OT"
     );
-    let store = committed("nba/final_2ot");
+    let store = committed("basketball/nba/final_2ot");
     assert_eq!(store.snapshot().linescore_final.final_text.as_str(), "F/2OT");
 }
 
@@ -667,8 +667,8 @@ fn halftime_reads_each_sports_word_in_the_accent() {
     assert!(!view.clock_low);
 
     // BKN at ATL, 70-66 at the half, ESPN's clock reading "0.1".
-    let store = committed("nba/halftime");
-    let view = &store.snapshot().nba_live;
+    let store = committed("basketball/nba/halftime");
+    let view = &store.snapshot().basketball_live;
     assert_eq!(view.phase_text.as_str(), "Q2");
     assert_eq!(view.clock_text.as_str(), "HALF");
     assert!(view.clock_accent);
@@ -677,36 +677,36 @@ fn halftime_reads_each_sports_word_in_the_accent() {
 
 #[test]
 fn end_of_period_keeps_the_period_and_shows_end() {
-    let store = committed("nba/end_of_period");
-    let view = &store.snapshot().nba_live;
+    let store = committed("basketball/nba/end_of_period");
+    let view = &store.snapshot().basketball_live;
     assert_eq!(view.clock_text.as_str(), "END");
     assert!(view.clock_accent);
     assert!(view.phase_text.as_str().starts_with('Q'));
 }
 
 #[test]
-fn a_colonless_nba_clock_is_crunch_time() {
-    let store = committed("nba/in_progress_subminute");
-    let view = &store.snapshot().nba_live;
+fn a_colonless_basketball_clock_is_crunch_time() {
+    let store = committed("basketball/nba/in_progress_subminute");
+    let view = &store.snapshot().basketball_live;
     assert!(!view.clock_text.contains(':'));
     assert!(view.clock_low);
     assert!(!view.clock_accent);
 }
 
 // =========================================================================
-// NBA (NBA.md §3)
+// Basketball (NBA.md §3)
 // =========================================================================
 //
 // Hand-built wire games — the corpus's level-0 goldens carry no `ext=2`
 // groups — each naming the ESPN moment it stands for.
 
-use crate::snapshot::{CourtMark, NbaLiveView, Record};
+use crate::snapshot::{BasketballLiveView, CourtMark, Record};
 
 fn nba_league() -> LeagueId {
-    LeagueId::from_slug(Sport::Nba, "nba")
+    LeagueId::from_slug(Sport::Basketball, "nba")
 }
 
-fn nba_team(abbreviation: &str, score: u16) -> scoreboard_wire::TeamState<'_> {
+fn basketball_team(abbreviation: &str, score: u16) -> scoreboard_wire::TeamState<'_> {
     scoreboard_wire::TeamState {
         abbreviation,
         score,
@@ -719,22 +719,22 @@ fn nba_team(abbreviation: &str, score: u16) -> scoreboard_wire::TeamState<'_> {
 
 /// NY at CLE, second quarter, the tip-off ledger a few fouls and a timeout
 /// each in; no run, nothing new.
-fn nba_live<'a>(makes: &'a [nba::Make]) -> nba::Live<'a> {
-    nba::Live {
+fn basketball_live<'a>(makes: &'a [basketball::Make]) -> basketball::Live<'a> {
+    basketball::Live {
         game_id: "401909940",
         period: 2,
         phase: LivePhase::InProgress,
         clock: "11:32",
-        away: nba_team("NY", 26),
-        home: nba_team("CLE", 30),
+        away: basketball_team("NY", 26),
+        home: basketball_team("CLE", 30),
         last_play: None,
-        ledger: Some(nba::Ledger {
-            away: nba::TeamLedger {
+        ledger: Some(basketball::Ledger {
+            away: basketball::TeamLedger {
                 fouls: 2,
                 in_bonus: false,
                 timeouts: 6,
             },
-            home: nba::TeamLedger {
+            home: basketball::TeamLedger {
                 fouls: 4,
                 in_bonus: true,
                 timeouts: 5,
@@ -742,18 +742,18 @@ fn nba_live<'a>(makes: &'a [nba::Make]) -> nba::Live<'a> {
         }),
         run: None,
         newest_score: None,
-        makes: nba::Makes::new(makes),
+        makes: basketball::Makes::new(makes),
     }
 }
 
 /// A layup at the rim and a corner three.
-const LAYUP: nba::Make = nba::Make {
+const LAYUP: basketball::Make = basketball::Make {
     side: Side::Home,
     three: false,
     x: 0,
     y: 1,
 };
-const CORNER: nba::Make = nba::Make {
+const CORNER: basketball::Make = basketball::Make {
     side: Side::Away,
     three: true,
     x: -22,
@@ -761,8 +761,8 @@ const CORNER: nba::Make = nba::Make {
 };
 
 /// Mobley's layup for his 18th point, as play `seq`.
-fn newest(seq: u32, scorer: &'static str, points: u8) -> Option<nba::NewestScore<'static>> {
-    Some(nba::NewestScore {
+fn newest(seq: u32, scorer: &'static str, points: u8) -> Option<basketball::NewestScore<'static>> {
+    Some(basketball::NewestScore {
         side: Side::Home,
         scorer_points: points,
         seq,
@@ -771,45 +771,45 @@ fn newest(seq: u32, scorer: &'static str, points: u8) -> Option<nba::NewestScore
     })
 }
 
-fn commit_nba(store: &mut Store, game: nba::Live<'_>, now_ms: Millis) {
-    let detail = GameDetail::Nba(nba::Game::Live(game));
+fn commit_basketball(store: &mut Store, game: basketball::Live<'_>, now_ms: Millis) {
+    let detail = GameDetail::Basketball(basketball::Game::Live(game));
     store.commit_detail(&nba_league(), &detail, Logos::default(), now_ms, clock());
 }
 
 /// One poll of the game with the newest scoring play `seq`.
 fn poll_news(store: &mut Store, seq: u32, now_ms: Millis) {
-    let live = nba::Live {
+    let live = basketball::Live {
         newest_score: newest(seq, "MOBLEY", 18),
-        ..nba_live(&[LAYUP])
+        ..basketball_live(&[LAYUP])
     };
-    commit_nba(store, live, now_ms);
+    commit_basketball(store, live, now_ms);
 }
 
-fn nba_view(store: &Store) -> &NbaLiveView {
-    &store.snapshot().nba_live
+fn basketball_view(store: &Store) -> &BasketballLiveView {
+    &store.snapshot().basketball_live
 }
 
 #[test]
-fn an_nba_payload_decodes_through_the_wire_feed_at_level_two() {
+fn a_basketball_payload_decodes_through_the_wire_feed_at_level_two() {
     let makes = [CORNER, LAYUP];
-    let live = nba::Live {
-        run: Some(nba::Run {
+    let live = basketball::Live {
+        run: Some(basketball::Run {
             side: Side::Home,
             points: 8,
         }),
         newest_score: newest(501, "MOBLEY", 18),
-        ..nba_live(&makes)
+        ..basketball_live(&makes)
     };
     let mut bytes = [0u8; 512];
     let mut sink = scoreboard_wire::SliceSink::new(&mut bytes);
-    nba::encode_at(&nba::Game::Live(live), 2, &mut sink).unwrap();
+    basketball::encode_at(&basketball::Game::Live(live), 2, &mut sink).unwrap();
     let len = sink.len();
-    let detail = WireFeed.detail(Sport::Nba, &bytes[..len]).unwrap();
+    let detail = WireFeed.detail(Sport::Basketball, &bytes[..len]).unwrap();
 
     let mut store = Store::new();
     store.commit_detail(&nba_league(), &detail, Logos::default(), 1_000, clock());
-    let view = nba_view(&store);
-    assert_eq!(store.snapshot().mode, Mode::NbaLive);
+    let view = basketball_view(&store);
+    assert_eq!(store.snapshot().mode, Mode::BasketballLive);
     assert_eq!(view.ledger.unwrap().home.timeouts, 5);
     assert_eq!(view.run.unwrap().points, 8);
     assert_eq!(view.caption.as_str(), "MOBLEY 18");
@@ -836,9 +836,9 @@ fn an_nba_payload_decodes_through_the_wire_feed_at_level_two() {
 
 /// A payload from an older backend: the band and a bare court.
 #[test]
-fn a_level_zero_nba_payload_draws_the_band_and_a_bare_court() {
-    let store = committed("nba/in_progress");
-    let view = nba_view(&store);
+fn a_level_zero_basketball_payload_draws_the_band_and_a_bare_court() {
+    let store = committed("basketball/nba/in_progress");
+    let view = basketball_view(&store);
     assert_eq!(view.ledger, None);
     assert_eq!(view.run, None);
     assert_eq!(view.last_score, None);
@@ -851,7 +851,7 @@ fn a_level_zero_nba_payload_draws_the_band_and_a_bare_court() {
 fn the_first_look_at_a_game_stamps_no_news() {
     let mut store = Store::new();
     poll_news(&mut store, 500, 1_000);
-    let view = nba_view(&store);
+    let view = basketball_view(&store);
     assert_eq!(
         view.score_ms, 0,
         "a basket already on the board is old news"
@@ -867,15 +867,15 @@ fn a_new_scoring_play_stamps_the_news_and_a_repeat_does_not() {
     let mut store = Store::new();
     poll_news(&mut store, 500, 1_000);
     poll_news(&mut store, 501, 6_000);
-    assert_eq!(nba_view(&store).score_ms, 6_000);
+    assert_eq!(basketball_view(&store).score_ms, 6_000);
     poll_news(&mut store, 501, 11_000);
     assert_eq!(
-        nba_view(&store).score_ms,
+        basketball_view(&store).score_ms,
         6_000,
         "the same play, polled again"
     );
     poll_news(&mut store, 502, 16_000);
-    assert_eq!(nba_view(&store).score_ms, 16_000);
+    assert_eq!(basketball_view(&store).score_ms, 16_000);
 }
 
 /// §3.6's key is kept through a poll whose summary was missing, so the group
@@ -886,28 +886,32 @@ fn the_news_key_survives_a_poll_without_its_summary() {
     let mut store = Store::new();
     poll_news(&mut store, 500, 1_000);
     poll_news(&mut store, 501, 6_000);
-    commit_nba(&mut store, nba_live(&[LAYUP]), 11_000);
-    let view = nba_view(&store);
+    commit_basketball(&mut store, basketball_live(&[LAYUP]), 11_000);
+    let view = basketball_view(&store);
     assert_eq!(view.last_score, None, "nothing to say without the summary");
     assert!(view.caption.is_empty());
     assert!(!view.newest_marked);
     assert_eq!(view.score_seq, 501, "the key is kept");
     poll_news(&mut store, 501, 16_000);
     assert_eq!(
-        nba_view(&store).score_ms,
+        basketball_view(&store).score_ms,
         6_000,
         "the same play is not news again"
     );
     poll_news(&mut store, 502, 21_000);
-    assert_eq!(nba_view(&store).score_ms, 21_000);
+    assert_eq!(basketball_view(&store).score_ms, 21_000);
 
     // A game rotated in without its summary, which arrives a poll later.
     let mut store = Store::new();
-    commit_nba(&mut store, nba_live(&[]), 1_000);
+    commit_basketball(&mut store, basketball_live(&[]), 1_000);
     poll_news(&mut store, 500, 6_000);
-    assert_eq!(nba_view(&store).score_ms, 0, "the first key is adopted");
+    assert_eq!(
+        basketball_view(&store).score_ms,
+        0,
+        "the first key is adopted"
+    );
     poll_news(&mut store, 501, 11_000);
-    assert_eq!(nba_view(&store).score_ms, 11_000);
+    assert_eq!(basketball_view(&store).score_ms, 11_000);
 }
 
 #[test]
@@ -915,16 +919,16 @@ fn rotating_away_and_back_is_a_first_look_for_the_news_too() {
     let mut store = Store::new();
     poll_news(&mut store, 500, 1_000);
     poll_news(&mut store, 501, 6_000);
-    assert_eq!(nba_view(&store).score_ms, 6_000);
+    assert_eq!(basketball_view(&store).score_ms, 6_000);
 
     // Another game on screen, and two baskets here meanwhile.
-    let (league, bytes) = fixture("nba/halftime");
+    let (league, bytes) = fixture("basketball/nba/halftime");
     let other = WireFeed.detail(league.sport, &bytes).unwrap();
     store.commit_detail(&league, &other, Logos::default(), 11_000, clock());
     poll_news(&mut store, 503, 16_000);
-    assert_eq!(nba_view(&store).score_ms, 0, "old news");
+    assert_eq!(basketball_view(&store).score_ms, 0, "old news");
     poll_news(&mut store, 504, 21_000);
-    assert_eq!(nba_view(&store).score_ms, 21_000);
+    assert_eq!(basketball_view(&store).score_ms, 21_000);
 }
 
 /// §3.3: a poll without a ledger keeps the previous one — the glitch body
@@ -932,29 +936,33 @@ fn rotating_away_and_back_is_a_first_look_for_the_news_too() {
 #[test]
 fn the_ledger_holds_through_a_missing_group_and_resets_on_a_new_game() {
     let mut store = Store::new();
-    commit_nba(&mut store, nba_live(&[]), 1_000);
-    let held = nba_view(&store).ledger;
+    commit_basketball(&mut store, basketball_live(&[]), 1_000);
+    let held = basketball_view(&store).ledger;
     assert!(held.is_some());
-    commit_nba(
+    commit_basketball(
         &mut store,
-        nba::Live {
+        basketball::Live {
             ledger: None,
-            ..nba_live(&[])
+            ..basketball_live(&[])
         },
         6_000,
     );
-    assert_eq!(nba_view(&store).ledger, held, "held through the gap");
+    assert_eq!(basketball_view(&store).ledger, held, "held through the gap");
 
-    commit_nba(
+    commit_basketball(
         &mut store,
-        nba::Live {
+        basketball::Live {
             game_id: "401909941",
             ledger: None,
-            ..nba_live(&[])
+            ..basketball_live(&[])
         },
         11_000,
     );
-    assert_eq!(nba_view(&store).ledger, None, "another game's first look");
+    assert_eq!(
+        basketball_view(&store).ledger,
+        None,
+        "another game's first look"
+    );
 }
 
 #[test]
@@ -965,12 +973,12 @@ fn the_caption_takes_its_three_forms() {
         ("MOBLEY", 0, "MOBLEY"),
         ("", 18, ""),
     ] {
-        let live = nba::Live {
+        let live = basketball::Live {
             newest_score: newest(500, scorer, points),
-            ..nba_live(&[LAYUP])
+            ..basketball_live(&[LAYUP])
         };
-        commit_nba(&mut store, live, 1_000);
-        let view = nba_view(&store);
+        commit_basketball(&mut store, live, 1_000);
+        let view = basketball_view(&store);
         assert_eq!(view.caption.as_str(), caption);
         // A nameless play still has a side and a mark to blink.
         assert_eq!(view.last_score, Some(Side::Home));
@@ -982,7 +990,7 @@ fn the_caption_takes_its_three_forms() {
 /// minute, and never for the frozen "0.0"; a break keeps the period and
 /// reads END.
 #[test]
-fn the_nba_clock_warns_only_late_and_never_for_the_frozen_zero() {
+fn the_basketball_clock_warns_only_late_and_never_for_the_frozen_zero() {
     let cases = [
         (4, LivePhase::InProgress, "39.0", true),
         (5, LivePhase::InProgress, "12.5", true),
@@ -993,39 +1001,44 @@ fn the_nba_clock_warns_only_late_and_never_for_the_frozen_zero() {
     ];
     for (period, phase, clock, low) in cases {
         let mut store = Store::new();
-        commit_nba(
+        commit_basketball(
             &mut store,
-            nba::Live {
+            basketball::Live {
                 period,
                 phase,
                 clock,
-                ..nba_live(&[])
+                ..basketball_live(&[])
             },
             1_000,
         );
-        let view = nba_view(&store);
+        let view = basketball_view(&store);
         assert_eq!(view.clock_low, low, "period {period}, {phase:?}, {clock}");
     }
     let store = store_after(4, LivePhase::EndOfPeriod, "0.0");
-    let view = &store.snapshot().nba_live;
+    let view = &store.snapshot().basketball_live;
     assert_eq!(view.clock_text.as_str(), "END");
     assert_eq!(view.phase_text.as_str(), "Q4");
     assert!(view.clock_accent);
 
     // The corpus: DEN at IND's frozen fourth-quarter clock, and the real
     // 39.0 twenty-six minutes later.
-    assert!(!committed("nba/frozen_clock").snapshot().nba_live.clock_low);
     assert!(
-        committed("nba/in_progress_subminute")
+        !committed("basketball/nba/frozen_clock")
             .snapshot()
-            .nba_live
+            .basketball_live
+            .clock_low
+    );
+    assert!(
+        committed("basketball/nba/in_progress_subminute")
+            .snapshot()
+            .basketball_live
             .clock_low
     );
     // ORL at GS: period 5 is OT.
     assert_eq!(
-        committed("nba/overtime")
+        committed("basketball/nba/overtime")
             .snapshot()
-            .nba_live
+            .basketball_live
             .phase_text
             .as_str(),
         "OT"
@@ -1034,13 +1047,13 @@ fn the_nba_clock_warns_only_late_and_never_for_the_frozen_zero() {
 
 fn store_after(period: u8, phase: LivePhase, clock: &str) -> Store {
     let mut store = Store::new();
-    commit_nba(
+    commit_basketball(
         &mut store,
-        nba::Live {
+        basketball::Live {
             period,
             phase,
             clock,
-            ..nba_live(&[])
+            ..basketball_live(&[])
         },
         1_000,
     );
@@ -1050,8 +1063,8 @@ fn store_after(period: u8, phase: LivePhase, clock: &str) -> Store {
 /// SA at NY, Finals Game 4 (the corpus's `final_playoff` moment, by hand at
 /// level 2): Brunson's 36, Wembanyama's 14 boards, the series and both
 /// records.
-fn nba_final(leaders: bool, series: bool, records: bool) -> nba::Final<'static> {
-    nba::Final {
+fn basketball_final(leaders: bool, series: bool, records: bool) -> basketball::Final<'static> {
+    basketball::Final {
         game_id: "401859966",
         periods_played: 4,
         away: scoreboard_wire::FinalTeam {
@@ -1072,25 +1085,25 @@ fn nba_final(leaders: bool, series: bool, records: bool) -> nba::Final<'static> 
             },
             line_score: &[30, 24, 26, 27],
         },
-        leaders: leaders.then_some(nba::Leaders {
-            points: nba::Leader {
+        leaders: leaders.then_some(basketball::Leaders {
+            points: basketball::Leader {
                 side: Side::Home,
                 value: 36,
                 name: "J. Brunson",
             },
-            rebounds: nba::Leader {
+            rebounds: basketball::Leader {
                 side: Side::Away,
                 value: 14,
                 name: "V. Wembanyama",
             },
-            assists: nba::Leader {
+            assists: basketball::Leader {
                 side: Side::Home,
                 value: 9,
                 name: "J. Brunson",
             },
         }),
         series: series.then_some("NY leads series 3-1"),
-        records: records.then_some(nba::Records {
+        records: records.then_some(basketball::Records {
             away: scoreboard_wire::Record { wins: 1, losses: 3 },
             home: scoreboard_wire::Record { wins: 3, losses: 1 },
         }),
@@ -1098,20 +1111,21 @@ fn nba_final(leaders: bool, series: bool, records: bool) -> nba::Final<'static> 
 }
 
 #[test]
-fn an_nba_final_commits_the_shared_rows_and_the_leaders() {
+fn a_basketball_final_commits_the_shared_rows_and_the_leaders() {
     let mut store = Store::new();
-    let detail = GameDetail::Nba(nba::Game::Final(nba_final(true, true, true)));
+    let detail =
+        GameDetail::Basketball(basketball::Game::Final(basketball_final(true, true, true)));
     store.commit_detail(&nba_league(), &detail, Logos::default(), 1_000, clock());
     let snapshot = store.snapshot();
-    assert_eq!(snapshot.mode, Mode::NbaFinal);
+    assert_eq!(snapshot.mode, Mode::BasketballFinal);
     let shared = &snapshot.linescore_final;
-    assert_eq!(shared.sport, Sport::Nba);
+    assert_eq!(shared.sport, Sport::Basketball);
     assert_eq!(shared.final_text.as_str(), "FINAL");
     assert_eq!(shared.header_row.as_str(), " 1  2  3  4 ");
     assert_eq!(shared.home_row.as_str(), "30 24 26 27 ");
     assert!(shared.home_won);
 
-    let view = &snapshot.nba_final;
+    let view = &snapshot.basketball_final;
     let leaders = view.leaders.as_ref().unwrap();
     let lines: Vec<(&str, Side)> = leaders
         .iter()
@@ -1146,25 +1160,27 @@ fn an_nba_final_commits_the_shared_rows_and_the_leaders() {
 /// The handful of final bodies without leaders, and every final below
 /// `ext=2`: the shared rows stand in and the NBA view is empty.
 #[test]
-fn an_nba_final_without_its_groups_leaves_the_leaders_view_empty() {
+fn a_basketball_final_without_its_groups_leaves_the_leaders_view_empty() {
     let mut store = Store::new();
-    let detail = GameDetail::Nba(nba::Game::Final(nba_final(false, false, false)));
+    let detail = GameDetail::Basketball(basketball::Game::Final(basketball_final(
+        false, false, false,
+    )));
     store.commit_detail(&nba_league(), &detail, Logos::default(), 1_000, clock());
-    let view = &store.snapshot().nba_final;
+    let view = &store.snapshot().basketball_final;
     assert_eq!(view.leaders, None);
     assert!(view.series.is_empty());
     assert_eq!(view.records, None);
 
     // DEN at IND in Mexico City, and ORL at GS's double overtime, from the
     // corpus at level 0.
-    let store = committed("nba/final");
-    assert_eq!(store.snapshot().mode, Mode::NbaFinal);
+    let store = committed("basketball/nba/final");
+    assert_eq!(store.snapshot().mode, Mode::BasketballFinal);
     assert_eq!(
         store.snapshot().linescore_final.final_text.as_str(),
         "FINAL"
     );
-    assert_eq!(store.snapshot().nba_final.leaders, None);
-    let store = committed("nba/final_2ot");
+    assert_eq!(store.snapshot().basketball_final.leaders, None);
+    let store = committed("basketball/nba/final_2ot");
     assert_eq!(
         store.snapshot().linescore_final.final_text.as_str(),
         "F/2OT"
@@ -1355,7 +1371,7 @@ fn mlb_weather_carries_a_temperature_and_the_others_do_not() {
 /// The duck-typing the MicroPython models needed, stated as data instead.
 #[test]
 fn each_sport_fills_the_pregame_slots_with_what_it_has() {
-    let store = committed("nba/pregame");
+    let store = committed("basketball/nba/pregame");
     let view = &store.snapshot().pregame;
     assert!(!view.info_primary.is_empty(), "NBA leads with the arena");
     assert_eq!(
@@ -1557,7 +1573,7 @@ fn the_menu_restamps_when_the_window_scrolls_under_the_cursor() {
 fn sources() -> Vec<LeagueId> {
     vec![
         LeagueId::from_slug(Sport::Mlb, "mlb"),
-        LeagueId::from_slug(Sport::Nba, "nba"),
+        LeagueId::from_slug(Sport::Basketball, "nba"),
         LeagueId::from_slug(Sport::Soccer, "usa.1"),
     ]
 }
@@ -2705,7 +2721,7 @@ fn rotating_away_and_back_is_a_first_look_again() {
     assert_eq!(lamp(&store), (Some(Side::Away), 5_000));
 
     // Another game on screen, and a goal here meanwhile.
-    let (league, bytes) = fixture("nba/in_progress");
+    let (league, bytes) = fixture("basketball/nba/in_progress");
     let other = WireFeed.detail(league.sport, &bytes).unwrap();
     store.commit_detail(&league, &other, Logos::default(), 10_000, clock());
     poll_score(&mut store, 3, 0, 15_000);
@@ -2925,8 +2941,8 @@ fn a_hockey_pregame_stacks_three_record_columns_and_names_the_goalies() {
 /// first NBA release while this one dropped it, and the corpus's only NBA
 /// pregame has no note, so nothing noticed.
 #[test]
-fn an_nba_pregame_shows_its_note_and_series_as_the_second_line() {
-    let team = |abbreviation, line| nba::PregameTeam {
+fn a_basketball_pregame_shows_its_note_and_series_as_the_second_line() {
+    let team = |abbreviation, line| basketball::PregameTeam {
         abbreviation,
         colors: scoreboard_wire::TeamColors {
             primary: 0x00_1D_42_8A,
@@ -2935,7 +2951,7 @@ fn an_nba_pregame_shows_its_note_and_series_as_the_second_line() {
         record: Some(scoreboard_wire::Record { wins: 1, losses: 2 }),
         line: Some(line),
     };
-    let pregame = |info_secondary| nba::Pregame {
+    let pregame = |info_secondary| basketball::Pregame {
         game_id: "401859966",
         start_time: 1_781_481_600,
         venue: "Madison Square Garden",
@@ -2945,7 +2961,7 @@ fn an_nba_pregame_shows_its_note_and_series_as_the_second_line() {
     };
     let commit = |game| {
         let mut store = Store::new();
-        let detail = GameDetail::Nba(nba::Game::Pregame(game));
+        let detail = GameDetail::Basketball(basketball::Game::Pregame(game));
         store.commit_detail(&nba_league(), &detail, Logos::default(), 0, clock());
         store
     };
@@ -3003,10 +3019,10 @@ fn every_fixture_builds_a_sane_view() {
             (GameState::Pregame, _) => Mode::Pregame,
             (GameState::Final, Sport::Soccer) => Mode::SoccerFinal,
             (GameState::Final, Sport::Hockey) => Mode::HockeyFinal,
-            (GameState::Final, Sport::Nba) => Mode::NbaFinal,
+            (GameState::Final, Sport::Basketball) => Mode::BasketballFinal,
             (GameState::Final, _) => Mode::Final,
             (GameState::Live, Sport::Mlb) => Mode::MlbLive,
-            (GameState::Live, Sport::Nba) => Mode::NbaLive,
+            (GameState::Live, Sport::Basketball) => Mode::BasketballLive,
             (GameState::Live, Sport::Hockey) => Mode::HockeyLive,
             (GameState::Live, Sport::Football) => Mode::FootballLive,
             (GameState::Live, Sport::Soccer) => Mode::SoccerLive,
@@ -3057,8 +3073,8 @@ fn the_spot_checked_fixtures_carry_the_values_espn_sent() {
     assert_eq!(view.away_row.as_str(), " 0  0  2  0  0  1  1  0  0 ");
     assert_eq!(view.home_row.as_str(), " 2  0  1  0  0  0  0  0  0 ");
 
-    let store = committed("nba/in_progress");
-    let view = &store.snapshot().nba_live;
+    let store = committed("basketball/nba/in_progress");
+    let view = &store.snapshot().basketball_live;
     assert_eq!(view.phase_text.as_str(), "Q2");
     assert_eq!(view.clock_text.as_str(), "11:32");
     assert!(!view.clock_low);
@@ -3123,7 +3139,7 @@ fn every_string_bound_clears_the_corpus() {
                     max.note("team line", pitcher);
                 }
             }
-            GameDetail::Nba(nba::Game::Live(game)) => {
+            GameDetail::Basketball(basketball::Game::Live(game)) => {
                 max.note("clock", game.clock);
                 if let Some(play) = game.last_play {
                     max.note("play id", play.id);
@@ -3134,7 +3150,7 @@ fn every_string_bound_clears_the_corpus() {
                     max.note_len("player name", score.scorer.len() + 3);
                 }
             }
-            GameDetail::Nba(nba::Game::Pregame(game)) => {
+            GameDetail::Basketball(basketball::Game::Pregame(game)) => {
                 max.note("info primary", game.venue);
                 for line in [game.away.line, game.home.line].into_iter().flatten() {
                     max.note("team line", line);
@@ -3202,7 +3218,7 @@ fn every_string_bound_clears_the_corpus() {
                 max.note_periods(game.away.line_score.len());
                 max.note_periods(game.home.line_score.len());
             }
-            GameDetail::Nba(nba::Game::Final(game)) => {
+            GameDetail::Basketball(basketball::Game::Final(game)) => {
                 max.note_periods(game.away.line_score.len());
                 max.note_periods(game.home.line_score.len());
                 for leader in game

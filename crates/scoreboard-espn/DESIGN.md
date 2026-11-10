@@ -24,7 +24,7 @@ crates/scoreboard-espn/
 ├── DESIGN.md        this file
 ├── src/lib.rs       crate docs, re-exports
 ├── src/path.rs      the engine: path patterns + matcher over picojson events
-├── src/{mlb,nba,football,soccer}.rs   per-sport: extract structs, PATHS
+├── src/{mlb,basketball,football,soccer}.rs   per-sport: extract structs, PATHS
 │                    table, sink with the semantic mapping
 └── tests/           corpus extraction + chunk-split invariance
 ```
@@ -330,11 +330,11 @@ a second document. What is specific to the lane, decided here so nobody
 relitigates it:
 
 - **Two documents, one combiner.** The scoreboard event feeds
-  `nba::Extractor` as before, its table grown by the fields §3.1 and
+  `basketball::Extractor` as before, its table grown by the fields §3.1 and
   §3.7–3.9 read (`season.type`, `status.type.{name,altDetail}`,
   `series.summary`, `notes[0].headline`, `lastPlay.type.id`, the
   competitors' `leaders[*]`); the per-event summary feeds
-  `nba::SummaryExtractor`, for **live games only** (NBA.md D3: finals and
+  `basketball::SummaryExtractor`, for **live games only** (NBA.md D3: finals and
   pregames come from the scoreboard alone). Both produce owned extracts and
   `Extract::as_game(&self, Option<&Summary>)` borrows the wire view from
   them; without a summary the view is the scoreboard alone, the `ext=2`
@@ -352,7 +352,7 @@ relitigates it:
   summary fails a game.
 - **The flash is §3.7's filter at both sources.** The wire's `last_play` is
   the scoreboard's `lastPlay` when its type is in the one pinned table
-  (`nba::FLASH_TYPES`: timeout, challenge and review outcomes, technicals,
+  (`basketball::FLASH_TYPES`: timeout, challenge and review outcomes, technicals,
   flagrant), else the summary's newest eligible play, else none — with and
   without a summary, so a degraded poll flashes less, never more. The
   filter is applied where the scoreboard play is built, so `Live::last_play`

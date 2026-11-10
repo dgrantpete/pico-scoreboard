@@ -460,7 +460,7 @@ impl DeviceConfig {
         let sports = &self.sports;
         let toggles = [
             (sports.mlb, Sport::Mlb, "mlb"),
-            (sports.nba, Sport::Nba, "nba"),
+            (sports.nba, Sport::Basketball, "nba"),
             (sports.nhl, Sport::Hockey, "nhl"),
         ];
         for (toggle, sport, slug) in toggles {
@@ -515,7 +515,7 @@ impl DeviceConfig {
             let sports = &mut self.sports;
             changed |= match league.sport {
                 Sport::Mlb => sports.mlb.set(enabled),
-                Sport::Nba => sports.nba.set(enabled),
+                Sport::Basketball => sports.nba.set(enabled),
                 // One hockey league, one toggle; a second row needs a config
                 // shape first, which `every_registered_league_fits_the_slate`
                 // insists on (NHL.md D5).
@@ -530,7 +530,7 @@ impl DeviceConfig {
     fn league_enabled(&self, league: &RegisteredLeague) -> bool {
         match league.sport {
             Sport::Mlb => self.sports.mlb.enabled,
-            Sport::Nba => self.sports.nba.enabled,
+            Sport::Basketball => self.sports.nba.enabled,
             Sport::Hockey => self.sports.nhl.enabled,
             Sport::Football => self.sports.football.contains(league.slug),
             Sport::Soccer => self.sports.soccer.contains(league.slug),

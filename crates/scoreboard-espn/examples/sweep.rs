@@ -15,7 +15,7 @@ use std::io::{BufRead, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use scoreboard_espn::common::{Quirk, Quirks};
-use scoreboard_espn::{football, mlb, nba, soccer};
+use scoreboard_espn::{basketball, football, mlb, soccer};
 use scoreboard_wire::GameState;
 
 #[derive(Default)]
@@ -205,9 +205,9 @@ fn list_pass(sport: &str, body: &[u8], stats: &mut Stats) -> (u64, u64) {
         }
         "nba" => {
             let mut on_game = |_id: &str, _state: GameState| {};
-            let extractor = nba::Extractor::games_list(&mut on_game, &mut quirks);
+            let extractor = basketball::Extractor::games_list(&mut on_game, &mut quirks);
             let mut matcher =
-                scoreboard_espn::StreamMatcher::new(nba::PATHS, extractor, &mut scratch)
+                scoreboard_espn::StreamMatcher::new(basketball::PATHS, extractor, &mut scratch)
                     .expect("table");
             match matcher.write(body) {
                 Ok(()) => match matcher.finish() {
@@ -299,16 +299,16 @@ fn detail_pass(sport: &str, league: &str, body: &[u8], id: &str, stats: &mut Sta
             }
         }
         "nba" => {
-            let extractor = nba::Extractor::game_detail(id, &mut quirks);
+            let extractor = basketball::Extractor::game_detail(id, &mut quirks);
             let mut matcher =
-                scoreboard_espn::StreamMatcher::new(nba::PATHS, extractor, &mut scratch)
+                scoreboard_espn::StreamMatcher::new(basketball::PATHS, extractor, &mut scratch)
                     .expect("table");
             match matcher.write(body).map_err(|e| format!("{e:?}")).and_then(|()| {
                 matcher.finish().map_err(|e| format!("{e:?}"))
             }) {
                 Ok(ex) => match ex.into_detail() {
-                    Some(nba::DetailOutcome::Found(extract)) => {
-                        scoreboard_wire::nba::encode(&extract.as_game(None), &mut wire)
+                    Some(basketball::DetailOutcome::Found(extract)) => {
+                        scoreboard_wire::basketball::encode(&extract.as_game(None), &mut wire)
                             .expect("encode");
                         "Found".into()
                     }

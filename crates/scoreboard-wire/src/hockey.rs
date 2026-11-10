@@ -69,7 +69,7 @@
 //! # Pregame (state = 0)
 //!
 //! Fixed 33-byte section at offset 2 (`<BHHHHIIIIIHH`): the
-//! [NBA pregame](crate::nba)'s 29 bytes, then the overtime losses.
+//! [NBA pregame](crate::basketball)'s 29 bytes, then the overtime losses.
 //!
 //! | off | type | field                                            |
 //! |-----|------|--------------------------------------------------|
@@ -145,7 +145,7 @@
 //!
 //! Decode rejects what no encoder writes. Beyond the truncation, UTF-8 and
 //! trailing-byte checks every payload gets, it rejects: a flags byte with a bit
-//! its layout leaves undefined (the [`crate::nba`] extension flags' rule — the
+//! its layout leaves undefined (the [`crate::basketball`] extension flags' rule — the
 //! newest and strictest in the crate; the older live flags ignore spare bits);
 //! a code outside its set (phase, strength, a goal record's spare bits, next
 //! shooter, a star's side); a goal count, or a side's shootout attempts, over

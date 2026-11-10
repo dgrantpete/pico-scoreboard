@@ -1,15 +1,15 @@
-//! `scoreboard-espn::nba` extracts → the NBA domain DTOs, plus the streaming
+//! `scoreboard-espn::basketball` extracts → the NBA domain DTOs, plus the streaming
 //! entry points the handlers call. The NBA is two documents like hockey: the
 //! league scoreboard (list + detail) and, for live games only, the per-event
 //! summary (NBA.md D3). The extractor combines the two itself
 //! (`Extract::as_game`) — the one-source flash, which summary groups a
 //! payload carries — so the DTO is built from that combined view rather than
 //! from the two extracts, and cannot disagree with the wire. The scoreboard
-//! lane exposes a bare sink (`nba::Extractor`) rather than wrapped
+//! lane exposes a bare sink (`basketball::Extractor`) rather than wrapped
 //! extractors, so this adapter drives `StreamMatcher` itself for it.
 
 use scoreboard_espn::StreamMatcher;
-use scoreboard_espn::nba::{
+use scoreboard_espn::basketball::{
     self, DetailOutcome, Extract, Kind, Summary, SummaryExtractor, TransformError,
 };
 use scoreboard_wire as wire;
@@ -23,8 +23,10 @@ use crate::shared::game::{GameListEntry, LastPlay, LivePhase};
 use crate::shared::team::TeamState;
 
 use super::types::{
-    NbaFinalGame, NbaFinalTeam, NbaGame, NbaLeader, NbaLeaders, NbaLedger, NbaLiveGame, NbaMake,
-    NbaNewestScore, NbaPregameGame, NbaPregameTeam, NbaRecords, NbaRun, NbaTeamLedger,
+    BasketballFinalGame, BasketballFinalTeam, BasketballGame, BasketballLeader, BasketballLeaders,
+    BasketballLedger, BasketballLiveGame, BasketballMake, BasketballNewestScore,
+    BasketballPregameGame, BasketballPregameTeam, BasketballRecords, BasketballRun,
+    BasketballTeamLedger,
 };
 
 /// Games list: every clean event with a competition — NBA's list state is
@@ -38,10 +40,10 @@ pub(crate) fn list_entries(bytes: &[u8], url: &str) -> Result<Vec<GameListEntry>
         });
     };
     let mut quirks = TracingQuirks::new("nba");
-    let extractor = nba::Extractor::games_list(&mut on_game, &mut quirks);
+    let extractor = basketball::Extractor::games_list(&mut on_game, &mut quirks);
     let mut scratch = vec![0u8; SCRATCH_LEN];
-    let mut matcher =
-        StreamMatcher::new(nba::PATHS, extractor, &mut scratch).map_err(|e| stream_error(url, e))?;
+    let mut matcher = StreamMatcher::new(basketball::PATHS, extractor, &mut scratch)
+        .map_err(|e| stream_error(url, e))?;
     matcher.write(bytes).map_err(|e| stream_error(url, e))?;
     let sink = matcher.finish().map_err(|e| stream_error(url, e))?;
     let stats = sink.stats();
@@ -58,10 +60,10 @@ pub(crate) fn list_entries(bytes: &[u8], url: &str) -> Result<Vec<GameListEntry>
 /// says so and builds the DTO.
 pub(crate) fn detail_extract(bytes: &[u8], game_id: &str, url: &str) -> Result<Extract, AppError> {
     let mut quirks = TracingQuirks::for_event("nba", game_id);
-    let extractor = nba::Extractor::game_detail(game_id, &mut quirks);
+    let extractor = basketball::Extractor::game_detail(game_id, &mut quirks);
     let mut scratch = vec![0u8; SCRATCH_LEN];
-    let mut matcher =
-        StreamMatcher::new(nba::PATHS, extractor, &mut scratch).map_err(|e| stream_error(url, e))?;
+    let mut matcher = StreamMatcher::new(basketball::PATHS, extractor, &mut scratch)
+        .map_err(|e| stream_error(url, e))?;
     matcher.write(bytes).map_err(|e| stream_error(url, e))?;
     let sink = matcher.finish().map_err(|e| stream_error(url, e))?;
     let stats = sink.stats();
@@ -126,7 +128,7 @@ pub(crate) fn summary(bytes: &[u8], extract: &Extract, url: &str) -> Option<Summ
 }
 
 /// Extract (+ summary) → DTO, through the crate's own combiner.
-pub(crate) fn game_from_extract(extract: &Extract, summary: Option<&Summary>) -> NbaGame {
+pub(crate) fn game_from_extract(extract: &Extract, summary: Option<&Summary>) -> BasketballGame {
     game_from_view(&extract.as_game(summary))
 }
 
@@ -134,9 +136,9 @@ pub(crate) fn game_from_extract(extract: &Extract, summary: Option<&Summary>) ->
 /// and the corpus harness checks the two compose to the identity. Scores stay
 /// `u32` like the JSON always carried them (the wire view saturates, so the
 /// widening here is exact).
-fn game_from_view(game: &wire::nba::Game<'_>) -> NbaGame {
+fn game_from_view(game: &wire::basketball::Game<'_>) -> BasketballGame {
     match game {
-        wire::nba::Game::Pregame(game) => NbaGame::Pregame(NbaPregameGame {
+        wire::basketball::Game::Pregame(game) => BasketballGame::Pregame(BasketballPregameGame {
             game_id: game.game_id.to_owned(),
             start_time: game.start_time,
             venue: game.venue.to_owned(),
@@ -144,7 +146,7 @@ fn game_from_view(game: &wire::nba::Game<'_>) -> NbaGame {
             home: pregame_team(&game.home),
             away: pregame_team(&game.away),
         }),
-        wire::nba::Game::Live(game) => NbaGame::Live(NbaLiveGame {
+        wire::basketball::Game::Live(game) => BasketballGame::Live(BasketballLiveGame {
             game_id: game.game_id.to_owned(),
             period: game.period,
             clock: game.clock.to_owned(),
@@ -159,15 +161,15 @@ fn game_from_view(game: &wire::nba::Game<'_>) -> NbaGame {
                 id: play.id.to_owned(),
                 text: play.text.to_owned(),
             }),
-            ledger: game.ledger.map(|ledger| NbaLedger {
+            ledger: game.ledger.map(|ledger| BasketballLedger {
                 away: team_ledger(ledger.away),
                 home: team_ledger(ledger.home),
             }),
-            run: game.run.map(|run| NbaRun {
+            run: game.run.map(|run| BasketballRun {
                 side: domain_side(run.side),
                 points: run.points,
             }),
-            newest_score: game.newest_score.map(|score| NbaNewestScore {
+            newest_score: game.newest_score.map(|score| BasketballNewestScore {
                 side: domain_side(score.side),
                 scorer: score.scorer.to_owned(),
                 // The wire's 0 is "the boxscore has not listed the player".
@@ -177,18 +179,18 @@ fn game_from_view(game: &wire::nba::Game<'_>) -> NbaGame {
             }),
             makes: game.makes.iter().map(make).collect(),
         }),
-        wire::nba::Game::Final(game) => NbaGame::Final(NbaFinalGame {
+        wire::basketball::Game::Final(game) => BasketballGame::Final(BasketballFinalGame {
             game_id: game.game_id.to_owned(),
             periods_played: game.periods_played,
             home: final_team(&game.home),
             away: final_team(&game.away),
-            leaders: game.leaders.map(|leaders| NbaLeaders {
+            leaders: game.leaders.map(|leaders| BasketballLeaders {
                 points: leader(leaders.points),
                 rebounds: leader(leaders.rebounds),
                 assists: leader(leaders.assists),
             }),
             series: game.series.map(str::to_owned),
-            records: game.records.map(|records| NbaRecords {
+            records: game.records.map(|records| BasketballRecords {
                 away: domain_record(records.away),
                 home: domain_record(records.home),
             }),
@@ -196,8 +198,8 @@ fn game_from_view(game: &wire::nba::Game<'_>) -> NbaGame {
     }
 }
 
-fn pregame_team(team: &wire::nba::PregameTeam<'_>) -> NbaPregameTeam {
-    NbaPregameTeam {
+fn pregame_team(team: &wire::basketball::PregameTeam<'_>) -> BasketballPregameTeam {
+    BasketballPregameTeam {
         abbreviation: team.abbreviation.to_owned(),
         colors: domain_colors(team.colors),
         record: team.record.map(domain_record),
@@ -213,8 +215,8 @@ fn live_team(team: &wire::TeamState<'_>) -> TeamState {
     }
 }
 
-fn final_team(team: &wire::FinalTeam<'_>) -> NbaFinalTeam {
-    NbaFinalTeam {
+fn final_team(team: &wire::FinalTeam<'_>) -> BasketballFinalTeam {
+    BasketballFinalTeam {
         abbreviation: team.abbreviation.to_owned(),
         score: u32::from(team.score),
         colors: domain_colors(team.colors),
@@ -222,16 +224,16 @@ fn final_team(team: &wire::FinalTeam<'_>) -> NbaFinalTeam {
     }
 }
 
-fn team_ledger(column: wire::nba::TeamLedger) -> NbaTeamLedger {
-    NbaTeamLedger {
+fn team_ledger(column: wire::basketball::TeamLedger) -> BasketballTeamLedger {
+    BasketballTeamLedger {
         fouls: column.fouls,
         in_bonus: column.in_bonus,
         timeouts: column.timeouts,
     }
 }
 
-fn make(make: wire::nba::Make) -> NbaMake {
-    NbaMake {
+fn make(make: wire::basketball::Make) -> BasketballMake {
+    BasketballMake {
         side: domain_side(make.side),
         three: make.three,
         x: make.x,
@@ -239,8 +241,8 @@ fn make(make: wire::nba::Make) -> NbaMake {
     }
 }
 
-fn leader(leader: wire::nba::Leader<'_>) -> NbaLeader {
-    NbaLeader {
+fn leader(leader: wire::basketball::Leader<'_>) -> BasketballLeader {
+    BasketballLeader {
         side: domain_side(leader.side),
         value: leader.value,
         name: leader.name.to_owned(),
@@ -294,7 +296,10 @@ mod tests {
 
     /// One corpus event, as the handler would have it from the board.
     fn corpus_extract(stem: &str, id: &str) -> Extract {
-        let path = format!("{}/testdata/nba/{stem}.json", env!("CARGO_MANIFEST_DIR"));
+        let path = format!(
+            "{}/testdata/basketball/nba/{stem}.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
         let event = std::fs::read_to_string(path).expect("corpus fixture");
         let body = format!(r#"{{"events":[{event}]}}"#);
         detail_extract(body.as_bytes(), id, "test://sb").expect("corpus event")
@@ -314,7 +319,7 @@ mod tests {
         let extract = corpus_extract("in_progress", "401909940");
         let summary = summary(br#"{"plays":"glitch"}"#, &extract, "test://summary")
             .expect("a readable body is a summary, however thin");
-        let NbaGame::Live(game) = game_from_extract(&extract, Some(&summary)) else {
+        let BasketballGame::Live(game) = game_from_extract(&extract, Some(&summary)) else {
             panic!("in_progress is live");
         };
         assert!(game.ledger.is_none() && game.run.is_none());

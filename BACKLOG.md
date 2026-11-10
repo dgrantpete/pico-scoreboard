@@ -1250,7 +1250,7 @@ reviewed change.
     post rows lacked them), a live playoff body (`series` and a game-number
     headline), a live NBA Cup body for the pregame's second line. Pull them
     from the collector's first fortnight of NBA summaries (from 2026-11-08)
-    by `backend/testdata/nba/PROVENANCE.md`'s method, and re-check §2's
+    by `backend/testdata/basketball/nba/PROVENANCE.md`'s method, and re-check §2's
     counts against it.
 120. **Crests at eight bits — what BACKLOG 115 left (2026-11-08).** The
     drawing surface is RGB888, but the 32-slot crest pool is still RGB565

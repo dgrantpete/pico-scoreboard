@@ -33,13 +33,13 @@ use crate::blit::{Canvas, Slice};
 use crate::court::{ESPN_ORIGIN, End, WOOD};
 use crate::font::{self, Align, Style};
 use crate::geometry::{
-    self, EDGE_INSET, FINAL_LINESCORE_SCROLL, NBA_CAPTION_PAUSE_MS, NBA_FINAL, NBA_LIVE,
-    NbaLiveGeometry, STARS_SCROLL,
+    self, BASKETBALL_CAPTION_PAUSE_MS, BASKETBALL_FINAL, BASKETBALL_LIVE, BasketballLiveGeometry,
+    EDGE_INSET, FINAL_LINESCORE_SCROLL, STARS_SCROLL,
 };
 use crate::widgets::{arrow, count_dots, timeout_blocks};
 use crate::{BLACK, Rgb888, WHITE, generated, mix, toast};
 use scoreboard_model::UiColors;
-use scoreboard_model::snapshot::{CourtMark, NbaLiveView, Record, Side};
+use scoreboard_model::snapshot::{BasketballLiveView, CourtMark, Record, Side};
 
 /// A side's timeouts at the tip, and so the blocks in its row.
 const TIMEOUTS: u8 = 7;
@@ -69,8 +69,8 @@ const LEADER_LABELS: [&str; 3] = ["PTS", "REB", "AST"];
 pub fn render_live(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     canvas.fill(BLACK);
     let snapshot = scene.snapshot;
-    let view = &snapshot.nba_live;
-    let table = NBA_LIVE;
+    let view = &snapshot.basketball_live;
+    let table = BASKETBALL_LIVE;
     let colors = &snapshot.ui_colors;
     let primary = colors.primary;
 
@@ -118,7 +118,12 @@ pub fn clock_color(colors: &UiColors, accent: bool, low: bool) -> Rgb888 {
 /// colour; the blocks count the timeouts left, burned ones dark. No ledger,
 /// no dots and no blocks: a first look without its summary shows the band
 /// bare rather than a fake seven.
-fn ledger(canvas: &mut Canvas<'_>, view: &NbaLiveView, colors: &UiColors, table: &NbaLiveGeometry) {
+fn ledger(
+    canvas: &mut Canvas<'_>,
+    view: &BasketballLiveView,
+    colors: &UiColors,
+    table: &BasketballLiveGeometry,
+) {
     let Some(ledger) = view.ledger else {
         return;
     };
@@ -158,9 +163,9 @@ fn ledger(canvas: &mut Canvas<'_>, view: &NbaLiveView, colors: &UiColors, table:
 fn scores(
     canvas: &mut Canvas<'_>,
     scene: &Scene<'_>,
-    view: &NbaLiveView,
+    view: &BasketballLiveView,
     primary: Rgb888,
-    table: &NbaLiveGeometry,
+    table: &BasketballLiveGeometry,
 ) {
     let since = scene.now.since(scene.snapshot.animation_start_ms).0;
     for (side, slot, score, team) in [
@@ -191,7 +196,12 @@ fn scores(
 
 /// The floor and everything on it: every mark in play order, the newest
 /// blinking while its score is news, then the caption.
-fn court(canvas: &mut Canvas<'_>, scene: &Scene<'_>, view: &NbaLiveView, table: &NbaLiveGeometry) {
+fn court(
+    canvas: &mut Canvas<'_>,
+    scene: &Scene<'_>,
+    view: &BasketballLiveView,
+    table: &BasketballLiveGeometry,
+) {
     let court = table.court;
     let (away, home) = (view.away_color, view.home_color);
     court.draw(canvas, away, home);
@@ -238,7 +248,7 @@ fn across(mark: &CourtMark) -> f32 {
 /// How long the newest score has been news, while it is (§3.6): inside the
 /// window the prepared view sized, on the wall rail from the news stamp. A
 /// first look stamps none.
-fn news(view: &NbaLiveView, scene: &Scene<'_>) -> Option<u64> {
+fn news(view: &BasketballLiveView, scene: &Scene<'_>) -> Option<u64> {
     view.last_score?;
     if view.score_ms == 0 {
         return None;
@@ -259,9 +269,9 @@ fn news(view: &NbaLiveView, scene: &Scene<'_>) -> Option<u64> {
 fn caption(
     canvas: &mut Canvas<'_>,
     scene: &Scene<'_>,
-    view: &NbaLiveView,
+    view: &BasketballLiveView,
     news: bool,
-    table: &NbaLiveGeometry,
+    table: &BasketballLiveGeometry,
 ) {
     let slot = table.caption;
     let face = &generated::SPLEEN_5X8;
@@ -297,7 +307,7 @@ fn caption(
             Align::Center,
             scene.now.since(view.score_ms).motion(),
             Style::new(face, team(side)),
-            scene.game_scroll(NBA_CAPTION_PAUSE_MS),
+            scene.game_scroll(BASKETBALL_CAPTION_PAUSE_MS),
         );
         return;
     }
@@ -327,7 +337,7 @@ fn caption(
 }
 
 /// Bare floor under the caption: the slot and the row above it.
-fn wood_box(canvas: &mut Canvas<'_>, table: &NbaLiveGeometry) {
+fn wood_box(canvas: &mut Canvas<'_>, table: &BasketballLiveGeometry) {
     let wood = table.caption_box;
     canvas.fill_rect(wood.x, wood.y, wood.width, wood.height, WOOD);
 }
@@ -358,8 +368,8 @@ pub fn render_final(canvas: &mut Canvas<'_>, scene: &Scene<'_>) {
     canvas.fill(BLACK);
     let snapshot = scene.snapshot;
     let shared = &snapshot.linescore_final;
-    let view = &snapshot.nba_final;
-    let table = NBA_FINAL;
+    let view = &snapshot.basketball_final;
+    let table = BASKETBALL_FINAL;
     let colors = &snapshot.ui_colors;
     let (away_color, home_color) =
         super::winner_colors(shared.home_won, shared.away_color, shared.home_color);

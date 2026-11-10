@@ -101,6 +101,6 @@ const fn total_label(sport: Sport) -> &'static str {
         Sport::Mlb => "R",
         // Soccer and hockey never reach this screen — their finals are their
         // own shapes — but the enum has five values.
-        Sport::Nba | Sport::Hockey | Sport::Football | Sport::Soccer => "T",
+        Sport::Basketball | Sport::Hockey | Sport::Football | Sport::Soccer => "T",
     }
 }

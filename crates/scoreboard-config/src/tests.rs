@@ -274,7 +274,7 @@ fn every_registered_league_fits_the_slate() {
         let slug = heapless::String::try_from(league.slug).expect("a slug fits MAX_LEAGUE");
         match league.sport {
             Sport::Mlb => config.sports.mlb.enabled = true,
-            Sport::Nba => config.sports.nba.enabled = true,
+            Sport::Basketball => config.sports.nba.enabled = true,
             Sport::Hockey => {
                 assert_eq!(
                     league.slug, "nhl",

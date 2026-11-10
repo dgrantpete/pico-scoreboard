@@ -3,7 +3,7 @@
 //! into games*, not about fetching: URLs, ETags, sockets and retry policy stay
 //! in the app, where the I/O is.
 
-use scoreboard_wire::{DecodeError, GameState, football, hockey, list, mlb, nba, soccer};
+use scoreboard_wire::{DecodeError, GameState, basketball, football, hockey, list, mlb, soccer};
 
 pub use crate::snapshot::Sport;
 
@@ -36,13 +36,16 @@ impl LeagueId {
         };
         let prefix = match sport {
             Sport::Mlb => "baseball/mlb",
-            Sport::Nba => "basketball/nba",
+            Sport::Basketball => "basketball",
             Sport::Hockey => "hockey",
             Sport::Football => "football",
             Sport::Soccer => "soccer",
         };
         crate::text::set_plain(&mut id.key, prefix);
-        if matches!(sport, Sport::Hockey | Sport::Football | Sport::Soccer) {
+        if matches!(
+            sport,
+            Sport::Basketball | Sport::Hockey | Sport::Football | Sport::Soccer
+        ) {
             let _ = id.key.push('/');
             crate::text::set_plain_append(&mut id.key, slug);
         }
@@ -75,7 +78,7 @@ pub struct RegisteredLeague {
 /// still polls, under its own upper-cased name.
 pub const LEAGUES: &[RegisteredLeague] = &[
     league(Sport::Mlb, "mlb", "MLB"),
-    league(Sport::Nba, "nba", "NBA"),
+    league(Sport::Basketball, "nba", "NBA"),
     // One hockey league today; another is a row here (NHL.md §6.4).
     league(Sport::Hockey, "nhl", "NHL"),
     league(Sport::Football, "nfl", "NFL"),
@@ -103,7 +106,7 @@ const fn league(sport: Sport, slug: &'static str, display_name: &'static str) ->
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameDetail<'a> {
     Mlb(mlb::Game<'a>),
-    Nba(nba::Game<'a>),
+    Basketball(basketball::Game<'a>),
     Hockey(hockey::Game<'a>),
     Football(football::Game<'a>),
     Soccer(soccer::Game<'a>),
@@ -113,7 +116,7 @@ impl GameDetail<'_> {
     pub fn sport(&self) -> Sport {
         match self {
             GameDetail::Mlb(_) => Sport::Mlb,
-            GameDetail::Nba(_) => Sport::Nba,
+            GameDetail::Basketball(_) => Sport::Basketball,
             GameDetail::Hockey(_) => Sport::Hockey,
             GameDetail::Football(_) => Sport::Football,
             GameDetail::Soccer(_) => Sport::Soccer,
@@ -123,7 +126,7 @@ impl GameDetail<'_> {
     pub fn state(&self) -> GameState {
         match self {
             GameDetail::Mlb(game) => game.state(),
-            GameDetail::Nba(game) => game.state(),
+            GameDetail::Basketball(game) => game.state(),
             GameDetail::Hockey(game) => game.state(),
             GameDetail::Football(game) => game.state(),
             GameDetail::Soccer(game) => game.state(),
@@ -135,9 +138,9 @@ impl GameDetail<'_> {
             GameDetail::Mlb(mlb::Game::Pregame(game)) => game.game_id,
             GameDetail::Mlb(mlb::Game::Live(game)) => game.game_id,
             GameDetail::Mlb(mlb::Game::Final(game)) => game.game_id,
-            GameDetail::Nba(nba::Game::Pregame(game)) => game.game_id,
-            GameDetail::Nba(nba::Game::Live(game)) => game.game_id,
-            GameDetail::Nba(nba::Game::Final(game)) => game.game_id,
+            GameDetail::Basketball(basketball::Game::Pregame(game)) => game.game_id,
+            GameDetail::Basketball(basketball::Game::Live(game)) => game.game_id,
+            GameDetail::Basketball(basketball::Game::Final(game)) => game.game_id,
             GameDetail::Hockey(hockey::Game::Pregame(game)) => game.game_id,
             GameDetail::Hockey(hockey::Game::Live(game)) => game.game_id,
             GameDetail::Hockey(hockey::Game::Final(game)) => game.game_id,
@@ -164,13 +167,13 @@ impl GameDetail<'_> {
             GameDetail::Mlb(mlb::Game::Final(game)) => {
                 (game.away.abbreviation, game.home.abbreviation)
             }
-            GameDetail::Nba(nba::Game::Pregame(game)) => {
+            GameDetail::Basketball(basketball::Game::Pregame(game)) => {
                 (game.away.abbreviation, game.home.abbreviation)
             }
-            GameDetail::Nba(nba::Game::Live(game)) => {
+            GameDetail::Basketball(basketball::Game::Live(game)) => {
                 (game.away.abbreviation, game.home.abbreviation)
             }
-            GameDetail::Nba(nba::Game::Final(game)) => {
+            GameDetail::Basketball(basketball::Game::Final(game)) => {
                 (game.away.abbreviation, game.home.abbreviation)
             }
             GameDetail::Hockey(hockey::Game::Pregame(game)) => {
@@ -224,7 +227,7 @@ impl WireFeed {
     ) -> Result<GameDetail<'a>, DecodeError> {
         Ok(match sport {
             Sport::Mlb => GameDetail::Mlb(mlb::decode(payload)?),
-            Sport::Nba => GameDetail::Nba(nba::decode(payload)?),
+            Sport::Basketball => GameDetail::Basketball(basketball::decode(payload)?),
             Sport::Hockey => GameDetail::Hockey(hockey::decode(payload)?),
             Sport::Football => GameDetail::Football(football::decode(payload)?),
             Sport::Soccer => GameDetail::Soccer(soccer::decode(payload)?),

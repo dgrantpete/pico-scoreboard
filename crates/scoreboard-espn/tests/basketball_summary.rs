@@ -1,24 +1,24 @@
 //! NBA summary lane: the corpus pairs and NBA.md §3's rules.
 //!
-//! Fixtures are single EVENT objects (`backend/testdata/nba/*.json`),
+//! Fixtures are single EVENT objects (`backend/testdata/basketball/nba/*.json`),
 //! wrapped here as `{"events":[…]}` scoreboard bodies, each paired with the
 //! raw summary body of the same moment (`*.summary.json`; pregame has none).
 //! The expected values are `PROVENANCE.md`'s evidence plus a reference walk
 //! of §3 over the pairs; every wire value the lane produces is encoded at
-//! `ext=2` and decoded back through `scoreboard_wire::nba`. The scoreboard
-//! half's parity gate is `nba_extract.rs`; this file is the summary half and
+//! `ext=2` and decoded back through `scoreboard_wire::basketball`. The scoreboard
+//! half's parity gate is `basketball_extract.rs`; this file is the summary half and
 //! the fields the court screens added to the scoreboard.
 
 use std::fs;
 use std::path::PathBuf;
 
-use scoreboard_espn::common::{Quirk, Quirks};
-use scoreboard_espn::nba::{
+use scoreboard_espn::basketball::{
     self, DetailOutcome, Extract, Extractor, Kind, Summary, SummaryContext, SummaryExtractor,
     SummaryReport,
 };
+use scoreboard_espn::common::{Quirk, Quirks};
 use scoreboard_espn::StreamMatcher;
-use scoreboard_wire::nba::{self as wire, Game, Ledger, Make, Run, TeamLedger};
+use scoreboard_wire::basketball::{self as wire, Game, Ledger, Make, Run, TeamLedger};
 use scoreboard_wire::{Record, Side, SliceSink};
 
 /// Every committed pair, in `PROVENANCE.md` order.
@@ -48,7 +48,7 @@ const FIXTURES: &[&str] = &[
 fn testdata(rel: &str) -> PathBuf {
     PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../backend/testdata/nba"
+        "/../../backend/testdata/basketball/nba"
     ))
     .join(rel)
 }
@@ -112,7 +112,7 @@ fn extract_sized(body: &str, target: &str, sizes: &[usize]) -> (DetailOutcome, R
     let outcome = {
         let extractor = Extractor::game_detail(target, &mut quirks);
         let mut scratch = vec![0u8; 64 * 1024];
-        let mut matcher = StreamMatcher::new(nba::PATHS, extractor, &mut scratch).unwrap();
+        let mut matcher = StreamMatcher::new(basketball::PATHS, extractor, &mut scratch).unwrap();
         for (start, end) in chunks(body.len(), sizes) {
             matcher.write(&body.as_bytes()[start..end]).unwrap();
         }
@@ -1358,7 +1358,7 @@ fn the_flash_prefers_the_scoreboards_eligible_play_then_the_summarys() {
     let text = mutate(&summary_text("run").unwrap(), |v| {
         v["plays"].as_array_mut().unwrap().retain(|p| {
             let type_id: u16 = p["type"]["id"].as_str().unwrap().parse().unwrap();
-            !nba::FLASH_TYPES.contains(&type_id)
+            !basketball::FLASH_TYPES.contains(&type_id)
         });
     });
     let summary = summarize(&text, extract.summary_context()).summary;

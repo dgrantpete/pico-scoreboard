@@ -589,7 +589,11 @@ const fn screen(redraw: bool, fade: u8) -> Tick {
 const fn is_live(mode: Mode) -> bool {
     matches!(
         mode,
-        Mode::MlbLive | Mode::SoccerLive | Mode::NbaLive | Mode::FootballLive | Mode::HockeyLive
+        Mode::MlbLive
+            | Mode::SoccerLive
+            | Mode::BasketballLive
+            | Mode::FootballLive
+            | Mode::HockeyLive
     )
 }
 

@@ -95,7 +95,7 @@ use crate::common::{
     wire_phase, EText, Exact, HomeAway, LivePhase, Market, OddsScratch, Quirk, Quirks, WireText,
 };
 use crate::path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
-use scoreboard_wire::nba::{
+use scoreboard_wire::basketball::{
     Ledger, Make, Records, Run, TeamLedger, MAX_COORDINATE_X, MAX_COORDINATE_Y, MAX_MAKES,
     MIN_COORDINATE_Y, RUN_SHOW,
 };
@@ -144,7 +144,7 @@ const COORDINATE_WINDOW: core::ops::RangeInclusive<f64> = -100.0..=200.0;
 const NAME_SUFFIXES: [&str; 5] = ["Jr.", "Sr.", "II", "III", "IV"];
 
 /// §3.7's eligible play types, pinned from every type in the capture set
-/// (`backend/testdata/nba/PROVENANCE.md`): the full timeout (16), the
+/// (`backend/testdata/basketball/nba/PROVENANCE.md`): the full timeout (16), the
 /// coach's-challenge outcomes (214 supported, 215 overturned, 216 stands),
 /// the ref-initiated review outcomes (278/279/280 likewise), the technicals
 /// (29 defensive three seconds, 30 double, 35 technical, 48 flopping) and
@@ -288,7 +288,7 @@ pub static PATHS: &[Pattern] = &[
 /// One extracted NBA game: owned, bounded, domain-shaped. String bounds are
 /// the wire cap ([`EText`] = 255 bytes, ruling 2), scores stay `u32` like
 /// the backend's domain model (the wire view saturates), line scores are
-/// already sorted/clamped bytes like `NbaFinalTeam::line_score`.
+/// already sorted/clamped bytes like `BasketballFinalTeam::line_score`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Extract {
     pub game_id: EText,
@@ -492,9 +492,9 @@ impl Extract {
     /// summary's, when the backend has one. Without it the view is the
     /// scoreboard alone (D3's degrade): no ledger, run or newest score, no
     /// makes, and the flash is the scoreboard's `lastPlay` filtered by §3.7.
-    pub fn as_game<'a>(&'a self, summary: Option<&'a Summary>) -> wire::nba::Game<'a> {
+    pub fn as_game<'a>(&'a self, summary: Option<&'a Summary>) -> wire::basketball::Game<'a> {
         match &self.kind {
-            Kind::Pregame(game) => wire::nba::Game::Pregame(wire::nba::Pregame {
+            Kind::Pregame(game) => wire::basketball::Game::Pregame(wire::basketball::Pregame {
                 game_id: self.game_id.as_str(),
                 start_time: game.start_time,
                 venue: game.venue.as_str(),
@@ -502,7 +502,7 @@ impl Extract {
                 away: wire_pregame_team(&game.away),
                 home: wire_pregame_team(&game.home),
             }),
-            Kind::Live(game) => wire::nba::Game::Live(wire::nba::Live {
+            Kind::Live(game) => wire::basketball::Game::Live(wire::basketball::Live {
                 game_id: self.game_id.as_str(),
                 period: game.period,
                 phase: wire_phase(game.phase),
@@ -526,7 +526,7 @@ impl Extract {
                 ledger: summary.and_then(|s| s.ledger),
                 run: summary.and_then(|s| s.run),
                 newest_score: summary.and_then(|s| s.newest_score.as_ref()).map(|score| {
-                    wire::nba::NewestScore {
+                    wire::basketball::NewestScore {
                         side: score.side,
                         scorer_points: score.scorer_points,
                         seq: score.seq,
@@ -534,18 +534,21 @@ impl Extract {
                         scorer: score.scorer.as_str(),
                     }
                 }),
-                makes: wire::nba::Makes::new(summary.map_or(&[], |s| s.makes.as_slice())),
+                makes: wire::basketball::Makes::new(summary.map_or(&[], |s| s.makes.as_slice())),
             }),
-            Kind::Final(game) => wire::nba::Game::Final(wire::nba::Final {
+            Kind::Final(game) => wire::basketball::Game::Final(wire::basketball::Final {
                 game_id: self.game_id.as_str(),
                 periods_played: game.periods_played,
                 away: wire_final_team(&game.away),
                 home: wire_final_team(&game.home),
-                leaders: game.leaders.as_ref().map(|leaders| wire::nba::Leaders {
-                    points: wire_leader(&leaders.points),
-                    rebounds: wire_leader(&leaders.rebounds),
-                    assists: wire_leader(&leaders.assists),
-                }),
+                leaders: game
+                    .leaders
+                    .as_ref()
+                    .map(|leaders| wire::basketball::Leaders {
+                        points: wire_leader(&leaders.points),
+                        rebounds: wire_leader(&leaders.rebounds),
+                        assists: wire_leader(&leaders.assists),
+                    }),
                 series: game.series.as_deref(),
                 records: game.records,
             }),
@@ -553,8 +556,8 @@ impl Extract {
     }
 }
 
-fn wire_pregame_team(team: &PregameTeam) -> wire::nba::PregameTeam<'_> {
-    wire::nba::PregameTeam {
+fn wire_pregame_team(team: &PregameTeam) -> wire::basketball::PregameTeam<'_> {
+    wire::basketball::PregameTeam {
         abbreviation: team.abbreviation.as_str(),
         colors: team.colors,
         record: team.record,
@@ -579,8 +582,8 @@ fn wire_final_team(team: &FinalTeam) -> wire::FinalTeam<'_> {
     }
 }
 
-fn wire_leader(leader: &Leader) -> wire::nba::Leader<'_> {
-    wire::nba::Leader {
+fn wire_leader(leader: &Leader) -> wire::basketball::Leader<'_> {
+    wire::basketball::Leader {
         side: leader.side,
         value: leader.value,
         name: leader.name.as_str(),
@@ -808,7 +811,7 @@ enum Mode<'c> {
 }
 
 /// The NBA sink: one implementation, two entry uses. Drive it with
-/// `StreamMatcher::new(nba::PATHS, extractor, scratch)`, feed the body, then
+/// `StreamMatcher::new(basketball::PATHS, extractor, scratch)`, feed the body, then
 /// [`Extractor::stats`] / [`Extractor::into_detail`] on the finished sink.
 pub struct Extractor<'c, Q: Quirks> {
     mode: Mode<'c>,
@@ -1374,7 +1377,7 @@ impl<Q: Quirks> Sink for Extractor<'_, Q> {
 // ------------------------------------------------------------- the semantics
 
 /// The deserialize tier: mirrors serde's required/typed field rules plus the
-/// DU conversion's per-state requirements (`backend/src/nba/types.rs`).
+/// DU conversion's per-state requirements (`backend/src/basketball/types.rs`).
 /// `false` ⇒ the event is skipped and counted failed, exactly where the
 /// backend's `parse_events` would drop it.
 fn deserializes(s: &EventScratch) -> bool {

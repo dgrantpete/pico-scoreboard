@@ -1,7 +1,7 @@
 use axum::{http::HeaderMap, response::Response};
 
 use super::adapter;
-use super::types::NbaGame;
+use super::types::BasketballGame;
 use super::wire::encode_game;
 use crate::AppState;
 use crate::error::{AppError, ErrorResponse};
@@ -9,7 +9,7 @@ use crate::espn::league::{self, Nba};
 use crate::shared::game::GameListEntry;
 use crate::shared::handler;
 
-use scoreboard_espn::nba::{Extract, Summary};
+use scoreboard_espn::basketball::{Extract, Summary};
 
 fn scoreboard_url(state: &AppState) -> String {
     league::scoreboard_url(&state.config.espn, &Nba)
@@ -40,7 +40,7 @@ async fn fetch_summary(state: &AppState, extract: &Extract, game_id: &str) -> Op
         (status = 304, description = "Game set and states unchanged since client's If-None-Match"),
         (status = 502, description = "ESPN upstream error", body = ErrorResponse),
     ),
-    tag = "nba"
+    tag = "basketball"
 )]
 pub async fn list_games(state: &AppState, headers: &HeaderMap) -> Result<Response, AppError> {
     let url = scoreboard_url(state);
@@ -55,11 +55,11 @@ pub async fn list_games(state: &AppState, headers: &HeaderMap) -> Result<Respons
     path = "/basketball/nba/games/{game_id}",
     params(("game_id" = String, Path, description = "ESPN event ID")),
     responses(
-        (status = 200, description = "Game state (pregame/live/final). Live games carry the per-event summary's facts — team fouls, bonus and timeouts, the run, the newest scorer and the court's makes — when it could be fetched; finals and pregames come from the scoreboard alone. Binary encoding available via `Accept: application/x-scoreboard-struct`; the `ext=N` parameter selects the extension level: `; ext=1` adds the pregame betting lines, `; ext=2` adds the live ledger, run, newest score and makes, the pregame's second info line and the final's leaders, series and records (see crates/scoreboard-wire)", body = NbaGame),
+        (status = 200, description = "Game state (pregame/live/final). Live games carry the per-event summary's facts — team fouls, bonus and timeouts, the run, the newest scorer and the court's makes — when it could be fetched; finals and pregames come from the scoreboard alone. Binary encoding available via `Accept: application/x-scoreboard-struct`; the `ext=N` parameter selects the extension level: `; ext=1` adds the pregame betting lines, `; ext=2` adds the live ledger, run, newest score and makes, the pregame's second info line and the final's leaders, series and records (see crates/scoreboard-wire)", body = BasketballGame),
         (status = 404, description = "Game not on today's scoreboard", body = ErrorResponse),
         (status = 502, description = "ESPN upstream error", body = ErrorResponse),
     ),
-    tag = "nba"
+    tag = "basketball"
 )]
 pub async fn get_game(
     state: &AppState,

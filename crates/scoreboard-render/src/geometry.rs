@@ -181,7 +181,7 @@ pub const HOCKEY_SCROLL_PAUSE_MS: u64 = 1500;
 /// Pause feel for the court's caption (NBA.md §3.6), the same arrangement:
 /// the prepared view sizes the news window with it, so a long name is read
 /// once in full before the caption goes.
-pub const NBA_CAPTION_PAUSE_MS: u64 = 1500;
+pub const BASKETBALL_CAPTION_PAUSE_MS: u64 = 1500;
 
 /// The hockey three-stars final's names and series line, and the NBA leaders
 /// final's rows: a fixed feel, like the pregame lines, slow enough to read a
@@ -471,7 +471,7 @@ pub const MLB_LIVE: MlbLiveGeometry = MlbLiveGeometry {
 /// five-character clock is 30 px only in the small font (40 in the other
 /// two) — the price of the 37-row court, accepted by the owner (D13).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NbaLiveGeometry {
+pub struct BasketballLiveGeometry {
     pub logo_away: Slice,
     pub logo_home: Slice,
     /// Five foul dots at a 5 px pitch, a pixel in from the crests.
@@ -502,7 +502,7 @@ pub struct NbaLiveGeometry {
     pub strip: Slice,
 }
 
-pub const NBA_LIVE: NbaLiveGeometry = NbaLiveGeometry {
+pub const BASKETBALL_LIVE: BasketballLiveGeometry = BasketballLiveGeometry {
     logo_away: rect(1, 1, 24, 24),
     logo_home: rect(103, 1, 24, 24),
     fouls_away: rect(26, 2, 24, 4),
@@ -529,7 +529,7 @@ pub const NBA_LIVE: NbaLiveGeometry = NbaLiveGeometry {
 /// rebounds and assists leaders, each in their team's colour — and both
 /// records under the rule, the series line over them in the playoffs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NbaFinalGeometry {
+pub struct BasketballFinalGeometry {
     pub logo_away: Slice,
     pub logo_home: Slice,
     pub score_away: Slice,
@@ -552,7 +552,7 @@ pub struct NbaFinalGeometry {
     pub records_alone: Slice,
 }
 
-pub const NBA_FINAL: NbaFinalGeometry = NbaFinalGeometry {
+pub const BASKETBALL_FINAL: BasketballFinalGeometry = BasketballFinalGeometry {
     logo_away: rect(1, 2, 24, 24),
     score_away: rect(25, 6, 25, 16),
     logo_home: rect(1, 38, 24, 24),
@@ -824,7 +824,7 @@ impl Default for RenderSettings {
 pub const fn bottom_strip(mode: Mode) -> Slice {
     match mode {
         Mode::MlbLive => MLB_LIVE.strip,
-        Mode::NbaLive => NBA_LIVE.strip,
+        Mode::BasketballLive => BASKETBALL_LIVE.strip,
         Mode::FootballLive => FOOTBALL_LIVE.strip,
         Mode::SoccerLive => SOCCER_LIVE.strip,
         Mode::HockeyLive => HOCKEY_LIVE.strip,
