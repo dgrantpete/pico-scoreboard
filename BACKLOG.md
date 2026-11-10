@@ -1349,6 +1349,17 @@ reviewed change.
     Reproduce with a scripted push loop, catch the stall over RTT with
     cyw43's state, and see whether the release build can reach the same
     state through its ordinary polling.
+    A third time on 2026-11-10 (the NCAAB vouch, diag build of 0bc240e),
+    under only GET readbacks of the drawn frame every ~35 s while the unit
+    polled a local backend: after 15 normal minutes it dropped off the LAN
+    at about 03:52 UTC. ARP failed, the defmt RTT session lost SWD within
+    seconds of the last normal poll, and the unit stayed dark for 9 minutes
+    with no self-recovery. The watchdog never fired because both executors
+    kept running: once SWD came back, both cores were in
+    `SyncExecutor::poll`, LOCK_OWNER was 0 and the breadcrumb cell was
+    empty. The probe's attach reset it, and it came back on the stored
+    config with no previous-boot record. SWD going quiet at the same moment
+    as the radio is new, and it points below the executor.
 128. **College basketball corpus — what B0 did not have (NCAAB.md §6).** A
     live overtime body (period 3), a technical foul (521) as the flash, a
     delayed game, a live neutral-site tournament body, and a type-91

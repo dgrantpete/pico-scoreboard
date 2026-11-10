@@ -3,9 +3,17 @@
 Status: **decided** (owner, 2026-11-08/09: the decisions page "NCAA Basketball
 Decisions", answers A1–A11, and the mockup gallery "NCAA Panel Mockups"
 reviewed live on the bench panel). The engineering choices marked
-**proposed** wait for the owner's veto. **Built 2026-11-10:** B0–B8 landed
-(caafcca → 0bc240e) and the CI-mirror gates are green on a clean worktree;
-B9's docs are in. The release follows the bench vouch.
+**proposed** wait for the owner's veto. **Released 2026-11-10:** B0–B9
+landed (caafcca → 0926b71); the CI-mirror gates were green on a clean
+worktree and GitHub's `rust` run on the pushed commit. The bench vouch ran
+the HEAD diag build against a local backend and mock slates of both
+leagues. The drawn frames came back over `/api/diag/frame` for every live
+screen, and the frame probe measured basketball live at a render mean of
+about 2.0 ms, a frame max of 12.8 ms and no overruns. The prod backend
+deployed first and was verified (college answers, the NBA's v2 bytes are
+unchanged). Stable and dev are 2026.11.10-0926b71 (sha256 8ec5ced3…),
+whose exact image was probe-flashed to the owner's unit and booted against
+prod before the manifest went live. Deferred: BACKLOG 124–130.
 The owner authorised the release to production (backend, then the stable
 firmware channel) once every phase is verified (2026-11-09: "make sure we
 vouch stuff first").
