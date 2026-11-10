@@ -1275,3 +1275,48 @@ reviewed change.
     football routes read the scoreboard alone, so this starts from ad-hoc
     fetches or a targets flip. Findings first; a screen that uses them is
     its own design.
+122. **One indicator vocabulary across sports (owner, 2026-11-09).** The
+    small markers grew one sport at a time: count dots (MLB balls, strikes
+    and outs, the NBA's team fouls, hockey's skaters, the start-up Wi-Fi
+    attempts), timeout blocks (football's three, the NBA's seven), the
+    possession, caption and banner arrow, the clock-warning colour, hockey's
+    power-play glow and the NBA's run glow, the BONUS caption. They differ in
+    colour (team colour, UI primary or warning), in what an unfilled slot
+    looks like (an outlined dot with a dark interior, a dark-gray block,
+    hockey's empty fifth skater), in direction (timeouts empty left to right
+    on both sides; skater rows run outward from each crest), and in what
+    happens near a threshold (MLB's critical-count pulse, the NBA's foul row
+    turning red at the opponent's bonus). Decide one rule per dimension and
+    apply it everywhere. One rule is agreed already: an unlit slot means a
+    known zero (a foul not committed, a timeout burned) and is never a
+    placeholder for missing data. Data missing for a poll holds or stays
+    dark; data a league never has gets no track at all, and the layout gives
+    the space away by league facts, not per-poll presence. Hockey's skater
+    dots (123) are the first case under it.
+123. **Hockey's skater dots go, once the banner says every count (owner,
+    decided 2026-11-09).** Five team-coloured dots sit under each crest all
+    game, and friends asked what they mean. Decision: remove them and let
+    the banner line carry strength in words, shown only when strength is
+    not even. Not yet true: NHL.md §3.4 rule 7 says a power play shows
+    "POWER PLAY" plus "a ON d", but the renderer draws only the title and
+    the arrow for a power play or an empty net (`game/hockey.rs`
+    `situation`) and the count only for a matched "4 ON 4", so today the
+    dots are the only thing that tells 5-on-4 from 5-on-3. "POWER PLAY 5 ON
+    3" is 17 glyphs and the 73 px line holds 14, so the wording needs a
+    rule; the proposal is to name the standard cases and count the rest:
+    "POWER PLAY" (5 on 4), "EMPTY NET" (6 on 5), "5 ON 3", "4 ON 3", "6 ON
+    4", "4 ON 4", "3 ON 3" (outside the regular-season overtime, as today),
+    each with the arrow toward the side ahead in its colour. The banner model
+    already carries both counts. Mock the wording, fix rule 7 to match, then
+    drop `skater_dots` and give its row away. Icons (a stick, a helmet,
+    crossed-out skaters) were considered and set aside: at 5-8 px they read
+    as noise and still have to be counted. A separate, evidence-first
+    question is an arena-style penalty clock ("MATTHEWS 1:42"). ESPN
+    publishes none (NHL.md §2), and §3.4 ruled out rebuilding one because
+    coincidental minors and power-play goals break the arithmetic. Penalty
+    plays do carry `penaltyMinutes`, `penaltyType`, the player and the
+    elapsed clock (behind the 143 placeholder for 10-30 s), and the
+    collector has kept NHL summaries with `onIce` since October, so a
+    rebuilt clock can be measured against `onIce`'s strength changes before
+    anyone designs it. Show it only where one penalty explains the strength,
+    and only if that holds on nearly every power play.
