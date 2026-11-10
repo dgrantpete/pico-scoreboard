@@ -84,12 +84,12 @@ export interface OtaConfig {
 
 export type OtaConfigUpdate = Partial<OtaConfig>;
 
-// Sports / league selection. Football and soccer leagues are ESPN slugs
-// (see the firmware's league registry, LEAGUES in
+// Sports / league selection. Basketball, football and soccer leagues are ESPN
+// slugs (see the firmware's league registry, LEAGUES in
 // crates/scoreboard-model/src/feed.rs); empty list = that sport off.
 export interface SportsConfig {
 	mlb: { enabled: boolean };
-	nba: { enabled: boolean };
+	basketball: { leagues: string[] };
 	// Present only on firmware that has hockey: the frozen MicroPython never
 	// sends the key, and its absence is what hides the toggle (NHL.md D7).
 	nhl?: { enabled: boolean };

@@ -80,6 +80,8 @@ pub struct RegisteredLeague {
 pub const LEAGUES: &[RegisteredLeague] = &[
     league(Sport::Mlb, "mlb", "MLB"),
     league(Sport::Basketball, "nba", "NBA"),
+    // NCAAB.md D12: basketball's leagues side by side, like football's.
+    league(Sport::Basketball, "mens-college-basketball", "NCAA BASKETBALL"),
     // One hockey league today; another is a row here (NHL.md §6.4).
     league(Sport::Hockey, "nhl", "NHL"),
     league(Sport::Football, "nfl", "NFL"),

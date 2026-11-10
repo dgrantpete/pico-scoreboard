@@ -1723,8 +1723,8 @@ fn a_single_league_slate_degrades_a_league_skip_to_a_plain_skip() {
 
 #[test]
 fn every_registered_league_rotates_at_once() {
-    // Every registered league at once is nine sources, one past a byte; the
-    // ninth's games have to be reachable under their own league.
+    // Every registered league at once is ten sources, past a byte; the last
+    // one's games have to be reachable under their own league.
     let every: Vec<LeagueId> = crate::feed::LEAGUES
         .iter()
         .map(|league| LeagueId::from_slug(league.sport, league.slug))
@@ -1734,14 +1734,15 @@ fn every_registered_league_rotates_at_once() {
     slate.set_sources(&every);
     assert_eq!(slate.sources().len(), every.len(), "nothing truncated");
     list(&mut slate, 0, &[(GameState::Final, "m1")]);
-    list(&mut slate, 8, &[(GameState::Final, "w1")]);
+    let last = (every.len() - 1) as u8;
+    list(&mut slate, last, &[(GameState::Final, "w1")]);
     slate.rebuild();
 
     assert_eq!(slate.len(), 2);
     slate.advance_league();
     let entry = slate.current().unwrap();
     assert_eq!(entry.id, "w1");
-    assert_eq!(entry.source, 8);
+    assert_eq!(entry.source, last);
     assert_eq!(entry.league.key.as_str(), "soccer/fifa.world");
 }
 
@@ -3306,7 +3307,7 @@ impl Maxima {
 fn the_snapshot_stays_inside_its_budget_line() {
     assert_eq!(ScoreboardSnapshot::SIZE, 3_768);
     assert_eq!(crate::SnapshotChannel::SIZE, 11_312);
-    assert_eq!(Slate::SIZE, 4_736);
+    assert_eq!(Slate::SIZE, 4_814);
 }
 
 // =========================================================================

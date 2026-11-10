@@ -138,7 +138,7 @@ pub struct ColorsPatch {
 #[serde(default)]
 pub struct SportsPatch {
     pub mlb: Option<TogglePatch>,
-    pub nba: Option<TogglePatch>,
+    pub basketball: Option<LeaguesPatch>,
     pub nhl: Option<TogglePatch>,
     pub football: Option<LeaguesPatch>,
     pub soccer: Option<LeaguesPatch>,
@@ -292,8 +292,8 @@ impl DeviceConfig {
             if let Some(mlb) = &sports.mlb {
                 set(&mut self.sports.mlb.enabled, &mlb.enabled);
             }
-            if let Some(nba) = &sports.nba {
-                set(&mut self.sports.nba.enabled, &nba.enabled);
+            if let Some(basketball) = &sports.basketball {
+                set(&mut self.sports.basketball.leagues, &basketball.leagues);
             }
             if let Some(nhl) = &sports.nhl {
                 set(&mut self.sports.nhl.enabled, &nhl.enabled);

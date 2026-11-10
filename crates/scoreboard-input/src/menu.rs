@@ -329,8 +329,10 @@ mod tests {
     /// Bits of the configuration mask, by registry position.
     const MLB: u16 = 1 << 0;
     const NBA: u16 = 1 << 1;
-    const NHL: u16 = 1 << 2;
-    const WORLD_CUP: u16 = 1 << 8;
+    const NCAA_BASKETBALL: u16 = 1 << 2;
+    const NHL: u16 = 1 << 3;
+    const NFL: u16 = 1 << 4;
+    const WORLD_CUP: u16 = 1 << 9;
     /// Every registered league on.
     const ALL: u16 = (1 << ROWS) - 1;
     /// What the caller passes on a press that is not the opening one: the
@@ -382,26 +384,27 @@ mod tests {
     #[test]
     fn opening_shows_the_registry_in_rotation_order_seeded_from_the_configuration() {
         let mut store = Store::new();
-        // The shipped defaults: MLB and the NHL on.
-        let _menu = open(MLB | NHL, &mut store);
+        // The shipped defaults switch on every league but soccer's (NCAAB.md
+        // D11); these are the five rows the window shows.
+        let _menu = open(MLB | NBA | NCAA_BASKETBALL | NHL | NFL, &mut store);
         let view = &store.snapshot().menu;
         assert!(view.active);
         let labels: Vec<&str, { thumb::VISIBLE_ROWS }> =
             view.rows.iter().map(|row| row.label.as_str()).collect();
-        assert_eq!(labels, ["MLB", "NBA", "NHL", "NFL", "NCAA FOOTBALL"]);
+        assert_eq!(labels, ["MLB", "NBA", "NCAA BASKETBALL", "NHL", "NFL"]);
         let checked: Vec<bool, { thumb::VISIBLE_ROWS }> =
             view.rows.iter().map(|row| row.checked).collect();
-        assert_eq!(checked, [true, false, true, false, false]);
+        assert_eq!(checked, [true, true, true, true, true]);
         assert_eq!(view.highlight, 0, "the cursor starts on the first item");
-        assert!(view.thumb_y >= 0, "nine rows need a scrollbar");
+        assert!(view.thumb_y >= 0, "ten rows need a scrollbar");
     }
 
     #[test]
-    fn the_ninth_league_is_the_ninth_bit_and_reopens_as_the_configuration_says() {
-        // One past what a byte-wide mask could hold.
+    fn the_tenth_league_is_the_tenth_bit_and_reopens_as_the_configuration_says() {
+        // Past what a byte-wide mask could hold.
         let mut store = Store::new();
         let mut menu = open(ALL, &mut store);
-        down(&mut menu, &mut store, 8);
+        down(&mut menu, &mut store, 9);
         select(&mut menu, &mut store);
         assert_eq!(
             close(&mut menu, &mut store),
@@ -410,10 +413,10 @@ mod tests {
 
         // The caller wrote that mask; the next session opens on it.
         menu.press(Button::B, Press::Long, ALL & !WORLD_CUP, &mut store, 1_000);
-        down(&mut menu, &mut store, 8);
+        down(&mut menu, &mut store, 9);
         let view = &store.snapshot().menu;
         let row = &view.rows[view.highlight as usize];
-        assert_eq!(row.source, 8);
+        assert_eq!(row.source, 9);
         assert_eq!(row.label.as_str(), "WORLD CUP");
         assert!(!row.checked);
         select(&mut menu, &mut store);

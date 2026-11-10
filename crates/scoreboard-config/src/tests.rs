@@ -33,7 +33,12 @@ fn defaults_match_the_micropython_defaults_dict() {
     );
     assert_eq!(config.colors.accent, Rgb::new(255, 255, 0));
     assert!(config.sports.mlb.enabled);
-    assert!(!config.sports.nba.enabled);
+    // NCAAB.md D11: every league on by default except soccer's.
+    let basketball: std::vec::Vec<&str> = config.sports.basketball.active().collect();
+    assert_eq!(basketball, ["nba", "mens-college-basketball"]);
+    let football: std::vec::Vec<&str> = config.sports.football.active().collect();
+    assert_eq!(football, ["nfl", "college-football"]);
+    assert!(config.sports.soccer.leagues.is_empty());
     assert!(config.sports.nhl.enabled, "NHL.md D5: on by default");
     assert_eq!(config.log.level.as_str(), "debug");
     assert_eq!(config.server.cache_max_age_seconds, 600);
@@ -191,7 +196,10 @@ fn a_config_stored_before_hockey_loads_with_the_nhl_on() {
 
     // Everything the document did say survives.
     assert_eq!(config.network.ssid.as_str(), "HOME-NETWORK-5G");
-    assert!(config.sports.mlb.enabled && config.sports.nba.enabled);
+    assert!(config.sports.mlb.enabled);
+    // Its `nba` switch is a key this firmware no longer reads (NCAAB.md D11):
+    // basketball takes its default, both leagues.
+    assert_eq!(config.sports.basketball.active().count(), 2);
 
     // The key now goes out on `GET /api/config`, which is how the settings
     // page learns this firmware has hockey (D7).
@@ -203,6 +211,7 @@ fn a_config_stored_before_hockey_loads_with_the_nhl_on() {
         [
             "baseball/mlb",
             "basketball/nba",
+            "basketball/mens-college-basketball",
             "hockey/nhl",
             "football/nfl",
             "soccer/usa.1",
@@ -253,6 +262,7 @@ fn a_unit_with_every_league_on_keeps_all_of_them_when_the_nhl_joins() {
         [
             "baseball/mlb",
             "basketball/nba",
+            "basketball/mens-college-basketball",
             "hockey/nhl",
             "football/nfl",
             "football/college-football",
@@ -266,15 +276,18 @@ fn a_unit_with_every_league_on_keeps_all_of_them_when_the_nhl_joins() {
 
 #[test]
 fn every_registered_league_fits_the_slate() {
-    // Switch on every league the firmware knows by name. A tenth registered
-    // league fails here: bump `slate::MAX_SOURCES` and re-measure the poller
-    // arena (BUDGET.md) in the same change.
+    // Switch on every league the firmware knows by name. An eleventh
+    // registered league fails here: bump `slate::MAX_SOURCES` and re-measure
+    // the poller arena (BUDGET.md) in the same change.
     let mut config = DeviceConfig::new();
+    config.sports.basketball.leagues.clear();
+    config.sports.football.leagues.clear();
+    config.sports.soccer.leagues.clear();
     for league in scoreboard_model::feed::LEAGUES {
         let slug = heapless::String::try_from(league.slug).expect("a slug fits MAX_LEAGUE");
         match league.sport {
             Sport::Mlb => config.sports.mlb.enabled = true,
-            Sport::Basketball => config.sports.nba.enabled = true,
+            Sport::Basketball => config.sports.basketball.leagues.push(slug).unwrap(),
             Sport::Hockey => {
                 assert_eq!(
                     league.slug, "nhl",
@@ -310,10 +323,17 @@ fn every_registered_league_fits_the_slate() {
 }
 
 #[test]
-fn the_default_rotation_is_mlb_then_the_nhl() {
+fn the_default_rotation_is_every_league_but_soccer() {
     assert_eq!(
         source_keys(&DeviceConfig::new()),
-        ["baseball/mlb", "hockey/nhl"]
+        [
+            "baseball/mlb",
+            "basketball/nba",
+            "basketball/mens-college-basketball",
+            "hockey/nhl",
+            "football/nfl",
+            "football/college-football",
+        ]
     );
 }
 
@@ -321,7 +341,9 @@ fn the_default_rotation_is_mlb_then_the_nhl() {
 fn the_nhl_source_is_the_endpoint_the_backend_serves() {
     // The poller builds `/{key}/games` and `/{key}/games/{id}` from this key
     // verbatim, so this is the request path: `/hockey/nhl/games`.
-    let (config, _) = DeviceConfig::from_json(br#"{"sports":{"mlb":{"enabled":false}}}"#);
+    let (config, _) = DeviceConfig::from_json(
+        br#"{"sports":{"mlb":{"enabled":false},"basketball":{"leagues":[]},"football":{"leagues":[]}}}"#,
+    );
     let built = config.league_sources();
     assert_eq!(built.sources.len(), 1);
     let nhl = &built.sources[0];
@@ -336,14 +358,14 @@ fn a_hand_written_config_past_the_slate_counts_what_it_drops() {
     // than the slate holds. The overflow is counted for the log, never a panic
     // (that would be a boot loop), and what fits is the D6-ordered prefix.
     let (config, complaint) = DeviceConfig::from_json(
-        br#"{"sports":{"nba":{"enabled":true},
+        br#"{"sports":{"basketball":{"leagues":["nba"]},
             "football":{"leagues":["nfl","college-football","ufl"]},
             "soccer":{"leagues":["usa.1","eng.1","esp.1","ger.1","ita.1"]}}}"#,
     );
     assert_eq!(complaint, None);
     let built = config.league_sources();
     assert_eq!(built.sources.len(), MAX_SOURCES);
-    assert_eq!(built.dropped, 2, "11 configured, 9 fit");
+    assert_eq!(built.dropped, 1, "11 configured, 10 fit");
     let keys: std::vec::Vec<&str> = built.sources.iter().map(|l| l.key.as_str()).collect();
     assert_eq!(
         keys,
@@ -357,6 +379,7 @@ fn a_hand_written_config_past_the_slate_counts_what_it_drops() {
             "soccer/usa.1",
             "soccer/eng.1",
             "soccer/esp.1",
+            "soccer/ger.1",
         ]
     );
 }
@@ -378,7 +401,17 @@ fn switching_the_nhl_off_sticks_across_a_reboot() {
     let (reloaded, complaint) = DeviceConfig::from_json(json(&config).as_bytes());
     assert_eq!(complaint, None);
     assert!(!reloaded.sports.nhl.enabled);
-    assert_eq!(source_keys(&reloaded), ["baseball/mlb"]);
+    assert_eq!(
+        source_keys(&reloaded),
+        [
+            "baseball/mlb",
+            "basketball/nba",
+            "basketball/mens-college-basketball",
+            "football/nfl",
+            "football/college-football",
+        ],
+        "everything else keeps its default"
+    );
 }
 
 /// The bit a registered league occupies in the menu's mask.
@@ -392,11 +425,17 @@ fn bit(slug: &str) -> u16 {
 
 #[test]
 fn the_league_mask_is_the_registry_in_order_and_round_trips() {
-    // The defaults: MLB and the NHL on, everything else off.
+    // The defaults: every league on but soccer's (NCAAB.md D11).
     let mut config = DeviceConfig::new();
-    assert_eq!(config.enabled_leagues(), bit("mlb") | bit("nhl"));
+    let defaults = bit("mlb")
+        | bit("nba")
+        | bit("mens-college-basketball")
+        | bit("nhl")
+        | bit("nfl")
+        | bit("college-football");
+    assert_eq!(config.enabled_leagues(), defaults);
 
-    for mask in [0, 0b1_1111_1111, bit("nba") | bit("eng.1"), bit("nfl")] {
+    for mask in [0, 0b11_1111_1111, bit("nba") | bit("eng.1"), bit("nfl")] {
         assert!(config.set_enabled_leagues(mask), "{mask:#011b} differs");
         assert_eq!(config.enabled_leagues(), mask);
         assert!(
@@ -414,6 +453,7 @@ fn the_league_mask_is_the_registry_in_order_and_round_trips() {
 #[test]
 fn the_mask_appends_and_removes_list_slugs_the_way_the_settings_page_does() {
     let mut config = DeviceConfig::new();
+    config.sports.football.leagues.clear();
     config.sports.soccer.leagues.clear();
     config
         .sports
@@ -433,6 +473,7 @@ fn the_mask_appends_and_removes_list_slugs_the_way_the_settings_page_does() {
     let soccer: std::vec::Vec<&str> = config.sports.soccer.active().collect();
     assert_eq!(soccer, ["usa.1"]);
     assert!(!config.sports.mlb.enabled && !config.sports.nhl.enabled);
+    assert_eq!(config.sports.basketball.active().count(), 0);
 }
 
 #[test]
@@ -441,6 +482,8 @@ fn a_slug_the_firmware_does_not_know_has_no_bit_and_is_left_alone() {
     // the menu must not be able to lose them, and they cannot be shown as a
     // checkbox because the menu's rows are the registry.
     let mut config = DeviceConfig::new();
+    config.sports.basketball.leagues.clear();
+    config.sports.football.leagues.clear();
     for (sport, slug) in [
         (&mut config.sports.football, "ufl"),
         (&mut config.sports.soccer, "esp.1"),
@@ -473,12 +516,12 @@ fn a_slug_the_firmware_does_not_know_has_no_bit_and_is_left_alone() {
 }
 
 #[test]
-fn the_ninth_league_is_the_ninth_bit() {
-    // One past a byte: the bit a `u8` mask would have lost.
+fn the_tenth_league_is_the_tenth_bit() {
+    // Past a byte: bits a `u8` mask would have lost.
     let mut config = DeviceConfig::new();
-    assert_eq!(bit("fifa.world"), 1 << 8);
-    assert!(config.set_enabled_leagues(1 << 8));
-    assert_eq!(config.enabled_leagues(), 1 << 8);
+    assert_eq!(bit("fifa.world"), 1 << 9);
+    assert!(config.set_enabled_leagues(1 << 9));
+    assert_eq!(config.enabled_leagues(), 1 << 9);
     assert_eq!(source_keys(&config), ["soccer/fifa.world"]);
 }
 

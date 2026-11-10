@@ -8,20 +8,28 @@
 	// SOCCER_LEAGUES below. A row shows only when the device's config has its
 	// key — capability by presence, so a firmware without hockey (the frozen
 	// MicroPython) shows no NHL switch (NHL.md D7).
-	type ToggleSport = keyof Config["sports"] & ("mlb" | "nba" | "nhl");
+	type ToggleSport = keyof Config["sports"] & ("mlb" | "nhl");
 	const ENABLED_SPORTS: {
 		key: ToggleSport;
 		label: string;
 		hint: string;
 	}[] = [
 		{ key: "mlb", label: "MLB", hint: "Major League Baseball" },
-		{ key: "nba", label: "NBA", hint: "National Basketball Association" },
 		{ key: "nhl", label: "NHL", hint: "National Hockey League" },
 	];
 
 	// Mirrors the firmware's league registry (LEAGUES in
 	// crates/scoreboard-model/src/feed.rs) and the backend's
 	// (backend/src/espn/league.rs). Values are ESPN league slugs.
+	const BASKETBALL_LEAGUES: { slug: string; label: string; hint: string }[] = [
+		{ slug: "nba", label: "NBA", hint: "National Basketball Association" },
+		{
+			slug: "mens-college-basketball",
+			label: "College Basketball",
+			hint: "NCAA men's — ESPN's Top 25 slate",
+		},
+	];
+
 	const FOOTBALL_LEAGUES: { slug: string; label: string; hint: string }[] = [
 		{ slug: "nfl", label: "NFL", hint: "National Football League" },
 		{
@@ -43,7 +51,7 @@
 		settingsStore.updateSports(key, { enabled: !current });
 	}
 
-	function toggleLeague(sport: "football" | "soccer", slug: string) {
+	function toggleLeague(sport: "basketball" | "football" | "soccer", slug: string) {
 		const current = settingsStore.config?.sports[sport].leagues ?? [];
 		const leagues = current.includes(slug)
 			? current.filter((s) => s !== slug)
@@ -74,6 +82,32 @@
 							type="checkbox"
 							checked={config.sports[sport.key]?.enabled ?? false}
 							onchange={() => toggleSport(sport.key)}
+						/>
+						<span class="switch-track"><span class="switch-thumb"></span></span>
+					</label>
+				</div>
+			{/each}
+
+			<hr class="separator" />
+
+			<div class="field-group">
+				<span class="label-text">Basketball Leagues</span>
+				<p class="hint">
+					Pro and college basketball — their games join the same rotation.
+				</p>
+			</div>
+
+			{#each BASKETBALL_LEAGUES as league (league.slug)}
+				<div class="row-between">
+					<div class="label-group">
+						<span class="label-text">{league.label}</span>
+						<p class="text-sm text-muted">{league.hint}</p>
+					</div>
+					<label class="switch">
+						<input
+							type="checkbox"
+							checked={config.sports.basketball.leagues.includes(league.slug)}
+							onchange={() => toggleLeague("basketball", league.slug)}
 						/>
 						<span class="switch-track"><span class="switch-thumb"></span></span>
 					</label>

@@ -77,10 +77,29 @@ pub(crate) fn red() -> Rgb {
     Rgb::new(255, 10, 10)
 }
 
-/// MLB is on by default; NBA and the multi-league sports wait for somebody to
-/// pick them.
+/// Every league is on by default except soccer's (the owner's call on
+/// 2026-11-10, NCAAB.md D11): the friends these units go to follow every
+/// sport but soccer, and a unit should rotate them without a settings visit.
 pub(crate) fn mlb() -> SportToggle {
     SportToggle { enabled: true }
+}
+
+/// The NBA and NCAA men's basketball — every basketball league registered.
+pub(crate) fn basketball() -> SportLeagues {
+    leagues(&["nba", "mens-college-basketball"])
+}
+
+/// The NFL and college football.
+pub(crate) fn football() -> SportLeagues {
+    leagues(&["nfl", "college-football"])
+}
+
+fn leagues(slugs: &[&str]) -> SportLeagues {
+    let mut out = SportLeagues::default();
+    for slug in slugs {
+        let _ = out.leagues.push(String::try_from(*slug).expect("a registered slug fits MAX_LEAGUE"));
+    }
+    out
 }
 
 /// NHL is on by default too (NHL.md D5, the owner's call on 2026-10-15):
@@ -175,9 +194,9 @@ impl Default for SportsConfig {
     fn default() -> SportsConfig {
         SportsConfig {
             mlb: mlb(),
-            nba: SportToggle::default(),
+            basketball: basketball(),
             nhl: nhl(),
-            football: SportLeagues::default(),
+            football: football(),
             soccer: SportLeagues::default(),
         }
     }

@@ -18,15 +18,15 @@ use crate::text::{Text, set_folded};
 /// No headroom, on purpose. Each source costs a league descriptor here and an
 /// ETag slot in the app's poller, and spare slots would hide the moment this
 /// needs rethinking: `scoreboard-config`'s
-/// `every_registered_league_fits_the_slate` fails the day a tenth league is
-/// registered, and that failure is the cue to bump this and re-measure the
-/// poller arena. A hand-written config can still name more (unregistered
+/// `every_registered_league_fits_the_slate` fails the day an eleventh league
+/// is registered, and that failure is the cue to bump this and re-measure the
+/// poller arena (ten since NCAA men's basketball, NCAAB.md B8). A hand-written config can still name more (unregistered
 /// slugs poll by design); `DeviceConfig::league_sources` counts those rather
 /// than dropping them silently.
 ///
 /// Also why the configuration's league mask (`DeviceConfig::enabled_leagues`,
 /// one bit per registered league) is a `u16`.
-pub const MAX_SOURCES: usize = 9;
+pub const MAX_SOURCES: usize = 10;
 
 const _: () = assert!(MAX_SOURCES <= u16::BITS as usize);
 

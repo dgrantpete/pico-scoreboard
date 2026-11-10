@@ -1231,3 +1231,17 @@ spelled-out league as condescending. Four golden cases re-blessed, sixteen
 frames (`football__nfl__pregame`, `football__nfl__pregame_odds`,
 `football__college-football__pregame_ranked`, `soccer__fifa.world__pregame`),
 each changing only in the info line's slot.
+
+## Basketball is a league list, and every league but soccer's starts on, 2026-11-10
+
+**Was:** `sports.nba: {"enabled": bool}`, off by default, the one basketball
+league; football's two leagues off by default too, so a fresh unit rotated MLB
+and the NHL only.
+
+**Is:** `sports.basketball: {"leagues": [...]}` in football's shape, holding
+`nba` and `mens-college-basketball` (NCAAB.md D1, D11), and the defaults switch
+on every registered league except soccer's: MLB, NBA, NCAA BASKETBALL, NHL,
+NFL, NCAA FOOTBALL — the owner's call for the units given to friends. There is
+no migration: a stored document's `nba` key is skipped like any unknown key and
+basketball takes its default, which is the configuration those units already
+ran. The league menu has ten rows and the mask ten bits.

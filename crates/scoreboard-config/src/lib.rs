@@ -247,14 +247,18 @@ impl From<Rgb> for scoreboard_model::Rgb888 {
 pub struct SportsConfig {
     #[serde(default = "defaults::mlb")]
     pub mlb: SportToggle,
-    #[serde(default)]
-    pub nba: SportToggle,
+    /// The basketball leagues by ESPN slug, football's shape (NCAAB.md D11).
+    /// A document stored before 2026-11-10 carries `nba: {"enabled": …}`
+    /// instead; serde skips that like any unknown key and this field takes its
+    /// default — no migration, by the owner's rule.
+    #[serde(default = "defaults::basketball")]
+    pub basketball: SportLeagues,
     /// The key's presence in `GET /api/config` is how the settings page knows
     /// this firmware has hockey (NHL.md D7); the frozen MicroPython never
     /// sends it.
     #[serde(default = "defaults::nhl")]
     pub nhl: SportToggle,
-    #[serde(default)]
+    #[serde(default = "defaults::football")]
     pub football: SportLeagues,
     #[serde(default)]
     pub soccer: SportLeagues,
@@ -444,7 +448,8 @@ impl DeviceConfig {
     }
 
     /// The configured leagues as poll sources, in rotation and menu order —
-    /// NHL.md D6: MLB, NBA, NHL, the football leagues, the soccer leagues.
+    /// NHL.md D6 and NCAAB.md D12: MLB, the basketball leagues, NHL, the
+    /// football leagues, the soccer leagues.
     ///
     /// `poller.py:223-239`'s `sources_from_config`, here rather than in the
     /// app so the order is host-tested. The app reads it at poller start and
@@ -458,15 +463,14 @@ impl DeviceConfig {
             dropped: 0,
         };
         let sports = &self.sports;
-        let toggles = [
-            (sports.mlb, Sport::Mlb, "mlb"),
-            (sports.nba, Sport::Basketball, "nba"),
-            (sports.nhl, Sport::Hockey, "nhl"),
-        ];
-        for (toggle, sport, slug) in toggles {
-            if toggle.enabled {
-                out.push(LeagueId::from_slug(sport, slug));
-            }
+        if sports.mlb.enabled {
+            out.push(LeagueId::from_slug(Sport::Mlb, "mlb"));
+        }
+        for slug in sports.basketball.active() {
+            out.push(LeagueId::from_slug(Sport::Basketball, slug));
+        }
+        if sports.nhl.enabled {
+            out.push(LeagueId::from_slug(Sport::Hockey, "nhl"));
         }
         for slug in sports.football.active() {
             out.push(LeagueId::from_slug(Sport::Football, slug));
@@ -479,7 +483,7 @@ impl DeviceConfig {
 
     /// Which registered leagues are on, one bit per row of
     /// [`scoreboard_model::feed::LEAGUES`]: bit `i` is set when league `i`
-    /// is configured — the `enabled` toggle for MLB, NBA and the NHL, or the
+    /// is configured — the `enabled` toggle for MLB and the NHL, or the
     /// slug's membership of the football or soccer list.
     ///
     /// This is the device's league menu's view of the configuration: nine
@@ -515,7 +519,7 @@ impl DeviceConfig {
             let sports = &mut self.sports;
             changed |= match league.sport {
                 Sport::Mlb => sports.mlb.set(enabled),
-                Sport::Basketball => sports.nba.set(enabled),
+                Sport::Basketball => sports.basketball.set(league.slug, enabled),
                 // One hockey league, one toggle; a second row needs a config
                 // shape first, which `every_registered_league_fits_the_slate`
                 // insists on (NHL.md D5).
@@ -530,7 +534,7 @@ impl DeviceConfig {
     fn league_enabled(&self, league: &RegisteredLeague) -> bool {
         match league.sport {
             Sport::Mlb => self.sports.mlb.enabled,
-            Sport::Basketball => self.sports.nba.enabled,
+            Sport::Basketball => self.sports.basketball.contains(league.slug),
             Sport::Hockey => self.sports.nhl.enabled,
             Sport::Football => self.sports.football.contains(league.slug),
             Sport::Soccer => self.sports.soccer.contains(league.slug),
