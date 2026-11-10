@@ -427,7 +427,9 @@ impl Store {
         // fetched, or the one-poll glitch body the backend drops — keeps the
         // previous poll's, which outlives the glitch. A first look has no
         // previous poll to keep.
+        view.ledger_tracks = rules.ledger;
         match game.ledger {
+            _ if !rules.ledger => view.ledger = None,
             Some(ledger) => view.ledger = Some(ledger),
             None if first_look => view.ledger = None,
             None => {}

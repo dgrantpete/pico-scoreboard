@@ -3306,7 +3306,7 @@ impl Maxima {
 fn the_snapshot_stays_inside_its_budget_line() {
     assert_eq!(ScoreboardSnapshot::SIZE, 3_768);
     assert_eq!(crate::SnapshotChannel::SIZE, 11_312);
-    assert_eq!(Slate::SIZE, 4_664);
+    assert_eq!(Slate::SIZE, 4_736);
 }
 
 // =========================================================================
@@ -4430,4 +4430,43 @@ fn a_line_score_gathers_every_overtime_into_one_column() {
     assert_eq!(view.away_row.as_str(), "35 30 15 ");
     assert_eq!(view.home_row.as_str(), "33 32 17 ");
     assert_eq!(view.final_text.as_str(), "F/2OT");
+}
+
+#[test]
+fn ncaa_mens_basketball_plays_halves_on_the_ncaa_court_with_no_ledger() {
+    let league = LeagueId::from_slug(Sport::Basketball, "mens-college-basketball");
+    assert_eq!(league.key.as_str(), "basketball/mens-college-basketball");
+    let rules = BasketballRules::of(&league);
+    assert_eq!(rules, BasketballRules::MENS_COLLEGE);
+    assert_eq!(rules.periods, Periods::HALVES);
+    assert_eq!(rules.court, CourtLines::NCAA);
+    assert!(!rules.ledger);
+    // The international arc and corner, a 12 ft lane.
+    assert!((CourtLines::NCAA.arc.feet() - 22.146).abs() < 0.001);
+    assert!((CourtLines::NCAA.corner.feet() - 21.656).abs() < 0.001);
+    assert_eq!(CourtLines::NCAA.lane_half.feet(), 6.0);
+}
+
+#[test]
+fn a_league_without_a_ledger_draws_none_whatever_the_payload_carries() {
+    // The NBA's bonus moment, committed as if a college endpoint had served
+    // it: the league's rules decide, not the poll (NCAAB.md D3).
+    let (_, bytes) = fixture("basketball/nba/bonus.ext2");
+    let detail = WireFeed.detail(Sport::Basketball, &bytes).unwrap();
+    let college = LeagueId::from_slug(Sport::Basketball, "mens-college-basketball");
+    let mut store = Store::new();
+    store.commit_detail(&college, &detail, Logos::default(), 1_000, clock());
+    let view = &store.snapshot().basketball_live;
+    assert!(!view.ledger_tracks);
+    assert_eq!(view.ledger, None);
+    assert_eq!(view.court, CourtLines::NCAA);
+    // Period 4 on halves is the second overtime.
+    assert_eq!(view.phase_text.as_str(), "2OT");
+
+    // The same payload under the NBA keeps its tracks and its ledger.
+    let store = committed("basketball/nba/bonus.ext2");
+    let view = &store.snapshot().basketball_live;
+    assert!(view.ledger_tracks);
+    assert!(view.ledger.is_some());
+    assert_eq!(view.court, CourtLines::NBA);
 }

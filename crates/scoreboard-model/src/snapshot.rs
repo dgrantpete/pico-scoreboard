@@ -598,9 +598,14 @@ pub struct BasketballLiveView {
     /// Under a minute in regulation's last period or overtime, and not an
     /// all-zero clock (NCAAB.md D7): draw the clock in the warning color.
     pub clock_low: bool,
+    /// Whether the band has team-foul and timeout tracks: the league's rule
+    /// (NCAAB.md D3), so the layout never moves with what one poll carried.
+    /// Without them the scores centre on the crests.
+    pub ledger_tracks: bool,
     /// Team fouls, bonus and timeouts (§3.3). `None` draws no dots and no
-    /// blocks: a first look without a summary, or a payload below `ext=2`.
-    /// A later poll of the same game without one keeps this one.
+    /// blocks: a first look without a summary, a payload below `ext=2`, or a
+    /// league without tracks. A later poll of the same game without one keeps
+    /// this one.
     pub ledger: Option<Ledger>,
     /// Unanswered points by one side, from six (§3.5). State, not news: a
     /// first look shows it.
@@ -641,6 +646,7 @@ impl BasketballLiveView {
             clock_text: Text::new(),
             clock_accent: false,
             clock_low: false,
+            ledger_tracks: true,
             ledger: None,
             run: None,
             last_score: None,

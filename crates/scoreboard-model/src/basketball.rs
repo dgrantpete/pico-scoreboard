@@ -14,12 +14,24 @@ use crate::periods::Periods;
 pub struct BasketballRules {
     pub periods: Periods,
     pub court: CourtLines,
+    /// Whether the league's screen has team-foul and timeout tracks. ESPN
+    /// publishes no college ledger (its fields read zero), so that band has
+    /// no tracks and its scores centre on the crests (NCAAB.md D3) — decided
+    /// by the league, never by what one poll carried.
+    pub ledger: bool,
 }
 
 impl BasketballRules {
     pub const NBA: BasketballRules = BasketballRules {
         periods: Periods::QUARTERS,
         court: CourtLines::NBA,
+        ledger: true,
+    };
+
+    pub const MENS_COLLEGE: BasketballRules = BasketballRules {
+        periods: Periods::HALVES,
+        court: CourtLines::NCAA,
+        ledger: false,
     };
 
     /// The rules for a basketball league, by the slug its endpoint key ends
@@ -35,7 +47,10 @@ impl BasketballRules {
 }
 
 /// Every league with rules of its own, by config slug.
-const LEAGUE_RULES: &[(&str, BasketballRules)] = &[("nba", BasketballRules::NBA)];
+const LEAGUE_RULES: &[(&str, BasketballRules)] = &[
+    ("nba", BasketballRules::NBA),
+    ("mens-college-basketball", BasketballRules::MENS_COLLEGE),
+];
 
 /// The rule-book lines that differ between courts. The floor's size, the rim,
 /// the backboard and the free-throw line are the same everywhere and stay the
@@ -55,6 +70,14 @@ impl CourtLines {
         arc: Length::ft(23, 9, 0),
         corner: Length::ft(22, 0, 0),
         lane_half: Length::ft(8, 0, 0),
+    };
+
+    /// NCAA basketball since 2019 (men) and 2021 (women): the international
+    /// arc, 6.75 m, and a 12 ft lane.
+    pub const NCAA: CourtLines = CourtLines {
+        arc: Length::ft(22, 1, 6),
+        corner: Length::ft(21, 7, 7),
+        lane_half: Length::ft(6, 0, 0),
     };
 }
 

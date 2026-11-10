@@ -7,9 +7,10 @@ use scoreboard_wire::{DecodeError, GameState, basketball, football, hockey, list
 
 pub use crate::snapshot::Sport;
 
-/// The endpoint key, e.g. "football/college-football" — the longest a
-/// registered league produces is 25 bytes.
-pub const LEAGUE_KEY: usize = 32;
+/// The endpoint key, e.g. "football/college-football". The longest a
+/// registered league produces is "basketball/mens-college-basketball", 34
+/// bytes; 40 leaves room for "basketball/womens-college-basketball" (36).
+pub const LEAGUE_KEY: usize = 40;
 
 /// One pollable league. `key` namespaces logo-cache slots and rotation
 /// identity across leagues — a soccer "POR" crest is not an MLB "POR".
