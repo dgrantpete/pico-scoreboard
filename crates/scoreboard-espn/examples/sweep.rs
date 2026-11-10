@@ -299,7 +299,8 @@ fn detail_pass(sport: &str, league: &str, body: &[u8], id: &str, stats: &mut Sta
             }
         }
         "nba" => {
-            let extractor = basketball::Extractor::game_detail(id, &mut quirks);
+            let extractor =
+                basketball::Extractor::game_detail(id, basketball::Rules::NBA, &mut quirks);
             let mut matcher =
                 scoreboard_espn::StreamMatcher::new(basketball::PATHS, extractor, &mut scratch)
                     .expect("table");

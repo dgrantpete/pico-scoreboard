@@ -8,7 +8,7 @@
 //! backend's serde + transform split implies (ruling 1).
 
 use scoreboard_espn::basketball::{
-    self, DetailOutcome, Extractor, Kind, ScanStats, TransformError,
+    self, DetailOutcome, Extractor, Kind, Rules, ScanStats, TransformError,
 };
 use scoreboard_espn::common::{IgnoreQuirks, Quirk, Quirks};
 use scoreboard_espn::StreamMatcher;
@@ -112,7 +112,11 @@ fn feed<'c, Q: Quirks>(
 
 fn run_detail(body: &str, target: &str, sizes: &[usize]) -> (DetailOutcome, ScanStats) {
     let mut quirks = IgnoreQuirks;
-    let extractor = feed(body, Extractor::game_detail(target, &mut quirks), sizes);
+    let extractor = feed(
+        body,
+        Extractor::game_detail(target, Rules::NBA, &mut quirks),
+        sizes,
+    );
     let stats = extractor.stats();
     (extractor.into_detail().expect("detail mode"), stats)
 }
@@ -443,7 +447,7 @@ fn events_shell_must_be_an_array() {
         let mut quirks = scoreboard_espn::common::IgnoreQuirks;
         let extractor = feed(
             body,
-            Extractor::game_detail("77", &mut quirks),
+            Extractor::game_detail("77", Rules::NBA, &mut quirks),
             &[usize::MAX],
         );
         assert!(extractor.stats().events_malformed, "{body}");
@@ -451,7 +455,7 @@ fn events_shell_must_be_an_array() {
     let mut quirks = scoreboard_espn::common::IgnoreQuirks;
     let extractor = feed(
         "{\"events\":[]}",
-        Extractor::game_detail("77", &mut quirks),
+        Extractor::game_detail("77", Rules::NBA, &mut quirks),
         &[usize::MAX],
     );
     assert!(!extractor.stats().events_malformed, "legal empty slate");
@@ -573,7 +577,7 @@ fn unknown_live_description_degrades_to_in_progress_with_a_quirk() {
     let target = event_id(&mutated);
     let extractor = feed(
         &body,
-        Extractor::game_detail(&target, &mut quirks),
+        Extractor::game_detail(&target, Rules::NBA, &mut quirks),
         &[body.len()],
     );
     let outcome = extractor.into_detail().expect("detail mode");
@@ -601,7 +605,7 @@ fn malformed_total_record_drops_to_none_with_a_quirk() {
     let target = event_id(&mutated);
     let extractor = feed(
         &body,
-        Extractor::game_detail(&target, &mut quirks),
+        Extractor::game_detail(&target, Rules::NBA, &mut quirks),
         &[body.len()],
     );
     let outcome = extractor.into_detail().expect("detail mode");

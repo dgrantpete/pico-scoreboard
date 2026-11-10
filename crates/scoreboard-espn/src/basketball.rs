@@ -1,6 +1,18 @@
-//! NBA extraction tables — the S1 sport lane over the shared path engine,
-//! grown for the court screens (`firmware-rs/NBA.md` §3 is the normative
-//! semantics of everything the `ext=2` groups carry).
+//! Basketball extraction tables — the S1 sport lane over the shared path
+//! engine, grown for the court screens (`firmware-rs/NBA.md` §3 is the
+//! normative semantics of everything the `ext=2` groups carry) and for a
+//! second league (`firmware-rs/NCAAB.md` §3: NCAA men's basketball).
+//!
+//! # Leagues
+//!
+//! One table, one sink, one wire format for every league. What differs is a
+//! handful of independent properties, [`Rules`], which the caller resolves
+//! from its league once and hands to the detail extractor
+//! ([`Rules::NBA`], [`Rules::MENS_COLLEGE`]); the extract carries them into
+//! the summary pass. Nothing here asks which league it is reading: the
+//! pregame rank line, the ledger lane, the shot frame, the regulation length
+//! and the flash table are each read from the rules (the football extractor's
+//! `is_college`, generalised — DESIGN.md ruling 8).
 //!
 //! Two streamed documents feed one payload. The league SCOREBOARD body
 //! (`$.events[*]...`, [`PATHS`] + the [`Extractor`] sink) carries the state,
@@ -49,24 +61,27 @@
 //! The v2 `last_play` field carries §3.7's filtered play: the scoreboard's
 //! `lastPlay` when its type is eligible (it is the newest play there is),
 //! else the summary's newest eligible play, else none. Eligible are the
-//! stoppages and the news — a full timeout, a challenge or review outcome,
-//! a technical or flagrant foul ([`FLASH_TYPES`]); made baskets, free throws,
-//! rebounds, substitutions, ordinary fouls and period boundaries are not, nor
-//! are the transient first postings of a challenge (213, 277) and the
-//! placeholder types (91 "No Shot", 61 "No Turnover"), which ESPN re-types in
-//! place under the same id — the re-typed play flashes then, once, if it is
-//! eligible. The gift fleet decodes the same field, so its NBA flash follows
-//! this filter too — fewer flashes on frozen firmware, not a break.
-//! [`Live::last_play`] keeps the unfiltered play for the backend's JSON DTO
-//! until phase 6.3 moves that to the filtered one.
+//! stoppages and the news, per league ([`Rules::flash_types`]): for the NBA
+//! a full timeout, a challenge or review outcome, a technical or flagrant
+//! foul ([`NBA_FLASH_TYPES`]); for college a team timeout, a technical or a
+//! challenge outcome, never the scheduled TV timeout ([`COLLEGE_FLASH_TYPES`]).
+//! Made baskets, free throws, rebounds, substitutions, ordinary fouls and
+//! period boundaries never flash, nor do the transient first postings of a
+//! challenge (213, 277) and the placeholder types (91 "No Shot", 61 "No
+//! Turnover"), which ESPN re-types in place under the same id — the re-typed
+//! play flashes then, once, if it is eligible. The gift fleet decodes the
+//! same field, so its NBA flash follows this filter too — fewer flashes on
+//! frozen firmware, not a break. [`Live::last_play`] is already the filtered
+//! play, so the backend's JSON DTO cannot disagree with the wire.
 //!
 //! # The summary tables
 //!
 //! `header.competitions[0].competitors[*]`: `team.id`, `homeAway`,
 //! `fouls.{teamFoulsCurrent,bonusState,foulsToGive}`, `timeoutsRemaining` —
-//! the ledger (§3.3) and the one team-id → side mapping every play and
-//! boxscore reference resolves through, at finish, whichever order the
-//! document arrived in. `plays[*]`: `id`, `sequenceNumber`, `type.id`,
+//! the ledger (§3.3; read only where [`Rules::ledger`] says the league has
+//! one) and the one team-id → side mapping every play and boxscore
+//! reference resolves through, at finish, whichever order the document
+//! arrived in. `plays[*]`: `id`, `sequenceNumber`, `type.id`,
 //! `text`, `scoringPlay`, `scoreValue`, `pointsAttempted`, `coordinate.{x,y}`,
 //! `team.id`, `awayScore`, `homeScore`, `participants[0].athlete.id` — the
 //! run walk (§3.5), the make ring (§3.4), the newest scoring play (§3.6) and
@@ -81,7 +96,7 @@
 //! Every pool is sized from the game and overflow degrades rather than
 //! panics: the make ring keeps the newest [`MAX_MAKES`] (the wire's cap, a
 //! bounded ring, never every play); each team's boxscore rows fill
-//! [`ATHLETES_PER_TEAM`], a nineteenth is a [`Quirk::BoundedOverflow`] and
+//! [`ATHLETES_PER_TEAM`], one more is a [`Quirk::BoundedOverflow`] and
 //! unlisted (points 0); a row keeps [`STAT_COLUMNS`] numeric cells, and a PTS
 //! column past them is the same quirk; a third header competitor or player
 //! block is a quirk and ignored; the flash text, the scorer's family name,
@@ -92,8 +107,8 @@
 use crate::common::{
     linescore_byte, num_i16, num_u16, num_u32, num_u8, order_home_away, parse_hex_rgb,
     parse_live_phase, parse_record, parse_start_time, push_upper, saturate_score, set_text,
-    stable_sort_by_key, wire_phase, EText, Exact, HomeAway, LivePhase, Market, OddsScratch, Quirk,
-    Quirks, WireText,
+    stable_sort_by_key, team_lines, wire_phase, EText, Exact, HomeAway, LineTeam, LivePhase,
+    Market, OddsScratch, Quirk, Quirks, WireText,
 };
 use crate::path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 use scoreboard_wire::basketball::{
@@ -115,11 +130,13 @@ pub const ID_BYTES: usize = 24;
 const STATUS_NAME_BYTES: usize = 32;
 /// `altDetail` is "OT" or "{n}OT"; anything longer cannot match.
 const ALT_DETAIL_BYTES: usize = 8;
-/// Boxscore rows per team: fifteen standard contracts and three two-way
-/// players are the most a roster can dress. The boxscore lists 11–15.
-pub const ATHLETES_PER_TEAM: usize = 18;
+/// Boxscore rows per team. An NBA roster dresses at most eighteen (fifteen
+/// contracts, three two-way players) and its boxscore lists 11–15; a college
+/// boxscore lists 14–18, but a non-Division-I side listed 37 (NCAAB.md §2).
+/// The extractor runs on the backend only, so the cap is generous: 40.
+pub const ATHLETES_PER_TEAM: usize = 40;
 /// Numeric cells kept per boxscore row: ESPN's NBA row has fourteen columns
-/// (MIN, PTS, FG, …, +/-); PTS is the second.
+/// (MIN, PTS, FG, …, +/-), college thirteen (no +/-); PTS is the second.
 pub const STAT_COLUMNS: usize = 16;
 /// Two teams play. Pools keyed by team hold this many and quirk on a third.
 pub const TEAMS: usize = 2;
@@ -129,8 +146,6 @@ pub const TEAMS: usize = 2;
 /// `season.type`: 2 is the regular season (preseason and the NBA Cup too), 3
 /// the playoffs, 5 the play-in — which is not the playoffs (§3.1).
 const SEASON_POSTSEASON: u8 = 3;
-/// `status.period` of a regulation final; 5 is the first overtime.
-const REGULATION_PERIODS: u8 = 4;
 /// A make is a scoring play worth a field goal; free throws attempt 0.
 const FIELD_GOAL_ATTEMPT: u8 = 2;
 /// ESPN's half-court frame runs 0–50 ft sideline to sideline, with the
@@ -144,14 +159,72 @@ const COORDINATE_WINDOW: core::ops::RangeInclusive<f64> = -100.0..=200.0;
 /// Trailing generational suffixes the family-name rule drops (§3.6).
 const NAME_SUFFIXES: [&str; 5] = ["Jr.", "Sr.", "II", "III", "IV"];
 
-/// §3.7's eligible play types, pinned from every type in the capture set
-/// (`backend/testdata/basketball/nba/PROVENANCE.md`): the full timeout (16), the
-/// coach's-challenge outcomes (214 supported, 215 overturned, 216 stands),
-/// the ref-initiated review outcomes (278/279/280 likewise), the technicals
-/// (29 defensive three seconds, 30 double, 35 technical, 48 flopping) and
-/// the flagrant type 1 (32; no type 2 was ever seen). No ejection type
-/// exists to add. The one table both documents' plays are judged by.
-pub const FLASH_TYPES: [u16; 12] = [16, 214, 215, 216, 278, 279, 280, 29, 30, 35, 48, 32];
+/// The NBA's §3.7 eligible play types, pinned from every type in the capture
+/// set (`backend/testdata/basketball/nba/PROVENANCE.md`): the full timeout
+/// (16), the coach's-challenge outcomes (214 supported, 215 overturned, 216
+/// stands), the ref-initiated review outcomes (278/279/280 likewise), the
+/// technicals (29 defensive three seconds, 30 double, 35 technical, 48
+/// flopping) and the flagrant type 1 (32; no type 2 was ever seen). No
+/// ejection type exists to add.
+pub const NBA_FLASH_TYPES: [u16; 12] = [16, 214, 215, 216, 278, 279, 280, 29, 30, 35, 48, 32];
+
+/// College's eligible play types (NCAAB.md D8): the team timeouts (578
+/// RegularTimeOut, 579 ShortTimeOut), the technical foul (521) and the
+/// coach's-challenge outcomes (215 overturned, 216 stands — the NBA's ids).
+/// Never the official TV timeout (580: scheduled, team-less and the most
+/// common last play there is) nor the 91 placeholder.
+pub const COLLEGE_FLASH_TYPES: [u16; 5] = [578, 579, 521, 215, 216];
+
+/// A basketball league's extraction properties (NCAAB.md D2): independent
+/// axes, resolved from the league once at the edge (the backend's
+/// `BasketballLeague` builds them) and read here, so the extractor never
+/// asks which league it serves. NCAA women's basketball — quarters, no
+/// ledger, the college frame — is why they stay independent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rules {
+    /// The pregame team line shows poll ranks — a ranked side's "#N SHORT
+    /// NAME", the unranked side named — before the betting lines (§3.8,
+    /// `common::team_lines`).
+    pub rank_line: bool,
+    /// The summary header's team fouls, bonus and timeouts are the league's
+    /// ledger (§3.3). Without one the lane is never read: ESPN publishes
+    /// zeros for college, and zeros there are the league's normal, not the
+    /// one-poll glitch, so they raise no quirk either.
+    pub ledger: bool,
+    /// Feet added to ESPN's `coordinate.y` (rounded) to reach the wire's
+    /// frame, feet from the backboard plane (§3.4, D4): ESPN's NBA rim sits
+    /// at y = 1, its college rim at y ≈ 0.25.
+    pub frame_shift_y: i8,
+    /// Regulation periods: four quarters or two halves. `altDetail`'s
+    /// overtime count starts after them (§3.1).
+    pub regulation: u8,
+    /// The play types that flash (§3.7), the one table both documents'
+    /// plays are judged by.
+    pub flash_types: &'static [u16],
+}
+
+impl Rules {
+    pub const NBA: Self = Self {
+        rank_line: false,
+        ledger: true,
+        frame_shift_y: 0,
+        regulation: 4,
+        flash_types: &NBA_FLASH_TYPES,
+    };
+
+    pub const MENS_COLLEGE: Self = Self {
+        rank_line: true,
+        ledger: false,
+        frame_shift_y: 1,
+        regulation: 2,
+        flash_types: &COLLEGE_FLASH_TYPES,
+    };
+
+    /// §3.7's filter.
+    fn flashes(&self, type_id: u16) -> bool {
+        self.flash_types.contains(&type_id)
+    }
+}
 
 /// The three leader categories a final shows, in the wire's row order.
 const CATEGORIES: usize = 3;
@@ -217,12 +290,15 @@ const P_LEADER_NAME: usize = 47;
 const P_LEADER_VALUE: usize = 48;
 const P_LEADER_DISPLAY: usize = 49;
 const P_LEADER_ATHLETE: usize = 50;
+/// The college pregame's rank (§3.8), appended likewise; it cannot fail an
+/// event either. `shortDisplayName` (27) was already read for parity.
+const P_CURATED_RANK: usize = 51;
 
-/// The NBA scoreboard path table. 18 wire-relevant leaves plus the
+/// The basketball scoreboard path table. 18 wire-relevant leaves plus the
 /// parse-gating-only fields (`team.id`, `weather.*`, `shortDisplayName`) the
 /// backend's shared serde structs require to deserialize — rejection parity
 /// needs them even though nothing reads their values (ruling 1, inventory §6)
-/// — plus the betting lines and the court screens' fields.
+/// — plus the betting lines, the court screens' fields and the rank.
 ///
 /// Only `competitions[0]` is consulted, as in the backend
 /// (`fetch_game_parts` takes `competitions.into_iter().next()`).
@@ -282,14 +358,16 @@ pub static PATHS: &[Pattern] = &[
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("leaders"), AnyIndex, Key("leaders"), Index(0), Key("value")],
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("leaders"), AnyIndex, Key("leaders"), Index(0), Key("displayValue")],
     &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("leaders"), AnyIndex, Key("leaders"), Index(0), Key("athlete"), Key("shortName")],
+    &[Key("events"), AnyIndex, Key("competitions"), Index(0), Key("competitors"), AnyIndex, Key("curatedRank"), Key("current")],
 ];
 
 // ------------------------------------------------------------- the extract
 
-/// One extracted NBA game: owned, bounded, domain-shaped. String bounds are
-/// the wire cap ([`EText`] = 255 bytes, ruling 2), scores stay `u32` like
-/// the backend's domain model (the wire view saturates), line scores are
-/// already sorted/clamped bytes like `BasketballFinalTeam::line_score`.
+/// One extracted basketball game: owned, bounded, domain-shaped. String
+/// bounds are the wire cap ([`EText`] = 255 bytes, ruling 2), scores stay
+/// `u32` like the backend's domain model (the wire view saturates), line
+/// scores are already sorted/clamped bytes like
+/// `BasketballFinalTeam::line_score`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Extract {
     pub game_id: EText,
@@ -297,6 +375,8 @@ pub struct Extract {
     /// line carries it (§3.1). The play-in (5) is not the playoffs.
     pub playoffs: bool,
     pub kind: Kind,
+    /// The league's rules, for the summary pass ([`Extract::summary_context`]).
+    rules: Rules,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -316,8 +396,9 @@ pub struct Pregame {
     pub start_time: u32,
     pub venue: EText,
     /// The info cycle's second line (§3.8): `notes[0].headline` upper-cased,
-    /// plus " - " and `series.summary` in the playoffs; empty when there is
-    /// no headline (the shared cycle skips empty lines).
+    /// plus " - " and `series.summary` in the playoffs (college has no
+    /// series); empty when there is no headline (the shared cycle skips
+    /// empty lines).
     pub info_secondary: EText,
     pub away: PregameTeam,
     pub home: PregameTeam,
@@ -330,8 +411,10 @@ pub struct PregameTeam {
     /// `None` when ESPN omits or malforms the `type == "total"` record —
     /// a cleared flag bit on the wire, not a zero record.
     pub record: Option<Record>,
-    /// The betting line, "+3.5  +140" — both teams or neither
-    /// (`OddsScratch::team_lines`). Carried by the wire's `ext=1` only.
+    /// The team line (§3.8, `common::team_lines`): where the league ranks,
+    /// "#5 ARIZONA" and the unranked opponent's "CAL POLY"; otherwise the
+    /// betting line, "+3.5  +140", both teams or neither. Carried by the
+    /// wire's `ext=1` only.
     pub line: Option<EText>,
 }
 
@@ -345,7 +428,7 @@ pub struct Live {
     pub away: LiveTeam,
     pub home: LiveTeam,
     /// The scoreboard's contribution to the flash: `situation.lastPlay` when
-    /// its `type.id` is one of [`FLASH_TYPES`] (§3.7), else `None` — a
+    /// its `type.id` is one of [`Rules::flash_types`] (§3.7), else `None` — a
     /// rebound or a made basket is not a play to flash, and every consumer
     /// (the wire view and the backend's JSON DTO alike) sees the one filtered
     /// play. Also absent before the opening tip (`situation: {}` is a real
@@ -372,7 +455,7 @@ pub struct LastPlay {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Final {
-    /// `status.period`: 4 in regulation, more with overtime.
+    /// `status.period`: the league's regulation (4 or 2), more with overtime.
     pub periods_played: u8,
     pub away: FinalTeam,
     pub home: FinalTeam,
@@ -420,8 +503,8 @@ pub struct Leader {
 /// [`Extract::as_game`]; empty when the context was not a live game.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Summary {
-    /// §3.3; `None` when a field was missing on either side or the body was
-    /// the one-poll glitch.
+    /// §3.3; `None` when the league has no ledger, when a field was missing
+    /// on either side, or when the body was the one-poll glitch.
     pub ledger: Option<Ledger>,
     /// §3.5; `None` under [`RUN_SHOW`] points.
     pub run: Option<Run>,
@@ -471,6 +554,9 @@ pub struct SummaryContext {
     /// The scoreboard's state. Only a live game has a ledger, a run, marks
     /// to draw and a caption; a final's or a pregame's body is not read.
     state: GameState,
+    /// The league's rules, the scoreboard pass's own: the ledger lane, the
+    /// frame shift and the flash table.
+    rules: Rules,
 }
 
 impl Extract {
@@ -486,6 +572,7 @@ impl Extract {
     pub fn summary_context(&self) -> SummaryContext {
         SummaryContext {
             state: self.state(),
+            rules: self.rules,
         }
     }
 
@@ -754,6 +841,11 @@ struct CompetitorScratch {
     /// transform. Capacity is the wire's `MAX_LINE_SCORE`.
     line: heapless::Vec<(u8, u8), MAX_LINE_SCORE>,
     line_clipped: bool,
+    /// `curatedRank.current` (99 is unranked), for the rank line; a wrong
+    /// type reads as absent.
+    rank: Option<u16>,
+    /// `team.shortDisplayName`, the rank line's name; empty when absent.
+    short_name: EText,
     /// This competitor's `leaders[name=points|rebounds|assists].leaders[0]`,
     /// the first entry per category; the final arm picks between the two
     /// competitors' (§3.9).
@@ -807,11 +899,12 @@ enum Mode<'c> {
     },
     Detail {
         target: &'c str,
+        rules: Rules,
         outcome: Option<DetailOutcome>,
     },
 }
 
-/// The NBA sink: one implementation, two entry uses. Drive it with
+/// The basketball sink: one implementation, two entry uses. Drive it with
 /// `StreamMatcher::new(basketball::PATHS, extractor, scratch)`, feed the body, then
 /// [`Extractor::stats`] / [`Extractor::into_detail`] on the finished sink.
 pub struct Extractor<'c, Q: Quirks> {
@@ -823,19 +916,22 @@ pub struct Extractor<'c, Q: Quirks> {
 
 impl<'c, Q: Quirks> Extractor<'c, Q> {
     /// Games-list mode: every clean event with a competition yields
-    /// `(id, state)` — NBA's `list_state` is total, no exclusions.
+    /// `(id, state)` — basketball's `list_state` is total, no exclusions,
+    /// and the same for every league, so the list takes no rules.
     pub fn games_list(on_game: &'c mut dyn FnMut(&str, GameState), quirks: &'c mut Q) -> Self {
         Self::new(Mode::List { on_game }, quirks)
     }
 
-    /// Game-detail mode for one event id. Every event is validated and
-    /// counted until the target resolves (ruling 14 — the counts must be
-    /// exact when the target is missing); after that, remaining events are
-    /// fast-forwarded with `Directive::SkipElement` and left uncounted.
-    pub fn game_detail(target: &'c str, quirks: &'c mut Q) -> Self {
+    /// Game-detail mode for one event id under its league's `rules`. Every
+    /// event is validated and counted until the target resolves (ruling 14
+    /// — the counts must be exact when the target is missing); after that,
+    /// remaining events are fast-forwarded with `Directive::SkipElement` and
+    /// left uncounted.
+    pub fn game_detail(target: &'c str, rules: Rules, quirks: &'c mut Q) -> Self {
         Self::new(
             Mode::Detail {
                 target,
+                rules,
                 outcome: None,
             },
             quirks,
@@ -900,14 +996,16 @@ impl<'c, Q: Quirks> Extractor<'c, Q> {
                 // A clean event with an empty competitions array lists
                 // nothing, exactly like the backend's filter_map.
             }
-            Mode::Detail { outcome, .. } => {
+            Mode::Detail { outcome, rules, .. } => {
                 if s.is_target && outcome.is_none() {
                     *outcome = Some(match s.state {
                         None => DetailOutcome::NoCompetition,
-                        Some(state) => match transform(s, state, phase, &mut *self.quirks) {
-                            Ok(extract) => DetailOutcome::Found(extract),
-                            Err(error) => DetailOutcome::Rejected(error),
-                        },
+                        Some(state) => {
+                            match transform(s, state, phase, *rules, &mut *self.quirks) {
+                                Ok(extract) => DetailOutcome::Found(extract),
+                                Err(error) => DetailOutcome::Rejected(error),
+                            }
+                        }
                     });
                 }
             }
@@ -1288,6 +1386,7 @@ impl<Q: Quirks> Sink for Extractor<'_, Q> {
                     }
                 }
             }
+            // Optional (DESIGN.md ruling 18): absent or null reads as black.
             P_TEAM_COLOR => {
                 if let Some(competitor) = self.competitor(indices) {
                     match value {
@@ -1295,6 +1394,7 @@ impl<Q: Quirks> Sink for Extractor<'_, Q> {
                             competitor.color_seen = true;
                             competitor.color = parse_hex_rgb(text);
                         }
+                        Value::Null => {}
                         _ => competitor.color_bad = true,
                     }
                 }
@@ -1306,15 +1406,26 @@ impl<Q: Quirks> Sink for Extractor<'_, Q> {
                             competitor.alternate_seen = true;
                             competitor.alternate = parse_hex_rgb(text);
                         }
+                        Value::Null => {}
                         _ => competitor.alternate_bad = true,
                     }
                 }
             }
             P_TEAM_SHORT_NAME => {
-                if !matches!(value, Value::Str(_) | Value::Null) {
-                    if let Some(competitor) = self.competitor(indices) {
-                        competitor.short_name_bad = true;
+                if let Some(competitor) = self.competitor(indices) {
+                    match value {
+                        Value::Str(text) => set_text(&mut competitor.short_name, text),
+                        Value::Null => {}
+                        _ => competitor.short_name_bad = true,
                     }
+                }
+            }
+            P_CURATED_RANK => {
+                if let Some(competitor) = self.competitor(indices) {
+                    competitor.rank = match value {
+                        Value::Num(text) => num_u16(text),
+                        _ => None,
+                    };
                 }
             }
             P_RECORDS => {
@@ -1432,10 +1543,8 @@ fn deserializes(s: &EventScratch) -> bool {
         if !competitor.abbreviation_seen || competitor.abbreviation_bad {
             return false;
         }
-        if !competitor.color_seen || competitor.color_bad {
-            return false;
-        }
-        if !competitor.alternate_seen || competitor.alternate_bad {
+        // Colours are optional (ruling 18); only a wrong type fails.
+        if competitor.color_bad || competitor.alternate_bad {
             return false;
         }
         if competitor.short_name_bad || competitor.records_bad || competitor.linescores_bad {
@@ -1456,6 +1565,7 @@ fn transform<Q: Quirks>(
     s: &EventScratch,
     state: StateKind,
     phase: LivePhase,
+    rules: Rules,
     quirks: &mut Q,
 ) -> Result<Extract, TransformError> {
     let [first, second] = &s.competitors;
@@ -1468,14 +1578,14 @@ fn transform<Q: Quirks>(
     let kind = match state {
         StateKind::Pre => {
             let start_time = s.start_time.ok_or(TransformError::StartTime)?;
+            let [away_line, home_line] =
+                team_lines(rules.rank_line, away.line_team(), home.line_team(), &s.odds);
             // Home before away: the backend builds its struct in that
             // order, which fixes the malformed-record quirk order.
             let mut home = pregame_team(home, quirks)?;
             let mut away = pregame_team(away, quirks)?;
-            if let Some([away_line, home_line]) = s.odds.team_lines() {
-                away.line = Some(text_of(&away_line));
-                home.line = Some(text_of(&home_line));
-            }
+            away.line = away_line;
+            home.line = home_line;
             Kind::Pregame(Pregame {
                 start_time,
                 venue: s.venue_name.clone(),
@@ -1495,12 +1605,12 @@ fn transform<Q: Quirks>(
                 home,
                 // §3.7's filter, applied where the play is built so no
                 // unfiltered copy exists for a consumer to flash by mistake.
-                last_play: (s.last_play_seen && s.play_type.is_some_and(flash_eligible)).then(
-                    || LastPlay {
-                        id: s.play_id.clone(),
-                        text: s.play_text.clone(),
-                    },
-                ),
+                last_play: (s.last_play_seen
+                    && s.play_type.is_some_and(|type_id| rules.flashes(type_id)))
+                .then(|| LastPlay {
+                    id: s.play_id.clone(),
+                    text: s.play_text.clone(),
+                }),
             })
         }
         StateKind::Post => {
@@ -1514,7 +1624,7 @@ fn transform<Q: Quirks>(
             } else {
                 ""
             };
-            if actual != expected_alt_detail(s.period).as_str() {
+            if actual != expected_alt_detail(s.period, rules.regulation).as_str() {
                 quirks.quirk(Quirk::FinalDetailMismatch);
             }
             Kind::Final(Final {
@@ -1537,13 +1647,33 @@ fn transform<Q: Quirks>(
         game_id: s.id.clone(),
         playoffs,
         kind,
+        rules,
     })
 }
 
+impl CompetitorScratch {
+    fn line_team(&self) -> LineTeam<'_> {
+        LineTeam {
+            rank: self.rank,
+            short_name: &self.short_name,
+        }
+    }
+}
+
+/// Ruling 18: an absent colour is black (0), which the device's colour rule
+/// lifts or swaps for the other; a present one is six hex digits or the
+/// target is rejected.
 fn colors(competitor: &CompetitorScratch) -> Result<TeamColors, TransformError> {
+    let color = |seen: bool, parsed: Option<u32>| {
+        if seen {
+            parsed.ok_or(TransformError::Color)
+        } else {
+            Ok(0)
+        }
+    };
     Ok(TeamColors {
-        primary: competitor.color.ok_or(TransformError::Color)?,
-        alternate: competitor.alternate.ok_or(TransformError::Color)?,
+        primary: color(competitor.color_seen, competitor.color)?,
+        alternate: color(competitor.alternate_seen, competitor.alternate)?,
     })
 }
 
@@ -1666,8 +1796,8 @@ fn info_secondary(playoffs: bool, headline: &WireText, series: &WireText) -> ETe
     out
 }
 
-/// The five names ESPN sends for the NBA (§2) plus STATUS_DELAYED, which §2
-/// says to assume exists. Absent follows the state silently; anything else
+/// The five names ESPN sends for both leagues (NBA.md and NCAAB.md §2) plus
+/// STATUS_DELAYED, which NBA.md §2 says to assume exists. Absent follows the state silently; anything else
 /// is the quirk (§3.1).
 fn status_name_unknown(name: &Exact<STATUS_NAME_BYTES>) -> bool {
     if !name.seen() {
@@ -1686,12 +1816,12 @@ fn status_name_unknown(name: &Exact<STATUS_NAME_BYTES>) -> bool {
     )
 }
 
-/// The `altDetail` §3.1's final label implies: none through regulation,
-/// "OT" after one overtime, "{n}OT" after n.
-fn expected_alt_detail(period: u8) -> heapless::String<ALT_DETAIL_BYTES> {
+/// The `altDetail` §3.1's final label implies: none through the league's
+/// regulation, "OT" after one overtime, "{n}OT" after n.
+fn expected_alt_detail(period: u8, regulation: u8) -> heapless::String<ALT_DETAIL_BYTES> {
     use core::fmt::Write as _;
     let mut out = heapless::String::new();
-    match period.saturating_sub(REGULATION_PERIODS) {
+    match period.saturating_sub(regulation) {
         0 => {}
         1 => {
             let _ = out.push_str("OT");
@@ -1711,11 +1841,6 @@ fn code(value: Value<'_>) -> Option<u16> {
         Value::Str(text) | Value::Num(text) => num_u16(text),
         _ => None,
     }
-}
-
-/// §3.7's table.
-fn flash_eligible(type_id: u16) -> bool {
-    FLASH_TYPES.contains(&type_id)
 }
 
 /// The backend's `linescore_bytes` ordering: a **stable** sort by period —
@@ -1981,6 +2106,7 @@ struct SummarySink<Q: Quirks> {
     /// The context said live; otherwise every callback is a no-op and the
     /// summary is empty.
     live: bool,
+    rules: Rules,
     quirks: Q,
     play: PlayScratch,
     /// The running score before the play in hand (§3.5); 0-0 before the
@@ -2001,6 +2127,7 @@ impl<Q: Quirks> SummarySink<Q> {
     fn new(context: SummaryContext, quirks: Q) -> Self {
         Self {
             live: context.state == GameState::Live,
+            rules: context.rules,
             quirks,
             play: PlayScratch::default(),
             prev: (0, 0),
@@ -2074,7 +2201,11 @@ impl<Q: Quirks> SummarySink<Q> {
                         x: (x - COURT_CENTRE_X)
                             .clamp(-i32::from(MAX_COORDINATE_X), i32::from(MAX_COORDINATE_X))
                             as i8,
-                        y: y.clamp(i32::from(MIN_COORDINATE_Y), i32::from(MAX_COORDINATE_Y)) as i8,
+                        // The league's frame shift first (D4), then the
+                        // wire's range.
+                        y: (y + i32::from(self.rules.frame_shift_y))
+                            .clamp(i32::from(MIN_COORDINATE_Y), i32::from(MAX_COORDINATE_Y))
+                            as i8,
                     });
                     marked = true;
                 }
@@ -2095,7 +2226,10 @@ impl<Q: Quirks> SummarySink<Q> {
 
         // §3.7: the newest eligible play, its text as ESPN wrote it (the
         // wire view trims it beside the scoreboard's).
-        if play.type_id.is_some_and(flash_eligible) {
+        if play
+            .type_id
+            .is_some_and(|type_id| self.rules.flashes(type_id))
+        {
             if let (Some(id), Some(text)) = (play.id.get(), play.text.get()) {
                 self.flash = Some(LastPlay {
                     id: owned(id),
@@ -2122,6 +2256,7 @@ impl<Q: Quirks> SummarySink<Q> {
     fn resolve(self) -> SummaryReport<Q> {
         let Self {
             live,
+            rules,
             mut quirks,
             run,
             makes: recs,
@@ -2186,8 +2321,9 @@ impl<Q: Quirks> SummarySink<Q> {
             })
         });
 
-        let ledger = match (away_team, home_team) {
-            (Some(away), Some(home)) => ledger(away, home, &mut quirks),
+        // A league without a ledger reads none, glitch or not (§3.3).
+        let ledger = match (rules.ledger, away_team, home_team) {
+            (true, Some(away), Some(home)) => ledger(away, home, &mut quirks),
             _ => None,
         };
         // A run shorter than RUN_SHOW is not a run on the wire (§3.5).

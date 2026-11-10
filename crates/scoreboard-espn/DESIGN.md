@@ -233,8 +233,9 @@ Added as the sport lanes landed:
     their games. Absent or null now reads as black (0), slot by slot, and
     the device's colour rule lifts it or yields to the other colour; any
     other JSON type still fails the event, and a string that is not six hex
-    digits still rejects the target. Football (C3); hockey keeps its own
-    lane rule (an absent alternate reads as the primary).
+    digits still rejects the target. Football (C3) and basketball (both
+    leagues); hockey keeps its own lane rule (an absent alternate reads as
+    the primary).
 
 ## The hockey lane (2026-10-14, NHL.md phase 6.2)
 
@@ -361,8 +362,8 @@ relitigates it:
   summary fails a game.
 - **The flash is §3.7's filter at both sources.** The wire's `last_play` is
   the scoreboard's `lastPlay` when its type is in the one pinned table
-  (`basketball::FLASH_TYPES`: timeout, challenge and review outcomes, technicals,
-  flagrant), else the summary's newest eligible play, else none — with and
+  (`basketball::NBA_FLASH_TYPES`: timeout, challenge and review outcomes,
+  technicals, flagrant; since the college lane, the league's table), else the summary's newest eligible play, else none — with and
   without a summary, so a degraded poll flashes less, never more. The
   filter is applied where the scoreboard play is built, so `Live::last_play`
   is already the filtered play and no unfiltered copy exists for the wire
@@ -394,9 +395,9 @@ relitigates it:
   and starts none; the next clean step starts fresh.
 - **Bounds** (each documented at its constant, overflow degrades): the make
   ring keeps the newest `MAX_MAKES` = 128 (the wire's cap) as a ring, never
-  every play; `ATHLETES_PER_TEAM` = 18 boxscore rows per team (fifteen
-  contracts and three two-way players), a nineteenth is
-  `Quirk::BoundedOverflow` and unlisted; `STAT_COLUMNS` = 16 numeric cells
+  every play; `ATHLETES_PER_TEAM` boxscore rows per team (18 for the NBA's
+  fifteen contracts and three two-way players; 40 since the college lane),
+  one more is `Quirk::BoundedOverflow` and unlisted; `STAT_COLUMNS` = 16 numeric cells
   per row (ESPN's row has fourteen), a PTS column past them is the same
   quirk; a third header competitor or player block is a quirk and ignored;
   strings at `MAX_STRING_BYTES` (ruling 2), compare keys at `ID_BYTES` = 24
@@ -413,6 +414,47 @@ relitigates it:
   text has no " makes " (a placeholder's "makes 2-foot shot", a goaltending
   award) has no scorer and no quirk; a missing ledger field is absence, not
   a glitch; a placeholder-typed make (91) is a make like any other.
+
+## The college basketball lane (2026-11-09, NCAAB.md phase B4)
+
+NCAA men's basketball joins the NBA in `basketball.rs` the way college
+football shares `football.rs`: one table, one sink, one wire format.
+`firmware-rs/NCAAB.md` §3 is normative; the corpus is
+`backend/testdata/basketball/mens-college-basketball/` with its
+`PROVENANCE.md`. What is specific to the lane, decided here so nobody
+relitigates it:
+
+- **Properties, not a league.** `basketball::Rules` is a product of
+  independent axes — `rank_line`, `ledger`, `frame_shift_y`, `regulation`,
+  `flash_types` — with `Rules::NBA` and `Rules::MENS_COLLEGE`; the backend's
+  `BasketballLeague` resolves one at the edge (D2, ruling 8 generalised).
+  Nothing in the crate asks which league it reads. `Extractor::game_detail`
+  takes the rules and the extract carries them, so `summary_context()`
+  stays the only road to a summary pass and the two passes cannot disagree
+  about the league. The games list takes none: its state and the
+  deserialize tier are the same for every league.
+- **College per §3:** no ledger lane (the header's fouls and timeouts are
+  never read — ESPN publishes zeros, and zeros there are the league's
+  normal, so no `LedgerGlitch` either); ESPN's y plus one foot, after
+  rounding and before the wire's clamp (D4: the wire's y is feet from the
+  backboard plane for every league); the flash table {578, 579, 521, 215,
+  216} — never the TV timeout (580) or the placeholder (91); `altDetail`
+  judged against two halves, so a college overtime is period 3 and quiet;
+  and the pregame team line by football's rank rule, `common::team_lines`
+  (promoted at its second user, ruling 15; football byte-identical). The
+  note is the pregame's second line as in the NBA; college has no series.
+- **New scoreboard fields** (`curatedRank.current`, and
+  `shortDisplayName` now kept as text) decorate like every court-screen
+  field: a wrong type reads as absent, nothing fails an event.
+- **Colours** are optional for both leagues (ruling 18): the corpus's
+  `pregame_colourless` (West Coast Baptist) keeps its game.
+- **Bounds:** `ATHLETES_PER_TEAM` 18 → 40 (college lists 14–18 a team and a
+  non-Division-I side listed 37; the extractor runs only on the backend).
+- **Quiet by design, or not:** the corpus raises one quirk shape, §3.5's
+  correction on free throws shot after a stoppage — ESPN posts the rows
+  between the foul and the throws with the score after both, so the first
+  throw reads as the running score falling by one (twice in
+  `end_of_regulation`); the run ends there as the rule says.
 
 ## Lanes and validation
 

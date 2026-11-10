@@ -13,8 +13,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use scoreboard_espn::basketball::{
-    self, DetailOutcome, Extract, Extractor, Kind, Summary, SummaryContext, SummaryExtractor,
-    SummaryReport,
+    self, DetailOutcome, Extract, Extractor, Kind, Rules, Summary, SummaryContext,
+    SummaryExtractor, SummaryReport,
 };
 use scoreboard_espn::common::{Quirk, Quirks};
 use scoreboard_espn::StreamMatcher;
@@ -110,7 +110,7 @@ fn chunks(len: usize, sizes: &[usize]) -> Vec<(usize, usize)> {
 fn extract_sized(body: &str, target: &str, sizes: &[usize]) -> (DetailOutcome, RecQuirks) {
     let mut quirks = RecQuirks::default();
     let outcome = {
-        let extractor = Extractor::game_detail(target, &mut quirks);
+        let extractor = Extractor::game_detail(target, Rules::NBA, &mut quirks);
         let mut scratch = vec![0u8; 64 * 1024];
         let mut matcher = StreamMatcher::new(basketball::PATHS, extractor, &mut scratch).unwrap();
         for (start, end) in chunks(body.len(), sizes) {
@@ -1270,9 +1270,9 @@ fn the_scorers_points_come_from_the_boxscore_by_the_pts_column() {
 }
 
 #[test]
-fn a_nineteenth_boxscore_row_is_a_bounded_overflow_and_unlisted() {
-    // Pad OKC's block to eighteen rows ahead of McCain, then a nineteenth:
-    // he is the overflow and his points are unknown.
+fn a_row_past_the_athlete_cap_is_a_bounded_overflow_and_unlisted() {
+    // Pad OKC's block to the cap ahead of McCain, then one more: he is the
+    // overflow and his points are unknown.
     let (extract, _) = pair("run");
     let text = mutate(&summary_text("run").unwrap(), |v| {
         for block in v["boxscore"]["players"].as_array_mut().unwrap() {
@@ -1286,7 +1286,7 @@ fn a_nineteenth_boxscore_row_is_a_bounded_overflow_and_unlisted() {
                 .unwrap();
             let row = athletes.remove(mccain);
             let filler = athletes[0].clone();
-            while athletes.len() < 18 {
+            while athletes.len() < basketball::ATHLETES_PER_TEAM {
                 athletes.push(filler.clone());
             }
             athletes.push(row);
@@ -1358,7 +1358,7 @@ fn the_flash_prefers_the_scoreboards_eligible_play_then_the_summarys() {
     let text = mutate(&summary_text("run").unwrap(), |v| {
         v["plays"].as_array_mut().unwrap().retain(|p| {
             let type_id: u16 = p["type"]["id"].as_str().unwrap().parse().unwrap();
-            !basketball::FLASH_TYPES.contains(&type_id)
+            !basketball::NBA_FLASH_TYPES.contains(&type_id)
         });
     });
     let summary = summarize(&text, extract.summary_context()).summary;

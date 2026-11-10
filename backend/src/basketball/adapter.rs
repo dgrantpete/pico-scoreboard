@@ -10,7 +10,7 @@
 
 use scoreboard_espn::StreamMatcher;
 use scoreboard_espn::basketball::{
-    self, DetailOutcome, Extract, Kind, Summary, SummaryExtractor, TransformError,
+    self, DetailOutcome, Extract, Kind, Rules, Summary, SummaryExtractor, TransformError,
 };
 use scoreboard_wire as wire;
 
@@ -60,7 +60,7 @@ pub(crate) fn list_entries(bytes: &[u8], url: &str) -> Result<Vec<GameListEntry>
 /// says so and builds the DTO.
 pub(crate) fn detail_extract(bytes: &[u8], game_id: &str, url: &str) -> Result<Extract, AppError> {
     let mut quirks = TracingQuirks::for_event("nba", game_id);
-    let extractor = basketball::Extractor::game_detail(game_id, &mut quirks);
+    let extractor = basketball::Extractor::game_detail(game_id, Rules::NBA, &mut quirks);
     let mut scratch = vec![0u8; SCRATCH_LEN];
     let mut matcher = StreamMatcher::new(basketball::PATHS, extractor, &mut scratch)
         .map_err(|e| stream_error(url, e))?;
