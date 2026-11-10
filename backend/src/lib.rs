@@ -311,7 +311,7 @@ async fn games_list(
 ) -> Result<Response, AppError> {
     match AnyLeague::from_path(&sport, &league)? {
         AnyLeague::Mlb => mlb::list_games(&state, &headers).await,
-        AnyLeague::Nba => basketball::list_games(&state, &headers).await,
+        AnyLeague::Basketball(league) => basketball::list_games(&state, league, &headers).await,
         AnyLeague::Nhl => hockey::list_games(&state, &headers).await,
         AnyLeague::Football(league) => football::list_games(&state, league, &headers).await,
         AnyLeague::Soccer(league) => soccer::list_games(&state, league, &headers).await,
@@ -327,7 +327,9 @@ async fn games_detail(
 ) -> Result<Response, AppError> {
     match AnyLeague::from_path(&sport, &league)? {
         AnyLeague::Mlb => mlb::get_game(&state, &game_id, &headers).await,
-        AnyLeague::Nba => basketball::get_game(&state, &game_id, &headers).await,
+        AnyLeague::Basketball(league) => {
+            basketball::get_game(&state, league, &game_id, &headers).await
+        }
         AnyLeague::Nhl => hockey::get_game(&state, &game_id, &headers).await,
         AnyLeague::Football(league) => football::get_game(&state, league, &game_id, &headers).await,
         AnyLeague::Soccer(league) => soccer::get_game(&state, league, &game_id, &headers).await,
@@ -384,6 +386,25 @@ mod tests {
         // The football routes are present under their own tag.
         assert!(value["paths"]["/football/{league}/games"].is_object());
         assert!(value["paths"]["/football/{league}/games/{game_id}"].is_object());
+    }
+
+    /// Basketball's routes take the league like football's: one pair of
+    /// `/basketball/{league}/…` paths serves the NBA and college alike.
+    #[test]
+    fn openapi_registers_basketball_by_league() {
+        let doc = ApiDoc::openapi();
+        let json = serde_json::to_string(&doc).expect("OpenAPI doc serializes");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        for path in [
+            "/basketball/{league}/games",
+            "/basketball/{league}/games/{game_id}",
+        ] {
+            assert_eq!(
+                value["paths"][path]["get"]["tags"][0], "basketball",
+                "{path}"
+            );
+        }
+        assert!(value["paths"]["/basketball/nba/games"].is_null());
     }
 
     /// Hockey is a full sibling in the doc too: `HockeyGame` is the same

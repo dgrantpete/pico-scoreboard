@@ -451,10 +451,12 @@ relitigates it:
 - **Bounds:** `ATHLETES_PER_TEAM` 18 → 40 (college lists 14–18 a team and a
   non-Division-I side listed 37; the extractor runs only on the backend).
 - **Quiet by design, or not:** the corpus raises one quirk shape, §3.5's
-  correction on free throws shot after a stoppage — ESPN posts the rows
-  between the foul and the throws with the score after both, so the first
-  throw reads as the running score falling by one (twice in
-  `end_of_regulation`); the run ends there as the rule says.
+  correction. College summaries post the dead-ball rows around free throws
+  (substitutions, a TV timeout, rebounds) with a stale or a future score, so
+  the running score falls or jumps: two to four times in each full game of
+  the corpus against the NBA's none or one (twice in `end_of_regulation`,
+  live: the rows before two free throws carry the score after both). The
+  run ends there, as the rule says.
 
 ## Lanes and validation
 

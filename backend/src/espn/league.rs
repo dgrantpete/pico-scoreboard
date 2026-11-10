@@ -1,6 +1,8 @@
 //! Registry of ESPN (sport, league) API path pairs. Adding a sport means one
 //! implementor here plus a sport module — nothing else changes.
 
+use scoreboard_espn::basketball::Rules;
+
 use crate::config::EspnConfig;
 use crate::error::AppError;
 
@@ -22,17 +24,48 @@ impl EspnLeague for Mlb {
     }
 }
 
-/// NBA league marker. Backs both the basketball games endpoints and the
-/// generic logo route (logo resolution is payload-driven off the scoreboard,
-/// so any league in this registry gets logos for free).
-pub struct Nba;
+/// Multi-league basketball (NCAAB.md D1): both leagues share the ESPN sport
+/// slug "basketball", one `basketball/` backend module and one wire format.
+/// Like every league here it also backs the generic logo route (logo
+/// resolution is payload-driven off the scoreboard). The `/basketball/nba/…`
+/// paths are frozen: the gift fleet polls them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BasketballLeague {
+    Nba,
+    MensCollegeBasketball,
+}
 
-impl EspnLeague for Nba {
+impl BasketballLeague {
+    pub fn from_path(league: &str) -> Result<Self, AppError> {
+        match league {
+            "nba" => Ok(Self::Nba),
+            "mens-college-basketball" => Ok(Self::MensCollegeBasketball),
+            _ => Err(AppError::InvalidLeague {
+                league: format!("basketball/{league}"),
+                valid: VALID_LEAGUES,
+            }),
+        }
+    }
+
+    /// The extractor's per-league properties (NCAAB.md D2), resolved here,
+    /// once: the extraction itself never asks which league it reads.
+    pub fn rules(self) -> Rules {
+        match self {
+            Self::Nba => Rules::NBA,
+            Self::MensCollegeBasketball => Rules::MENS_COLLEGE,
+        }
+    }
+}
+
+impl EspnLeague for BasketballLeague {
     fn espn_sport(&self) -> &'static str {
         "basketball"
     }
     fn espn_league(&self) -> &'static str {
-        "nba"
+        match self {
+            Self::Nba => "nba",
+            Self::MensCollegeBasketball => "mens-college-basketball",
+        }
     }
 }
 
@@ -127,11 +160,11 @@ impl EspnLeague for SoccerLeague {
 }
 
 /// Leagues addressable via `/{sport}/{league}/...` path segments.
-const VALID_LEAGUES: &str = "baseball/mlb, basketball/nba, football/{nfl, college-football}, hockey/nhl, soccer/{fifa.world, usa.1, eng.1, mex.1}";
+const VALID_LEAGUES: &str = "baseball/mlb, basketball/{nba, mens-college-basketball}, football/{nfl, college-football}, hockey/nhl, soccer/{fifa.world, usa.1, eng.1, mex.1}";
 
 pub enum AnyLeague {
     Mlb,
-    Nba,
+    Basketball(BasketballLeague),
     Nhl,
     Football(FootballLeague),
     Soccer(SoccerLeague),
@@ -141,8 +174,10 @@ impl AnyLeague {
     pub fn from_path(sport: &str, league: &str) -> Result<Self, AppError> {
         match (sport, league) {
             ("baseball", "mlb") => Ok(Self::Mlb),
-            ("basketball", "nba") => Ok(Self::Nba),
             ("hockey", "nhl") => Ok(Self::Nhl),
+            // Like football and soccer below, the league reports its own
+            // error against the unified VALID_LEAGUES list.
+            ("basketball", lg) => BasketballLeague::from_path(lg).map(Self::Basketball),
             // FootballLeague::from_path already reports its error against the
             // unified VALID_LEAGUES list, prefixed with the football segment.
             ("football", lg) => FootballLeague::from_path(lg).map(Self::Football),
@@ -161,7 +196,7 @@ impl EspnLeague for AnyLeague {
     fn espn_sport(&self) -> &'static str {
         match self {
             Self::Mlb => Mlb.espn_sport(),
-            Self::Nba => Nba.espn_sport(),
+            Self::Basketball(league) => league.espn_sport(),
             Self::Nhl => Nhl.espn_sport(),
             Self::Football(league) => league.espn_sport(),
             Self::Soccer(league) => league.espn_sport(),
@@ -170,7 +205,7 @@ impl EspnLeague for AnyLeague {
     fn espn_league(&self) -> &'static str {
         match self {
             Self::Mlb => Mlb.espn_league(),
-            Self::Nba => Nba.espn_league(),
+            Self::Basketball(league) => league.espn_league(),
             Self::Nhl => Nhl.espn_league(),
             Self::Football(league) => league.espn_league(),
             Self::Soccer(league) => league.espn_league(),
@@ -211,7 +246,13 @@ mod tests {
         ));
         assert!(matches!(
             AnyLeague::from_path("basketball", "nba"),
-            Ok(AnyLeague::Nba)
+            Ok(AnyLeague::Basketball(BasketballLeague::Nba))
+        ));
+        assert!(matches!(
+            AnyLeague::from_path("basketball", "mens-college-basketball"),
+            Ok(AnyLeague::Basketball(
+                BasketballLeague::MensCollegeBasketball
+            ))
         ));
         assert!(matches!(
             AnyLeague::from_path("hockey", "nhl"),
@@ -244,6 +285,29 @@ mod tests {
         assert!(!FootballLeague::Nfl.is_college());
     }
 
+    /// The NBA keeps its frozen path segment (the gift fleet polls
+    /// `/basketball/nba/…`), college takes ESPN's slug, and each league
+    /// brings its own extraction rules.
+    #[test]
+    fn basketball_leagues_map_to_the_shared_basketball_sport_slug() {
+        use BasketballLeague::{MensCollegeBasketball, Nba};
+        assert_eq!(Nba.espn_sport(), "basketball");
+        assert_eq!(MensCollegeBasketball.espn_sport(), "basketball");
+        assert_eq!(Nba.espn_league(), "nba");
+        assert_eq!(
+            MensCollegeBasketball.espn_league(),
+            "mens-college-basketball"
+        );
+        for league in [Nba, MensCollegeBasketball] {
+            assert_eq!(
+                BasketballLeague::from_path(league.espn_league()).ok(),
+                Some(league)
+            );
+        }
+        assert_eq!(Nba.rules(), Rules::NBA);
+        assert_eq!(MensCollegeBasketball.rules(), Rules::MENS_COLLEGE);
+    }
+
     /// Both an unknown sport and an unknown soccer league report the same
     /// unified `VALID_LEAGUES` list (the previously-divergent error strings).
     #[test]
@@ -259,6 +323,7 @@ mod tests {
         };
         check("lacrosse", "pll", "lacrosse/pll");
         check("football", "xfl", "football/xfl");
+        check("basketball", "wnba", "basketball/wnba");
         check("soccer", "eng.99", "soccer/eng.99");
     }
 }

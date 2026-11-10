@@ -21,14 +21,35 @@ leagues:
     sport: basketball
     league: nba
     events:
-      - fixture: nba/pregame.json          # SA @ POR, the betting lines
+      - fixture: basketball/nba/pregame.json          # SA @ POR, the betting lines
         start_in: 2h
-      - fixture: nba/run.json              # WSH @ OKC, OKC on an 8-0 run
-      - fixture: nba/bonus_both.json       # NY @ CLE, both sides in the bonus
-      - fixture: nba/halftime.json         # BKN @ ATL
-      - fixture: nba/overtime.json         # ORL @ GS, period 5
-      - fixture: nba/final.json            # DEN @ IND, game leaders
-      - fixture: nba/final_playoff.json    # SA @ NY, NBA Finals game 4
+      - fixture: basketball/nba/run.json              # WSH @ OKC, OKC on an 8-0 run
+      - fixture: basketball/nba/bonus_both.json       # NY @ CLE, both sides in the bonus
+      - fixture: basketball/nba/halftime.json         # BKN @ ATL
+      - fixture: basketball/nba/overtime.json         # ORL @ GS, period 5
+      - fixture: basketball/nba/final.json            # DEN @ IND, game leaders
+      - fixture: basketball/nba/final_playoff.json    # SA @ NY, NBA Finals game 4
+
+  # Every college basketball screen, one moment per game (the corpus has
+  # several of Tennessee-Radford and Texas-Grambling; a slate takes one
+  # each): the rank line and a colourless crest before tip, the opening
+  # tip, the court through a run, the end of regulation, a team timeout's
+  # flash, an overtime final and the national championship.
+  - name: ncaab-demo
+    mode: scenario
+    sport: basketball
+    league: mens-college-basketball
+    events:
+      - fixture: basketball/mens-college-basketball/pregame_ranked.json      # CP @ #5 ARIZ
+        start_in: 2h
+      - fixture: basketball/mens-college-basketball/pregame_colourless.json  # WCBC @ BOIS, no colours
+        start_in: 3h
+      - fixture: basketball/mens-college-basketball/tip.json                 # OAK @ ALA, 0-0
+      - fixture: basketball/mens-college-basketball/run.json                 # UNF @ MIA, MIA on an 8-0 run
+      - fixture: basketball/mens-college-basketball/end_of_regulation.json   # GRAM @ TEX, 2ND END
+      - fixture: basketball/mens-college-basketball/team_timeout.json        # RAD @ TENN, "Radford Timeout"
+      - fixture: basketball/mens-college-basketball/final_ot.json            # MISS vs ARK, F/OT
+      - fixture: basketball/mens-college-basketball/final_tournament.json    # CONN vs MICH, the title game
 
   # Every hockey screen, twelve different teams. shootout.json is the same
   # game (event id) as final_so_no_stars.json, so the live shootout is

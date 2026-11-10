@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use crate::basketball::BasketballGame;
 use crate::error::AppError;
+use crate::espn::league::BasketballLeague;
 use crate::football::FootballGame;
 use crate::hockey::HockeyGame;
 use crate::mlb::MlbGame;
@@ -102,27 +103,22 @@ pub(crate) fn mlb_games() -> Vec<(String, MlbGame)> {
         .collect()
 }
 
-/// The basketball leagues whose fixtures the harness encodes: a league's
-/// corpus joins the golden set with its route.
-const BASKETBALL_LEAGUES: &[&str] = &["nba"];
-
-/// Basketball fixture stems (`{league}/{name}`) of the leagues in
-/// [`BASKETBALL_LEAGUES`].
-fn basketball_fixture_names() -> Vec<String> {
-    fixture_names("basketball")
-        .into_iter()
-        .filter(|name| {
-            name.split_once('/')
-                .is_some_and(|(league, _)| BASKETBALL_LEAGUES.contains(&league))
-        })
-        .collect()
+/// Basketball fixtures nest under their ESPN league slug, which resolves to
+/// the league exactly as the router resolves the path segment — the only
+/// per-league input to the extraction (its rules). A directory that is not a
+/// league is a corpus error.
+fn basketball_league(name: &str) -> BasketballLeague {
+    let slug = name.split_once('/').map_or("", |(league, _)| league);
+    BasketballLeague::from_path(slug)
+        .unwrap_or_else(|_| panic!("basketball/{name}: {slug:?} is not a basketball league"))
 }
 
-/// One NBA fixture as the detail handler sees it: the scoreboard extract,
-/// then, where the handler would fetch one (a live game, NBA.md D3) and
-/// `with_summary` allows, the pair's summary half through the same adapter
-/// call. A final's pair exists in the corpus but the handler never reads it,
-/// so a final comes out summary-less either way, as a pregame does.
+/// One basketball fixture as the detail handler sees it: the scoreboard
+/// extract under its league, then, where the handler would fetch one (a live
+/// game, NBA.md D3) and `with_summary` allows, the pair's summary half
+/// through the same adapter call. A final's pair exists in the corpus but the
+/// handler never reads it, so a final comes out summary-less either way, as
+/// a pregame does.
 fn basketball_parts(
     name: &str,
     with_summary: bool,
@@ -132,8 +128,9 @@ fn basketball_parts(
 ) {
     use crate::basketball::adapter;
 
+    let league = basketball_league(name);
     let (id, body) = fixture_body("basketball", name);
-    let extract = adapter::detail_extract(body.as_bytes(), &id, "test://corpus/basketball")
+    let extract = adapter::detail_extract(body.as_bytes(), &id, league, "test://corpus/basketball")
         .unwrap_or_else(|e| panic!("basketball/{name}: {e:?}"));
     let summary = (with_summary && adapter::wants_summary(&extract)).then(|| {
         let path = testdata()
@@ -141,16 +138,16 @@ fn basketball_parts(
             .join(format!("{name}{SUMMARY_STEM}.json"));
         let bytes = std::fs::read(&path)
             .unwrap_or_else(|e| panic!("basketball/{name}: a live fixture is a pair: {e}"));
-        adapter::summary(&bytes, &extract, "test://corpus/basketball/summary")
+        adapter::summary(&bytes, &extract, league, "test://corpus/basketball/summary")
             .unwrap_or_else(|| panic!("basketball/{name}: summary unreadable"))
     });
     (extract, summary)
 }
 
-/// Every NBA fixture with its summary where the handler would fetch one —
-/// the canonical goldens.
+/// Every basketball fixture with its summary where the handler would fetch
+/// one — the canonical goldens.
 pub(crate) fn basketball_games() -> Vec<(String, BasketballGame)> {
-    basketball_fixture_names()
+    fixture_names("basketball")
         .into_iter()
         .map(|name| {
             let (extract, summary) = basketball_parts(&name, true);
@@ -160,13 +157,13 @@ pub(crate) fn basketball_games() -> Vec<(String, BasketballGame)> {
         .collect()
 }
 
-/// Every live NBA fixture from the scoreboard alone, under
+/// Every live basketball fixture from the scoreboard alone, under
 /// [`NO_SUMMARY_SUFFIX`] — what the handler sends when the summary fetch or
 /// parse failed. Every live fixture rather than one: the degrade empties the
 /// `ext=2` groups and takes the flash's second source away (NBA.md §3.7), so
 /// each fixture's degraded form is a payload of its own.
 pub(crate) fn basketball_games_without_summary() -> Vec<(String, BasketballGame)> {
-    basketball_fixture_names()
+    fixture_names("basketball")
         .into_iter()
         .filter_map(|name| {
             let (extract, _) = basketball_parts(&name, false);
@@ -276,7 +273,7 @@ pub(crate) fn hockey_games() -> Vec<(String, HockeyGame)> {
 const EXT1_SUFFIX: &str = ".ext1";
 const EXT2_SUFFIX: &str = ".ext2";
 
-/// The level an NBA golden's name says it was encoded at.
+/// The level a basketball golden's name says it was encoded at.
 fn basketball_level(name: &str) -> u8 {
     if name.ends_with(EXT2_SUFFIX) {
         2
@@ -301,10 +298,11 @@ pub(crate) fn encoded_corpus() -> Vec<Encoded> {
     for (name, game) in mlb_games() {
         push("mlb", name, crate::mlb::wire::encode_game(&game));
     }
-    // The NBA defines the extension levels: every fixture pins the frozen v2
-    // bytes and its `ext=2` form, a pregame its `ext=1` form too (the only
-    // state with an `ext=1` block), and a live fixture the `ext=2` form the
-    // handler degrades to without its summary.
+    // Basketball defines the extension levels: every fixture of every league
+    // pins the v2 bytes (frozen for the NBA's gift fleet) and its `ext=2`
+    // form, a pregame its `ext=1` form too (the only state with an `ext=1`
+    // block), and a live fixture the `ext=2` form the handler degrades to
+    // without its summary.
     for (name, game) in basketball_games() {
         if matches!(game, BasketballGame::Pregame(_)) {
             push(
@@ -655,17 +653,17 @@ mod tests {
         }
     }
 
-    /// The NBA's DTO is copied from the extractor's combined view, and
+    /// Basketball's DTO is copied from the extractor's combined view, and
     /// `basketball/wire.rs` turns it back into one. The two must compose to the
     /// identity at every extension level, or the JSON and the struct
-    /// representation of one game could disagree: every NBA fixture, with
-    /// and without its summary, encodes the same through the DTO as straight
-    /// from the crate's view.
+    /// representation of one game could disagree: every basketball fixture,
+    /// with and without its summary, encodes the same through the DTO as
+    /// straight from the crate's view.
     #[test]
     fn basketball_dto_round_trips_the_combined_view() {
         use scoreboard_wire as wire;
 
-        for name in &basketball_fixture_names() {
+        for name in &fixture_names("basketball") {
             for with_summary in [true, false] {
                 let (extract, summary) = basketball_parts(name, with_summary);
                 let view = extract.as_game(summary.as_ref());
@@ -697,7 +695,7 @@ mod tests {
                 .as_str()
                 .map(str::to_owned)
         };
-        for name in basketball_fixture_names() {
+        for name in fixture_names("basketball") {
             let dir = testdata().join("basketball");
             let Ok(summary) =
                 std::fs::read_to_string(dir.join(format!("{name}{SUMMARY_STEM}.json")))

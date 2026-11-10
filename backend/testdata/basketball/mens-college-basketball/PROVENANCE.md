@@ -14,6 +14,13 @@ Pregames have no summary. Live pairs agree on status name, period,
 `displayClock` and both scores within 120 s; finals agree on status name and
 both scores (a final summary's header carries no clock).
 
+The goldens under `backend/testdata/wire/basketball/mens-college-basketball/`
+follow the NBA's naming: `<name>.bin` the v2 bytes, `<name>.ext1.bin` a
+pregame's team lines (the rank line), `<name>.ext2.bin` the §3 blocks, and
+`<name>.no_summary.ext2.bin` the payload a live fixture's handler serves when
+the summary fetch fails. Nothing in them is frozen: no deployed decoder has
+polled the college route.
+
 ## Sources
 
 1. The home-lab collector (`tools/espn`, the NUC's Postgres), target `ncaab`

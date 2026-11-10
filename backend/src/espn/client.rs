@@ -16,24 +16,28 @@ const LOGO_CACHE_CAPACITY: usize = 64;
 /// of Picos collapses into (at most) one upstream fetch per TTL window.
 const JSON_CACHE_TTL: Duration = Duration::from_secs(5);
 
-/// Distinct JSON URLs cached at once: one per pollable league (nine), a
+/// Distinct JSON URLs cached at once: one per pollable league (ten), a
 /// summary URL per live soccer game (commentary), a summary URL per live or
-/// final NHL game a device shows — up to 16 a night (NHL.md §5) — and one per
-/// live NBA game — up to 15 a night (NBA.md §5) — with headroom for the two
-/// leagues' busiest nights coinciding. LRU rather than a plain map so
-/// parameterized URLs can't grow unbounded.
+/// final NHL game a device shows — up to 16 a night (NHL.md §5) — one per
+/// live NBA game — up to 15 a night (NBA.md §5) — and one per live college
+/// basketball game a device polls (NCAAB.md §5). ESPN's default college slate
+/// runs to 26 games a day, spread from noon to late evening, so at most half
+/// are live at once (the B0 captures peak at 5 of 5 and 4 of 16): 10 + 16 +
+/// 15 + 13 = 54 when every league's busiest night coincides, before live
+/// soccer — past the 48 this held for nine leagues, hence 64. LRU rather than
+/// a plain map so parameterized URLs can't grow unbounded.
 ///
 /// Memory: an expired entry is replaced, never purged, so the resident worst
 /// case is every slot holding the largest body the backend fetches — an NHL
-/// summary, ~630 KB after a double-overtime final (NHL.md §2): 48 × 630 KB ≈
-/// 30 MB. An NBA summary is smaller, 110 KB at the tip to ~513 KB at the end
-/// of a long game (NBA.md §2), and a live-only fetch means a final's body is
-/// never resident: a full NBA slate adds ≈ 15 × 0.5 MB ≈ 8 MB inside that
-/// ceiling. The extractors stream each body through a 64 KiB scratch and
-/// build no document tree, so the bodies are the whole cost: filling every
-/// slot with the NHL summary took a local release build from 5 to 35 MB
-/// private, against the Fly machine's 256 MB (`fly.toml`).
-const JSON_CACHE_CAPACITY: usize = 48;
+/// summary, ~630 KB after a double-overtime final (NHL.md §2): 64 × 630 KB ≈
+/// 40 MB. The basketball summaries are smaller — the NBA's 110 KB at the tip
+/// to ~513 KB at the end of a long game (NBA.md §2), college's 121–443 KB live
+/// (NCAAB.md §2) — and a live-only fetch means a final's body is never
+/// resident. The extractors stream each body through a 64 KiB scratch and
+/// build no document tree, so the bodies are the whole cost: filling 48 slots
+/// with the NHL summary took a local release build from 5 to 35 MB private,
+/// so 64 is ≈ 45 MB against the Fly machine's 256 MB (`fly.toml`).
+const JSON_CACHE_CAPACITY: usize = 64;
 
 /// HTTP client for ESPN with in-memory logo and JSON caches.
 #[derive(Debug, Clone)]

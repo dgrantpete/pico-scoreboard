@@ -1,7 +1,9 @@
-//! `scoreboard-espn::basketball` extracts → the NBA domain DTOs, plus the streaming
-//! entry points the handlers call. The NBA is two documents like hockey: the
-//! league scoreboard (list + detail) and, for live games only, the per-event
-//! summary (NBA.md D3). The extractor combines the two itself
+//! `scoreboard-espn::basketball` extracts → the basketball domain DTOs, plus
+//! the streaming entry points the handlers call, for every basketball league
+//! (the league's extraction rules come from `BasketballLeague::rules`, its
+//! quirk label from its ESPN slug). Basketball is two documents like hockey:
+//! the league scoreboard (list + detail) and, for live games only, the
+//! per-event summary (NBA.md D3). The extractor combines the two itself
 //! (`Extract::as_game`) — the one-source flash, which summary groups a
 //! payload carries — so the DTO is built from that combined view rather than
 //! from the two extracts, and cannot disagree with the wire. The scoreboard
@@ -10,7 +12,7 @@
 
 use scoreboard_espn::StreamMatcher;
 use scoreboard_espn::basketball::{
-    self, DetailOutcome, Extract, Kind, Rules, Summary, SummaryExtractor, TransformError,
+    self, DetailOutcome, Extract, Kind, Summary, SummaryExtractor, TransformError,
 };
 use scoreboard_wire as wire;
 
@@ -19,6 +21,7 @@ use crate::espn::adapt::{
     SCRATCH_LEN, TracingQuirks, TransformKind, absent_verdict, domain_colors, domain_record,
     domain_side, domain_state, events_malformed, stream_error, transform_error, warn_failed_events,
 };
+use crate::espn::league::{BasketballLeague, EspnLeague};
 use crate::shared::game::{GameListEntry, LastPlay, LivePhase};
 use crate::shared::team::TeamState;
 
@@ -29,9 +32,13 @@ use super::types::{
     BasketballTeamLedger,
 };
 
-/// Games list: every clean event with a competition — NBA's list state is
-/// total, no exclusions.
-pub(crate) fn list_entries(bytes: &[u8], url: &str) -> Result<Vec<GameListEntry>, AppError> {
+/// Games list: every clean event with a competition — basketball's list
+/// state is total, no exclusions, in every league.
+pub(crate) fn list_entries(
+    bytes: &[u8],
+    league: BasketballLeague,
+    url: &str,
+) -> Result<Vec<GameListEntry>, AppError> {
     let mut entries: Vec<GameListEntry> = Vec::new();
     let mut on_game = |id: &str, state: wire::GameState| {
         entries.push(GameListEntry {
@@ -39,7 +46,7 @@ pub(crate) fn list_entries(bytes: &[u8], url: &str) -> Result<Vec<GameListEntry>
             state: domain_state(state),
         });
     };
-    let mut quirks = TracingQuirks::new("nba");
+    let mut quirks = TracingQuirks::new(league.espn_league());
     let extractor = basketball::Extractor::games_list(&mut on_game, &mut quirks);
     let mut scratch = vec![0u8; SCRATCH_LEN];
     let mut matcher = StreamMatcher::new(basketball::PATHS, extractor, &mut scratch)
@@ -58,9 +65,14 @@ pub(crate) fn list_entries(bytes: &[u8], url: &str) -> Result<Vec<GameListEntry>
 /// Detail front half: extract the target event or map the outcome to today's
 /// status codes. The handler then fetches the summary when [`wants_summary`]
 /// says so and builds the DTO.
-pub(crate) fn detail_extract(bytes: &[u8], game_id: &str, url: &str) -> Result<Extract, AppError> {
-    let mut quirks = TracingQuirks::for_event("nba", game_id);
-    let extractor = basketball::Extractor::game_detail(game_id, Rules::NBA, &mut quirks);
+pub(crate) fn detail_extract(
+    bytes: &[u8],
+    game_id: &str,
+    league: BasketballLeague,
+    url: &str,
+) -> Result<Extract, AppError> {
+    let mut quirks = TracingQuirks::for_event(league.espn_league(), game_id);
+    let extractor = basketball::Extractor::game_detail(game_id, league.rules(), &mut quirks);
     let mut scratch = vec![0u8; SCRATCH_LEN];
     let mut matcher = StreamMatcher::new(basketball::PATHS, extractor, &mut scratch)
         .map_err(|e| stream_error(url, e))?;
@@ -92,10 +104,10 @@ pub(crate) fn detail_extract(bytes: &[u8], game_id: &str, url: &str) -> Result<E
     }
 }
 
-/// D3: a live game reads the summary — the ledger, the run, the makes, the
-/// newest score and the flash's second source. A final's leaders, records and
-/// series and a pregame's second line are on the scoreboard, so neither
-/// fetches the 110–513 KB body for nothing.
+/// D3: a live game reads the summary — the ledger where the league has one,
+/// the run, the makes, the newest score and the flash's second source. A
+/// final's leaders, records and series and a pregame's second line are on the
+/// scoreboard, so neither fetches the 110–513 KB body for nothing.
 pub(crate) fn wants_summary(extract: &Extract) -> bool {
     matches!(extract.kind, Kind::Live(_))
 }
@@ -104,16 +116,24 @@ pub(crate) fn wants_summary(extract: &Extract) -> bool {
 /// `None` with a warn, as a failed fetch does, and the game is served from the
 /// scoreboard alone. Only the stream itself can fail; a malformed region
 /// inside a readable summary already degrades field by field in the crate.
-pub(crate) fn summary(bytes: &[u8], extract: &Extract, url: &str) -> Option<Summary> {
+/// The league's rules ride the extract's summary context; `league` names the
+/// quirks and the warnings.
+pub(crate) fn summary(
+    bytes: &[u8],
+    extract: &Extract,
+    league: BasketballLeague,
+    url: &str,
+) -> Option<Summary> {
+    let label = league.espn_league();
     let mut scratch = vec![0u8; SCRATCH_LEN];
     let mut extractor = match SummaryExtractor::new(
         extract.summary_context(),
-        TracingQuirks::for_event("nba", extract.game_id.as_str()),
+        TracingQuirks::for_event(label, extract.game_id.as_str()),
         &mut scratch,
     ) {
         Ok(extractor) => extractor,
         Err(e) => {
-            tracing::warn!(url = %url, error = ?e, "nba summary extractor failed to construct; serving the scoreboard alone");
+            tracing::warn!(league = label, url = %url, error = ?e, "basketball summary extractor failed to construct; serving the scoreboard alone");
             return None;
         }
     };
@@ -121,7 +141,7 @@ pub(crate) fn summary(bytes: &[u8], extract: &Extract, url: &str) -> Option<Summ
     match report {
         Ok(report) => Some(report.summary),
         Err(e) => {
-            tracing::warn!(url = %url, error = ?e, "nba summary body unreadable; serving the scoreboard alone");
+            tracing::warn!(league = label, url = %url, error = ?e, "basketball summary body unreadable; serving the scoreboard alone");
             None
         }
     }
@@ -256,12 +276,14 @@ fn leader(leader: wire::basketball::Leader<'_>) -> BasketballLeader {
 mod tests {
     use super::*;
 
+    use BasketballLeague::Nba;
+
     const CLEAN_EVENT: &str = r#"{"id":"401","date":"2026-04-11T02:30Z","competitions":[]}"#;
 
     #[test]
     fn absent_id_with_clean_parse_is_not_found() {
         let body = format!(r#"{{"events":[{CLEAN_EVENT}]}}"#);
-        let err = detail_extract(body.as_bytes(), "999", "test://sb")
+        let err = detail_extract(body.as_bytes(), "999", Nba, "test://sb")
             .err()
             .unwrap();
         assert!(matches!(err, AppError::GameNotFound(id) if id == "999"));
@@ -270,7 +292,7 @@ mod tests {
     #[test]
     fn absent_id_with_glitched_parse_is_upstream_error_not_404() {
         let body = format!(r#"{{"events":[{CLEAN_EVENT},{{}}]}}"#);
-        let err = detail_extract(body.as_bytes(), "999", "test://sb")
+        let err = detail_extract(body.as_bytes(), "999", Nba, "test://sb")
             .err()
             .unwrap();
         assert!(matches!(err, AppError::EspnDeserialize { .. }));
@@ -279,7 +301,7 @@ mod tests {
     #[test]
     fn found_id_without_competition_is_404_even_when_glitched() {
         let body = format!(r#"{{"events":[{CLEAN_EVENT},{{}}]}}"#);
-        let err = detail_extract(body.as_bytes(), "401", "test://sb")
+        let err = detail_extract(body.as_bytes(), "401", Nba, "test://sb")
             .err()
             .unwrap();
         assert!(matches!(err, AppError::GameNotFound(id) if id == "401"));
@@ -288,9 +310,9 @@ mod tests {
     #[test]
     fn events_not_an_array_is_upstream_error() {
         let body = br#"{"events":"glitch"}"#;
-        let err = detail_extract(body, "401", "test://sb").err().unwrap();
+        let err = detail_extract(body, "401", Nba, "test://sb").err().unwrap();
         assert!(matches!(err, AppError::EspnDeserialize { .. }));
-        let err = list_entries(body, "test://sb").err().unwrap();
+        let err = list_entries(body, Nba, "test://sb").err().unwrap();
         assert!(matches!(err, AppError::EspnDeserialize { .. }));
     }
 
@@ -302,22 +324,22 @@ mod tests {
         );
         let event = std::fs::read_to_string(path).expect("corpus fixture");
         let body = format!(r#"{{"events":[{event}]}}"#);
-        detail_extract(body.as_bytes(), id, "test://sb").expect("corpus event")
+        detail_extract(body.as_bytes(), id, Nba, "test://sb").expect("corpus event")
     }
 
     #[test]
     fn an_unreadable_summary_degrades_to_the_scoreboard_alone() {
         let extract = corpus_extract("in_progress", "401909940");
         assert!(wants_summary(&extract));
-        assert!(summary(br#"not json"#, &extract, "test://summary").is_none());
+        assert!(summary(br#"not json"#, &extract, Nba, "test://summary").is_none());
         // Truncated mid-document: the stream never closes.
-        assert!(summary(br#"{"plays":[{"id":"1""#, &extract, "test://summary").is_none());
+        assert!(summary(br#"{"plays":[{"id":"1""#, &extract, Nba, "test://summary").is_none());
     }
 
     #[test]
     fn a_readable_summary_with_no_facts_still_serves() {
         let extract = corpus_extract("in_progress", "401909940");
-        let summary = summary(br#"{"plays":"glitch"}"#, &extract, "test://summary")
+        let summary = summary(br#"{"plays":"glitch"}"#, &extract, Nba, "test://summary")
             .expect("a readable body is a summary, however thin");
         let BasketballGame::Live(game) = game_from_extract(&extract, Some(&summary)) else {
             panic!("in_progress is live");
