@@ -3,7 +3,9 @@
 Status: **decided** (owner, 2026-11-08/09: the decisions page "NCAA Basketball
 Decisions", answers A1–A11, and the mockup gallery "NCAA Panel Mockups"
 reviewed live on the bench panel). The engineering choices marked
-**proposed** wait for the owner's veto. **Not started**: phases B0–B9 follow.
+**proposed** wait for the owner's veto. **Built 2026-11-10:** B0–B8 landed
+(caafcca → 0bc240e) and the CI-mirror gates are green on a clean worktree;
+B9's docs are in. The release follows the bench vouch.
 The owner authorised the release to production (backend, then the stable
 firmware channel) once every phase is verified (2026-11-09: "make sure we
 vouch stuff first").
@@ -207,7 +209,10 @@ Navy primaries draw faint marks on the wood (C4).
 ### 3.11 The arena court (both leagues)
 
 Geometry is the reviewed prototype, `data/ncaab-design/render-ncaa/src/arena.rs`
-view 4 (the "chosen court"), whose numbers are normative:
+view 4 (the "chosen court"), whose numbers are normative. Production
+(`court.rs`, its tables from `tests/court_compile.rs`) matched it byte for
+byte in B7: both static courts with hoops under four colour pairs, 243,122
+marks, the caption floor and the prototype harness's whole frames.
 
 - **Camera:** perspective, 200 ft back from centre court on the near side,
   39° above the floor, fitted to the B5 court rect (x 2, y 26, 124 × 37): near
@@ -229,8 +234,12 @@ view 4 (the "chosen court"), whose numbers are normative:
     edge neighbours, one beside and one above or below) is dropped.
   - The three-point line: corner rows and the arc as row runs joining the
     previous row (today's staircase), whole through every row.
-  - **The boundary draws last** — sidelines and baselines unbroken; lane
-    colours end against them.
+  - **The boundary draws last** among the floor's layers — sidelines and
+    baselines unbroken after the floor, the marks and the caption; lane
+    colours end against them. The hoops then stand in front of each
+    baseline's far end: after them, every boundary pixel that changed is the
+    hoop's own or knocked out beside it, and only in the far half (rows
+    26–37). `tests/court.rs` asserts both.
 - **Colours:** floor `WOOD` plain (no planks, no fog); lines `LINES`; keys in
   the attacking team's colour at 2/3; marks as NBA.md D5.
 - **Hoops:** stanchion (base 6 × 2.5 ft behind the baseline at half `PAD`,
@@ -274,7 +283,13 @@ To measure in the phase that changes them; record in BUDGET.md.
 - Slate (160 games): a November Saturday ≈ CFB 70 + NCAAB ≤ 26 + NBA ≈ 10 +
   NHL ≈ 14 + soccer (off by default) — fits; March's tournament days fit.
 - Backend: one summary per live college game a device is polling, 121–438 KB
-  per 5 s cache window; `JSON_CACHE_CAPACITY` (48) holds; re-derive its note.
+  per 5 s cache window. *B5: 48 did not hold (10 + 16 + 15 + 13 = 54 on the
+  busiest coinciding nights); `JSON_CACHE_CAPACITY` is 64, ≈ 45 MB worst case
+  of 256 (BUDGET.md).*
+- *Measured 2026-11-10 (BUDGET.md): the image grew 6,376 B against stable
+  915f594 (75.3 % of the partition, 380 KB headroom); the arena court is
+  smaller than the flat one in `frame::render` (−2,918 B) plus 601 table
+  runs; `.bss` +640 B (the poller arena).*
 
 ## 6. Phases (each ends green: `cargo test --workspace`, clippy, thumbv8m builds; commits by explicit pathspec)
 
@@ -288,6 +303,11 @@ summaries (from 2026-11-09 21:13 UTC) and historical March 2026 captures:
 `technical`, `team_timeout`, `tv_timeout`, `placeholder_play`. PROVENANCE.md
 as the NBA's. Re-check §2's counts and the frame fit; revise §2/§3 where
 the data disagrees.
+*As built (93a3e08): 13 events and 11 summaries. `pregame_unranked_colourless`
+is `pregame_colourless`. There is no live `overtime` and no `technical`
+fixture (BACKLOG 128). `final_ot` is a historical SEC tournament game. The
+flash's 521 and 578 are hand-posted in both documents by
+`every_college_flash_type_flashes_from_either_document`.*
 
 ### B1 Rename (byte-identical)
 `Sport::Nba` → `Sport::Basketball`; `nba` modules → `basketball` in wire,

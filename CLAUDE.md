@@ -28,8 +28,10 @@ See `.claude/ARCHITECTURE.md` for full component details.
   pinned to exact pixels by their tests. The four hand-drawn sprites are 8-bit
   PNGs in `crates/scoreboard-render/art/`, the source of truth, compiled into
   the committed `src/generated/art.rs` by the `tests/art_compile.rs` test
-  (re-generate with `SCOREBOARD_BLESS_ART=1`; it fails when stale). No
-  Aseprite, no Python
+  (re-generate with `SCOREBOARD_BLESS_ART=1`; it fails when stale). The
+  court's static pixels are its code run on the host by
+  `tests/court_compile.rs` into the committed `src/generated/court.rs`
+  (`SCOREBOARD_BLESS_COURT=1`, same staleness check). No Aseprite, no Python
 - Fonts: `firmware/assets/fonts/` is the source of truth; `tools/compile_fonts.py`
   emits the committed Rust glyph tables and the MicroPython modules in
   `firmware/src/scoreboard/fonts/` (everything except `__init__.py`, gitignored)

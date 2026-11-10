@@ -61,6 +61,16 @@ primitives rule. The last column keeps what was turned down.
 | D13 | Clock | **Small font** (`spleen_5x8`, 30 px for "11:34") under the period chip — the price of the 37-row court, accepted by the owner; drawn verbatim, never extrapolated; **proposed rule:** warning colour only in the 4th quarter and overtime, sub-minute, and never for "0.0" (the frozen-clock quirk, §2) | The big clock (B4's court) |
 | D14 | Art | **Procedural Rust court**, numbers beside the projection math that reads them (the owner's one-source-of-truth direction; the first BACKLOG 116 step). No Aseprite file | An Aseprite court compiled to bytes, as the rink was |
 
+**The court since 2026-11-10** is `firmware-rs/NCAAB.md` D5's arena court
+(§3.11 there is normative): the same rectangle seen through a mild
+perspective camera, the centre circle back as an oval, each key's
+free-throw circle, pixel-art hoops, the lines per league
+(`BasketballRules::court`). Its static pixels are still code, run on the
+host into committed tables (NCAAB.md E1). D1's top-down drawing, D5's "no
+centre circle" and the flat-court parts of §6.5 below are history; D5's
+marks (2 × 2 at 96/256, makes only, each team attacking under its crest)
+and every other decision stand.
+
 ## 2. Data facts (evidence-backed)
 
 Design time (2026-11-07/08, `data/nba-design/ESPN-NBA-FINDINGS.md`, local):
@@ -711,6 +721,10 @@ flash window in the prepared view; bounds tests; the size pin and BUDGET.md
 (§5).
 
 ### 6.5 `scoreboard-render` — done 2026-11-08 (6.5a widgets and court, 6.5b screens)
+*The flat court described here was replaced on 2026-11-10 by NCAAB.md
+§3.11's arena court (`court::Camera`, `CourtRaster`, `draw_hoops`; the
+`Court` rectangle and `B5` geometry below are unchanged). `ESPN_ORIGIN` is
+`ORIGIN`, the wire's frame for every league.*
 As built: `NBA_FINAL`'s slots are `final_label`, `leader_label_x` (53),
 `leader_rows` (`rect(73, y, 54, 8)` at y 14/24/34), `linescore_rows`
 (`rect(53, y, 74, 8)`, the fallback), `rule_y` 43, `series`, `records`

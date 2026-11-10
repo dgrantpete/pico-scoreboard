@@ -1314,3 +1314,69 @@ reviewed change.
     rebuilt clock can be measured against `onIce`'s strength changes before
     anyone designs it. Show it only where one penalty explains the strength,
     and only if that holds on nearly every power play.
+124. **College basketball's ledger, derived from plays (NCAAB.md D3,
+    2026-11-10).** ESPN publishes zeros for college team fouls, bonus and
+    timeouts, so the college band has no tracks (`ledger: false`). A derived
+    ledger would count each half's foul plays against the NCAA men's bonus
+    (one-and-one at 7, double at 10) and the team timeouts (578, 579)
+    against the game's allowance, overtime adding one. It encodes the rule
+    book on the backend, and one missed play row miscounts silently for the
+    rest of the half, with nothing to check it against: ESPN's own fields
+    are the zeros. Revisit if ESPN ever fills them (the sweep would show
+    non-zero headers) or if friends ask. The band already keys its layout
+    on the league's rules, so turning a ledger on is a rules flip plus the
+    extractor lane.
+125. **Navy primaries mark faintly on the wood (NCAAB.md C4).** Virginia
+    (#232D4B) and Cal (#003262) pass the colour rule, which lifts only
+    hue-less darks, so their 2 × 2 makes at 96/256 over the wood (30, 20,
+    10), and their key at two thirds, barely read on the panel. Lift by
+    contrast against the wood rather than by hue, and pin every corpus
+    team's mark contrast in one test, across both basketball leagues and
+    hockey's ice.
+126. **The rink under the arena camera (NCAAB.md C5).** The court is seen
+    through `court::Camera` with pixel-art hoops; the rink is still flat.
+    For one look across the two floor sports, fit the camera to the rink's
+    rectangle, draw the nets as the hoops are drawn, and reuse
+    `tests/court_compile.rs`'s region, trace and knockout tooling, so the
+    rink's static pixels become tables in the same way. Goal marks follow
+    the camera, as makes do.
+127. **The diag build drops off the network under frame pushes (NCAAB.md
+    C6).** On 2026-11-09 the bench unit, running the diag build, stopped
+    answering partway through a run of `diag` frame uploads, as it had
+    once before. A probe sample had core 0 idle in the executor's WFE and
+    core 1 still rendering, which points at the radio path, not the CPU.
+    That is the field units' "goes dark until power-cycled" signature.
+    Reproduce with a scripted push loop, catch the stall over RTT with
+    cyw43's state, and see whether the release build can reach the same
+    state through its ordinary polling.
+128. **College basketball corpus — what B0 did not have (NCAAB.md §6).** A
+    live overtime body (period 3), a technical foul (521) as the flash, a
+    delayed game, a live neutral-site tournament body, and a type-91
+    placeholder as a summary's newest scoring play. Pull them from the
+    collector's college summaries (kept since 2026-11-09 21:13 UTC) by
+    `backend/testdata/basketball/mens-college-basketball/PROVENANCE.md`'s
+    method, and re-check NCAAB.md §2 against them.
+129. **NCAA women's basketball, a third league.** The collector has kept
+    `ncaaw` scoreboards since 2026-11-09 21:34 UTC, without summaries. The
+    device's rules already fit it: `Periods::QUARTERS`, `CourtLines::NCAA`,
+    `ledger: false` (the reason `BasketballRules` is a product type). It
+    needs: `follow_summaries` on, a corpus, the frame shift fitted on its
+    plays, the flash table pinned from its play types, the extractor's
+    regulation at 4, `MAX_SOURCES` 10 → 11, and a menu label, which is the
+    owner's call. `LEAGUE_KEY` (40) already holds
+    "basketball/womens-college-basketball".
+130. **The basketball flash's summary fallback can be old news (found in
+    NCAAB.md B7, 2026-11-10).** §3.7 flashes the scoreboard's `lastPlay` when
+    its type is eligible, else the summary's newest eligible play, and the
+    model flashes any play id it did not flash last, so rotating onto a live
+    game flashes that play on its first look. When the newest eligible play
+    is old, the first look hides the court behind stale news. In the corpus
+    the NBA's `in_progress` flashes a Q1 4:52 "Knicks Full timeout" 18 wall
+    minutes after it was posted (now Q2 11:41), and college's `in_progress`
+    a "Grambling Timeout" from 15 minutes earlier. College's table is
+    sparser (no TV timeouts), so it goes stale more often. Every summary
+    play carries `wallclock`, so the extractor could drop a summary-sourced
+    play older than a window (the flash's own length, or a few minutes)
+    against the newest play's `wallclock`. Check hockey's and football's
+    flash sources for the same shape first, since the rule should be one
+    rule. The decision is the owner's.

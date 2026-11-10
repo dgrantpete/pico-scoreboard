@@ -333,6 +333,35 @@ the frame probe should take them at the next bench session.
 | Spinner toast | 9.96 | 8.26 |
 | Football live, still a blit — the run-to-run floor | 7.68 | 7.36 |
 
+### What NCAA basketball cost in flash (NCAAB.md §5)
+
+Measured 2026-11-10 as a clean before/after: 915f594 (stable
+2026.11.09-915f594) against 0bc240e (B0–B8 landed, the arena court and the
+college golden frames), both built boot-integrated with
+`SCOREBOARD_FW_VERSION=measure` from detached worktrees.
+
+| Section | Before | After | Δ |
+|---|---:|---:|---:|
+| `.text` | 785,504 | 788,816 | +3,312 |
+| `.rodata` | 378,020 | 380,836 | +2,816 |
+| `.data` | 13,892 | 14,140 | +248 |
+| `.bss` | 295,848 | 296,488 | +640 |
+| Raw image | 1,177,724 | 1,184,100 | **+6,376** |
+
+The arena court drew smaller than the flat one it replaced:
+`frame::render`, which inlines the screens, fell 2,918 B, because the
+lines, keys, oval and hoops are runs filled by one loop rather than
+projected and staircased per frame. The marks' `Camera::origin` is 456 B,
+and the tables are 601 three-byte runs (the floor, both hoops and their
+knockout, and each rule book's lines, keys and caption floor), ≈ 1.8 KB of
+the `.rodata` growth. The rest is elsewhere: the config's `basketball`
+list through serde's visitors (+2.3 KB across `DeviceConfig` and
+`ConfigPatch`), the app's `main` (+1.7 KB, the tenth source and the longer
+key inlined), the model's rules, periods table and OT column, and the
+rebuilt `index.html.gz` (+123 B). `.bss` is the poller arena's +640 B (the 40-byte key and
+the tenth source, as measured above). The image is 75.3 % of the 1.5 MiB
+active partition; **380 KB of headroom** remain.
+
 ### Correction to SPEC §4 — the handoff needs three buffers, not two
 
 SPEC §4 specifies `static SNAPSHOTS: [ScoreboardSnapshot; 2]`: core 0 fills the
@@ -1173,6 +1202,21 @@ to 16 a night at 85–630 KB each.
   629 KB summary for 48 events went from **5.4 to 35.4 MB private**, with a
   **52 MB peak working set** under 48 concurrent refetches. Against 256 MB it
   fits with room to spare.
+
+### 48 → 64 for college basketball (2026-11-10)
+
+NCAAB.md §5 expected 48 to hold; B5 found it did not (f7ca267). The tenth
+league's scoreboard and a summary per live college game a device polls join
+the NHL's 16 and the NBA's 15. ESPN's default college slate runs to 26 games
+a day spread from noon to late evening, so at most about half are live at
+once (the B0 captures peak at 5 of 5 and 4 of 16): 10 + 16 + 15 + 13 = 54
+when every league's busiest night coincides, before live soccer's
+commentary. `JSON_CACHE_CAPACITY` is 64.
+
+- **Resident worst case: ≈ 40 MB** of bodies (64 × 630 KB, the NHL's
+  double-overtime summary still the largest; college summaries are
+  121–443 KB live), **≈ 45 MB private** scaled from the 48-slot measurement
+  above, against the machine's 256 MB.
 
 ## Caveats to close before the numbers can be trusted end to end
 

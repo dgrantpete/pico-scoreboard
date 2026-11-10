@@ -1245,3 +1245,19 @@ NFL, NCAA FOOTBALL — the owner's call for the units given to friends. There is
 no migration: a stored document's `nba` key is skipped like any unknown key and
 basketball takes its default, which is the configuration those units already
 ran. The league menu has ten rows and the mask ten bits.
+
+## The court is the arena court, and college basketball is Rust's alone, 2026-11-10
+
+**Was:** the NBA's live court was the flat B5 drawing (NBA.md D1, D14): a
+top-down floor stretched 1.8× across, no centre circle, a three-row board
+and a one-pixel rim. The gift fleet's MicroPython NBA screen never had a
+court; it draws the frozen v2 payload its own way.
+
+**Is:** NCAAB.md D5's arena court for every basketball league: a perspective
+camera fitted to the same rectangle, the keys and the centre oval drawn as
+regions, pixel-art hoops with a one-pixel knockout, the lines by league.
+Thirty-four NBA live frames were re-blessed, changing only in the court's
+rows. NCAA men's basketball (13 golden cases, 52 frames) has no MicroPython
+counterpart: no frozen decoder has ever polled `/basketball/mens-college-basketball`,
+so none of its bytes are frozen. The gift fleet's `/basketball/nba` v2
+bytes are byte-identical.
