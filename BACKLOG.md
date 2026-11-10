@@ -1352,9 +1352,10 @@ reviewed change.
     Not a third sample: on 2026-11-10 (the NCAAB vouch) the bench went
     black for 9 minutes at ~03:52 UTC and again for ~20 minutes after an
     OTA reboot at ~04:10, both times with a `probe-rs run` session attached
-    or just killed. Each time the timer read 0 (the chip was held at reset
-    in the bootloader), and the next probe access released it to boot
-    normally. The debugger held the core, not the firmware. Never leave
+    or just killed. Each time, the next probe access released it to boot
+    normally: 31 s of uptime the first time; the second time the timer
+    read 0, held at reset in the bootloader. The debugger held the core,
+    not the firmware. Never leave
     `probe-rs run` attached across a reboot, or kill it with `timeout`.
 128. **College basketball corpus — what B0 did not have (NCAAB.md §6).** A
     live overtime body (period 3), a technical foul (521) as the flash, a
