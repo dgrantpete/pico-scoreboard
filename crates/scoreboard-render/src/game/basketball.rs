@@ -204,7 +204,7 @@ fn court(
 ) {
     let court = table.court;
     let (away, home) = (view.away_color, view.home_color);
-    court.draw(canvas, away, home);
+    court.draw(canvas, view.court, away, home);
     for mark in &view.marks {
         let color = match mark.side {
             Side::Away => away,

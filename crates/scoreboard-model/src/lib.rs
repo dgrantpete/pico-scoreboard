@@ -22,10 +22,12 @@
 #[cfg(test)]
 extern crate std;
 
+pub mod basketball;
 pub mod channel;
 pub mod color;
 pub mod feed;
 pub mod led;
+pub mod periods;
 pub mod poll;
 pub mod prefetch;
 pub mod slate;

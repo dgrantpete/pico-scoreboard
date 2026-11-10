@@ -23,6 +23,7 @@
 //! rink's feet→pixel map, the setup QR, menu row strips, and every RGB565
 //! conversion.
 
+use crate::basketball::CourtLines;
 use crate::color::{Rgb888, UiColors};
 use crate::text::Text;
 
@@ -585,14 +586,17 @@ pub struct BasketballLiveView {
     pub home_score: u16,
     pub away_color: Rgb888,
     pub home_color: Rgb888,
-    /// "Q3" / "OT" / "2OT" — during a break, the period that just ended.
+    /// The league's lines, from its rules (NCAAB.md D2).
+    pub court: CourtLines,
+    /// "Q3" / "1ST" / "OT" / "2OT" — during a break, the period that just
+    /// ended.
     pub phase_text: Text<SHORT>,
-    /// "4:37" / "53.0", or "HALF" / "END" during a break.
+    /// "4:37" / "53.0" / "0:39", or "HALF" / "END" during a break.
     pub clock_text: Text<CLOCK>,
     /// Break state: draw the clock in the accent color.
     pub clock_accent: bool,
-    /// Sub-minute in the fourth quarter or overtime, and not the frozen
-    /// "0.0" (§3.2): draw the clock in the warning color.
+    /// Under a minute in regulation's last period or overtime, and not an
+    /// all-zero clock (NCAAB.md D7): draw the clock in the warning color.
     pub clock_low: bool,
     /// Team fouls, bonus and timeouts (§3.3). `None` draws no dots and no
     /// blocks: a first look without a summary, or a payload below `ext=2`.
@@ -632,6 +636,7 @@ impl BasketballLiveView {
             home_score: 0,
             away_color: Rgb888::WHITE,
             home_color: Rgb888::WHITE,
+            court: CourtLines::NBA,
             phase_text: Text::new(),
             clock_text: Text::new(),
             clock_accent: false,

@@ -5,8 +5,10 @@
 
 use scoreboard_wire::{FinalTeam, LivePhase, Side, basketball, football, hockey, mlb, soccer};
 
+use crate::basketball::BasketballRules;
 use crate::color::Rgb888;
 use crate::feed::{GameDetail, LeagueId};
+use crate::periods::Periods;
 use crate::snapshot::{
     Banner, BannerKind, Bases, CLOCK, CourtMark, FieldSituation, GoalMark, LINESCORE, LeaderLine,
     Millis, Mode, Record, SHOOTOUT_SLOTS, SHORT, ShootoutRow, ShootoutView, ShotMark, Sport,
@@ -32,9 +34,12 @@ pub struct LocalClock {
 pub struct LinescoreFinal<'a> {
     pub sport: Sport,
     pub game_id: &'a str,
-    /// Innings or quarters played — the column count, and what decides whether
+    /// Innings or periods played — the column count, and what decides whether
     /// the banner reads "FINAL", "F/10" or "F/OT".
     pub periods: u8,
+    /// Regulation's length in the same units: the periods past it are
+    /// overtime (baseball's extra innings count their own way).
+    pub regulation: u8,
     pub away: FinalTeam<'a>,
     pub home: FinalTeam<'a>,
 }
@@ -258,7 +263,7 @@ impl Store {
             }
             GameDetail::Mlb(mlb::Game::Final(game)) => self.commit_mlb_final(game, logos, now_ms),
             GameDetail::Basketball(basketball::Game::Live(game)) => {
-                self.commit_basketball_live(game, logos, now_ms);
+                self.commit_basketball_live(game, BasketballRules::of(league), logos, now_ms);
                 if let Some(play) = game.last_play {
                     self.flash_play(play.id, play.text, now_ms);
                 }
@@ -267,7 +272,7 @@ impl Store {
                 self.commit_pregame(&PregameInput::basketball(game), logos, now_ms, clock);
             }
             GameDetail::Basketball(basketball::Game::Final(game)) => {
-                self.commit_basketball_final(game, logos, now_ms)
+                self.commit_basketball_final(game, BasketballRules::of(league), logos, now_ms)
             }
             GameDetail::Hockey(hockey::Game::Live(game)) => {
                 self.commit_hockey_live(game, logos, now_ms);
@@ -368,6 +373,7 @@ impl Store {
                 sport: Sport::Mlb,
                 game_id: game.game_id,
                 periods: game.innings_played,
+                regulation: 9,
                 away: game.away,
                 home: game.home,
             },
@@ -388,6 +394,7 @@ impl Store {
     pub fn commit_basketball_live(
         &mut self,
         game: &basketball::Live<'_>,
+        rules: BasketballRules,
         logos: Logos,
         now_ms: Millis,
     ) {
@@ -399,6 +406,7 @@ impl Store {
         view.home_score = game.home.score;
         view.away_color = Rgb888::from(game.away.colors);
         view.home_color = Rgb888::from(game.home.colors);
+        view.court = rules.court;
         set_break_clock(
             &mut view.phase_text,
             &mut view.clock_text,
@@ -406,18 +414,16 @@ impl Store {
             game.phase,
             game.period,
             game.clock,
-            BASKETBALL_HALFTIME,
+            Naming {
+                periods: rules.periods,
+                halftime: BASKETBALL_HALFTIME,
+            },
         );
-        // Crunch time where the clock can end the game — the fourth quarter
-        // and overtime — under a minute, which ESPN signals only by the
-        // colonless "39.0" shape; and not "0.0": a real 0.0 lasts a poll
-        // before END_PERIOD, while the frozen-clock quirk would paint a red
-        // 0.0 for ten minutes (§3.2).
-        let sub_minute = !game.clock.is_empty() && !game.clock.contains(':');
+        // Crunch time where the clock can end the game — the last period of
+        // regulation and overtime — under a minute (NCAAB.md D7).
         view.clock_low = game.phase == LivePhase::InProgress
-            && game.period >= 4
-            && sub_minute
-            && game.clock != FROZEN_CLOCK;
+            && game.period >= rules.periods.regulation()
+            && crunch_clock(game.clock);
 
         // The ledger hold (§3.3): a payload without a ledger — the summary not
         // fetched, or the one-poll glitch body the backend drops — keeps the
@@ -483,6 +489,7 @@ impl Store {
     pub fn commit_basketball_final(
         &mut self,
         game: &basketball::Final<'_>,
+        rules: BasketballRules,
         logos: Logos,
         now_ms: Millis,
     ) {
@@ -491,6 +498,7 @@ impl Store {
             sport: Sport::Basketball,
             game_id: game.game_id,
             periods: game.periods_played,
+            regulation: rules.periods.regulation(),
             away: game.away,
             home: game.home,
         });
@@ -688,7 +696,10 @@ impl Store {
             game.phase,
             game.period,
             game.clock,
-            FOOTBALL_HALFTIME,
+            Naming {
+                periods: Periods::QUARTERS,
+                halftime: FOOTBALL_HALFTIME,
+            },
         );
         // Crunch time only where the clock can end a half: Q2, Q4, overtime.
         // The colon-less form is NBA's sub-minute shape, kept as a belt in
@@ -733,6 +744,7 @@ impl Store {
                 sport: Sport::Football,
                 game_id: game.game_id,
                 periods: game.periods_played,
+                regulation: Periods::QUARTERS.regulation(),
                 away: game.away,
                 home: game.home,
             },
@@ -851,7 +863,7 @@ impl Store {
         view.home_won = home.score > away.score;
         view.away_color = away_color;
         view.home_color = home_color;
-        set_final_text(&mut view.final_text, game.sport, game.periods);
+        set_final_text(&mut view.final_text, game.sport, game.periods, game.regulation);
         build_linescore(
             &mut view.header_row,
             &mut view.away_row,
@@ -939,16 +951,11 @@ fn soccer_phase(half: u8) -> &'static str {
     PHASES[index as usize]
 }
 
-/// Period name for the quarter sports: Q1-Q4, then OT, 2OT, ...
-fn set_period_name(dst: &mut Text<SHORT>, period: u8) {
-    match period {
-        0..=4 => write_text!(dst, "Q{period}"),
-        5 => set_plain(dst, "OT"),
-        _ => {
-            let overtimes = period - 4;
-            write_text!(dst, "{overtimes}OT");
-        }
-    }
+/// How a sport's period chip and clock slot name its periods and breaks.
+#[derive(Debug, Clone, Copy)]
+struct Naming {
+    periods: Periods,
+    halftime: Halftime,
 }
 
 /// What a sport's clock slot says at halftime, and whether its period chip
@@ -973,9 +980,14 @@ const BASKETBALL_HALFTIME: Halftime = Halftime {
     keeps_period: true,
 };
 
-/// ESPN's frozen clock (NBA.md §2): "0.0" for minutes while the game runs,
-/// which must not wear the warning colour.
-const FROZEN_CLOCK: &str = "0.0";
+/// Under a minute in either of ESPN's clock shapes — college's "0:39" or the
+/// NBA's colonless "39.0" — and not all zeros: a real zero lasts a poll before
+/// the period ends, while ESPN's frozen clocks ("0.0", "0:00") can sit for
+/// minutes and must not wear the warning colour (NCAAB.md D7).
+pub(crate) fn crunch_clock(clock: &str) -> bool {
+    let under_a_minute = clock.starts_with("0:") || (!clock.is_empty() && !clock.contains(':'));
+    under_a_minute && clock.bytes().any(|b| b.is_ascii_digit() && b != b'0')
+}
 
 /// The clock slot shared by NBA and football: during a break the clock string
 /// is meaningless (it reads "0:00" or a reset "12:00"), so the phase is the
@@ -987,12 +999,13 @@ fn set_break_clock(
     phase: LivePhase,
     period: u8,
     clock: &str,
-    halftime: Halftime,
+    naming: Naming,
 ) {
+    let Naming { periods, halftime } = naming;
     match phase {
         LivePhase::Halftime => {
             if halftime.keeps_period {
-                set_period_name(phase_text, period);
+                periods.write_name(period, phase_text);
             } else {
                 phase_text.clear();
             }
@@ -1000,12 +1013,12 @@ fn set_break_clock(
             *clock_accent = true;
         }
         LivePhase::EndOfPeriod => {
-            set_period_name(phase_text, period);
+            periods.write_name(period, phase_text);
             set_plain(clock_text, "END");
             *clock_accent = true;
         }
         LivePhase::InProgress => {
-            set_period_name(phase_text, period);
+            periods.write_name(period, phase_text);
             set_folded(clock_text, clock);
             *clock_accent = false;
         }
@@ -1013,17 +1026,19 @@ fn set_break_clock(
 }
 
 /// The banner over a line-score final. Baseball counts innings past nine;
-/// the four-period sports count overtimes, and the NBA spells its single
-/// overtime out (NBA.md §3.1: `FINAL`, `FINAL/OT`, `F/{n}OT`). (Soccer never
-/// reaches here — its full-time screen is its own shape.)
-fn set_final_text(dst: &mut Text<SHORT>, sport: Sport, periods: u8) {
-    match (sport, periods) {
-        (Sport::Mlb, 10..) => write_text!(dst, "F/{periods}"),
-        (Sport::Mlb, _) | (_, 0..=4) => set_plain(dst, "FINAL"),
-        (Sport::Basketball, 5) => set_plain(dst, "FINAL/OT"),
-        (_, 5) => set_plain(dst, "F/OT"),
-        (_, _) => {
-            let overtimes = periods - 4;
+/// the other sports count overtimes past their regulation, and basketball
+/// spells its single overtime out (NBA.md §3.1: `FINAL`, `FINAL/OT`,
+/// `F/{n}OT`). (Soccer never reaches here — its full-time screen is its own
+/// shape.)
+fn set_final_text(dst: &mut Text<SHORT>, sport: Sport, periods: u8, regulation: u8) {
+    match sport {
+        Sport::Mlb if periods >= 10 => write_text!(dst, "F/{periods}"),
+        Sport::Mlb => set_plain(dst, "FINAL"),
+        _ if periods <= regulation => set_plain(dst, "FINAL"),
+        Sport::Basketball if periods == regulation + 1 => set_plain(dst, "FINAL/OT"),
+        _ if periods == regulation + 1 => set_plain(dst, "F/OT"),
+        _ => {
+            let overtimes = periods - regulation;
             write_text!(dst, "F/{overtimes}OT");
         }
     }

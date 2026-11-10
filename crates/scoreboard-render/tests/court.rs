@@ -4,10 +4,11 @@
 //! D5's alpha climb, and marks that stay inside the lines.
 
 use scoreboard_model::Rgb888;
+use scoreboard_model::basketball::CourtLines;
 use scoreboard_model::snapshot::Side;
 use scoreboard_render::blit::Canvas;
 use scoreboard_render::court::{
-    BACKBOARD, CORNER, Court, ESPN_ORIGIN, End, IRON, LENGTH, LINES, RIM, WOOD,
+    BACKBOARD, Court, ESPN_ORIGIN, End, IRON, LENGTH, LINES, RIM, WOOD,
 };
 use scoreboard_render::geometry::{HEIGHT, WIDTH};
 use scoreboard_render::{WHITE, scale};
@@ -139,7 +140,7 @@ fn end(home: bool) -> End {
 
 fn bare(court: Court, away: Rgb888, home: Rgb888) -> Frame {
     let mut frame = Frame::new();
-    court.draw(&mut frame.canvas(), away, home);
+    court.draw(&mut frame.canvas(), CourtLines::NBA, away, home);
     frame
 }
 
@@ -148,7 +149,7 @@ fn marked(background: Rgb888) -> Frame {
     let (away, home) = teams();
     let mut frame = Frame::filled(background);
     let mut canvas = frame.canvas();
-    B5.draw(&mut canvas, away, home);
+    B5.draw(&mut canvas, CourtLines::NBA, away, home);
     for (home_side, along, across) in MARKS {
         let color = if home_side { home } else { away };
         B5.plot_over(&mut canvas, end(home_side), along, across, color, ALPHA);
@@ -268,7 +269,7 @@ fn the_arc_is_one_staircase_without_nubs() {
     let (away, home) = teams();
     for court in STRIPS.into_iter().chain([B5]) {
         let frame = bare(court, away, home);
-        let corner_rows = -court.dy(CORNER);
+        let corner_rows = -court.dy(CourtLines::NBA.corner.feet());
         for end in [End::Left, End::Right] {
             let toward_centre = match end {
                 End::Left => 1,

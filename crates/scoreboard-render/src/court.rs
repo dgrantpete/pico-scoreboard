@@ -17,7 +17,9 @@
 //!
 //! # The lines
 //!
-//! The rule book's numbers, in feet ([`LENGTH`] through [`PAINT_DEPTH`]): the
+//! The rule book's numbers, in feet: [`LENGTH`] through [`PAINT_DEPTH`] are
+//! every court's, and the arc, the corner three and the lane's width are the
+//! league's ([`CourtLines`], from its rules — NCAAB.md D2). The
 //! sidelines, baselines and half-court line in [`LINES`]; each end's lane
 //! lines and free-throw line in the attacking team's colour at two thirds,
 //! the floor between them left as [`WOOD`] so the marks that land in the
@@ -47,6 +49,7 @@
 
 use crate::blit::Canvas;
 use crate::{BLACK, Rgb888, mix, scale};
+use scoreboard_model::basketball::CourtLines;
 use scoreboard_model::snapshot::Side;
 
 /// The court's rectangle on the panel — the lines are its outer ring — and
@@ -84,13 +87,7 @@ pub const WIDTH: f32 = 50.0;
 /// The rim's centre from the baseline, and the backboard's face.
 pub const RIM: f32 = 5.25;
 pub const BACKBOARD: f32 = 4.0;
-/// The three-point arc's radius about the rim, and the corner three's
-/// distance from the centre line, where the straight segment runs until the
-/// arc reaches it.
-pub const ARC: f32 = 23.75;
-pub const CORNER: f32 = 22.0;
-/// The paint's half-width, and its depth: the free-throw line.
-pub const PAINT_HALF: f32 = 8.0;
+/// The paint's depth: the free-throw line, the same on every court.
 pub const PAINT_DEPTH: f32 = 19.0;
 /// Where ESPN's shot frame starts, in feet from the baseline: its `y = 1` is
 /// the rim (NBA.md §3.4), so a make sits `y + ESPN_ORIGIN` feet along.
@@ -131,8 +128,9 @@ impl Court {
     }
 
     /// The bare floor: wood, lines, each end's lane in its attacking team's
-    /// colour, the arcs, the boards and the rims.
-    pub fn draw(&self, canvas: &mut Canvas<'_>, away: Rgb888, home: Rgb888) {
+    /// colour, the arcs, the boards and the rims, on the league's lines.
+    pub fn draw(&self, canvas: &mut Canvas<'_>, lines: CourtLines, away: Rgb888, home: Rgb888) {
+        let (arc, corner) = (lines.arc.feet(), lines.corner.feet());
         let (x0, x1) = (self.x, self.x + self.width - 1);
         let y0 = self.y;
         let mid = self.mid();
@@ -141,7 +139,7 @@ impl Court {
         canvas.rect(x0, y0, self.width, self.height, LINES);
         canvas.vline(self.fx(LENGTH / 2.0), y0 + 1, self.height - 2, LINES);
 
-        let half = -self.dy(PAINT_HALF);
+        let half = -self.dy(lines.lane_half.feet());
         for (end, team) in [(End::Left, away), (End::Right, home)] {
             // The lane lines and the free-throw line, from the baseline to
             // the paint's depth.
@@ -155,11 +153,11 @@ impl Court {
             // The three-point line, from the corner rows in to the middle:
             // the corner segment is the first row's run from the baseline,
             // and every later row's run joins the previous row's.
-            let corner_rows = -self.dy(CORNER);
+            let corner_rows = -self.dy(corner);
             let mut prev: Option<i32> = None;
             for row in (0..=corner_rows).rev() {
-                let across = (row as f32 * WIDTH / (self.height - 1) as f32).min(CORNER);
-                let along = RIM + libm::sqrtf((ARC * ARC - across * across).max(0.0));
+                let across = (row as f32 * WIDTH / (self.height - 1) as f32).min(corner);
+                let along = RIM + libm::sqrtf((arc * arc - across * across).max(0.0));
                 let x = self.at(end, along);
                 let from = match (prev, end) {
                     (None, End::Left) => x0 + 1,

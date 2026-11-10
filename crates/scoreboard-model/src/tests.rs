@@ -454,6 +454,7 @@ fn a_walk_off_pads_the_missing_home_column_with_x() {
             sport: Sport::Mlb,
             game_id: "g1",
             periods: 3,
+            regulation: 9,
             away,
             home,
         },
@@ -3299,8 +3300,8 @@ impl Maxima {
 /// shows up as a failing test rather than as silent RAM.
 #[test]
 fn the_snapshot_stays_inside_its_budget_line() {
-    assert_eq!(ScoreboardSnapshot::SIZE, 3_760);
-    assert_eq!(crate::SnapshotChannel::SIZE, 11_288);
+    assert_eq!(ScoreboardSnapshot::SIZE, 3_768);
+    assert_eq!(crate::SnapshotChannel::SIZE, 11_312);
     assert_eq!(Slate::SIZE, 4_664);
 }
 
@@ -4293,5 +4294,94 @@ mod led {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), LOOKS.len());
+    }
+}
+
+// =========================================================================
+// Basketball's per-league rules (NCAAB.md D2)
+// =========================================================================
+
+use crate::basketball::{BasketballRules, CourtLines, Length};
+use crate::periods::Periods;
+
+fn period_name(periods: Periods, period: u8) -> String {
+    let mut text = Text::new();
+    periods.write_name(period, &mut text);
+    text.as_str().to_string()
+}
+
+#[test]
+fn periods_name_regulation_from_their_table_and_count_overtime_past_it() {
+    let quarters: Vec<String> = (0..=7).map(|p| period_name(Periods::QUARTERS, p)).collect();
+    assert_eq!(quarters, ["", "Q1", "Q2", "Q3", "Q4", "OT", "2OT", "3OT"]);
+    let halves: Vec<String> = (0..=5).map(|p| period_name(Periods::HALVES, p)).collect();
+    assert_eq!(halves, ["", "1ST", "2ND", "OT", "2OT", "3OT"]);
+    assert_eq!(Periods::QUARTERS.regulation(), 4);
+    assert_eq!(Periods::HALVES.regulation(), 2);
+}
+
+#[test]
+fn a_basketball_league_resolves_its_rules_and_an_unknown_one_plays_the_nbas() {
+    assert_eq!(BasketballRules::of(&nba_league()), BasketballRules::NBA);
+    let unknown = LeagueId::from_slug(Sport::Basketball, "some-new-league");
+    assert_eq!(unknown.key.as_str(), "basketball/some-new-league");
+    assert_eq!(BasketballRules::of(&unknown), BasketballRules::NBA);
+}
+
+#[test]
+fn rule_book_lengths_are_exact() {
+    assert_eq!(Length::ft(23, 9, 0).feet(), 23.75);
+    assert_eq!(CourtLines::NBA.corner.feet(), 22.0);
+    assert_eq!(CourtLines::NBA.lane_half.feet(), 8.0);
+    // 22 ft 1¾ in: an eighth-inch unit holds a rule book's fractions exactly.
+    assert_eq!(Length::ft(22, 1, 6), Length::ft(22, 0, 14));
+}
+
+#[test]
+fn a_final_counts_overtime_from_its_regulation() {
+    let team = scoreboard_wire::FinalTeam {
+        abbreviation: "AWY",
+        score: 70,
+        colors: scoreboard_wire::TeamColors {
+            primary: 0x00_FF_00_00,
+            alternate: 0,
+        },
+        line_score: &[30, 30, 10],
+    };
+    let banner = |sport, periods, regulation| {
+        let mut store = Store::new();
+        store.commit_linescore_final(
+            &LinescoreFinal {
+                sport,
+                game_id: "g1",
+                periods,
+                regulation,
+                away: team,
+                home: scoreboard_wire::FinalTeam { score: 72, ..team },
+            },
+            Logos::default(),
+            0,
+        );
+        store.snapshot().linescore_final.final_text.as_str().to_string()
+    };
+    // Halves: overtime is period 3 (NCAAB.md D6).
+    assert_eq!(banner(Sport::Basketball, 2, 2), "FINAL");
+    assert_eq!(banner(Sport::Basketball, 3, 2), "FINAL/OT");
+    assert_eq!(banner(Sport::Basketball, 4, 2), "F/2OT");
+    // Quarters, as before.
+    assert_eq!(banner(Sport::Basketball, 5, 4), "FINAL/OT");
+    assert_eq!(banner(Sport::Football, 5, 4), "F/OT");
+    assert_eq!(banner(Sport::Football, 6, 4), "F/2OT");
+}
+
+#[test]
+fn the_crunch_clock_is_under_a_minute_in_either_shape_and_never_all_zeros() {
+    use crate::sports::crunch_clock;
+    for clock in ["39.0", "0.4", "0:39", "0:01"] {
+        assert!(crunch_clock(clock), "{clock} is crunch time");
+    }
+    // A minute or more, and ESPN's frozen clocks.
+    for clock in ["1:00", "12:00", "20:00", "0.0", "0:00", ""] {
+        assert!(!crunch_clock(clock), "{clock} is not");
     }
 }
