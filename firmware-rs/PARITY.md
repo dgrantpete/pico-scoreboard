@@ -1215,3 +1215,19 @@ show at the corpus's time points (the play flash holds the strip;
 court's mockup pin went through the same oracle: emulated, both reference
 courts matched the mockup's RGB565 bytes exactly; the references are now
 RGB888.
+
+## No game screen names its league, 2026-11-10
+
+**Was:** the multi-league sports led the pregame's info cycle with the league's
+display name, football "NFL" / "NCAA FOOTBALL" then the stadium, soccer
+"PREMIER LEAGUE" (and the rest) then the stadium, as `football.py` and
+`soccer.py` did by threading the league into the pregame class.
+
+**Is:** the stadium leads every sport's pregame, and football and soccer show it
+alone (their wires carry no note to follow it). The league's display name lives
+in the league menu and nowhere else (NCAAB.md D9, C1). The owner's call: the
+24 × 24 crests already say which league a game belongs to, and fans read a
+spelled-out league as condescending. Four golden cases re-blessed, sixteen
+frames (`football__nfl__pregame`, `football__nfl__pregame_odds`,
+`football__college-football__pregame_ranked`, `soccer__fifa.world__pregame`),
+each changing only in the info line's slot.

@@ -1383,10 +1383,13 @@ fn each_sport_fills_the_pregame_slots_with_what_it_has() {
     assert_eq!(view.away.line.as_str(), "", "nor a betting line");
     assert!(view.away.record.is_some());
 
+    // No game screen names its league (NCAAB.md D9): the stadium leads, and
+    // football's wire carries no note to follow it.
     let store = committed("football/college-football/pregame_ranked");
     let view = &store.snapshot().pregame;
-    assert_eq!(view.info_primary.as_str(), "NCAA FOOTBALL");
-    assert!(!view.info_secondary.is_empty(), "the stadium follows");
+    assert!(!view.info_primary.is_empty(), "the stadium leads");
+    assert_ne!(view.info_primary.as_str(), "NCAA FOOTBALL");
+    assert_eq!(view.info_secondary.as_str(), "");
     assert!(
         view.away.line.as_str().starts_with('#') || view.home.line.as_str().starts_with('#'),
         "a ranked matchup puts the rank on the team line"
@@ -1394,8 +1397,9 @@ fn each_sport_fills_the_pregame_slots_with_what_it_has() {
 
     let store = committed("soccer/fifa.world/pregame");
     let view = &store.snapshot().pregame;
-    assert_eq!(view.info_primary.as_str(), "WORLD CUP");
-    assert!(!view.info_secondary.is_empty());
+    assert!(!view.info_primary.is_empty(), "the stadium leads");
+    assert_ne!(view.info_primary.as_str(), "WORLD CUP");
+    assert_eq!(view.info_secondary.as_str(), "");
     let (league, bytes) = fixture("soccer/fifa.world/pregame");
     let detail = WireFeed.detail(league.sport, &bytes).unwrap();
     assert_eq!(view.away.line.as_str(), detail.abbreviations().0);

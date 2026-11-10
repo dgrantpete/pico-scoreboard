@@ -18,8 +18,8 @@ pub struct LeagueId {
     /// e.g. "baseball/mlb", "soccer/usa.1".
     pub key: crate::text::Text<LEAGUE_KEY>,
     pub sport: Sport,
-    /// User-facing, e.g. "PREMIER LEAGUE". Shown in the league menu, and —
-    /// for the multi-league sports — on the pregame info line.
+    /// User-facing, e.g. "PREMIER LEAGUE". Shown in the league menu and
+    /// nowhere else: no game screen names its league (NCAAB.md D9).
     pub display_name: crate::text::Text<{ crate::snapshot::MENU_LABEL }>,
 }
 

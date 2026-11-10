@@ -179,17 +179,16 @@ impl<'a> PregameInput<'a> {
         }
     }
 
-    /// Football: the league leads the info cycle (the wire does not carry it —
-    /// the device knows which endpoint it polled), the stadium follows, and
-    /// the per-team line is a ranked college team's "#3 OHIO STATE", else the
-    /// betting line ("+7  -305").
-    pub fn football(game: &football::Pregame<'a>, league_name: &'a str) -> Self {
+    /// Football: the stadium, and no second phase — no screen names the league
+    /// (NCAAB.md D9: the crests already say it). The per-team line is a ranked
+    /// college team's "#3 OHIO STATE", else the betting line ("+7  -305").
+    pub fn football(game: &football::Pregame<'a>) -> Self {
         Self {
             sport: Sport::Football,
             game_id: game.game_id,
             start_time: game.start_time,
-            info_primary: league_name,
-            info_secondary: game.venue,
+            info_primary: game.venue,
+            info_secondary: "",
             temperature: None,
             away: PregameSideInput {
                 abbreviation: game.away.abbreviation,
@@ -206,16 +205,16 @@ impl<'a> PregameInput<'a> {
         }
     }
 
-    /// Soccer: league then stadium, no records, and the per-team line is the
-    /// club's abbreviation — the lower half of the screen would otherwise be
-    /// empty.
-    pub fn soccer(game: &soccer::Pregame<'a>, league_name: &'a str) -> Self {
+    /// Soccer: the stadium alone (no league name, NCAAB.md D9), no records,
+    /// and the per-team line is the club's abbreviation — the lower half of the
+    /// screen would otherwise be empty.
+    pub fn soccer(game: &soccer::Pregame<'a>) -> Self {
         Self {
             sport: Sport::Soccer,
             game_id: game.game_id,
             start_time: game.start_time,
-            info_primary: league_name,
-            info_secondary: game.venue,
+            info_primary: game.venue,
+            info_secondary: "",
             temperature: None,
             away: PregameSideInput {
                 abbreviation: game.away.abbreviation,
@@ -252,7 +251,6 @@ impl Store {
         now_ms: Millis,
         clock: LocalClock,
     ) {
-        let league_name = league.display_name.as_str();
         match detail {
             GameDetail::Mlb(mlb::Game::Live(game)) => {
                 self.commit_mlb_live(game, logos, now_ms);
@@ -294,7 +292,7 @@ impl Store {
             }
             GameDetail::Football(football::Game::Pregame(game)) => {
                 self.commit_pregame(
-                    &PregameInput::football(game, league_name),
+                    &PregameInput::football(game),
                     logos,
                     now_ms,
                     clock,
@@ -311,7 +309,7 @@ impl Store {
             }
             GameDetail::Soccer(soccer::Game::Pregame(game)) => {
                 self.commit_pregame(
-                    &PregameInput::soccer(game, league_name),
+                    &PregameInput::soccer(game),
                     logos,
                     now_ms,
                     clock,
