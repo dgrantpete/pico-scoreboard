@@ -102,6 +102,22 @@ pub(crate) fn mlb_games() -> Vec<(String, MlbGame)> {
         .collect()
 }
 
+/// The basketball leagues whose fixtures the harness encodes: a league's
+/// corpus joins the golden set with its route.
+const BASKETBALL_LEAGUES: &[&str] = &["nba"];
+
+/// Basketball fixture stems (`{league}/{name}`) of the leagues in
+/// [`BASKETBALL_LEAGUES`].
+fn basketball_fixture_names() -> Vec<String> {
+    fixture_names("basketball")
+        .into_iter()
+        .filter(|name| {
+            name.split_once('/')
+                .is_some_and(|(league, _)| BASKETBALL_LEAGUES.contains(&league))
+        })
+        .collect()
+}
+
 /// One NBA fixture as the detail handler sees it: the scoreboard extract,
 /// then, where the handler would fetch one (a live game, NBA.md D3) and
 /// `with_summary` allows, the pair's summary half through the same adapter
@@ -134,7 +150,7 @@ fn basketball_parts(
 /// Every NBA fixture with its summary where the handler would fetch one —
 /// the canonical goldens.
 pub(crate) fn basketball_games() -> Vec<(String, BasketballGame)> {
-    fixture_names("basketball")
+    basketball_fixture_names()
         .into_iter()
         .map(|name| {
             let (extract, summary) = basketball_parts(&name, true);
@@ -150,7 +166,7 @@ pub(crate) fn basketball_games() -> Vec<(String, BasketballGame)> {
 /// `ext=2` groups and takes the flash's second source away (NBA.md §3.7), so
 /// each fixture's degraded form is a payload of its own.
 pub(crate) fn basketball_games_without_summary() -> Vec<(String, BasketballGame)> {
-    fixture_names("basketball")
+    basketball_fixture_names()
         .into_iter()
         .filter_map(|name| {
             let (extract, _) = basketball_parts(&name, false);
@@ -649,7 +665,7 @@ mod tests {
     fn basketball_dto_round_trips_the_combined_view() {
         use scoreboard_wire as wire;
 
-        for name in &fixture_names("basketball") {
+        for name in &basketball_fixture_names() {
             for with_summary in [true, false] {
                 let (extract, summary) = basketball_parts(name, with_summary);
                 let view = extract.as_game(summary.as_ref());
@@ -681,7 +697,7 @@ mod tests {
                 .as_str()
                 .map(str::to_owned)
         };
-        for name in fixture_names("basketball") {
+        for name in basketball_fixture_names() {
             let dir = testdata().join("basketball");
             let Ok(summary) =
                 std::fs::read_to_string(dir.join(format!("{name}{SUMMARY_STEM}.json")))

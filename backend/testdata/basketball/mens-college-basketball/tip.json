@@ -1,0 +1,647 @@
+{
+  "id": "401906759",
+  "uid": "s:40~l:41~e:401906759",
+  "date": "2026-11-10T00:30Z",
+  "name": "Oakland Golden Grizzlies at Alabama Crimson Tide",
+  "shortName": "OAK @ ALA",
+  "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+  },
+  "competitions": [
+    {
+      "id": "401906759",
+      "uid": "s:40~l:41~e:401906759~c:401906759",
+      "date": "2026-11-10T00:30Z",
+      "attendance": 0,
+      "type": {
+        "id": "1",
+        "abbreviation": "STD"
+      },
+      "timeValid": true,
+      "neutralSite": false,
+      "conferenceCompetition": false,
+      "playByPlayAvailable": true,
+      "recent": true,
+      "venue": {
+        "id": "1925",
+        "fullName": "Coleman Coliseum",
+        "address": {
+          "city": "Tuscaloosa",
+          "state": "AL"
+        },
+        "indoor": true
+      },
+      "competitors": [
+        {
+          "id": "333",
+          "uid": "s:40~l:41~t:333",
+          "type": "team",
+          "order": 0,
+          "homeAway": "home",
+          "team": {
+            "id": "333",
+            "uid": "s:40~l:41~t:333",
+            "location": "Alabama",
+            "name": "Crimson Tide",
+            "abbreviation": "ALA",
+            "displayName": "Alabama Crimson Tide",
+            "shortDisplayName": "Alabama",
+            "color": "9e1b32",
+            "alternateColor": "ffffff",
+            "isActive": true,
+            "venue": {
+              "id": "1925"
+            },
+            "links": [
+              {
+                "rel": [
+                  "clubhouse",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mens-college-basketball/team/_/id/333/alabama-crimson-tide",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mens-college-basketball/team/roster/_/id/333",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:41~t:333&section=roster",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mens-college-basketball/team/stats/_/id/333",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:41~t:333&section=stats",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mens-college-basketball/team/schedule/_/id/333",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:41~t:333&section=scores",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              }
+            ],
+            "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/333.png",
+            "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/333.png",
+            "conferenceId": "23"
+          },
+          "score": "0",
+          "linescores": [
+            {
+              "value": 0.0,
+              "displayValue": "0",
+              "period": 1
+            }
+          ],
+          "statistics": [
+            {
+              "name": "rebounds",
+              "abbreviation": "REB",
+              "displayValue": "0"
+            },
+            {
+              "name": "avgRebounds",
+              "abbreviation": "REB",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "assists",
+              "abbreviation": "AST",
+              "displayValue": "0"
+            },
+            {
+              "name": "fieldGoalsAttempted",
+              "abbreviation": "FGA",
+              "displayValue": "0"
+            },
+            {
+              "name": "fieldGoalsMade",
+              "abbreviation": "FGM",
+              "displayValue": "0"
+            },
+            {
+              "name": "fieldGoalPct",
+              "abbreviation": "FG%",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "freeThrowPct",
+              "abbreviation": "FT%",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "freeThrowsAttempted",
+              "abbreviation": "FTA",
+              "displayValue": "0"
+            },
+            {
+              "name": "freeThrowsMade",
+              "abbreviation": "FTM",
+              "displayValue": "0"
+            },
+            {
+              "name": "points",
+              "abbreviation": "PTS",
+              "displayValue": "0"
+            },
+            {
+              "name": "threePointFieldGoalsAttempted",
+              "abbreviation": "3PA",
+              "displayValue": "0"
+            },
+            {
+              "name": "threePointFieldGoalsMade",
+              "abbreviation": "3PM",
+              "displayValue": "0"
+            },
+            {
+              "name": "avgPoints",
+              "abbreviation": "PTS",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "avgAssists",
+              "abbreviation": "AST",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "threePointFieldGoalPct",
+              "abbreviation": "3P%",
+              "displayValue": "0.0"
+            }
+          ],
+          "curatedRank": {
+            "current": 18
+          },
+          "records": [
+            {
+              "name": "overall",
+              "abbreviation": "Season",
+              "type": "total",
+              "summary": "2-0"
+            },
+            {
+              "name": "Home",
+              "abbreviation": "Home",
+              "type": "home",
+              "summary": "2-0"
+            },
+            {
+              "name": "Road",
+              "abbreviation": "AWAY",
+              "type": "road",
+              "summary": "0-0"
+            },
+            {
+              "name": "vs. Conf.",
+              "abbreviation": "VS CONF",
+              "type": "vsconf",
+              "summary": "0-0"
+            }
+          ]
+        },
+        {
+          "id": "2473",
+          "uid": "s:40~l:41~t:2473",
+          "type": "team",
+          "order": 1,
+          "homeAway": "away",
+          "team": {
+            "id": "2473",
+            "uid": "s:40~l:41~t:2473",
+            "location": "Oakland",
+            "name": "Golden Grizzlies",
+            "abbreviation": "OAK",
+            "displayName": "Oakland Golden Grizzlies",
+            "shortDisplayName": "Oakland",
+            "color": "04091c",
+            "alternateColor": "bc955c",
+            "isActive": true,
+            "venue": {
+              "id": "2178"
+            },
+            "links": [
+              {
+                "rel": [
+                  "clubhouse",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mens-college-basketball/team/_/id/2473/oakland-golden-grizzlies",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mens-college-basketball/team/roster/_/id/2473",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:41~t:2473&section=roster",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mens-college-basketball/team/stats/_/id/2473",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:41~t:2473&section=stats",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mens-college-basketball/team/schedule/_/id/2473",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:41~t:2473&section=scores",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              }
+            ],
+            "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2473.png",
+            "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2473.png",
+            "conferenceId": "45"
+          },
+          "score": "0",
+          "linescores": [
+            {
+              "value": 0.0,
+              "displayValue": "0",
+              "period": 1
+            }
+          ],
+          "statistics": [
+            {
+              "name": "rebounds",
+              "abbreviation": "REB",
+              "displayValue": "0"
+            },
+            {
+              "name": "avgRebounds",
+              "abbreviation": "REB",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "assists",
+              "abbreviation": "AST",
+              "displayValue": "0"
+            },
+            {
+              "name": "fieldGoalsAttempted",
+              "abbreviation": "FGA",
+              "displayValue": "0"
+            },
+            {
+              "name": "fieldGoalsMade",
+              "abbreviation": "FGM",
+              "displayValue": "0"
+            },
+            {
+              "name": "fieldGoalPct",
+              "abbreviation": "FG%",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "freeThrowPct",
+              "abbreviation": "FT%",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "freeThrowsAttempted",
+              "abbreviation": "FTA",
+              "displayValue": "0"
+            },
+            {
+              "name": "freeThrowsMade",
+              "abbreviation": "FTM",
+              "displayValue": "0"
+            },
+            {
+              "name": "points",
+              "abbreviation": "PTS",
+              "displayValue": "0"
+            },
+            {
+              "name": "threePointFieldGoalsAttempted",
+              "abbreviation": "3PA",
+              "displayValue": "0"
+            },
+            {
+              "name": "threePointFieldGoalsMade",
+              "abbreviation": "3PM",
+              "displayValue": "0"
+            },
+            {
+              "name": "avgPoints",
+              "abbreviation": "PTS",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "avgAssists",
+              "abbreviation": "AST",
+              "displayValue": "0.0"
+            },
+            {
+              "name": "threePointFieldGoalPct",
+              "abbreviation": "3P%",
+              "displayValue": "0.0"
+            }
+          ],
+          "curatedRank": {
+            "current": 99
+          },
+          "records": [
+            {
+              "name": "overall",
+              "abbreviation": "Season",
+              "type": "total",
+              "summary": "0-3"
+            },
+            {
+              "name": "Home",
+              "abbreviation": "Home",
+              "type": "home",
+              "summary": "0-0"
+            },
+            {
+              "name": "Road",
+              "abbreviation": "AWAY",
+              "type": "road",
+              "summary": "0-3"
+            },
+            {
+              "name": "vs. Conf.",
+              "abbreviation": "VS CONF",
+              "type": "vsconf",
+              "summary": "0-0"
+            }
+          ]
+        }
+      ],
+      "notes": [],
+      "situation": {
+        "lastPlay": {
+          "id": "401906759121008147",
+          "type": {
+            "id": "615",
+            "text": "Jumpball"
+          },
+          "text": "Jump Ball lost by Oakland",
+          "scoreValue": 0,
+          "team": {
+            "id": "2473"
+          },
+          "probability": {
+            "tiePercentage": 0.0,
+            "homeWinPercentage": 0.972,
+            "awayWinPercentage": 0.028000000000000025
+          },
+          "athletesInvolved": [
+            {
+              "id": "5176752",
+              "fullName": "Chris Fields Jr.",
+              "displayName": "Chris Fields Jr.",
+              "shortName": "C. Fields Jr.",
+              "links": [
+                {
+                  "rel": [
+                    "playercard",
+                    "desktop",
+                    "athlete"
+                  ],
+                  "href": "https://www.espn.com/mens-college-basketball/player/_/id/5176752/chris-fields-jr"
+                }
+              ],
+              "headshot": "https://a.espncdn.com/i/headshots/mens-college-basketball/players/full/5176752.png",
+              "jersey": "2",
+              "position": "F",
+              "team": {
+                "id": "2473"
+              }
+            }
+          ]
+        }
+      },
+      "status": {
+        "clock": 1198.0,
+        "displayClock": "19:58",
+        "period": 1,
+        "type": {
+          "id": "2",
+          "name": "STATUS_IN_PROGRESS",
+          "state": "in",
+          "completed": false,
+          "description": "In Progress",
+          "detail": "19:58 - 1st Half",
+          "shortDetail": "19:58 - 1st"
+        }
+      },
+      "broadcasts": [
+        {
+          "market": "national",
+          "names": [
+            "SECN+"
+          ]
+        }
+      ],
+      "format": {
+        "regulation": {
+          "periods": 2
+        }
+      },
+      "startDate": "2026-11-10T00:30Z",
+      "broadcast": "SECN+",
+      "geoBroadcasts": [
+        {
+          "type": {
+            "id": "4",
+            "shortName": "Streaming"
+          },
+          "market": {
+            "id": "1",
+            "type": "National"
+          },
+          "media": {
+            "shortName": "SECN+",
+            "logo": "https://a.espncdn.com/guid/d1e3d7c4-8e72-37f3-b9b9-515573fd5526/logos/default.png",
+            "darkLogo": ""
+          },
+          "lang": "en",
+          "region": "us"
+        }
+      ],
+      "highlights": []
+    }
+  ],
+  "links": [
+    {
+      "language": "en-US",
+      "rel": [
+        "live",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/mens-college-basketball/game?gameId=401906759",
+      "text": "Gamecast",
+      "shortText": "Gamecast",
+      "isExternal": false,
+      "isPremium": false
+    },
+    {
+      "language": "en-US",
+      "rel": [
+        "boxscore",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/mens-college-basketball/boxscore/_/gameId/401906759",
+      "text": "Box Score",
+      "shortText": "Box Score",
+      "isExternal": false,
+      "isPremium": false
+    },
+    {
+      "language": "en-US",
+      "rel": [
+        "pbp",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/mens-college-basketball/playbyplay/_/gameId/401906759",
+      "text": "Play-by-Play",
+      "shortText": "Play-by-Play",
+      "isExternal": false,
+      "isPremium": false
+    }
+  ],
+  "weather": {
+    "displayValue": "34",
+    "temperature": 57,
+    "highTemperature": 57,
+    "conditionId": "Mostly clear",
+    "link": {
+      "language": "en-US",
+      "rel": [
+        "35401"
+      ],
+      "href": "http://www.accuweather.com/en/us/stillman-stadium-al/35401/current-weather/209259_poi?lang=en-us",
+      "text": "Weather",
+      "shortText": "Weather",
+      "isExternal": true,
+      "isPremium": false
+    }
+  },
+  "status": {
+    "clock": 1198.0,
+    "displayClock": "19:58",
+    "period": 1,
+    "type": {
+      "id": "2",
+      "name": "STATUS_IN_PROGRESS",
+      "state": "in",
+      "completed": false,
+      "description": "In Progress",
+      "detail": "19:58 - 1st Half",
+      "shortDetail": "19:58 - 1st"
+    }
+  }
+}

@@ -1,0 +1,475 @@
+{
+  "id": "401929171",
+  "uid": "s:40~l:41~e:401929171",
+  "date": "2026-11-05T02:00Z",
+  "name": "West Coast Baptist Eagles at Boise State Broncos",
+  "shortName": "WCBC @ BOIS",
+  "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+  },
+  "competitions": [
+    {
+      "id": "401929171",
+      "uid": "s:40~l:41~e:401929171~c:401929171",
+      "date": "2026-11-05T02:00Z",
+      "attendance": 0,
+      "type": {
+        "id": "1",
+        "abbreviation": "STD"
+      },
+      "timeValid": true,
+      "neutralSite": false,
+      "conferenceCompetition": false,
+      "playByPlayAvailable": false,
+      "recent": true,
+      "venue": {
+        "id": "2028",
+        "fullName": "ExtraMile Arena",
+        "address": {
+          "city": "Boise",
+          "state": "ID"
+        },
+        "indoor": true
+      },
+      "competitors": [
+        {
+          "id": "68",
+          "uid": "s:40~l:41~t:68",
+          "type": "team",
+          "order": 0,
+          "homeAway": "home",
+          "team": {
+            "id": "68",
+            "uid": "s:40~l:41~t:68",
+            "location": "Boise State",
+            "name": "Broncos",
+            "abbreviation": "BOIS",
+            "displayName": "Boise State Broncos",
+            "shortDisplayName": "Boise St",
+            "color": "0033a0",
+            "alternateColor": "d64309",
+            "isActive": true,
+            "venue": {
+              "id": "2028"
+            },
+            "links": [
+              {
+                "rel": [
+                  "clubhouse",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mens-college-basketball/team/_/id/68/boise-state-broncos",
+                "text": "Clubhouse",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mens-college-basketball/team/roster/_/id/68",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "roster",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:41~t:68&section=roster",
+                "text": "Roster",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mens-college-basketball/team/stats/_/id/68",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "stats",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:41~t:68&section=stats",
+                "text": "Statistics",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "desktop",
+                  "team"
+                ],
+                "href": "https://www.espn.com/mens-college-basketball/team/schedule/_/id/68",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              },
+              {
+                "rel": [
+                  "schedule",
+                  "sportscenter",
+                  "app",
+                  "team"
+                ],
+                "href": "sportscenter://x-callback-url/showClubhouse?uid=s:40~l:41~t:68&section=scores",
+                "text": "Schedule",
+                "isExternal": false,
+                "isPremium": false
+              }
+            ],
+            "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/68.png",
+            "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/68.png",
+            "conferenceId": "21"
+          },
+          "score": "0",
+          "curatedRank": {
+            "current": 99
+          },
+          "statistics": [],
+          "records": [
+            {
+              "name": "overall",
+              "abbreviation": "Season",
+              "type": "total",
+              "summary": "0-0"
+            },
+            {
+              "name": "Home",
+              "abbreviation": "Home",
+              "type": "home",
+              "summary": "0-0"
+            },
+            {
+              "name": "Road",
+              "abbreviation": "AWAY",
+              "type": "road",
+              "summary": "0-0"
+            },
+            {
+              "name": "vs. Conf.",
+              "abbreviation": "VS CONF",
+              "type": "vsconf",
+              "summary": "0-0"
+            }
+          ]
+        },
+        {
+          "id": "110418",
+          "uid": "s:40~l:41~t:110418",
+          "type": "team",
+          "order": 1,
+          "homeAway": "away",
+          "team": {
+            "id": "110418",
+            "uid": "s:40~l:41~t:110418",
+            "location": "West Coast Baptist",
+            "name": "Eagles",
+            "abbreviation": "WCBC",
+            "displayName": "West Coast Baptist Eagles",
+            "shortDisplayName": "West Coast",
+            "isActive": false,
+            "links": []
+          },
+          "score": "0",
+          "curatedRank": {
+            "current": 99
+          },
+          "statistics": [
+            {
+              "name": "rebounds",
+              "abbreviation": "REB",
+              "displayValue": "19",
+              "rankDisplayValue": "Tied-802nd"
+            },
+            {
+              "name": "avgRebounds",
+              "abbreviation": "REB",
+              "displayValue": "19.0",
+              "rankDisplayValue": "Tied-416th"
+            },
+            {
+              "name": "assists",
+              "abbreviation": "AST",
+              "displayValue": "11",
+              "rankDisplayValue": "Tied-268th"
+            },
+            {
+              "name": "fieldGoalsAttempted",
+              "abbreviation": "FGA",
+              "displayValue": "65",
+              "rankDisplayValue": "Tied-115th"
+            },
+            {
+              "name": "fieldGoalsMade",
+              "abbreviation": "FGM",
+              "displayValue": "23",
+              "rankDisplayValue": "Tied-263rd"
+            },
+            {
+              "name": "fieldGoalPct",
+              "abbreviation": "FG%",
+              "displayValue": "35.4",
+              "rankDisplayValue": "Tied-329th"
+            },
+            {
+              "name": "freeThrowPct",
+              "abbreviation": "FT%",
+              "displayValue": "83.3",
+              "rankDisplayValue": "Tied-33rd"
+            },
+            {
+              "name": "freeThrowsAttempted",
+              "abbreviation": "FTA",
+              "displayValue": "18",
+              "rankDisplayValue": "Tied-256th"
+            },
+            {
+              "name": "freeThrowsMade",
+              "abbreviation": "FTM",
+              "displayValue": "15",
+              "rankDisplayValue": "Tied-172nd"
+            },
+            {
+              "name": "points",
+              "abbreviation": "PTS",
+              "displayValue": "69",
+              "rankDisplayValue": "Tied-258th"
+            },
+            {
+              "name": "threePointFieldGoalsAttempted",
+              "abbreviation": "3PA",
+              "displayValue": "31",
+              "rankDisplayValue": "Tied-67th"
+            },
+            {
+              "name": "threePointFieldGoalsMade",
+              "abbreviation": "3PM",
+              "displayValue": "8",
+              "rankDisplayValue": "Tied-162nd"
+            },
+            {
+              "name": "avgPoints",
+              "abbreviation": "PTS",
+              "displayValue": "69.0",
+              "rankDisplayValue": "Tied-256th"
+            },
+            {
+              "name": "avgAssists",
+              "abbreviation": "AST",
+              "displayValue": "11.0",
+              "rankDisplayValue": "Tied-267th"
+            },
+            {
+              "name": "threePointFieldGoalPct",
+              "abbreviation": "3P%",
+              "displayValue": "25.8",
+              "rankDisplayValue": "Tied-310th"
+            }
+          ],
+          "leaders": [
+            {
+              "name": "pointsPerGame",
+              "displayName": "Points Per Game",
+              "shortDisplayName": "PPG",
+              "abbreviation": "PTS",
+              "leaders": [
+                {
+                  "displayValue": "17.0",
+                  "value": 17.0,
+                  "athlete": {
+                    "id": "5464980",
+                    "fullName": "Isaiah Dolloso",
+                    "displayName": "Isaiah Dolloso",
+                    "shortName": "I. Dolloso",
+                    "links": [],
+                    "jersey": "0",
+                    "position": {
+                      "abbreviation": "G"
+                    },
+                    "team": {
+                      "id": "110418"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "110418"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "reboundsPerGame",
+              "displayName": "Rebounds Per Game",
+              "shortDisplayName": "RPG",
+              "abbreviation": "REB",
+              "leaders": [
+                {
+                  "displayValue": "3.0",
+                  "value": 3.0,
+                  "athlete": {
+                    "id": "5464980",
+                    "fullName": "Isaiah Dolloso",
+                    "displayName": "Isaiah Dolloso",
+                    "shortName": "I. Dolloso",
+                    "links": [],
+                    "jersey": "0",
+                    "position": {
+                      "abbreviation": "G"
+                    },
+                    "team": {
+                      "id": "110418"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "110418"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "assistsPerGame",
+              "displayName": "Assists Per Game",
+              "shortDisplayName": "APG",
+              "abbreviation": "AST",
+              "leaders": [
+                {
+                  "displayValue": "4.0",
+                  "value": 4.0,
+                  "athlete": {
+                    "id": "5320753",
+                    "fullName": "Isaias Salgado",
+                    "displayName": "Isaias Salgado",
+                    "shortName": "I. Salgado",
+                    "links": [],
+                    "jersey": "7",
+                    "position": {
+                      "abbreviation": "PG"
+                    },
+                    "team": {
+                      "id": "110418"
+                    },
+                    "active": true
+                  },
+                  "team": {
+                    "id": "110418"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "notes": [],
+      "status": {
+        "clock": 0.0,
+        "displayClock": "0:00",
+        "period": 0,
+        "type": {
+          "id": "1",
+          "name": "STATUS_SCHEDULED",
+          "state": "pre",
+          "completed": false,
+          "description": "Scheduled",
+          "detail": "Wed, November 4th at 9:00 PM EST",
+          "shortDetail": "11/4 - 9:00 PM EST"
+        }
+      },
+      "broadcasts": [
+        {
+          "market": "national",
+          "names": [
+            "YouTube"
+          ]
+        }
+      ],
+      "format": {
+        "regulation": {
+          "periods": 2
+        }
+      },
+      "tickets": [
+        {
+          "summary": "Tickets as low as $6",
+          "numberAvailable": 383,
+          "links": [
+            {
+              "href": "https://www.vividseats.com/boise-state-broncos-mens-basketball-tickets-extramile-arena-11-4-2026--sports-ncaa-basketball/production/7558390?wsUser=717"
+            },
+            {
+              "href": "https://www.vividseats.com/extramile-arena-tickets/venue/2347?wsUser=717"
+            }
+          ]
+        }
+      ],
+      "startDate": "2026-11-05T02:00Z",
+      "broadcast": "YouTube",
+      "geoBroadcasts": [
+        {
+          "type": {
+            "id": "4",
+            "shortName": "Streaming"
+          },
+          "market": {
+            "id": "1",
+            "type": "National"
+          },
+          "media": {
+            "shortName": "YouTube"
+          },
+          "lang": "en",
+          "region": "us"
+        }
+      ],
+      "highlights": []
+    }
+  ],
+  "links": [
+    {
+      "language": "en-US",
+      "rel": [
+        "summary",
+        "desktop",
+        "event"
+      ],
+      "href": "https://www.espn.com/mens-college-basketball/game/_/gameId/401929171/west-coast-boise-st",
+      "text": "Gamecast",
+      "shortText": "Gamecast",
+      "isExternal": false,
+      "isPremium": false
+    }
+  ],
+  "status": {
+    "clock": 0.0,
+    "displayClock": "0:00",
+    "period": 0,
+    "type": {
+      "id": "1",
+      "name": "STATUS_SCHEDULED",
+      "state": "pre",
+      "completed": false,
+      "description": "Scheduled",
+      "detail": "Wed, November 4th at 9:00 PM EST",
+      "shortDetail": "11/4 - 9:00 PM EST"
+    }
+  }
+}
