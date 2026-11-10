@@ -91,8 +91,9 @@
 
 use crate::common::{
     linescore_byte, num_i16, num_u16, num_u32, num_u8, order_home_away, parse_hex_rgb,
-    parse_live_phase, parse_record, parse_start_time, saturate_score, set_text, stable_sort_by_key,
-    wire_phase, EText, Exact, HomeAway, LivePhase, Market, OddsScratch, Quirk, Quirks, WireText,
+    parse_live_phase, parse_record, parse_start_time, push_upper, saturate_score, set_text,
+    stable_sort_by_key, wire_phase, EText, Exact, HomeAway, LivePhase, Market, OddsScratch, Quirk,
+    Quirks, WireText,
 };
 use crate::path::{ContainerKind, Directive, Error, Pattern, Seg, Sink, StreamMatcher, Value};
 use scoreboard_wire::basketball::{
@@ -1663,19 +1664,6 @@ fn info_secondary(playoffs: bool, headline: &WireText, series: &WireText) -> ETe
         push_upper(&mut out, series);
     }
     out
-}
-
-/// Append `src` upper-cased, char by char with `core`'s mapping (ruling
-/// 10), stopping at the first char that no longer fits — a mapping can grow
-/// a char, so the cut is where the output fills, on a char boundary.
-fn push_upper(dst: &mut EText, src: &str) {
-    for ch in src.chars() {
-        for upper in ch.to_uppercase() {
-            if dst.push(upper).is_err() {
-                return;
-            }
-        }
-    }
 }
 
 /// The five names ESPN sends for the NBA (§2) plus STATUS_DELAYED, which §2

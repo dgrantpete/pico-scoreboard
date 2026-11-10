@@ -37,12 +37,10 @@
 //! slate / absent target. An `events` OBJECT is the documented residue —
 //! see the variant's doc.
 
-use core::fmt::Write as _;
-
 use crate::common::{
-    EText, Exact, HomeAway, Market, OddsScratch, Quirk, Quirks, linescore_byte, num_i16, num_u8,
-    num_u16, order_home_away, parse_hex_rgb, parse_live_phase, parse_record, parse_start_time,
-    saturate_score, set_text, stable_sort_by_key, wire_phase,
+    EText, Exact, HomeAway, LineTeam, Market, OddsScratch, Quirk, Quirks, linescore_byte, num_i16,
+    num_u8, num_u16, order_home_away, parse_hex_rgb, parse_live_phase, parse_record,
+    parse_start_time, saturate_score, set_text, stable_sort_by_key, team_lines, wire_phase,
 };
 use crate::path::{self, ContainerKind, Directive, Pattern, Seg, Sink, StreamMatcher, Value};
 use scoreboard_wire::football as wire;
@@ -363,8 +361,7 @@ struct TeamExtract {
     record: Option<Record>,
     /// The pregame team line: a college rank — and, when only the other
     /// side is ranked, this side's name — else the betting line.
-    line: bool,
-    line_text: EText,
+    line: Option<EText>,
     /// Sorted line-score bytes; bound = the wire's `u8`-length cap.
     line_score: heapless::Vec<u8, MAX_LINE_SCORE>,
 }
@@ -382,7 +379,7 @@ impl TeamExtract {
             abbreviation: &self.abbreviation,
             colors: self.colors(),
             record: self.record,
-            line: self.line.then_some(self.line_text.as_str()),
+            line: self.line.as_deref(),
         }
     }
 
@@ -588,7 +585,8 @@ struct Comp0Competitor {
     abbreviation: EText,
     color: EText,
     alternate_color: EText,
-    short_display_name: bool,
+    /// `team.shortDisplayName`; empty when absent (the rank rule treats
+    /// the two alike).
     short_display_name_text: EText,
     /// First `records[]` entry with `type == "total"` (`.find` semantics).
     total_summary: bool,
@@ -602,6 +600,15 @@ struct Comp0Competitor {
     linescores: heapless::Vec<(u8, u8), MAX_LINE_SCORE>,
     linescores_clipped: bool,
     rank: Option<u16>,
+}
+
+impl Comp0Competitor {
+    fn line_team(&self) -> LineTeam<'_> {
+        LineTeam {
+            rank: self.rank,
+            short_name: &self.short_display_name_text,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -906,7 +913,6 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
                 Value::Str(s) => {
                     if let Some(k) = Self::slot(idx) {
                         let c = &mut self.ev.comp0.competitors[k];
-                        c.short_display_name = true;
                         set_text(&mut c.short_display_name_text, s);
                     }
                 }
@@ -1202,33 +1208,18 @@ fn transform(
     match state {
         St::Pre => {
             set_text(&mut g.venue, &d.venue);
-            fill_pregame_team(&mut g.home, &d.competitors[home_k], is_college, quirks)?;
-            fill_pregame_team(&mut g.away, &d.competitors[away_k], is_college, quirks)?;
-            // One ranked side names the other, so the block reads as a
-            // matchup ("ILLINOIS" over "#8 UCLA") rather than a rank over a
-            // blank; most of a college Saturday's slate has exactly one
-            // ranked team.
-            if g.home.line != g.away.line {
-                let (team, c) = if g.home.line {
-                    (&mut g.away, &d.competitors[away_k])
-                } else {
-                    (&mut g.home, &d.competitors[home_k])
-                };
-                if c.short_display_name && !c.short_display_name_text.is_empty() {
-                    team.line = true;
-                    build_rank_line(&mut team.line_text, None, &c.short_display_name_text);
-                }
-            }
-            // Ranks or betting lines, never one of each: an unranked game
-            // (every NFL game) gets the lines when both sides have a spread.
-            if !g.home.line && !g.away.line {
-                if let Some([away, home]) = d.odds.team_lines() {
-                    for (team, text) in [(&mut g.away, away), (&mut g.home, home)] {
-                        team.line = true;
-                        set_text(&mut team.line_text, &text);
-                    }
-                }
-            }
+            fill_pregame_team(&mut g.home, &d.competitors[home_k], quirks)?;
+            fill_pregame_team(&mut g.away, &d.competitors[away_k], quirks)?;
+            // The rank rule (`common::team_lines`): pros never rank, so every
+            // NFL game gets the betting lines when both sides have a spread;
+            // most of a college Saturday's slate has exactly one ranked team,
+            // which names the other.
+            [g.away.line, g.home.line] = team_lines(
+                is_college,
+                d.competitors[away_k].line_team(),
+                d.competitors[home_k].line_team(),
+                &d.odds,
+            );
         }
         St::In => {
             set_text(&mut g.clock, &d.clock);
@@ -1261,7 +1252,6 @@ fn transform(
 fn fill_pregame_team(
     team: &mut TeamExtract,
     c: &Comp0Competitor,
-    is_college: bool,
     quirks: &mut impl Quirks,
 ) -> Result<(), ExtractError> {
     set_text(&mut team.abbreviation, &c.abbreviation);
@@ -1277,17 +1267,6 @@ fn fill_pregame_team(
     } else {
         None
     };
-    // The four rank-line gates (backend `rank_line`): pros never rank,
-    // 99 is ESPN's unranked sentinel, and an absent or empty short
-    // display name leaves nothing to uppercase.
-    if is_college {
-        if let Some(rank) = c.rank {
-            if rank != 99 && c.short_display_name && !c.short_display_name_text.is_empty() {
-                team.line = true;
-                build_rank_line(&mut team.line_text, Some(rank), &c.short_display_name_text);
-            }
-        }
-    }
     Ok(())
 }
 
@@ -1369,28 +1348,6 @@ fn parse_timeouts(d: &Comp0Data) -> Option<wire::Timeouts> {
         away: d.away_timeouts.clamp(0, u8::MAX as i16) as u8,
         home: d.home_timeouts.clamp(0, u8::MAX as i16) as u8,
     })
-}
-
-/// `format!("#{} {}", rank, name.to_uppercase())` in `no_std`, or the bare
-/// upper-cased name for the unranked side of a ranked game: `core`'s
-/// `char::to_uppercase` per char (full Unicode mapping — ruling 10;
-/// `make_ascii_uppercase` would diverge on any non-ASCII name, and `ß`
-/// grows to `SS`). Stops at the first char that no longer fits, which is
-/// exactly the wire's truncate-at-a-char-boundary prefix of the backend's
-/// unbounded string.
-fn build_rank_line(dst: &mut EText, rank: Option<u16>, name: &str) {
-    dst.clear();
-    // "#" + at most 5 digits + " " always fits in 255.
-    if let Some(rank) = rank {
-        let _ = write!(dst, "#{rank} ");
-    }
-    'chars: for c in name.chars() {
-        for upper in c.to_uppercase() {
-            if dst.push(upper).is_err() {
-                break 'chars;
-            }
-        }
-    }
 }
 
 // -------------------------------------------------------- entry points

@@ -546,3 +546,88 @@ fn is_odds_number(text: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
 }
+
+// ---------------------------------------------------------------------------
+// The pregame team line: a poll rank where the league ranks, else the betting
+// line. Football's rule (college football since 915f594), promoted at its
+// second user, college basketball (ruling 15).
+
+/// ESPN's `curatedRank.current` for a team outside the poll.
+pub const UNRANKED: u16 = 99;
+
+/// One side's inputs to the pregame team line.
+#[derive(Debug, Clone, Copy)]
+pub struct LineTeam<'a> {
+    /// `curatedRank.current`; `None` when the field is absent. [`UNRANKED`]
+    /// is a value like any other here — the rule knows what it means.
+    pub rank: Option<u16>,
+    /// `team.shortDisplayName`; empty when absent.
+    pub short_name: &'a str,
+}
+
+/// The pregame team lines, `[away, home]`. Where the league shows poll
+/// ranks (`ranks`), a ranked side reads "#N SHORT NAME" and, when only one
+/// side is ranked, the other reads its short name alone, so the block is a
+/// matchup ("CAL POLY" over "#5 ARIZONA") rather than a rank over a blank;
+/// a side with no short name shows no rank and names nothing. A game with no
+/// line by then gets the betting lines (`OddsScratch::team_lines`), both or
+/// neither: ranks or betting lines, never one of each.
+pub fn team_lines(
+    ranks: bool,
+    away: LineTeam<'_>,
+    home: LineTeam<'_>,
+    odds: &OddsScratch,
+) -> [Option<EText>; 2] {
+    let teams = [away, home];
+    let mut lines = teams.map(|team| {
+        let rank = team.rank.filter(|&rank| ranks && rank != UNRANKED)?;
+        (!team.short_name.is_empty()).then(|| rank_line(Some(rank), team.short_name))
+    });
+    if lines[0].is_some() != lines[1].is_some() {
+        let unranked = usize::from(lines[0].is_some());
+        let name = teams[unranked].short_name;
+        if !name.is_empty() {
+            lines[unranked] = Some(rank_line(None, name));
+        }
+    }
+    if lines.iter().all(Option::is_none) {
+        if let Some(odds) = odds.team_lines() {
+            lines = odds.map(|line| {
+                let mut text = EText::new();
+                set_text(&mut text, &line);
+                Some(text)
+            });
+        }
+    }
+    lines
+}
+
+/// `format!("#{} {}", rank, name.to_uppercase())` in `no_std`, or the bare
+/// upper-cased name without a rank, cut where [`push_upper`] cuts — the
+/// wire's truncate-at-a-char-boundary prefix of the backend's unbounded
+/// string.
+fn rank_line(rank: Option<u16>, name: &str) -> EText {
+    use core::fmt::Write as _;
+    let mut out = EText::new();
+    // "#" + at most 5 digits + " " always fits in 255.
+    if let Some(rank) = rank {
+        let _ = write!(out, "#{rank} ");
+    }
+    push_upper(&mut out, name);
+    out
+}
+
+/// Append `src` upper-cased, char by char with `core`'s full Unicode mapping
+/// (ruling 10: `make_ascii_uppercase` would diverge on any non-ASCII name,
+/// and `ß` grows to `SS`), stopping at the first char that no longer fits —
+/// a mapping can grow a char, so the cut is where the output fills, on a
+/// char boundary.
+pub fn push_upper(dst: &mut EText, src: &str) {
+    for ch in src.chars() {
+        for upper in ch.to_uppercase() {
+            if dst.push(upper).is_err() {
+                return;
+            }
+        }
+    }
+}
