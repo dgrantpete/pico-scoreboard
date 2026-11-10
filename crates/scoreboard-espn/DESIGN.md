@@ -226,6 +226,15 @@ Added as the sport lanes landed:
     `odds[0]`'s `close` numbers are read; a second sportsbook never stands
     in for the first. Football shows them only when neither team is ranked
     (ranks or lines, never one of each); the NBA's ride the wire's `ext=1`.
+18. **Team colours are optional** (2026-11-09, `firmware-rs/NCAAB.md` D13).
+    ESPN's college teams can come without `color` or `alternateColor` (1 of
+    56 college football games on 2026-11-07/08; 19 of 74 ranked college
+    basketball games in a week), and ruling 1's serde-era parity dropped
+    their games. Absent or null now reads as black (0), slot by slot, and
+    the device's colour rule lifts it or yields to the other colour; any
+    other JSON type still fails the event, and a string that is not six hex
+    digits still rejects the target. Football (C3); hockey keeps its own
+    lane rule (an absent alternate reads as the primary).
 
 ## The hockey lane (2026-10-14, NHL.md phase 6.2)
 

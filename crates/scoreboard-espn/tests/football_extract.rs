@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use scoreboard_espn::common::{IgnoreQuirks, Quirk, Quirks};
 use scoreboard_espn::football::{
-    Counts, DetailExtractor, DetailOutcome, FootballError, GameExtract, ListEntries,
+    Counts, DetailExtractor, DetailOutcome, ExtractError, FootballError, GameExtract, ListEntries,
     ListExtractor,
 };
 use scoreboard_wire::{GameState, SliceSink, football as wire};
@@ -284,6 +284,70 @@ fn venue_required_only_pregame() {
             assert_eq!(counts.failed, 1, "{name}");
         }
     }
+}
+
+/// NCAAB.md D13 (C3): a team without colours keeps its game — 1 of 56
+/// college games on 2026-11-07/08 (Merrimack) was being dropped. Absent and
+/// null read as black (0), each slot on its own, in the list and the detail
+/// alike; a string that is not six hex digits still rejects the target.
+#[test]
+fn a_colourless_team_keeps_its_game_and_reads_black() {
+    let event = fixture_json("college-football/pregame_ranked");
+    let id = event_id(&event);
+    let base: serde_json::Value = serde_json::from_str(&event).unwrap();
+    let away_index = usize::from(base["competitions"][0]["competitors"][0]["homeAway"] != "away");
+    let with_team = |edit: &dyn Fn(&mut serde_json::Map<String, serde_json::Value>)| {
+        let mut value = base.clone();
+        let team = &mut value["competitions"][0]["competitors"][away_index]["team"];
+        edit(team.as_object_mut().unwrap());
+        wrap(&serde_json::to_string(&value).unwrap())
+    };
+    let away_colors = |body: &str| {
+        let extract = found(body, &id, true, usize::MAX);
+        let wire::Game::Pregame(pregame) = extract.as_game() else {
+            panic!("pregame fixture");
+        };
+        let home = pregame.home.colors;
+        assert!(
+            home.primary != 0 && home.alternate != 0,
+            "home keeps its own"
+        );
+        (pregame.away.colors.primary, pregame.away.colors.alternate)
+    };
+
+    let absent = with_team(&|team| {
+        team.remove("color");
+        team.remove("alternateColor");
+    });
+    let null = with_team(&|team| {
+        team.insert("color".into(), serde_json::Value::Null);
+        team.insert("alternateColor".into(), serde_json::Value::Null);
+    });
+    for body in [&absent, &null] {
+        let (entries, counts) = run_list(body, usize::MAX);
+        assert_eq!(counts, Counts { ok: 1, failed: 0 });
+        assert_eq!(entries, [(id.clone(), GameState::Pregame)]);
+        assert_eq!(away_colors(body), (0, 0));
+    }
+
+    let primary_only = with_team(&|team| {
+        team.remove("alternateColor");
+    });
+    let (primary, alternate) = away_colors(&primary_only);
+    assert!(primary != 0);
+    assert_eq!(alternate, 0);
+
+    let bad = with_team(&|team| {
+        team.insert("color".into(), "not-hex".into());
+    });
+    let mut scratch = vec![0u8; 16 * 1024];
+    let mut extractor =
+        DetailExtractor::new(&id, true, IgnoreQuirks, &mut scratch).expect("table valid");
+    extractor.write(bad.as_bytes()).expect("clean parse");
+    assert!(matches!(
+        extractor.finish(),
+        Err(FootballError::Extract(ExtractError::BadColor))
+    ));
 }
 
 /// A scoreboard shell whose `events` is a scalar or null fails the

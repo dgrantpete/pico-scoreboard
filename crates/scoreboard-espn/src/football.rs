@@ -492,8 +492,6 @@ struct CompetitorCheck {
     score: bool,
     team_id: bool,
     abbreviation: bool,
-    color: bool,
-    alternate_color: bool,
     curated_entered: bool,
     curated_current: bool,
     /// Current `records[j]` element.
@@ -583,8 +581,10 @@ struct Comp0Competitor {
     /// (ruling 16): overflow invalidates instead of truncating.
     team_id: Exact<ID_BYTES>,
     abbreviation: EText,
-    color: EText,
-    alternate_color: EText,
+    /// `team.color` / `team.alternateColor`; `None` when absent or null,
+    /// which reads as black (D13).
+    color: Option<EText>,
+    alternate_color: Option<EText>,
     /// `team.shortDisplayName`; empty when absent (the rank rule treats
     /// the two alike).
     short_display_name_text: EText,
@@ -889,24 +889,32 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
                     self.ev.comp0.odds.set(market, side, v);
                 }
             }
-            TEAM_ABBR | TEAM_COLOR | TEAM_ALT_COLOR => match v {
+            TEAM_ABBR => match v {
                 Value::Str(s) => {
-                    let check = &mut self.ev.check.competitor;
-                    match pattern {
-                        TEAM_ABBR => check.abbreviation = true,
-                        TEAM_COLOR => check.color = true,
-                        _ => check.alternate_color = true,
-                    }
+                    self.ev.check.competitor.abbreviation = true;
                     if let Some(k) = Self::slot(idx) {
-                        let c = &mut self.ev.comp0.competitors[k];
-                        let dst = match pattern {
-                            TEAM_ABBR => &mut c.abbreviation,
-                            TEAM_COLOR => &mut c.color,
-                            _ => &mut c.alternate_color,
-                        };
-                        set_text(dst, s);
+                        set_text(&mut self.ev.comp0.competitors[k].abbreviation, s);
                     }
                 }
+                _ => self.invalid(),
+            },
+            // Optional (NCAAB.md D13): a college team may carry no colours
+            // (Merrimack, 2026-11-07), and absent or null keeps the game.
+            // Another type still fails the event like any typed leaf, and a
+            // string that is not six hex digits still rejects the target.
+            TEAM_COLOR | TEAM_ALT_COLOR => match v {
+                Value::Str(s) => {
+                    if let Some(k) = Self::slot(idx) {
+                        let c = &mut self.ev.comp0.competitors[k];
+                        let dst = if pattern == TEAM_COLOR {
+                            &mut c.color
+                        } else {
+                            &mut c.alternate_color
+                        };
+                        set_text(dst.insert(EText::new()), s);
+                    }
+                }
+                Value::Null => {}
                 _ => self.invalid(),
             },
             TEAM_SDN => match v {
@@ -1070,8 +1078,6 @@ impl<E: ListEntries, Q: Quirks> FootballSink<E, Q> {
             && c.score
             && c.team_id
             && c.abbreviation
-            && c.color
-            && c.alternate_color
             // `curatedRank: {}` fails serde (`current` is required).
             && (!c.curated_entered || c.curated_current);
         if !complete {
@@ -1277,9 +1283,16 @@ fn fill_scored_team(team: &mut TeamExtract, c: &Comp0Competitor) -> Result<(), E
     fill_colors(team, c)
 }
 
+/// An absent colour is black (0), which the device's colour rule lifts or
+/// swaps for the other (D13); a present one is six hex digits or the target
+/// is rejected, primary judged first.
 fn fill_colors(team: &mut TeamExtract, c: &Comp0Competitor) -> Result<(), ExtractError> {
-    team.primary = parse_hex_rgb(&c.color).ok_or(ExtractError::BadColor)?;
-    team.alternate = parse_hex_rgb(&c.alternate_color).ok_or(ExtractError::BadColor)?;
+    let parse = |color: &Option<EText>| match color {
+        None => Ok(0),
+        Some(text) => parse_hex_rgb(text).ok_or(ExtractError::BadColor),
+    };
+    team.primary = parse(&c.color)?;
+    team.alternate = parse(&c.alternate_color)?;
     Ok(())
 }
 
